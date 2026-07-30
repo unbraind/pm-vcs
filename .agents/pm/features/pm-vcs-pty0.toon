@@ -1,0 +1,24 @@
+id: pm-vcs-pty0
+title: "pm vcs preflight: turn silent merge-driver absence into a loud, remediable failure"
+description: "Five checks over one checkout: committed fence, per-clone driver configuration, fence coverage against the active schema, a driver that actually executes, and a clean tracker worktree."
+type: Feature
+status: closed
+priority: 1
+tags[2]: "area:package",merge-safety
+created_at: "2026-07-30T10:51:31.535Z"
+updated_at: "2026-07-30T10:52:07.717Z"
+closed_at: "2026-07-30T10:52:07.700Z"
+completed_at: "2026-07-30T10:52:07.700Z"
+author: "harness:claude-code"
+acceptance_criteria: merge_driver_runs executes the real configured driver against a synthetic three-way input rather than only checking that config exists; a fresh clone fails and passes after pm merge install; a linked worktree passes without one; drift warns while missing fails
+parent: pm-vcs-ghql
+resolution: Implemented and covered.
+expected_result: The command behaves as its acceptance criteria describe.
+actual_result: "59 tests pass; coverage is 100% lines, branches and functions across all five source files, stable across three consecutive gate runs."
+learnings[1]{created_at,author,text}:
+  "2026-07-30T10:51:48.638Z","harness:claude-code","A linked worktree does NOT need its own pm merge install. The package spec assumed every fresh worktree re-opens the driver hole; the test written to prove that failed, because git worktree add shares the repository's config file. The hole is real for git clone (CI, collaborators), not for git worktree add. Both halves are now pinned by tests against a real clone and a real worktree, and the module doc states the distinction rather than the intuition."
+files[2]{path,scope,note}:
+  preflight.ts,project,Five readiness checks; composes the host's own driver and fence audits
+  test/preflight.test.ts,project,13 tests against real clones and worktrees
+close_reason: "Shipped in the initial release behind the 100/100/100 coverage gate, verified against real git repositories."
+body: ""

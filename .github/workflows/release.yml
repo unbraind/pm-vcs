@@ -1,0 +1,247 @@
+name: Daily Release
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: daily-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TIMEZONE: Europe/Vienna
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2.2.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Decide release
+        id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags
+          latest_tag="$(git tag --sort=-creatordate | head -n 1 || true)"
+          if [[ -n "$latest_tag" ]] && git diff --quiet "$latest_tag"..HEAD -- .; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+            echo "No changes since $latest_tag; skipping release." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          release_date="$(TZ="$RELEASE_TIMEZONE" date +%Y.%m.%d)"
+          base_tag="v${release_date}"
+          max_suffix=-1
+          while IFS= read -r existing_tag; do
+            if [[ "$existing_tag" == "$base_tag" ]]; then
+              (( max_suffix < 0 )) && max_suffix=0
+              continue
+            fi
+            if [[ "$existing_tag" == "$base_tag-"* ]]; then
+              suffix="${existing_tag#"$base_tag-"}"
+              if [[ "$suffix" =~ ^[0-9]+$ ]] && (( suffix > max_suffix )); then
+                max_suffix="$suffix"
+              fi
+            fi
+          done < <(git tag -l "${base_tag}*")
+
+          if (( max_suffix >= 0 )); then
+            tag="${base_tag}-$((max_suffix + 1))"
+          else
+            tag="$base_tag"
+          fi
+
+          version_core="${tag#v}"
+          year="${version_core%%.*}"
+          version_tail="${version_core#*.}"
+          month="${version_tail%%.*}"
+          day_and_suffix="${version_tail#*.}"
+          day="${day_and_suffix%%-*}"
+          suffix="${day_and_suffix#"$day"}"
+          npm_version="$((10#$year)).$((10#$month)).$((10#$day))${suffix}"
+
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "npm_version=$npm_version" >> "$GITHUB_OUTPUT"
+
+      - name: Update release version
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm version "${{ steps.decide.outputs.npm_version }}" --no-git-tag-version --allow-same-version
+          node -e "const fs=require('node:fs');const version=JSON.parse(fs.readFileSync('package.json','utf8')).version;for(const file of ['manifest.json']){if(!fs.existsSync(file))continue;const json=JSON.parse(fs.readFileSync(file,'utf8'));json.version=version;fs.writeFileSync(file,JSON.stringify(json,null,2)+'\n');}for(const file of ['index.ts']){if(!fs.existsSync(file))continue;const source=fs.readFileSync(file,'utf8');const next=source.replace(/^  version:\s*[\"'][^\"']+[\"']/m,'  version: \"'+version+'\"');if(next!==source)fs.writeFileSync(file,next);}"
+          npm run build
+
+      - name: Generate changelog and release notes
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary
+          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --check
+          npx pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm > RELEASE_NOTES.md
+
+      - name: Run release checks
+        if: steps.decide.outputs.should_release == 'true'
+        run: npm run release:check
+
+      - name: Commit release files
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          paths=(package.json package-lock.json manifest.json CHANGELOG.md)
+          [[ -f index.ts ]] && paths+=(index.ts)
+          [[ -d src ]] && paths+=(src)
+          git add "${paths[@]}"
+          if git diff --cached --quiet; then
+            echo "Release files are already current; tagging existing commit."
+          else
+            git commit -m "Release ${{ github.event.repository.name }} ${{ steps.decide.outputs.tag }}"
+          fi
+
+      # Refuse non-main release runs BEFORE publishing. `github.ref` is the
+      # authoritative workflow trigger ref: schedule -> refs/heads/main;
+      # workflow_dispatch from main -> refs/heads/main; workflow_dispatch from a
+      # feature branch -> refs/heads/<feature> (refused here). Checking the
+      # trigger ref (rather than git topology) reliably distinguishes a feature
+      # branch from main, which commit-topology checks cannot do (a feature
+      # branch off main is also a descendant of origin/main).
+      - name: Check release ref
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        env:
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Refusing to release from non-main ref ('$GITHUB_REF'). Run the release workflow from main."
+            exit 1
+          fi
+
+      - name: Publish npm package
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_VERSION: ${{ steps.decide.outputs.npm_version }}
+        run: |
+          set -euo pipefail
+          pkg_name="$(node -p "require('./package.json').name")"
+          if npm view "${pkg_name}@${NPM_VERSION}" version --json >/dev/null 2>&1; then
+            echo "::notice::${pkg_name}@${NPM_VERSION} already published; skipping publish step."
+            exit 0
+          fi
+          publish_with_provenance() {
+            npm publish --access public --provenance --ignore-scripts
+          }
+          publish_without_provenance() {
+            echo "::warning::Falling back to publish WITHOUT --provenance after repeated 404 from npm registry."
+            npm publish --access public --ignore-scripts
+          }
+          attempt=0
+          max_attempts=3
+          while (( attempt < max_attempts )); do
+            attempt=$(( attempt + 1 ))
+            if publish_with_provenance; then
+              echo "Published with provenance on attempt ${attempt}."
+              exit 0
+            fi
+            if npm view "${pkg_name}@${NPM_VERSION}" version --json >/dev/null 2>&1; then
+              echo "::notice::Version landed despite reported error; treating as success."
+              exit 0
+            fi
+            echo "Publish attempt ${attempt}/${max_attempts} failed; sleeping 30s before retry..."
+            sleep 30
+          done
+          echo "::warning::All ${max_attempts} provenance publish attempts failed; trying once without provenance."
+          if publish_without_provenance; then
+            echo "Published without provenance."
+            exit 0
+          fi
+          if npm view "${pkg_name}@${NPM_VERSION}" version --json >/dev/null 2>&1; then
+            echo "::notice::Version landed during fallback; treating as success."
+            exit 0
+          fi
+          echo "::error::Publish failed after retries and provenance fallback."
+          exit 1
+
+      # Push tag + main AFTER a successful publish so a failed publish does not
+      # leave the repo tagged/skipped. The release ref (fast-forward of
+      # origin/main) was already verified in the "Check release ref" step before
+      # publishing, so here we only create the tag and advance main.
+      - name: Push release tag and main
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag "${{ steps.decide.outputs.tag }}"
+          git push origin HEAD:main
+          git push origin "${{ steps.decide.outputs.tag }}"
+
+      - name: Verify bun install of published package
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg_name="$(node -p "require('./package.json').name")"
+          pkg_version="${{ steps.decide.outputs.npm_version }}"
+          mkdir -p /tmp/bun-verify
+          cd /tmp/bun-verify
+          rm -rf node_modules bun.lockb package.json
+          bun init -y > /dev/null
+          # Smoke-test that the just-published version installs via bun.
+          # Retry to absorb npm registry propagation (~60s typical).
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if bun add "${pkg_name}@${pkg_version}"; then
+              echo "bun add succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "bun add failed on attempt $attempt, sleeping 30s..."
+            sleep 30
+          done
+          # bun's registry mirror can lag well past npm's own propagation,
+          # especially for prerelease (-N) versions. The npm registry is
+          # authoritative for what we just published: if it confirms the
+          # version, the release genuinely succeeded and the bun failure is
+          # mirror lag, not a publish failure. Do not let it block the
+          # GitHub release / post-publish steps that follow.
+          echo "bun could not resolve ${pkg_name}@${pkg_version}; checking npm registry authoritatively..."
+          if npm view "${pkg_name}@${pkg_version}" version --registry="https://registry.npmjs.org" > /dev/null 2>&1; then
+            echo "::warning::bun has not mirrored ${pkg_name}@${pkg_version} yet, but npm confirms it is published (registry mirror lag). Treating verification as successful."
+            exit 0
+          fi
+          echo "npm registry does not show ${pkg_name}@${pkg_version} - real publish failure."
+          exit 1
+      - name: Create GitHub release
+        if: steps.decide.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ steps.decide.outputs.tag }}" --title "${{ github.event.repository.name }} ${{ steps.decide.outputs.tag }}" --notes-file RELEASE_NOTES.md --verify-tag

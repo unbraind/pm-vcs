@@ -1,0 +1,113 @@
+{
+  "name": "pm-vcs",
+  "version": "2026.7.30",
+  "description": "Branch-aware merge safety for pm trackers: preflight a clone before multi-agent item work, predict a merge's per-field resolution before running it, and join git history to the pm ledger",
+  "type": "module",
+  "main": "dist/index.js",
+  "files": [
+    "dist/",
+    "manifest.json",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build && npm run build:test && node --test test/*.test.ts",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck",
+    "audit:prod": "node --input-type=module -e \"import { spawnSync } from 'node:child_process'; import { devNull } from 'node:os'; const env = { ...process.env, npm_config_userconfig: devNull, NPM_CONFIG_USERCONFIG: devNull }; for (const key of Object.keys(env)) if (key.toLowerCase() === 'npm_config_allow_scripts') delete env[key]; const win = process.platform === 'win32'; const r = spawnSync(win ? 'npm.cmd' : 'npm', ['audit', '--omit=dev', '--ignore-scripts'], { stdio: 'inherit', env, shell: win }); process.exit(r.status ?? 1);\"",
+    "pack:dry-run": "npm pack --dry-run",
+    "changelog": "pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --release-version-from-package --since-previous-tag --until-release-tag --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release",
+    "changelog:full": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release",
+    "changelog:check": "pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --release-version-from-package --since-previous-tag --until-release-tag --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --check",
+    "release:check": "npm run typecheck && npm run build && npm run coverage && npm run audit:prod && npm run pack:dry-run && npm run changelog:check",
+    "prepublishOnly": "npm run release:check",
+    "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary",
+    "prepare": "node scripts/prepare-merge-driver.mjs",
+    "merge:install": "pm merge install",
+    "coverage": "npm run build && npm run build:test && node scripts/coverage-gate.ts"
+  },
+  "coverageGate": {
+    "sources": [
+      "."
+    ],
+    "tests": [
+      "test/preflight.test.ts",
+      "test/preview.test.ts",
+      "test/ledger.test.ts",
+      "test/git.test.ts",
+      "test/surface.test.ts"
+    ],
+    "thresholds": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "keywords": [
+    "pm-cli",
+    "pm-extension",
+    "pm-package",
+    "git",
+    "merge",
+    "merge-driver",
+    "multi-agent",
+    "worktree",
+    "vcs"
+  ],
+  "author": "@unbraind",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unbraind/pm-vcs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/unbraind/pm-vcs/issues"
+  },
+  "homepage": "https://github.com/unbraind/pm-vcs#readme",
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@unbrained/pm-cli": "^2026.7.29",
+    "pm-changelog": "^2026.7.26",
+    "typescript": "^7.0.2"
+  },
+  "peerDependencies": {
+    "@unbrained/pm-cli": ">=2026.7.29"
+  },
+  "pm": {
+    "aliases": [
+      "vcs"
+    ],
+    "extensions": [
+      "."
+    ],
+    "catalog": {
+      "display_name": "VCS Merge Safety",
+      "category": "workflow",
+      "summary": "Preflight a clone for multi-agent item work, predict a merge's per-field resolution before running it, and map a commit range onto the pm items it touched.",
+      "tags": [
+        "git",
+        "merge",
+        "multi-agent"
+      ],
+      "links": {
+        "docs": "https://github.com/unbraind/pm-vcs#readme",
+        "npm": "https://www.npmjs.com/package/pm-vcs",
+        "repository": "https://github.com/unbraind/pm-vcs",
+        "report": "https://github.com/unbraind/pm-vcs/issues"
+      }
+    },
+    "docs": [
+      "README.md",
+      "CHANGELOG.md"
+    ],
+    "examples": [
+      "README.md"
+    ]
+  }
+}

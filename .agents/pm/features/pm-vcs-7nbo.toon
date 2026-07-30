@@ -1,0 +1,24 @@
+id: pm-vcs-7nbo
+title: "pm vcs preview: predict a merge's per-field resolution before running it"
+description: "Reads base/ours/theirs blobs out of git and hands them to the shipped merge primitives, so the prediction is the same computation the real merge performs."
+type: Feature
+status: closed
+priority: 1
+tags[2]: "area:package",merge-safety
+created_at: "2026-07-30T10:51:31.900Z"
+updated_at: "2026-07-30T10:52:08.079Z"
+closed_at: "2026-07-30T10:52:08.068Z"
+completed_at: "2026-07-30T10:52:08.068Z"
+author: "harness:claude-code"
+acceptance_criteria: "For a real two-branch divergence the prediction matches the subsequent real git merge exactly, including which field conflicts, which side wins it, and that both sides' notes union; --fail-on turns it into a CI gate"
+parent: pm-vcs-ghql
+resolution: Implemented and covered.
+expected_result: The command behaves as its acceptance criteria describe.
+actual_result: "59 tests pass; coverage is 100% lines, branches and functions across all five source files, stable across three consecutive gate runs."
+learnings[1]{created_at,author,text}:
+  "2026-07-30T10:51:49.000Z","harness:claude-code","mergeItemDocuments accepts an empty base but rejects an empty ours or theirs ('not a readable item document'). That maps exactly onto git's behaviour: add/add IS handed to a driver with an empty base file, while delete/modify is settled at the tree level and never reaches a driver. So the preview must not call the primitive when a side's blob is absent; it reports delete_modify instead. Probed against real item blobs rather than assumed, after a test failed on the empty-side throw."
+files[2]{path,scope,note}:
+  preview.ts,project,Merge prediction by calling the shipped three-way primitives
+  test/preview.test.ts,project,14 tests; the headline one performs the real merge and compares
+close_reason: "Shipped in the initial release behind the 100/100/100 coverage gate, verified against real git repositories."
+body: ""
