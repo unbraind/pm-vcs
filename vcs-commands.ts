@@ -22,7 +22,7 @@ import {
   readBundle,
 } from "./engine/bundle.ts";
 import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
-import { type Signature } from "./engine/model.ts";
+import { type Signature, decodeCommit, decodeTree } from "./engine/model.ts";
 import { ObjectStoreError, type ObjectId } from "./engine/objects.ts";
 import { type Operation } from "./engine/oplog.ts";
 import {
@@ -530,10 +530,28 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const corrupt: string[] = [];
       let verified = 0;
-      for (const id of repository.allReachable()) {
+      // Walk the full object closure from every ref, not only the commits: a
+      // corrupted blob or tree is the corruption most likely to occur in
+      // practice, and reading only commits (what allReachable yields) would miss
+      // it entirely. Reading each object re-hashes it, which is the check.
+      const seen = new Set<string>();
+      const queue: string[] = [
+        ...repository.refs.list(BRANCH_PREFIX),
+        ...repository.refs.list(TAG_PREFIX),
+      ].map((entry) => entry.target);
+      while (queue.length > 0) {
+        const id = queue.pop() as string;
+        if (seen.has(id)) continue;
+        seen.add(id);
         try {
-          repository.objects.read(id);
+          const object = repository.objects.read(id);
           verified += 1;
+          if (object.type === "commit") {
+            const commit = decodeCommit(object.payload);
+            queue.push(commit.tree, ...commit.parents);
+          } else if (object.type === "tree") {
+            for (const entry of decodeTree(object.payload)) queue.push(entry.id);
+          }
         } catch (error) {
           corrupt.push(`${id}: ${error instanceof ObjectStoreError ? error.code : "unreadable"}`);
         }

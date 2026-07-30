@@ -8,6 +8,7 @@
 // a check at each call site.
 
 import {
+  chmodSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -264,7 +265,12 @@ export function materializeTree(
     const absolute = join(root, ...path.split("/"));
     const content = store.read(value.id).payload;
     mkdirSync(dirname(absolute), { recursive: true });
-    writeFileSync(absolute, content, { mode: value.mode === "100755" ? 0o755 : 0o644 });
+    writeFileSync(absolute, content);
+    // chmod in addition to the write's mode: `writeFileSync` applies `mode` only
+    // on creation, so rewriting a pre-existing executable file with a 100644
+    // entry would otherwise leave the executable bit set and `status` would
+    // never see the tree it just materialised as clean.
+    chmodSync(absolute, value.mode === "100755" ? 0o755 : 0o644);
     entries.push({ path, id: value.id, mode: value.mode === "100755" ? "100755" : "100644" });
   }
   // Directories left empty by the removals above are pruned, so switching away

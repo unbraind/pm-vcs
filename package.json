@@ -1,7 +1,7 @@
 {
   "name": "pm-vcs",
   "version": "2026.7.30",
-  "description": "Branch-aware merge safety for pm trackers: preflight a clone before multi-agent item work, predict a merge's per-field resolution before running it, and join git history to the pm ledger",
+  "description": "A version control system written from scratch on the pm SDK: its own content-addressed object store, refs, Myers diff, three-way merge, operation log and bundles, with no shell-out to git. Structured records are a first-class object kind and merge per field, so many agents on many branches converge without a line merge anywhere in the pipeline.",
   "type": "module",
   "main": "dist/index.js",
   "files": [
@@ -41,7 +41,20 @@
       "test/preview.test.ts",
       "test/ledger.test.ts",
       "test/git.test.ts",
-      "test/surface.test.ts"
+      "test/surface.test.ts",
+      "test/objects.test.ts",
+      "test/model.test.ts",
+      "test/refs.test.ts",
+      "test/diff.test.ts",
+      "test/merge.test.ts",
+      "test/records.test.ts",
+      "test/worktree.test.ts",
+      "test/ignore.test.ts",
+      "test/config.test.ts",
+      "test/oplog.test.ts",
+      "test/bundle.test.ts",
+      "test/repo.test.ts",
+      "test/vcs-commands.test.ts"
     ],
     "thresholds": {
       "lines": 100,
@@ -53,12 +66,18 @@
     "pm-cli",
     "pm-extension",
     "pm-package",
-    "git",
+    "version-control",
+    "vcs",
+    "dvcs",
+    "content-addressed",
     "merge",
-    "merge-driver",
+    "three-way-merge",
+    "diff",
     "multi-agent",
-    "worktree",
-    "vcs"
+    "structured-merge",
+    "crdt-like",
+    "jujutsu",
+    "git-alternative"
   ],
   "author": "@unbraind",
   "license": "MIT",
@@ -87,13 +106,15 @@
       "."
     ],
     "catalog": {
-      "display_name": "VCS Merge Safety",
+      "display_name": "Version Control System",
       "category": "workflow",
-      "summary": "Preflight a clone for multi-agent item work, predict a merge's per-field resolution before running it, and map a commit range onto the pm items it touched.",
+      "summary": "A from-scratch version control system for structured project data. Own object store, refs, diff, merge, operation log and bundles - no git underneath. Records merge per field, so two agents editing two different fields of one item always converge.",
       "tags": [
-        "git",
+        "version-control",
+        "vcs",
         "merge",
-        "multi-agent"
+        "multi-agent",
+        "structured-data"
       ],
       "links": {
         "docs": "https://github.com/unbraind/pm-vcs#readme",

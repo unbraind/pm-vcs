@@ -95,7 +95,7 @@ test("the manifest, package metadata and module agree on identity", () => {
 test("activation registers every command with no host-owned flag collision", async () => {
   const harness = await activate();
 
-  for (const command of ["vcs preflight", "vcs preview", "vcs items"]) {
+  for (const command of ["vcs git preflight", "vcs git preview", "vcs git items"]) {
     harness.assertCommandContract({ command });
   }
 
@@ -113,7 +113,7 @@ test("activation registers every command with no host-owned flag collision", asy
     "--no-changed-fields",
     "--full-changed-fields",
   ]);
-  const flags = harness.assertFlags({ targetCommand: "vcs preview" });
+  const flags = harness.assertFlags({ targetCommand: "vcs git preview" });
   const declared = flags.flags.map((flag) => flag.long ?? "");
   assert.deepEqual(declared, ["--fail-on"]);
   for (const flag of declared) {
@@ -125,7 +125,7 @@ test("preflight runs through the host and exits non-zero on a broken checkout", 
   const harness = await activate();
   const sandbox = track(createSandbox());
 
-  const clean = await harness.runCommand({ command: "vcs preflight", pmRoot: sandbox.pmRoot });
+  const clean = await harness.runCommand({ command: "vcs git preflight", pmRoot: sandbox.pmRoot });
   assert.equal(clean.handled, true);
   const payload = clean.result as { ok: boolean; preflight: PreflightReport };
   assert.equal(payload.ok, true);
@@ -134,7 +134,7 @@ test("preflight runs through the host and exits non-zero on a broken checkout", 
   // Break the fence, then assert the command reports it as a failure. Throwing is
   // the only channel an extension command has for a non-zero exit.
   sandbox.git("config", "--remove-section", "merge.pm-history");
-  const broken = await harness.runCommand({ command: "vcs preflight", pmRoot: sandbox.pmRoot });
+  const broken = await harness.runCommand({ command: "vcs git preflight", pmRoot: sandbox.pmRoot });
   assert.ok(
     broken.errorMessage !== undefined || broken.handled === false,
     `a failed preflight must not report success: ${JSON.stringify(broken)}`,
@@ -147,7 +147,7 @@ test("preview runs through the host and gates on a threshold", async () => {
   track(sandbox);
 
   const report = await harness.runCommand({
-    command: "vcs preview",
+    command: "vcs git preview",
     args: ["agent-b"],
     pmRoot: sandbox.pmRoot,
   });
@@ -159,7 +159,7 @@ test("preview runs through the host and gates on a threshold", async () => {
   // `--fail-on` arrives camel-cased, which is the single most common cause of a
   // silently ignored extension flag.
   const gated = await harness.runCommand({
-    command: "vcs preview",
+    command: "vcs git preview",
     args: ["agent-b"],
     options: { failOn: "conflict" },
     pmRoot: sandbox.pmRoot,
@@ -178,7 +178,7 @@ test("items runs through the host and reports the range's items", async () => {
   sandbox.commit("Add an item");
 
   const result = await harness.runCommand({
-    command: "vcs items",
+    command: "vcs git items",
     args: [`${start}..HEAD`],
     pmRoot: sandbox.pmRoot,
   });
@@ -195,7 +195,7 @@ test("a missing positional argument is refused with a remediation", async () => 
   const harness = await activate();
   const sandbox = track(createSandbox());
 
-  for (const command of ["vcs preview", "vcs items"]) {
+  for (const command of ["vcs git preview", "vcs git items"]) {
     const blank = await harness.runCommand({ command, args: ["   "], pmRoot: sandbox.pmRoot });
     assert.ok(
       blank.errorMessage !== undefined || blank.handled === false,
@@ -211,7 +211,7 @@ test("a missing positional argument is refused with a remediation", async () => 
 
 test("roots resolve from the context, from git, or fail with a remediation", () => {
   const sandbox = track(createSandbox());
-  const base = { command: "vcs preflight", args: [], options: {}, global: {} };
+  const base = { command: "vcs git preflight", args: [], options: {}, global: {} };
 
   // The host supplies repo_root when it can resolve one.
   const supplied = resolveRoots({
