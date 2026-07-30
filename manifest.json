@@ -1,0 +1,16 @@
+{
+  "name": "pm-vcs",
+  "version": "2026.7.30",
+  "description": "Branch-aware merge safety for pm trackers. `pm vcs preflight` verifies a clone or fresh worktree can merge tracker data field-aware before an agent starts work; `pm vcs preview <ref>` predicts the exact per-field resolution a real merge would produce, by running the shipped merge primitives against blobs read out of git; `pm vcs items <range>` maps a commit range onto the pm items it created, modified and closed.",
+  "author": "@unbraind",
+  "entry": "./dist/index.js",
+  "priority": 50,
+  "pm_min_version": "2026.7.29",
+  "capabilities": [
+    "commands",
+    "schema"
+  ],
+  "pm": {
+    "compatibility": "v2"
+  }
+}

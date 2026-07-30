@@ -1,0 +1,25 @@
+id: pm-vcs-ghql
+title: "pm-vcs: branch-aware merge safety for pm trackers"
+description: "Cover what pm-cli's shipped merge drivers do not: the state of a checkout before a merge, the outcome of a merge before running it, and the join between git history and the pm ledger."
+type: Epic
+status: closed
+priority: 1
+tags[3]: "area:package",merge-safety,multi-agent
+created_at: "2026-07-30T10:51:31.154Z"
+updated_at: "2026-07-30T10:52:08.915Z"
+closed_at: "2026-07-30T10:52:08.904Z"
+completed_at: "2026-07-30T10:52:08.904Z"
+author: "harness:claude-code"
+acceptance_criteria: Three commands ship behind a 100/100/100 coverage gate with real-git tests; preview's prediction is proven against a real git merge; preflight distinguishes a fresh clone from a linked worktree; no host-owned global flag is declared and activation is clean
+resolution: Three commands shipped; preview verified against a real merge; preflight distinguishes clone from worktree; activation clean with no host-owned flag collision.
+expected_result: "A production-ready package meeting the fleet's coverage, docstring and gate bar."
+actual_result: "59 tests, 100/100/100 coverage, clean activation through the real loader, and three upstream findings filed (pm-cli#825, #826, #827)."
+notes[1]{created_at,author,text}:
+  "2026-07-30T10:51:49.741Z","harness:claude-code","Branch coverage can be nondeterministic. A comparator written (a < b ? -1 : 1) over item ids left ledger.ts branch coverage varying between 97.5% and 100% across runs, because item ids carry a random token and which arm executes depends on the order a run happens to generate. Under a hard 100% gate that is a build that fails at random. Replaced with Number(a>b)-Number(a<b), which is the same total order with no branch to cover, then verified stable across three consecutive full gate runs."
+files[2]{path,scope,note}:
+  git.ts,project,The single git boundary plus its pure parsers
+  index.ts,project,Activation and command registration
+tests[1]{command,path,scope}:
+  npm run coverage,scripts/coverage-gate.ts,project
+close_reason: "Initial release complete: pm vcs preflight, preview and items, with the merge-prediction claim proven against a real git merge."
+body: ""
