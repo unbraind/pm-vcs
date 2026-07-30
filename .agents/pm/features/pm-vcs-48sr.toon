@@ -1,0 +1,14 @@
+id: pm-vcs-48sr
+title: Operation log and undo
+description: "Every mutating operation appends a record of the refs it moved, before and after. Undo rewinds the refs to the state before an operation, which makes an agent's mistake recoverable without the agent having to reason about ids. Objects are never removed, so undo is always possible."
+type: Feature
+status: in_progress
+priority: 2
+tags[1]: "area:vcs"
+created_at: "2026-07-30T22:37:55.150Z"
+updated_at: "2026-07-30T22:55:30.724Z"
+author: "harness:claude-code"
+acceptance_criteria: Every command that moves a ref appends exactly one operation; undo restores every ref the operation touched and appends its own operation; undo of an undo returns to the later state; the log survives a process crash mid-operation without becoming unreadable
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-30T22:37:58.756Z","harness:claude-code","cli:update:dep",detected
+body: ""

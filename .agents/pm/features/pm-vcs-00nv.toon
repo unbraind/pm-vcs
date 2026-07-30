@@ -1,0 +1,14 @@
+id: pm-vcs-00nv
+title: "Refs, HEAD and compare-and-swap branch updates"
+description: "Branch and tag storage under refs/, with HEAD either symbolic (ref: refs/heads/main) or a detached object id. Every ref update takes the expected current value and fails if it no longer holds, which is the primitive that lets several agents advance branches in one repository without silently overwriting one another."
+type: Feature
+status: in_progress
+priority: 1
+tags[1]: "area:vcs"
+created_at: "2026-07-30T22:37:53.384Z"
+updated_at: "2026-07-30T22:55:28.304Z"
+author: "harness:claude-code"
+acceptance_criteria: HEAD resolves through a symbolic ref to a commit and reports detached state distinctly; a ref update with a stale expected value fails and leaves the ref untouched; creating a branch that exists fails rather than moving it; deleting the branch HEAD points at is refused
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-30T22:37:56.374Z","harness:claude-code","cli:update:dep",detected
+body: ""

@@ -1,0 +1,328 @@
+// Serialization for the three composite object kinds.
+//
+// Every encoder here is canonical: one logical value has exactly one byte
+// representation. That is a correctness requirement, not tidiness — the object
+// id is the hash of these bytes, so a tree that sorted its entries differently
+// on two machines would produce two ids for one tree, and every identity check
+// the system makes (has this already been imported, is this a fast-forward, do
+// these two branches share a subtree) would quietly stop working.
+
+import {
+  hashObject,
+  type ObjectId,
+  ObjectStoreError,
+  type ObjectStore,
+} from "./objects.ts";
+
+/** File modes a tree entry can carry. */
+export const FILE_MODES = ["100644", "100755", "40000"] as const;
+
+/** A tree entry's mode: regular file, executable file, or subtree. */
+export type FileMode = (typeof FILE_MODES)[number];
+
+/** One name-to-object binding inside a tree. */
+export interface TreeEntry {
+  /** Entry name. A single path segment: never empty, never containing `/`. */
+  readonly name: string;
+  /** Whether the entry is a file, an executable file, or a subtree. */
+  readonly mode: FileMode;
+  /** The object this name binds to. */
+  readonly id: ObjectId;
+}
+
+/** Who made a change and when. */
+export interface Signature {
+  /** Display name. */
+  readonly name: string;
+  /** Email address. */
+  readonly email: string;
+  /** Milliseconds since the Unix epoch. */
+  readonly timestamp: number;
+  /**
+   * Minutes east of UTC at the time of writing.
+   *
+   * Stored alongside the absolute timestamp rather than folded into it, so a
+   * commit can be rendered in the zone it was made in without that zone ever
+   * affecting the ordering or the id.
+   */
+  readonly timezoneOffsetMinutes: number;
+}
+
+/** A commit: a tree, its ancestry, and who recorded it. */
+export interface Commit {
+  /** Root tree of the snapshot this commit names. */
+  readonly tree: ObjectId;
+  /**
+   * Parent commits, oldest lineage first.
+   *
+   * Empty for a root commit, one for an ordinary commit, two or more for a
+   * merge. The first parent is the branch that was checked out when the merge
+   * ran, which is what makes first-parent history meaningful.
+   */
+  readonly parents: readonly ObjectId[];
+  readonly author: Signature;
+  readonly committer: Signature;
+  /** Commit message, verbatim including any trailing newline. */
+  readonly message: string;
+}
+
+/** A field value a record can hold. */
+export type RecordValue = string | number | boolean | null | readonly RecordValue[];
+
+/** A structured document stored as named fields. */
+export interface RecordDocument {
+  readonly [field: string]: RecordValue;
+}
+
+/**
+ * Encodes a tree.
+ *
+ * Entries are sorted by name using byte order rather than locale collation:
+ * `String.prototype.localeCompare` is locale-sensitive and would let the same
+ * tree hash differently under two `LANG` settings.
+ *
+ * @param entries - The tree's entries in any order.
+ * @returns Canonical tree bytes.
+ * @throws ObjectStoreError When a name is empty, contains `/` or NUL, or is
+ *   duplicated — each of which would make the encoding ambiguous or the tree
+ *   unrepresentable as a directory.
+ */
+export function encodeTree(entries: readonly TreeEntry[]): Buffer {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (entry.name.length === 0) {
+      throw new ObjectStoreError("invalid_tree_entry", "A tree entry name cannot be empty.");
+    }
+    if (entry.name.includes("/") || entry.name.includes("\0")) {
+      throw new ObjectStoreError("invalid_tree_entry", `Tree entry name "${entry.name}" contains a path separator or NUL.`);
+    }
+    if (seen.has(entry.name)) {
+      throw new ObjectStoreError("invalid_tree_entry", `Tree entry name "${entry.name}" appears more than once.`);
+    }
+    seen.add(entry.name);
+  }
+  const sorted = [...entries].sort((left, right) => (
+    Buffer.compare(Buffer.from(left.name, "utf8"), Buffer.from(right.name, "utf8"))
+  ));
+  return Buffer.concat(sorted.map((entry) => Buffer.concat([
+    Buffer.from(`${entry.mode} ${entry.name}\0`, "utf8"),
+    Buffer.from(entry.id, "utf8"),
+  ])));
+}
+
+/**
+ * Decodes tree bytes back into entries.
+ *
+ * @param payload - Canonical tree bytes.
+ * @returns The entries, in the stored (name-sorted) order.
+ * @throws ObjectStoreError When the bytes are truncated or an entry declares an
+ *   unknown mode.
+ */
+export function decodeTree(payload: Buffer): TreeEntry[] {
+  const entries: TreeEntry[] = [];
+  let cursor = 0;
+  while (cursor < payload.length) {
+    const separator = payload.indexOf(0, cursor);
+    if (separator === -1) {
+      throw new ObjectStoreError("malformed_object", "Tree entry is missing the NUL before its object id.");
+    }
+    const header = payload.subarray(cursor, separator).toString("utf8");
+    const space = header.indexOf(" ");
+    if (space === -1) {
+      throw new ObjectStoreError("malformed_object", `Tree entry header "${header}" has no mode.`);
+    }
+    const mode = header.slice(0, space);
+    if (!(FILE_MODES as readonly string[]).includes(mode)) {
+      throw new ObjectStoreError("malformed_object", `Tree entry declares unknown mode "${mode}".`);
+    }
+    const idStart = separator + 1;
+    const idEnd = idStart + 64;
+    if (idEnd > payload.length) {
+      throw new ObjectStoreError("malformed_object", "Tree entry is truncated before its full object id.");
+    }
+    entries.push({
+      name: header.slice(space + 1),
+      mode: mode as FileMode,
+      id: payload.subarray(idStart, idEnd).toString("utf8"),
+    });
+    cursor = idEnd;
+  }
+  return entries;
+}
+
+/**
+ * Renders a signature as one line.
+ *
+ * @param signature - The signature to render.
+ * @returns `Name <email> <epochMs> <tzMinutes>`.
+ */
+function encodeSignature(signature: Signature): string {
+  return `${signature.name} <${signature.email}> ${signature.timestamp} ${signature.timezoneOffsetMinutes}`;
+}
+
+/**
+ * Parses a signature line.
+ *
+ * Parsed from the right, because a display name may contain spaces and angle
+ * brackets while the three trailing fields never do.
+ *
+ * @param line - The line following the `author ` or `committer ` keyword.
+ * @returns The parsed signature.
+ * @throws ObjectStoreError When the line does not carry all four fields.
+ */
+function decodeSignature(line: string): Signature {
+  const match = /^(.*) <([^<>]*)> (-?\d+) (-?\d+)$/.exec(line);
+  if (!match) {
+    throw new ObjectStoreError("malformed_object", `Commit signature "${line}" is not well-formed.`);
+  }
+  return {
+    name: match[1],
+    email: match[2],
+    timestamp: Number(match[3]),
+    timezoneOffsetMinutes: Number(match[4]),
+  };
+}
+
+/**
+ * Encodes a commit.
+ *
+ * @param commit - The commit to encode.
+ * @returns Canonical commit bytes: headers, a blank line, then the message.
+ */
+export function encodeCommit(commit: Commit): Buffer {
+  const lines = [
+    `tree ${commit.tree}`,
+    ...commit.parents.map((parent) => `parent ${parent}`),
+    `author ${encodeSignature(commit.author)}`,
+    `committer ${encodeSignature(commit.committer)}`,
+  ];
+  return Buffer.from(`${lines.join("\n")}\n\n${commit.message}`, "utf8");
+}
+
+/**
+ * Decodes commit bytes.
+ *
+ * @param payload - Canonical commit bytes.
+ * @returns The parsed commit.
+ * @throws ObjectStoreError When a required header is absent or unrecognised, or
+ *   the header block is not terminated by a blank line.
+ */
+export function decodeCommit(payload: Buffer): Commit {
+  const text = payload.toString("utf8");
+  const blankLine = text.indexOf("\n\n");
+  if (blankLine === -1) {
+    throw new ObjectStoreError("malformed_object", "Commit has no blank line separating headers from message.");
+  }
+  let tree: ObjectId | undefined;
+  const parents: ObjectId[] = [];
+  let author: Signature | undefined;
+  let committer: Signature | undefined;
+  for (const line of text.slice(0, blankLine).split("\n")) {
+    const space = line.indexOf(" ");
+    const keyword = space === -1 ? line : line.slice(0, space);
+    const value = space === -1 ? "" : line.slice(space + 1);
+    if (keyword === "tree") tree = value;
+    else if (keyword === "parent") parents.push(value);
+    else if (keyword === "author") author = decodeSignature(value);
+    else if (keyword === "committer") committer = decodeSignature(value);
+    else throw new ObjectStoreError("malformed_object", `Commit carries unknown header "${keyword}".`);
+  }
+  if (!tree || !author || !committer) {
+    throw new ObjectStoreError("malformed_object", "Commit is missing its tree, author or committer header.");
+  }
+  return { tree, parents, author, committer, message: text.slice(blankLine + 2) };
+}
+
+/**
+ * Encodes a record as canonical JSON.
+ *
+ * Keys are sorted and no whitespace is emitted, so two agents that built the
+ * same document by different routes produce the same id. Arrays keep their
+ * order: for an append-only sequence the order is the data, and for a set the
+ * merge normalises order rather than the encoder, which keeps the encoding a
+ * faithful record of what was written.
+ *
+ * @param document - The record's fields.
+ * @returns Canonical record bytes.
+ */
+export function encodeRecord(document: RecordDocument): Buffer {
+  const fields = Object.keys(document).sort();
+  const body = fields.map((field) => `${JSON.stringify(field)}:${JSON.stringify(document[field])}`);
+  return Buffer.from(`{${body.join(",")}}`, "utf8");
+}
+
+/**
+ * Decodes record bytes.
+ *
+ * @param payload - Canonical record bytes.
+ * @returns The record's fields.
+ * @throws ObjectStoreError When the bytes are not a JSON object.
+ */
+export function decodeRecord(payload: Buffer): RecordDocument {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload.toString("utf8"));
+  } catch {
+    throw new ObjectStoreError("malformed_object", "Record payload is not valid JSON.");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ObjectStoreError("malformed_object", "Record payload is not a JSON object.");
+  }
+  return parsed as RecordDocument;
+}
+
+/**
+ * Writes a tree and returns its id.
+ *
+ * @param store - Destination object store.
+ * @param entries - The tree's entries.
+ * @returns The stored tree's id.
+ */
+export function writeTree(store: ObjectStore, entries: readonly TreeEntry[]): ObjectId {
+  return store.write("tree", encodeTree(entries));
+}
+
+/**
+ * Reads a tree.
+ *
+ * @param store - Source object store.
+ * @param id - The tree's id.
+ * @returns The tree's entries.
+ * @throws ObjectStoreError When the object is absent, corrupt, or not a tree.
+ */
+export function readTree(store: ObjectStore, id: ObjectId): TreeEntry[] {
+  return decodeTree(store.readTyped(id, "tree"));
+}
+
+/**
+ * Writes a commit and returns its id.
+ *
+ * @param store - Destination object store.
+ * @param commit - The commit to write.
+ * @returns The stored commit's id.
+ */
+export function writeCommit(store: ObjectStore, commit: Commit): ObjectId {
+  return store.write("commit", encodeCommit(commit));
+}
+
+/**
+ * Reads a commit.
+ *
+ * @param store - Source object store.
+ * @param id - The commit's id.
+ * @returns The parsed commit.
+ * @throws ObjectStoreError When the object is absent, corrupt, or not a commit.
+ */
+export function readCommit(store: ObjectStore, id: ObjectId): Commit {
+  return decodeCommit(store.readTyped(id, "commit"));
+}
+
+/**
+ * Computes the id a tree would have without writing it.
+ *
+ * @param entries - The tree's entries.
+ * @returns The id the tree would be stored under.
+ */
+export function treeId(entries: readonly TreeEntry[]): ObjectId {
+  return hashObject("tree", encodeTree(entries));
+}

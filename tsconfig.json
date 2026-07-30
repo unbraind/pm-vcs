@@ -24,7 +24,8 @@
     ]
   },
   "include": [
-    "*.ts"
+    "*.ts",
+    "engine/**/*.ts"
   ],
   "exclude": [
     "node_modules",
