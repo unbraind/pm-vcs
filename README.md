@@ -149,6 +149,14 @@ Directly consumable by a PR description or release notes. Only item *documents* 
 never their history streams — a stream always changes alongside its document, so counting both
 would double every entry.
 
+**This is not the same set pm-changelog produces, and the difference is deliberate.**
+pm-changelog answers *"which items belong in this release's notes"* and lists completed work;
+`pm vcs items` answers *"which items did these commits touch"* and is status-blind. So for one
+range the changelog's set is a **subset**. Measured on a real pm-web release range
+(`v2026.07.29..v2026.07.30`): the changelog listed 2 items, this reported 4 — the extra two
+being open items that were touched but not finished. Use `pm vcs items` to describe what a
+branch did, and pm-changelog to describe what shipped.
+
 ## Design constraints
 
 - **No state of its own.** Every answer is derived from git and the tracker, so pm-vcs can

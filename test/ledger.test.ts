@@ -187,3 +187,33 @@ test("git status letters map onto change kinds", () => {
   // Anything else is a content change.
   assert.equal(changeKind("T"), "modified");
 });
+
+test("a range reports touched items regardless of status, unlike a changelog", () => {
+  // This is the distinction that makes `pm vcs items` and pm-changelog different
+  // tools rather than two implementations of one answer, and it is worth pinning
+  // because the difference is easy to mistake for a bug.
+  //
+  // pm-changelog answers "which items belong in this release's notes" and lists
+  // completed work. `pm vcs items` answers "which items did these commits touch"
+  // and is status-blind. So for the same range the changelog's set is a SUBSET:
+  // measured on pm-web's real v2026.07.29..v2026.07.30 range, the changelog
+  // listed 2 items and this reported 4 — the extra two being open items that were
+  // touched but not finished.
+  const sandbox = track(createSandbox());
+  const start = sandbox.git("rev-parse", "HEAD");
+  const closed = sandbox.createItem("Task", "Finished inside the range");
+  const open = sandbox.createItem("Task", "Still in progress at the end of the range");
+  sandbox.pm("close", closed, "--reason", "Done within the range");
+  sandbox.commit("Touch one item that closes and one that stays open");
+
+  const report = itemsInRange({
+    range: `${start}..HEAD`,
+    repoRoot: sandbox.root,
+    trackerPrefix: ".agents/pm",
+  });
+  assert.deepEqual(
+    report.items.map((item) => item.id).sort(),
+    [closed, open].sort(),
+    "both the closed and the still-open item must be reported",
+  );
+});
