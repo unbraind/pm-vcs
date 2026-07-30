@@ -53,8 +53,12 @@ test("a range reports the items it created, modified and deleted", () => {
   assert.deepEqual(report.totals, { created: 1, modified: 1, deleted: 1 });
 
   // Items are ordered by id so the output is stable across runs, which matters
-  // when this feeds a PR body or release notes.
-  assert.deepEqual([...report.items].map((item) => item.id).sort(), [...byId.keys()].sort());
+  // when this feeds a PR body or release notes. Compared against an
+  // independently sorted copy rather than sorting both sides — sorting the actual
+  // output too would make this assertion unable to detect unordered output at all.
+  const returned = report.items.map((item) => item.id);
+  assert.deepEqual(returned, [...returned].sort(), "items must already be ordered by id");
+  assert.deepEqual([...returned].sort(), [...byId.keys()].sort(), "and cover the same set");
 
   // Each item carries the commits that touched it, newest first, with the
   // authorship a changelog needs.

@@ -52,6 +52,9 @@ function run(file: string, args: readonly string[], cwd: string): string {
     cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    // A stuck `pm` or `git` should fail one test rather than stall the whole CI
+    // job with no output.
+    timeout: 120_000,
     env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
   }).trim();
 }

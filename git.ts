@@ -20,6 +20,17 @@
 
 import { spawnSync } from "node:child_process";
 
+/**
+ * Wall-clock ceiling for a single git invocation.
+ *
+ * Every pm-vcs command is a short sequence of read-only git calls, so none of
+ * them has a legitimate reason to take minutes. Without a ceiling a stuck
+ * `index.lock`, an unreachable remote, or a credential helper that blocks would
+ * hang the command an agent is waiting on, with no output and no way to tell a
+ * hang from slow work.
+ */
+const GIT_TIMEOUT_MS = 120_000;
+
 /** Outcome of one git invocation, with the exit status left for the caller to judge. */
 export interface GitResult {
   /** Process exit status; `null` when the process was terminated by a signal. */
@@ -81,11 +92,21 @@ export function runGit(args: readonly string[], cwd: string): GitResult {
     // ceiling truncates them into unparseable fragments, and spawnSync reports
     // that as an ENOBUFS error with empty output rather than as a short read.
     maxBuffer: 64 * 1024 * 1024,
+    timeout: GIT_TIMEOUT_MS,
     // Keep git from consulting a pager or prompting for credentials: either
     // would hang a command an agent is waiting on.
     env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
   });
   if (result.error) {
+    // A timeout arrives as an ETIMEDOUT spawn error, which is a different
+    // problem from git being absent and needs a different next step.
+    if ((result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+      throw new VcsError(
+        "git_timed_out",
+        `git ${args.join(" ")} did not finish within ${GIT_TIMEOUT_MS / 1000}s and was terminated.`,
+        "Check for a stale .git/index.lock, an unreachable remote, or a credential helper waiting on input, then retry.",
+      );
+    }
     throw new VcsError(
       "git_unavailable",
       `Could not run git: ${result.error.message}`,

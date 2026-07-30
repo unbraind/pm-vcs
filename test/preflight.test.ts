@@ -158,13 +158,40 @@ test("a driver command pointing at a path that does not resolve fails", () => {
   assert.match(check.remediation ?? "", /npm install/);
 });
 
-test("an unconfigured driver command has nothing to execute", () => {
+test("no configured driver at all leaves nothing to execute", () => {
   const sandbox = track(createSandbox());
-  sandbox.git("config", "--unset", "merge.pm-history.driver");
+  for (const driver of ["pm-history", "pm-relationship", "pm-json", "pm-item-toon"]) {
+    sandbox.git("config", "--unset", `merge.${driver}.driver`);
+  }
 
   const check = checkDriverExecutable(sandbox.root);
   assert.equal(check.status, "fail");
-  assert.match(check.detail, /No merge\.pm-history\.driver command is configured/);
+  assert.match(check.detail, /No pm merge driver command is configured/);
+});
+
+test("a broken item driver fails the check even when the history driver works", () => {
+  // The gap this closes: probing only one driver meant a broken
+  // merge.pm-item-toon.driver read as harmless config *drift*, the history probe
+  // passed, and preflight stayed green while every .toon item merge would fail at
+  // merge time.
+  const sandbox = track(createSandbox());
+  sandbox.git("config", "merge.pm-item-toon.driver", "./node_modules/.bin/absent-driver %O %A %B");
+
+  const check = checkDriverExecutable(sandbox.root);
+  assert.equal(check.status, "fail");
+  assert.match(check.detail, /merge\.pm-item-toon\.driver/);
+  assert.match(check.detail, /could not run/);
+});
+
+test("every configured driver is probed, each with content its own parser accepts", () => {
+  // A fixture the parser rejects would report a driver failure that is really a
+  // fixture failure, so the pass here is also evidence the fixtures are valid for
+  // all four artifact classes — including the item document, which must come from
+  // the SDK serializer because hand-written TOON is rejected outright.
+  const sandbox = track(createSandbox());
+  const check = checkDriverExecutable(sandbox.root);
+  assert.equal(check.status, "pass", check.detail);
+  assert.match(check.detail, /All 4 configured merge driver command\(s\) executed successfully/);
 });
 
 test("driver-command substitution reports failure detail from the command itself", () => {
@@ -249,15 +276,56 @@ test("a fence carrying a pattern the schema no longer produces fails", async () 
   assert.match(coverage.detail, /no longer produced/);
 });
 
-test("a tracker with no fence anywhere reports the fence as not installed", async () => {
-  // `pm init` installs the fence itself, so the absent-fence state has to be
-  // produced by removing the file rather than by skipping `pm merge install`.
-  const sandbox = track(createSandbox({ mergeInstall: false }));
-  unlinkSync(join(sandbox.root, ".gitattributes"));
+test("a repository with no committed .gitattributes has no fence coverage", async () => {
+  const sandbox = track(createSandbox({ mergeInstall: false, commitFence: false }));
+  writeFileSync(join(sandbox.root, "seed.txt"), "seed\n");
+  sandbox.git("add", "seed.txt");
+  sandbox.git("commit", "-q", "-m", "Commit without the fence");
+
   const report = await runPreflight({ repoRoot: sandbox.root, pmRoot: sandbox.pmRoot });
   const coverage = find(report.checks, "merge_fence_coverage");
   assert.equal(coverage.status, "fail");
-  assert.match(coverage.detail, /No merge fence was found/);
+  assert.match(coverage.detail, /No \.gitattributes is committed at HEAD/);
+});
+
+test("a committed file with no pm fence block has no fence coverage", async () => {
+  const sandbox = track(createSandbox({ mergeInstall: false }));
+  writeFileSync(join(sandbox.root, ".gitattributes"), "*.md text\n");
+  sandbox.commit("Commit an unrelated .gitattributes");
+
+  const report = await runPreflight({ repoRoot: sandbox.root, pmRoot: sandbox.pmRoot });
+  const coverage = find(report.checks, "merge_fence_coverage");
+  assert.equal(coverage.status, "fail");
+  assert.match(coverage.detail, /no pm merge-driver fence block/);
+});
+
+test("an uncommitted fence fix does not make coverage pass for other clones", async () => {
+  // The hole this closes: auditing the working tree let a local, uncommitted
+  // fence update turn coverage green while HEAD still lacked the patterns — so
+  // preflight reported a safe repository while every other clone merged those
+  // items unprotected. Coverage is now read from HEAD, so only a committed fence
+  // can clear it.
+  const sandbox = track(createSandbox());
+  const fencePath = join(sandbox.root, ".gitattributes");
+  const complete = readFileSync(fencePath, "utf8");
+
+  // Commit a fence missing the tasks patterns...
+  writeFileSync(
+    fencePath,
+    complete.split("\n").filter((line) => !line.includes("/tasks/")).join("\n"),
+  );
+  sandbox.commit("Commit a fence missing the tasks patterns");
+  // ...then restore the complete fence in the working tree only.
+  writeFileSync(fencePath, complete);
+
+  const report = await runPreflight({ repoRoot: sandbox.root, pmRoot: sandbox.pmRoot });
+  const coverage = find(report.checks, "merge_fence_coverage");
+  assert.equal(
+    coverage.status,
+    "fail",
+    "an uncommitted local fence must not clear coverage for other clones",
+  );
+  assert.match(coverage.detail, /absent from HEAD/);
 });
 
 test("uncommitted tracker changes warn without failing the preflight", () => {

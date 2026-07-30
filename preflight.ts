@@ -31,14 +31,17 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import {
-  auditMergeAttributeFence,
+  PM_GITATTRIBUTES_END,
+  PM_GITATTRIBUTES_START,
   auditMergeDriverConfiguration,
+  buildMergeAttributePatterns,
   resolveProjectMergeTypeFolders,
 } from "@unbrained/pm-cli/sdk/merge";
-import { readSettings } from "@unbrained/pm-cli/sdk";
+import { readSettings, serializeItemDocument } from "@unbrained/pm-cli/sdk";
+import type { ItemDocument } from "@unbrained/pm-cli/sdk";
 
 import { runGit } from "./git.ts";
 
@@ -96,7 +99,7 @@ export async function runPreflight(options: PreflightOptions): Promise<Preflight
   const checks: PreflightCheck[] = [
     checkGitattributesCommitted(repoRoot),
     await checkDriverConfiguration(repoRoot),
-    await checkFenceCoverage(pmRoot),
+    await checkFenceCoverage(repoRoot, pmRoot),
     checkDriverExecutable(repoRoot),
     checkUncommittedTrackerChanges(repoRoot, pmRoot),
   ];
@@ -188,110 +191,243 @@ export async function checkDriverConfiguration(repoRoot: string): Promise<Prefli
 }
 
 /**
- * Verifies the committed fence still covers every item type the schema declares.
+ * Verifies the **committed** fence covers every item type the schema declares.
  *
  * A type added with `pm schema add-type` writes items into a folder that a fence
  * installed earlier does not name, so exactly those items merge unprotected
  * while every other item is safe.
  *
+ * This reads the fence out of `HEAD` rather than off disk, which matters more
+ * than it looks. The fence is the *shared* half of the mechanism: what protects
+ * other clones is what is committed. Auditing the working tree would let an
+ * uncommitted local fence update turn this check green while `HEAD` still lacks
+ * the patterns — preflight would report a safe repository while every other
+ * clone merged those items unprotected. The expected pattern set comes from the
+ * SDK's own `buildMergeAttributePatterns`, so it cannot drift from what
+ * `pm merge install` writes.
+ *
+ * @param repoRoot - Absolute repository root.
  * @param pmRoot - Absolute tracker root.
  * @returns The finding for this check.
  */
-export async function checkFenceCoverage(pmRoot: string): Promise<PreflightCheck> {
+export async function checkFenceCoverage(
+  repoRoot: string,
+  pmRoot: string,
+): Promise<PreflightCheck> {
   const name = "merge_fence_coverage";
-  const settings = await readSettings(pmRoot);
-  const audit = await auditMergeAttributeFence(pmRoot, resolveProjectMergeTypeFolders(settings));
-  if (audit.status === "not_installed") {
+  const committed = runGit(["show", "HEAD:.gitattributes"], repoRoot);
+  if (committed.status !== 0) {
     return {
       name,
       status: "fail",
-      detail: "No merge fence was found for this tracker.",
-      remediation: "Run `pm merge install`.",
+      detail: "No .gitattributes is committed at HEAD, so no fence covers any item type for other clones.",
+      remediation: "Run `pm merge install`, then commit .gitattributes.",
     };
   }
-  if (audit.status === "drift") {
+
+  const fenced = fencedPatterns(committed.stdout);
+  if (fenced === null) {
+    return {
+      name,
+      status: "fail",
+      detail: "The committed .gitattributes contains no pm merge-driver fence block.",
+      remediation: "Run `pm merge install` and commit the resulting .gitattributes fence.",
+    };
+  }
+
+  const settings = await readSettings(pmRoot);
+  const trackerPrefix = relative(repoRoot, pmRoot).split("\\").join("/");
+  const expected = buildMergeAttributePatterns(
+    trackerPrefix,
+    resolveProjectMergeTypeFolders(settings),
+  );
+  const missing = expected.filter((pattern) => !fenced.includes(pattern));
+  const stale = fenced.filter((pattern) => !expected.includes(pattern));
+  if (missing.length > 0 || stale.length > 0) {
     const parts: string[] = [];
-    if (audit.missing_patterns.length > 0) {
-      parts.push(`${audit.missing_patterns.length} pattern(s) the active schema requires are absent`);
+    if (missing.length > 0) {
+      parts.push(`${missing.length} pattern(s) the active schema requires are absent from HEAD`);
     }
-    if (audit.stale_patterns.length > 0) {
-      parts.push(`${audit.stale_patterns.length} committed pattern(s) are no longer produced`);
+    if (stale.length > 0) {
+      parts.push(`${stale.length} committed pattern(s) are no longer produced`);
     }
     return {
       name,
       status: "fail",
-      detail: `The committed fence no longer matches the active schema: ${parts.join("; ")}. Items in an uncovered type folder merge under git's default text driver.`,
+      detail: `The committed fence no longer matches the active schema: ${parts.join("; ")}. Items in an uncovered type folder merge under git's default text driver in every clone.`,
       remediation: "Run `pm merge install` to refresh the fence, then commit .gitattributes.",
     };
   }
   return {
     name,
     status: "pass",
-    detail: "The committed fence covers every item type folder the active schema declares.",
+    detail: "The fence committed at HEAD covers every item type folder the active schema declares.",
     remediation: null,
   };
 }
 
 /**
- * Proves a configured driver actually runs, by merging synthetic inputs with it.
+ * Extracts the pm-owned attribute lines from a `.gitattributes` body.
+ *
+ * @param body - Full `.gitattributes` contents.
+ * @returns The fenced pattern lines, or `null` when no fence block is present.
+ */
+export function fencedPatterns(body: string): string[] | null {
+  const lines = body.split(/\r?\n/);
+  const start = lines.indexOf(PM_GITATTRIBUTES_START);
+  const end = lines.indexOf(PM_GITATTRIBUTES_END);
+  if (start === -1 || end === -1 || end < start) return null;
+  return lines.slice(start + 1, end).map((line) => line.trim()).filter((line) => line !== "");
+}
+
+/**
+ * The pm merge drivers, each with a fixture its artifact class can actually parse.
+ *
+ * Probing only one driver was not enough: if `merge.pm-item-toon.driver` pointed
+ * at a missing executable, its configuration read as harmless *drift*, a probe of
+ * the history driver passed, and preflight stayed green while every `.toon` item
+ * merge would fail at merge time. Each driver therefore gets its own probe, with
+ * content its own parser accepts, so a failure is attributable to the driver
+ * command rather than to a fixture the parser rejected.
+ *
+ * `ours` and `theirs` deliberately differ from `base` in a way the field-aware
+ * merge resolves cleanly, so a healthy driver exits zero.
+ */
+const DRIVER_PROBES: readonly {
+  readonly key: string;
+  readonly extension: string;
+  readonly base: string;
+  readonly ours: string;
+  readonly theirs: string;
+}[] = [
+  {
+    key: "merge.pm-history.driver",
+    extension: "jsonl",
+    base: "",
+    ours: `${JSON.stringify({ op: "add", field: "a", value: 1 })}\n`,
+    theirs: `${JSON.stringify({ op: "add", field: "b", value: 2 })}\n`,
+  },
+  {
+    key: "merge.pm-relationship.driver",
+    extension: "jsonl",
+    base: "",
+    ours: `${JSON.stringify({ sequence: 1, eventId: "ours", at: "2026-01-01T00:00:00.000Z" })}\n`,
+    theirs: `${JSON.stringify({ sequence: 1, eventId: "theirs", at: "2026-01-01T00:00:01.000Z" })}\n`,
+  },
+  {
+    key: "merge.pm-json.driver",
+    extension: "json",
+    base: `${JSON.stringify({ probe: {} }, null, 2)}\n`,
+    ours: `${JSON.stringify({ probe: { ours: true } }, null, 2)}\n`,
+    theirs: `${JSON.stringify({ probe: { theirs: true } }, null, 2)}\n`,
+  },
+  {
+    key: "merge.pm-item-toon.driver",
+    extension: "toon",
+    // A real item document, produced by the SDK's own serializer so the item
+    // parser accepts it. Hand-written TOON is rejected as "not a readable item
+    // document", which would make this probe report a driver failure that is
+    // really a fixture failure.
+    base: serializeItemDocument(probeItemDocument(2)),
+    ours: serializeItemDocument(probeItemDocument(1)),
+    theirs: serializeItemDocument(probeItemDocument(2, "A note only theirs has")),
+  },
+];
+
+/**
+ * Builds a valid item document for the driver probe.
+ *
+ * `ItemDocument` is `{ metadata, body }`, and the serializer requires the
+ * metadata fields the parser then demands, so the shape is spelled out rather
+ * than cast — a cast here would compile and produce a document the item parser
+ * rejects, which is exactly the failure this fixture exists to avoid.
+ *
+ * @param priority - Priority to set, so two variants differ on a scalar.
+ * @param note - Optional note, so a variant also differs on a union collection.
+ * @returns An item document the shipped serializer and parser both accept.
+ */
+function probeItemDocument(priority: 1 | 2, note?: string): ItemDocument {
+  const stamp = "2026-01-01T00:00:00.000Z";
+  return {
+    metadata: {
+      id: "probe-0000",
+      title: "pm-vcs preflight driver probe",
+      description: "",
+      type: "Task",
+      status: "open",
+      priority,
+      tags: [],
+      created_at: stamp,
+      updated_at: stamp,
+      ...(note === undefined
+        ? {}
+        : { notes: [{ text: note, created_at: stamp, author: "pm-vcs-preflight" }] }),
+    },
+    body: "",
+  };
+}
+
+/**
+ * Proves every configured driver actually runs, by merging synthetic inputs.
  *
  * Configuration presence is not the same as a working driver. A driver command
- * that points into `node_modules` resolves in the clone it was installed from
- * and fails in a fresh worktree that has not run `npm install` — and it fails
- * *during* a merge, when the working tree is already rewritten. So this check
- * asks git to run the real driver, on three throwaway blobs, in a temporary
- * directory, and looks at the exit status.
+ * that points into `node_modules` resolves in the clone it was installed from and
+ * fails in a fresh worktree that has not run `npm install` — and it fails
+ * *during* a merge, when the working tree is already rewritten. So this asks each
+ * configured driver to merge three throwaway blobs in a temporary directory and
+ * looks at the exit status.
  *
- * The inputs are trivially mergeable, so a non-zero exit means the driver could
- * not run at all rather than that the content was hard to merge.
+ * A driver key that is not configured at all is reported by
+ * {@link checkDriverConfiguration} rather than here, so this check stays about
+ * executability and does not double-report the same problem.
  *
- * @param repoRoot - Absolute repository root, used to read the driver command.
+ * @param repoRoot - Absolute repository root, used to read the driver commands.
  * @returns The finding for this check.
  */
 export function checkDriverExecutable(repoRoot: string): PreflightCheck {
   const name = "merge_driver_runs";
-  // Probe the history driver specifically, because the fixture below is an
-  // append-only JSONL stream. Probing the item driver would mean feeding TOON
-  // documents to it, and a failure there could not be told apart from a fixture
-  // the tracker schema rejected.
-  const configured = runGit(["config", "--get", "merge.pm-history.driver"], repoRoot);
-  if (configured.status !== 0 || configured.stdout.trim() === "") {
+  const configured = DRIVER_PROBES.map((probe) => ({
+    probe,
+    command: runGit(["config", "--get", probe.key], repoRoot),
+  })).filter(({ command }) => command.status === 0 && command.stdout.trim() !== "");
+
+  if (configured.length === 0) {
     return {
       name,
       status: "fail",
-      detail: "No merge.pm-history.driver command is configured, so there is nothing to execute.",
+      detail: "No pm merge driver command is configured, so there is nothing to execute.",
       remediation: "Run `pm merge install` in this clone or worktree.",
     };
   }
 
   const scratch = mkdtempSync(join(tmpdir(), "pm-vcs-preflight-"));
   try {
-    // `base` empty with one distinct appended entry on each side: the union case
-    // the driver must handle, valid without any tracker schema, so a failure is
-    // attributable to the driver command rather than to the fixture.
-    const paths = {
-      base: join(scratch, "base.jsonl"),
-      ours: join(scratch, "ours.jsonl"),
-      theirs: join(scratch, "theirs.jsonl"),
-    };
-    writeFileSync(paths.base, "");
-    writeFileSync(paths.ours, `${JSON.stringify({ op: "add", field: "a", value: 1 })}\n`);
-    writeFileSync(paths.theirs, `${JSON.stringify({ op: "add", field: "b", value: 2 })}\n`);
-
-    const result = spawnDriver(configured.stdout.trim(), paths, scratch);
-    if (result.ok) {
+    const failures: string[] = [];
+    for (const { probe, command } of configured) {
+      const paths = {
+        base: join(scratch, `base.${probe.extension}`),
+        ours: join(scratch, `ours.${probe.extension}`),
+        theirs: join(scratch, `theirs.${probe.extension}`),
+      };
+      writeFileSync(paths.base, probe.base);
+      writeFileSync(paths.ours, probe.ours);
+      writeFileSync(paths.theirs, probe.theirs);
+      const result = spawnDriver(command.stdout.trim(), paths, scratch);
+      if (!result.ok) failures.push(`${probe.key}: ${result.detail}`);
+    }
+    if (failures.length > 0) {
       return {
         name,
-        status: "pass",
-        detail: "The configured merge driver executed successfully against a synthetic three-way input.",
-        remediation: null,
+        status: "fail",
+        detail: `${failures.length} of ${configured.length} configured merge driver command(s) could not run: ${failures.join("; ")}. Git would report a merge failure only once the working tree had already been rewritten.`,
+        remediation: "Run `npm install` if the drivers resolve through a local devDependency, then re-run `pm merge install` in this checkout.",
       };
     }
     return {
       name,
-      status: "fail",
-      detail: `The configured merge driver command could not run: ${result.detail}. Git would report a merge failure only once the working tree had already been rewritten.`,
-      remediation: "Run `npm install` if the driver resolves through a local devDependency, then re-run `pm merge install` in this checkout.",
+      status: "pass",
+      detail: `All ${configured.length} configured merge driver command(s) executed successfully against synthetic three-way inputs.`,
+      remediation: null,
     };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -339,6 +475,9 @@ export function spawnDriver(
     cwd,
     shell: true,
     encoding: "utf8",
+    // A driver command that never returns would hang preflight itself, which is
+    // the command an agent runs to find out whether it can safely proceed.
+    timeout: 30_000,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   });
   if (result.status === 0) return { ok: true, detail: "" };

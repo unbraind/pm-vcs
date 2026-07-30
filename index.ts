@@ -94,15 +94,21 @@ type ItemsEnvelope = CommandEnvelope & { readonly items: RangeReport };
  * option in a pm extension, so every read goes through this helper with the
  * camel-cased name.
  *
- * @param options - The context's option bag.
+ * The bag is accepted as possibly absent. `CommandHandlerContext` types it as
+ * always present, but pm-cli#825 is a standing demonstration that these types
+ * can promise more than the runtime delivers, and a `TypeError` from indexing
+ * `undefined` would surface as an opaque handler failure rather than as a
+ * missing option.
+ *
+ * @param options - The context's option bag, if the host supplied one.
  * @param name - Camel-cased option name.
  * @returns The trimmed value, or `undefined` when unset or blank.
  */
 export function readStringOption(
-  options: Record<string, unknown>,
+  options: Record<string, unknown> | undefined,
   name: string,
 ): string | undefined {
-  const raw = options[name];
+  const raw = options?.[name];
   if (typeof raw !== "string") return undefined;
   const trimmed = raw.trim();
   return trimmed === "" ? undefined : trimmed;

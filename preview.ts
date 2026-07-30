@@ -248,8 +248,16 @@ interface MergeSides {
  *
  * A path with no `merge` attribute is reported as `unprotected` without being
  * merged: that is the finding, and it is the one gap that silently produces
- * line-merged tracker data. A missing blob on a side is passed to the primitive
- * as an empty string, which is how the driver itself sees a one-sided add.
+ * line-merged tracker data.
+ *
+ * Missing blobs are handled asymmetrically, mirroring git:
+ *
+ * - **base absent** (added on both sides) is passed to the primitive as an empty
+ *   string, because git does hand add/add to a driver with an empty base file.
+ * - **ours or theirs absent** (delete/modify) short-circuits to `delete_modify`
+ *   and never reaches a primitive, because git settles that at the tree level
+ *   and never runs a driver — and `mergeItemDocuments` rejects an empty side
+ *   outright rather than reading it as a deletion.
  *
  * @param path - Repository-relative POSIX path.
  * @param driver - Merge driver git reported for the path.
