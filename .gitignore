@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.local
+.env
+*.tgz
+RELEASE_NOTES.md
+
+dist-test/
+.agents/pm/locks/
+.agents/pm/runtime/
+.agents/pm/search/
+.agents/pm/extensions/
+coverage/
+
+# pm-cli:runtime-cache:start
+.agents/pm/runtime/
+.agents/pm/search/
+.agents/pm/locks/
+.agents/pm/transactions/
+.agents/pm/checkpoints/
+# pm-cli:runtime-cache:end
