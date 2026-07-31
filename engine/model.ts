@@ -75,11 +75,34 @@ export interface RecordDocument {
 }
 
 /**
+ * Compares two names in UTF-8 byte order.
+ *
+ * This is the ordering the whole system sorts by, and it is deliberately not
+ * `<`/`>` on the strings. JavaScript compares strings by UTF-16 code unit, which
+ * disagrees with byte order for anything outside the Basic Multilingual Plane —
+ * so a tree encoded here and a ref listing sorted with `<` would order the same
+ * two names differently the moment one contains an emoji. It is also not
+ * `localeCompare`, which is locale-sensitive and would let one tree hash
+ * differently under two `LANG` settings.
+ *
+ * Being total — returning 0 for equal names rather than an arbitrary side — is
+ * what makes it safe to sort a collection that may legitimately contain two
+ * equal keys, and what keeps every call site free of a tie-breaking branch.
+ *
+ * @param left - First name.
+ * @param right - Second name.
+ * @returns Negative, zero or positive as `left` sorts before, with, or after `right`.
+ */
+export function compareByteOrder(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+
+/**
  * Encodes a tree.
  *
- * Entries are sorted by name using byte order rather than locale collation:
- * `String.prototype.localeCompare` is locale-sensitive and would let the same
- * tree hash differently under two `LANG` settings.
+ * Entries are sorted by name in byte order via {@link compareByteOrder}, for the
+ * reasons given there: the object id is the hash of these bytes, so an ordering
+ * that varied with locale or with a name's plane would vary the id.
  *
  * @param entries - The tree's entries in any order.
  * @returns Canonical tree bytes.
@@ -101,9 +124,7 @@ export function encodeTree(entries: readonly TreeEntry[]): Buffer {
     }
     seen.add(entry.name);
   }
-  const sorted = [...entries].sort((left, right) => (
-    Buffer.compare(Buffer.from(left.name, "utf8"), Buffer.from(right.name, "utf8"))
-  ));
+  const sorted = [...entries].sort((left, right) => compareByteOrder(left.name, right.name));
   return Buffer.concat(sorted.map((entry) => Buffer.concat([
     Buffer.from(`${entry.mode} ${entry.name}\0`, "utf8"),
     Buffer.from(entry.id, "utf8"),

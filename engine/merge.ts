@@ -182,9 +182,15 @@ function alignThreeWay(
       continue;
     }
 
-    // Not stable here, so find where stability resumes. The next stable point is
-    // the earliest base line that both sides still carry at or after the current
-    // cursors; everything before it is one unstable region.
+    // Not stable here, so find where stability resumes: the earliest base line
+    // both sides still carry. Everything before it is one unstable region.
+    //
+    // No check that the found indices are at or after the current cursors is
+    // needed, and one would be dead code. `matchMap` is built from a Myers diff,
+    // whose matched pairs are strictly increasing on both axes, so a match at a
+    // base index beyond `baseCursor` necessarily lies beyond the side cursors
+    // too — the cursors were themselves set from a match at or before
+    // `baseCursor`.
     let nextBase = base.length;
     let nextOurs = ours.length;
     let nextTheirs = theirs.length;
@@ -192,8 +198,6 @@ function alignThreeWay(
       const ourIndex = ourMatches.get(probe);
       const theirIndex = theirMatches.get(probe);
       if (ourIndex === undefined || theirIndex === undefined) continue;
-      /* c8 ignore next -- defensive guard: Myers matches are monotonic, so this is unreachable */
-      if (ourIndex < ourCursor || theirIndex < theirCursor) continue;
       nextBase = probe;
       nextOurs = ourIndex;
       nextTheirs = theirIndex;

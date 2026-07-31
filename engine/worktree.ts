@@ -20,7 +20,7 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { type IgnoreRules, isIgnored, isPrunableDirectory } from "./ignore.ts";
-import { type FileMode, type TreeEntry, readTree, writeTree } from "./model.ts";
+import { compareByteOrder, type FileMode, type TreeEntry, readTree, writeTree } from "./model.ts";
 import { hashObject, type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
 
 /** One staged path: what content and mode the next commit should record for it. */
@@ -365,9 +365,8 @@ export function computeStatus(
 
   const untracked = [...present].filter((path) => !staged.has(path)).sort();
   return {
-    staged: stagedChanges.sort((left, right) => (left.path < right.path ? -1 : 1)),
-    /* c8 ignore next 2 -- equality arm unreachable: no two paths can be equal */
-    unstaged: unstagedChanges.sort((left, right) => (left.path < right.path ? -1 : 1)),
+    staged: stagedChanges.sort((left, right) => compareByteOrder(left.path, right.path)),
+    unstaged: unstagedChanges.sort((left, right) => compareByteOrder(left.path, right.path)),
     untracked,
     clean: stagedChanges.length === 0 && unstagedChanges.length === 0 && untracked.length === 0,
   };

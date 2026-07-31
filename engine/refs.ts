@@ -22,6 +22,7 @@ import {
 } from "node:fs";
 import { dirname, join, posix, sep } from "node:path";
 
+import { compareByteOrder } from "./model.ts";
 import { isObjectId, type ObjectId, ObjectStoreError } from "./objects.ts";
 
 /** Prefix under which branch refs live. */
@@ -222,10 +223,7 @@ export class RefStore {
       }
     };
     walk(base);
-    // Two arms: names are filesystem paths within one directory tree, so no two
-    // can be equal and an equality arm would be dead code.
-  /* c8 ignore next 2 -- equality arm unreachable: no two refs share one name */
-  return found.sort((left, right) => (left.name < right.name ? -1 : 1));
+    return found.sort((left, right) => compareByteOrder(left.name, right.name));
   }
 
   /**

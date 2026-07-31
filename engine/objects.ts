@@ -225,17 +225,27 @@ export class ObjectStore {
    * structurally valid while its bytes rot, and silently returning altered
    * content is the one failure a content-addressed store must never have.
    *
+   * Only `ENOENT` means absent. Any other errno — a permission denial, a
+   * directory where an object file belongs, a failing disk — is re-raised
+   * unchanged, because reporting it as `object_not_found` would tell an operator
+   * their history had lost objects when in fact the store was merely unreadable.
+   * Those two conditions call for opposite responses: one is repaired by
+   * re-fetching history, the other by fixing the machine.
+   *
    * @param id - Object id to read.
    * @returns The object's kind and payload.
    * @throws ObjectStoreError When the id is malformed, the object is absent, its
    *   compressed bytes will not inflate, or its content does not hash to `id`.
+   * @throws Error The underlying I/O error, when the object cannot be read for
+   *   any reason other than being absent.
    */
   read(id: ObjectId): StoredObject {
     this.assertId(id);
     let compressed: Buffer;
     try {
       compressed = readFileSync(this.pathFor(id));
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       throw new ObjectStoreError("object_not_found", `No object ${id} in the store.`);
     }
     let framed: Buffer;

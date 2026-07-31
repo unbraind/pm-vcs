@@ -7,7 +7,7 @@
 // and each one is a branch that would otherwise never execute in the suite.
 
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
@@ -223,6 +223,26 @@ test("verify names the failure code for every object that will not read back", a
   assert.equal(result.handled, false);
   assert.match(String(result.errorMessage), /did not verify/);
   assert.match(String(result.errorMessage), new RegExp(`${blobId}: corrupt_object`));
+});
+
+test("verify re-raises an I/O failure instead of reporting the repository corrupt", async () => {
+  const { root, run } = await repoWithCommit();
+  const blobId = Repository.open(root).readIndex()[0].id;
+  // Replace the blob's file with a directory. Reading it fails with EISDIR, which
+  // says the *store* is unreadable, not that history lost content — the two call
+  // for opposite responses (fix the machine vs. re-fetch the objects), so verify
+  // must not fold this into its corruption tally. A blob is the right object to
+  // break: the ref walk reads commits and trees itself, so breaking one of those
+  // would fail before reaching the handler's own read.
+  const objectPath = join(root, CONTROL_DIRECTORY, "objects", blobId.slice(0, 2), blobId.slice(2));
+  rmSync(objectPath);
+  mkdirSync(objectPath);
+
+  const result = await run("vcs verify");
+  assert.equal(result.handled, false);
+  // An errno, not a VcsError: the failure is surfaced as what it is.
+  assert.doesNotMatch(String(result.errorMessage), /did not verify/);
+  assert.match(String(result.errorMessage), /EISDIR/);
 });
 
 test("switching to a tag still works when a corrupt branch file shares its name", async () => {
