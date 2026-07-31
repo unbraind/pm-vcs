@@ -12,9 +12,11 @@ import {
   decodeCommit,
   decodeRecord,
   decodeTree,
+  effectiveChangeId,
   encodeCommit,
   encodeRecord,
   encodeTree,
+  identityWithoutChangeLine,
   readCommit,
   readTree,
   treeId,
@@ -112,6 +114,69 @@ test("decodeTree rejects truncated or misformed bytes", () => {
     (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object",
   );
 });
+
+test("encodeCommit writes the change line immediately after the tree line and round-trips it", () => {
+  const change = "f".repeat(64);
+  const commit: Commit = {
+    tree: id,
+    changeId: change,
+    parents: [id],
+    author: signature,
+    committer: signature,
+    message: "a change with an identity\n",
+  };
+  const encoded = encodeCommit(commit).toString("utf8");
+  // The change line sits between `tree` and the first `parent`, which is the fixed
+  // position a decoder and a re-encoder rely on to hash to one id.
+  assert.ok(encoded.indexOf(`tree ${id}`) < encoded.indexOf(`change ${change}`));
+  assert.ok(encoded.indexOf(`change ${change}`) < encoded.indexOf("parent"));
+  const decoded = decodeCommit(encodeCommit(commit));
+  assert.equal(decoded.changeId, change);
+  assert.equal(decoded.tree, id);
+});
+
+test("a commit with no change line decodes without one, and is its own change", () => {
+  const commit: Commit = {
+    tree: id,
+    parents: [],
+    author: signature,
+    committer: signature,
+    message: "pre-change-id era\n",
+  };
+  assert.equal(decodeCommit(encodeCommit(commit)).changeId, undefined);
+  // effectiveChangeId falls back to the commit's own id for such a commit, which
+  // is what lets every caller treat a change uniformly across the rewrite era.
+  assert.equal(effectiveChangeId(id, decodeCommit(encodeCommit(commit))), id);
+  // A commit that does carry a change id is known by it instead.
+  const withChange: Commit = { ...commit, changeId: "a".repeat(64) };
+  assert.equal(effectiveChangeId(id, decodeCommit(encodeCommit(withChange))), "a".repeat(64));
+});
+
+test("identityWithoutChangeLine is the id a commit would have with no change line", () => {
+  const base = {
+    tree: id,
+    parents: [id],
+    author: signature,
+    committer: signature,
+    message: "deterministic identity\n",
+  };
+  // The change id a new commit adopts equals the id that commit hashes to when
+  // it carries no change line — so two identical commits adopt the same change
+  // id and remain one commit after a content-addressed convergence.
+  assert.equal(identityWithoutChangeLine(base), hashObjectOfCommit(base));
+});
+
+/**
+ * Computes the framed id of a commit's canonical bytes, mirroring the store.
+ *
+ * @param commit - The commit to hash.
+ * @returns The id the store would file it under.
+ */
+function hashObjectOfCommit(commit: Omit<Commit, "changeId">): string {
+  // Reuse the store's hashing by writing and reading the object type header.
+  const store = freshStore();
+  return store.write("commit", encodeCommit(commit));
+}
 
 test("encodeCommit and decodeCommit round-trip ancestry and message", () => {
   const commit: Commit = {

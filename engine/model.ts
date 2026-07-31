@@ -54,6 +54,19 @@ export interface Commit {
   /** Root tree of the snapshot this commit names. */
   readonly tree: ObjectId;
   /**
+   * Stable identity of the *change* this commit records, independent of the
+   * commit's own id.
+   *
+   * A change survives being described, rebased and squashed: each of those
+   * produces a new commit with a new id, but every one of them points back at
+   * the same change so `pm vcs log` can speak of one thing across a rewrite.
+   * A freshly created commit adopts the id it would hash to with no change line
+   * (see {@link identityWithoutChangeLine}); a rewritten commit inherits the
+   * effective change id of its predecessor. Absent on commits written before
+   * change ids existed, which {@link effectiveChangeId} treats as their own id.
+   */
+  readonly changeId?: ObjectId;
+  /**
    * Parent commits, oldest lineage first.
    *
    * Empty for a root commit, one for an ordinary commit, two or more for a
@@ -248,17 +261,66 @@ function decodeSignature(line: string): Signature {
 /**
  * Encodes a commit.
  *
+ * The change line, when present, is written immediately after the `tree` line
+ * and before any parents. Position is fixed rather than left to insertion order
+ * so a commit decoded and re-encoded hashes to the same id, which is what every
+ * identity check in the system relies on.
+ *
  * @param commit - The commit to encode.
  * @returns Canonical commit bytes: headers, a blank line, then the message.
  */
 export function encodeCommit(commit: Commit): Buffer {
-  const lines = [
-    `tree ${commit.tree}`,
+  const lines = [`tree ${commit.tree}`];
+  if (commit.changeId !== undefined) lines.push(`change ${commit.changeId}`);
+  lines.push(
     ...commit.parents.map((parent) => `parent ${parent}`),
     `author ${encodeSignature(commit.author)}`,
     `committer ${encodeSignature(commit.committer)}`,
-  ];
+  );
   return Buffer.from(`${lines.join("\n")}\n\n${commit.message}`, "utf8");
+}
+
+/**
+ * The id a commit would hash to if it carried no change line.
+ *
+ * A freshly created commit adopts this value as its change id. It is derived
+ * from the content the commit describes — its tree, parents, author, committer
+ * and message — none of which a rebase or squash alters in a way that should
+ * change *which change* this is, so the value is stable across a rewrite even
+ * though the commit's own id is not. The five fields are picked explicitly so a
+ * stray `changeId` on the input can never feed the hash and break the
+ * determinism the property depends on.
+ *
+ * @param commit - The commit's canonical fields, without its change id.
+ * @returns The id the commit would be stored under with no change line.
+ */
+export function identityWithoutChangeLine(
+  commit: Pick<Commit, "tree" | "parents" | "author" | "committer" | "message">,
+): ObjectId {
+  return hashObject("commit", encodeCommit({
+    tree: commit.tree,
+    parents: commit.parents,
+    author: commit.author,
+    committer: commit.committer,
+    message: commit.message,
+  }));
+}
+
+/**
+ * The change identity a commit should be known by.
+ *
+ * A commit that carries a change id is known by it; a commit written before
+ * change ids existed carries none, and is its own change — the only honest
+ * answer, since nothing else names it. Centralising the fallback keeps every
+ * caller (log output, descendant replay, conflict reporting) agreeing on one
+ * identity for one commit.
+ *
+ * @param commitId - The commit's own id.
+ * @param commit - The parsed commit.
+ * @returns The commit's change id when it has one, otherwise its own id.
+ */
+export function effectiveChangeId(commitId: ObjectId, commit: Commit): ObjectId {
+  return commit.changeId ?? commitId;
 }
 
 /**
@@ -277,6 +339,7 @@ export function decodeCommit(payload: Buffer): Commit {
     throw new ObjectStoreError("malformed_object", "Commit has no blank line separating headers from message.");
   }
   let tree: ObjectId | undefined;
+  let changeId: ObjectId | undefined;
   const parents: ObjectId[] = [];
   let author: Signature | undefined;
   let committer: Signature | undefined;
@@ -295,6 +358,14 @@ export function decodeCommit(payload: Buffer): Commit {
         throw new ObjectStoreError("malformed_object", `Commit names tree "${value}", which is not an object id.`);
       }
       tree = value;
+    } else if (keyword === "change") {
+      if (changeId !== undefined) {
+        throw new ObjectStoreError("malformed_object", "Commit carries more than one change header.");
+      }
+      if (!isObjectId(value)) {
+        throw new ObjectStoreError("malformed_object", `Commit names change "${value}", which is not an object id.`);
+      }
+      changeId = value;
     } else if (keyword === "parent") {
       if (!isObjectId(value)) {
         throw new ObjectStoreError("malformed_object", `Commit names parent "${value}", which is not an object id.`);
@@ -317,7 +388,13 @@ export function decodeCommit(payload: Buffer): Commit {
   if (!tree || !author || !committer) {
     throw new ObjectStoreError("malformed_object", "Commit is missing its tree, author or committer header.");
   }
-  return { tree, parents, author, committer, message: text.slice(blankLine + 2) };
+  // The change id is optional: a commit written before change ids existed has
+  // none, and is its own change. Assembling the object with it only when present
+  // is what keeps the encoder's `changeId !== undefined` check honest on a
+  // round-trip.
+  return changeId === undefined
+    ? { tree, parents, author, committer, message: text.slice(blankLine + 2) }
+    : { tree, changeId, parents, author, committer, message: text.slice(blankLine + 2) };
 }
 
 /**

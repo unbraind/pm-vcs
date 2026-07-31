@@ -14,6 +14,7 @@ import {
   optionalString,
   positiveInteger,
   signatureFor,
+  sourceWorkingRoot,
 } from "../vcs-commands.ts";
 import { CONTROL_DIRECTORY, Repository } from "../engine/repo.ts";
 import { flattenTree } from "../engine/worktree.ts";
@@ -62,17 +63,19 @@ const COMMANDS = [
   "vcs init", "vcs status", "vcs add", "vcs commit", "vcs log", "vcs diff",
   "vcs branch", "vcs switch", "vcs merge", "vcs undo", "vcs oplog",
   "vcs export", "vcs import", "vcs tag", "vcs verify",
+  "vcs describe", "vcs rebase", "vcs squash", "vcs split",
+  "vcs cherry-pick", "vcs revert", "vcs reset", "vcs restore", "vcs show",
   "vcs git preflight", "vcs git preview", "vcs git items",
 ];
 
-test("activation registers all 18 commands with no sibling dropped", async () => {
+test("activation registers all 27 commands with no sibling dropped", async () => {
   const harness = await activate();
   // A registration rejected by the loader aborts at that command and silently
   // drops every later sibling, so asserting each one's contract is the invariant.
   for (const command of COMMANDS) {
     harness.assertCommandContract({ command });
   }
-  assert.equal(COMMANDS.length, 18);
+  assert.equal(COMMANDS.length, 27);
 });
 
 test("findRepositoryRoot walks up to a control directory and returns null past the root", () => {
@@ -90,6 +93,16 @@ test("openRepository throws a remediation when no repository contains the direct
   assert.throws(
     () => openRepository({ command: "vcs status", args: [], options: {}, global: {}, pm_root: root }),
     (error: unknown) => error instanceof VcsError && error.code === "no_repository",
+  );
+});
+
+test("source working roots prefer a repository, then the portable workspace, then the tracker", () => {
+  const base = { command: "vcs init", args: [], options: {}, global: {}, pm_root: "/tracker" };
+  assert.equal(sourceWorkingRoot(base), "/tracker");
+  assert.equal(sourceWorkingRoot({ ...base, source_workspace_root: "/workspace" }), "/workspace");
+  assert.equal(
+    sourceWorkingRoot({ ...base, source_workspace_root: "/workspace", repo_root: "/repository" }),
+    "/repository",
   );
 });
 
@@ -131,6 +144,7 @@ test("a full repository workflow runs end to end through the host", async () => 
   // init
   const init = await harness.runCommand({ command: "vcs init", options: { branch: "main", recordPath: "items/*.toon" }, pmRoot: root });
   assert.equal(init.handled, true);
+  assert.equal(Object.hasOwn(init.result as object, "exit_code"), false, "successful payloads omit the host-reserved non-zero exit code");
   assert.equal((init.result as { repository: { branch: string } }).repository.branch, "main");
 
   // add + commit

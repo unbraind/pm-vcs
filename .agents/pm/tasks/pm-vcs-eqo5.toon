@@ -1,0 +1,21 @@
+id: pm-vcs-eqo5
+title: Implement describe operation
+description: Engine + command for describe with change-id preservation and descendant replay
+type: Task
+status: closed
+priority: 2
+tags: []
+created_at: "2026-07-31T07:00:57.975Z"
+updated_at: "2026-07-31T12:05:45.230Z"
+closed_at: "2026-07-31T12:05:45.211Z"
+completed_at: "2026-07-31T12:05:45.211Z"
+author: pi-agent
+estimated_minutes: 45
+acceptance_criteria: "Describe rewords a selected commit, preserves its change identity, replays descendants, moves affected refs transactionally, and is exposed through the host command surface."
+resolution: Delivered the self-written engine operation and registered pm SDK command surface.
+expected_result: "Describe rewords a selected commit, preserves its change identity, replays descendants, moves affected refs transactionally, and is exposed through the host command surface."
+actual_result: "Describe engine and command tests prove rewording, identity preservation, descendant replay, ref movement, detached HEAD, materialization, and undo."
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-bddk,parent,"2026-07-31T07:00:58.417Z",pi-agent,"cli:update:dep",detected
+close_reason: Implemented and covered by the Phase 2 engine and command suites
+body: ""

@@ -1,0 +1,35 @@
+id: pm-vcs-6ihf
+title: Retain explicit topological ordering for rewrite ranges
+description: Decide whether topoSort is redundant or a required safety property after coverage showed its parent-queue arm had not previously executed.
+type: Decision
+status: closed
+priority: 2
+tags[4]: architecture,coverage,history-rewrite,ordering
+created_at: "2026-07-31T11:43:39.209Z"
+updated_at: "2026-07-31T12:27:05.146Z"
+deadline: "2026-08-01T11:43:39.209Z"
+closed_at: "2026-07-31T11:44:02.023Z"
+completed_at: "2026-07-31T11:44:02.023Z"
+author: "harness:codex"
+estimated_minutes: 15
+acceptance_criteria: "Decision names the ordering invariant, alternatives, evidence, and consequence; a multi-commit rebase test fails if newest-first discovery order is replayed directly; full coverage reaches 100/100/100"
+resolution: Retain the iterative parent-before-child traversal with push-time deduplication.
+expected_result: Rewrite ranges replay every parent before its children without recursion or reliance on Set discovery order.
+actual_result: "The multi-commit rebase test executes the parent queue, preserves both change identities, and the 341-test gate reaches 100/100/100."
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-63kd,parent,"2026-07-31T11:43:39.209Z","harness:codex","cli:create:dep",detected
+comments[1]{created_at,author,text}:
+  "2026-07-31T11:43:39.209Z","harness:codex",The new two-commit rebase test executes topoSort's parent queue and asserts the older change is replayed onto the new base before its child.
+notes[2]{created_at,author,text}:
+  "2026-07-31T11:43:39.209Z","harness:codex","The traversal is a correctness boundary, not coverage scaffolding: deleting it would apply a child before its rewritten parent exists."
+  "2026-07-31T12:27:05.145Z","harness:codex","The recorded 341-test count was the exact passing scope when this item closed. The subsequent portable source-workspace regression added one test, making the Phase 2 final gate 342 before review; PR review follow-up later expands the suite again. Append-only history intentionally preserves each time-scoped result."
+learnings[1]{created_at,author,text}:
+  "2026-07-31T11:43:39.209Z","harness:codex","Reachability order and replay order have opposite semantics: graph discovery starts at the tip, while replay must start at the oldest included ancestor."
+files[1]{path,scope,note}:
+  engine/rewrite.ts,project,Iterative parent-before-child topological traversal
+tests[1]{command,scope,timeout_seconds,note}:
+  node --test test/rewrite.test.ts,project,30,Multi-commit rebase ordering and change identity
+docs[1]{path,scope,note}:
+  README.md,project,History rewriting architecture and command contract
+close_reason: "Decision recorded and executable evidence passes: explicit iterative topological ordering remains required for correct oldest-first replay."
+body: "Options considered: delete topoSort and rely on Set iteration order; retain the iterative parent-before-child traversal; replace it with recursive traversal. Retain the iterative traversal. Reachability yields the source tip before its ancestors, and a multi-commit rebase proves replay must reverse that discovery order. Push-time deduplication also makes diamonds linear and recursion would risk stack exhaustion on machine-generated history."

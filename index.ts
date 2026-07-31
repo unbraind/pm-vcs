@@ -76,8 +76,6 @@ export function resolveRoots(context: CommandHandlerContext): ResolvedRoots {
 interface CommandEnvelope {
   /** Whether the command's own criterion was satisfied. */
   readonly ok: boolean;
-  /** Non-zero when the caller should treat the run as a failure. */
-  readonly exit_code: number;
 }
 
 /** `pm vcs git preflight` result. */
@@ -230,7 +228,7 @@ function setupCommands(api: ExtensionApi): void {
       // returned payload always exits 0 whatever it contains — so the verdict is
       // carried in a thrown error rather than only in the report body.
       assertPreflightPassed(preflight);
-      return { ok: true, exit_code: 0, preflight };
+      return { ok: true, preflight };
     },
   });
 
@@ -269,7 +267,7 @@ function setupCommands(api: ExtensionApi): void {
         trackerPrefix: roots.trackerPrefix,
       });
       assertPreviewWithinThreshold(preview, readStringOption(context.options, "failOn"));
-      return { ok: true, exit_code: 0, preview };
+      return { ok: true, preview };
     },
   });
 
@@ -295,7 +293,7 @@ function setupCommands(api: ExtensionApi): void {
         repoRoot: roots.repoRoot,
         trackerPrefix: roots.trackerPrefix,
       });
-      return { ok: true, exit_code: 0, items };
+      return { ok: true, items };
     },
   });
 }

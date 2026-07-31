@@ -1,0 +1,25 @@
+id: pm-vcs-bddk
+title: Change identities and history rewriting
+description: "Add change identities to commits and build the transactional history-rewriting engine: describe, rebase, squash, split, cherry-pick, revert, reset, restore, show."
+type: Feature
+status: closed
+priority: 2
+tags: []
+created_at: "2026-07-31T06:41:40.043Z"
+updated_at: "2026-07-31T12:05:53.588Z"
+closed_at: "2026-07-31T12:05:53.561Z"
+completed_at: "2026-07-31T12:05:53.561Z"
+author: pi-agent
+estimated_minutes: 420
+acceptance_criteria: "npm run typecheck, coverage, audit:prod and pack:dry-run all pass; pm health reports no flag collisions; multi-agent per-field convergence and transactional-abort properties covered end to end"
+parent: pm-vcs-ijj7
+resolution: "Implemented stable change identities, transactional rewrite planning, nine command verbs, descendant/ref replay, record-field merge reuse, and whole-operation undo."
+expected_result: "All rewrite commands activate without collisions; multi-agent record convergence and transactional abort are proven; typecheck, coverage, audit, package, and changelog gates pass."
+actual_result: "All 27 package commands activate; 342 tests cover rewrite convergence and abort semantics; 19 source files report 100/100/100; audit, pack, and changelog gates pass."
+files[2]{path,scope,note}:
+  engine/rewrite.ts,project,Transactional rewrite planning and tree replay
+  vcs-commands.ts,project,Nine user-facing rewrite commands
+tests[1]{command,scope,timeout_seconds,note}:
+  "npm run release:check",project,240,Complete package release gate
+close_reason: History-rewriting feature delivered through the current pm SDK
+body: ""

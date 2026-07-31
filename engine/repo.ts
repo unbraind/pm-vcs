@@ -11,8 +11,8 @@
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import {
   type Commit,
@@ -21,20 +21,19 @@ import {
   type Signature,
   compareByteOrder,
   decodeRecord,
+  effectiveChangeId,
   encodeRecord,
+  identityWithoutChangeLine,
   readCommit,
   writeCommit,
 } from "./model.ts";
 import { type ObjectId, ObjectStore, ObjectStoreError, hashObject, isObjectId } from "./objects.ts";
 import {
-  type ContentMergeResult,
   type ConflictLabels,
   isAncestor,
   mergeBases,
-  mergeContent,
   reachable,
 } from "./merge.ts";
-import { mergeRecords } from "./records.ts";
 import {
   DEFAULT_CONFIG,
   type RepositoryConfig,
@@ -59,6 +58,21 @@ import {
 } from "./worktree.ts";
 import { splitLines, unifiedDiff } from "./diff.ts";
 import { type IgnoreRules, isIgnored, readIgnoreRules } from "./ignore.ts";
+import {
+  type HeadSnapshot,
+  type MergeConflict,
+  type RefSnapshot,
+  type RewriteContext,
+  type RewritePlan,
+  RewriteConflictError,
+  mergeTrees,
+  planCherryPick,
+  planDescribe,
+  planRebase,
+  planRevert,
+  planSplit,
+  planSquash,
+} from "./rewrite.ts";
 
 /** Name of the control directory inside a repository root. */
 export const CONTROL_DIRECTORY = ".pmvcs";
@@ -85,19 +99,12 @@ export interface MergeReport {
   readonly clean: boolean;
 }
 
-/** One path that could not be merged automatically. */
-export interface MergeConflict {
-  readonly path: string;
-  /** `content` for text, `record` for a structured document, `mode` for a permission clash. */
-  readonly reason: "content" | "record" | "mode";
-  /** For a record conflict, the fields that disagreed. */
-  readonly fields?: readonly string[];
-}
-
 /** One entry of `log` output. */
 export interface LogEntry {
   readonly id: ObjectId;
   readonly commit: Commit;
+  /** The change this commit records, stable across rewrites of this commit. */
+  readonly changeId: ObjectId;
 }
 
 /** Options that vary per commit. */
@@ -359,13 +366,18 @@ export class Repository {
         "Nothing staged differs from HEAD. Stage a change, or pass allowEmpty to record one anyway.",
       );
     }
-    const id = writeCommit(this.objects, {
+    const base = {
       tree,
       parents: parent === null ? [] : [parent],
       author: options.author,
       committer: options.committer ?? options.author,
       message: options.message,
-    });
+    };
+    // A new commit's change id is the id it would have with no change line, so
+    // the identity is a function of the content the commit describes rather than
+    // of the metadata rewriting later changes. Deriving it here, before the
+    // commit is stored, is what keeps the property deterministic with no seed.
+    const id = writeCommit(this.objects, { ...base, changeId: identityWithoutChangeLine(base) });
     this.advanceHead(head, parent, id, "commit", `Committed ${id.slice(0, 12)}: ${splitLines(options.message)[0] ?? ""}`, now);
     return id;
   }
@@ -554,7 +566,7 @@ export class Repository {
     let cursor: ObjectId | undefined = this.resolve(revision);
     while (cursor !== undefined && entries.length < limit) {
       const commit = readCommit(this.objects, cursor);
-      entries.push({ id: cursor, commit });
+      entries.push({ id: cursor, commit, changeId: effectiveChangeId(cursor, commit) });
       cursor = commit.parents[0];
     }
     return entries;
@@ -602,15 +614,18 @@ export class Repository {
     for (const path of [...new Set([...left.keys(), ...right.keys()])].sort(compareByteOrder)) {
       const before = left.get(path);
       const after = right.get(path);
-      // Two paths bound to the same object id are byte-identical by construction,
-      // so there is nothing to read and nothing to diff.
-      if (before?.id === after?.id) continue;
-      output.push(unifiedDiff(
-        this.diffText(before?.id ?? null),
-        this.diffText(after?.id ?? null),
-        before ? `a/${path}` : "/dev/null",
-        after ? `b/${path}` : "/dev/null",
-      ));
+      if (before?.id === after?.id && before?.mode === after?.mode) continue;
+      if (before !== undefined && after !== undefined && before.mode !== after.mode) {
+        output.push(`old mode ${before.mode}\nnew mode ${after.mode}\n`);
+      }
+      if (before?.id !== after?.id) {
+        output.push(unifiedDiff(
+          this.diffText(before?.id ?? null),
+          this.diffText(after?.id ?? null),
+          before ? `a/${path}` : "/dev/null",
+          after ? `b/${path}` : "/dev/null",
+        ));
+      }
     }
     return output.join("");
   }
@@ -672,22 +687,23 @@ export class Repository {
         `${revision} and HEAD share no common ancestor, so there is no base to merge against.`,
       );
     }
-    const baseTree = this.virtualBaseTree(bases);
-    const { files, merged, conflicts } = this.mergeTrees(
+    const baseTree = this.virtualBaseTree(bases, options.committer ?? options.author);
+    const { tree, merged, conflicts } = mergeTrees(
+      this.rewriteContext(options.committer ?? options.author),
       baseTree,
       readCommit(this.objects, ours).tree,
       readCommit(this.objects, theirs).tree,
       labels,
     );
-    const tree = buildTree(this.objects, files);
-    const id = writeCommit(this.objects, {
+    const draft = {
       tree,
       parents: [ours, theirs],
       author: options.author,
       committer: options.committer ?? options.author,
       message: options.message,
-    });
-    // Same ordering as the fast-forward above, for the same reason.
+    };
+    const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
+    // Ref before working tree, as in the fast-forward above and for the same reason.
     this.advanceHead(head, ours, id, "merge", `Merged ${revision} as ${id.slice(0, 12)}.`, now);
     this.writeIndex(materializeTree(this.objects, this.root, tree, CONTROL_DIRECTORY, this.ignoreRules()));
     return { kind: "merged", head: id, bases, merged, conflicts, clean: conflicts.length === 0 };
@@ -705,7 +721,7 @@ export class Repository {
    * @param bases - The minimal common ancestors.
    * @returns The tree to use as the merge base.
    */
-  private virtualBaseTree(bases: readonly ObjectId[]): ObjectId {
+  private virtualBaseTree(bases: readonly ObjectId[], committer: Signature): ObjectId {
     let tree = readCommit(this.objects, bases[0]).tree;
     for (const other of bases.slice(1)) {
       const otherTree = readCommit(this.objects, other).tree;
@@ -714,131 +730,10 @@ export class Repository {
       // Conflicts between two bases are resolved by keeping the first base's
       // side. A virtual base is a heuristic, not a snapshot anyone committed, and
       // recording markers in it would push them into the real merge's output.
-      const { files } = this.mergeTrees(nestedBase, tree, otherTree);
-      tree = buildTree(this.objects, files);
+      const { tree: merged } = mergeTrees(this.rewriteContext(committer), nestedBase, tree, otherTree);
+      tree = merged;
     }
     return tree;
-  }
-
-  /**
-   * Three-way merges two trees against a base tree.
-   *
-   * A path only one side changed takes that side without any content being read.
-   * A path both sides changed is merged by content — per field when both sides
-   * are record objects, by diff3 otherwise.
-   *
-   * @param baseTree - The base tree, or null when there is no common ancestor.
-   * @param ourTree - Our side's tree.
-   * @param theirTree - Their side's tree.
-   * @param labels - Names written into conflict markers.
-   * @returns The merged path map, which paths merged, and which conflicted.
-   */
-  private mergeTrees(
-    baseTree: ObjectId | null,
-    ourTree: ObjectId,
-    theirTree: ObjectId,
-    labels?: ConflictLabels,
-  ): {
-    files: Map<string, { id: ObjectId; mode: FileMode }>;
-    merged: string[];
-    conflicts: MergeConflict[];
-  } {
-    const base = flattenTree(this.objects, baseTree);
-    const ours = flattenTree(this.objects, ourTree);
-    const theirs = flattenTree(this.objects, theirTree);
-    const files = new Map<string, { id: ObjectId; mode: FileMode }>();
-    const merged: string[] = [];
-    const conflicts: MergeConflict[] = [];
-
-    for (const path of [...new Set([...base.keys(), ...ours.keys(), ...theirs.keys()])].sort(compareByteOrder)) {
-      const baseEntry = base.get(path);
-      const ourEntry = ours.get(path);
-      const theirEntry = theirs.get(path);
-      const ourChanged = (ourEntry?.id ?? null) !== (baseEntry?.id ?? null)
-        || (ourEntry?.mode ?? null) !== (baseEntry?.mode ?? null);
-      const theirChanged = (theirEntry?.id ?? null) !== (baseEntry?.id ?? null)
-        || (theirEntry?.mode ?? null) !== (baseEntry?.mode ?? null);
-
-      if (!theirChanged) {
-        if (ourEntry) files.set(path, ourEntry);
-        continue;
-      }
-      if (!ourChanged) {
-        if (theirEntry) files.set(path, theirEntry);
-        continue;
-      }
-      if (ourEntry?.id === theirEntry?.id && ourEntry?.mode === theirEntry?.mode) {
-        if (ourEntry) files.set(path, ourEntry);
-        continue;
-      }
-      // Both sides changed it. A delete on one side against an edit on the other
-      // has no content to merge, so our side is kept and the clash is reported.
-      if (!ourEntry || !theirEntry) {
-        conflicts.push({ path, reason: "content" });
-        if (ourEntry) files.set(path, ourEntry);
-        continue;
-      }
-      if (ourEntry.mode !== theirEntry.mode) {
-        conflicts.push({ path, reason: "mode" });
-        files.set(path, ourEntry);
-        continue;
-      }
-      const resolution = this.mergePath(path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels);
-      files.set(path, { id: resolution.id, mode: ourEntry.mode });
-      if (resolution.conflict) conflicts.push(resolution.conflict);
-      else merged.push(path);
-    }
-    return { files, merged, conflicts };
-  }
-
-  /**
-   * Merges one path's three blobs.
-   *
-   * Record objects take the per-field path; everything else takes diff3. The
-   * distinction is made on the stored object's type rather than on the path's
-   * extension, so what a file is called never decides how it merges.
-   *
-   * @param path - The path being merged, for conflict reporting.
-   * @param baseId - Base blob, or null when the path was added on both sides.
-   * @param ourId - Our blob.
-   * @param theirId - Their blob.
-   * @param labels - Names written into conflict markers.
-   * @returns The merged blob's id and any conflict.
-   */
-  private mergePath(
-    path: string,
-    baseId: ObjectId | null,
-    ourId: ObjectId,
-    theirId: ObjectId,
-    labels?: ConflictLabels,
-  ): { id: ObjectId; conflict?: MergeConflict } {
-    const ourObject = this.objects.read(ourId);
-    const theirObject = this.objects.read(theirId);
-    if (ourObject.type === "record" && theirObject.type === "record") {
-      const baseDocument: RecordDocument = baseId === null ? {} : decodeRecord(this.objects.readTyped(baseId, "record"));
-      const result = mergeRecords(
-        baseDocument,
-        decodeRecord(ourObject.payload),
-        decodeRecord(theirObject.payload),
-        this.config.recordPolicy,
-      );
-      return {
-        id: this.objects.write("record", encodeRecord(result.document)),
-        conflict: result.clean
-          ? undefined
-          : { path, reason: "record", fields: result.conflicts.map((conflict) => conflict.field) },
-      };
-    }
-    const result: ContentMergeResult = mergeContent(
-      baseId === null ? "" : this.objects.readTyped(baseId, "blob").toString("utf8"),
-      ourObject.payload.toString("utf8"),
-      theirObject.payload.toString("utf8"),
-      labels,
-    );
-    return {
-      id: this.objects.write("blob", Buffer.from(result.text, "utf8")),
-      conflict: result.clean ? undefined : { path, reason: "content" },
-    };
   }
 
   /**
@@ -877,6 +772,339 @@ export class Repository {
     return [...found].sort(compareByteOrder);
   }
 
+  /**
+   * The store and policy every tree merge needs, bound to a committer.
+   *
+   * @param committer - Signature applied to rewritten commits.
+   * @returns The context planning functions take.
+   */
+  private rewriteContext(committer: Signature): RewriteContext {
+    return { store: this.objects, config: this.config, committer };
+  }
+
+  /**
+   * Every branch and tag as a snapshot, the tips descendant replay walks from.
+   *
+   * @returns Each ref paired with its target.
+   */
+  private refSnapshots(): RefSnapshot[] {
+    return [...this.refs.list(BRANCH_PREFIX), ...this.refs.list(TAG_PREFIX)]
+      .map((entry) => ({ name: entry.name, target: entry.target }));
+  }
+
+  /**
+   * HEAD as planning reads it.
+   *
+   * @returns HEAD's kind, ref and target.
+   */
+  private headSnapshot(): HeadSnapshot {
+    const head = this.refs.readHead();
+    return head.kind === "branch"
+      ? { kind: "branch", ref: head.ref, target: head.target }
+      : { kind: "detached", ref: null, target: head.target };
+  }
+
+  /**
+   * Refuses a rewrite on a dirty tree before any object is written.
+   *
+   * A rewrite re-materialises the working tree from the new HEAD, so uncommitted
+   * changes would be overwritten. Checking first is what keeps the overwrite
+   * from happening — the whole point of the engine's transactional discipline.
+   *
+   * @throws ObjectStoreError When the working tree has uncommitted changes.
+   */
+  private assertCleanWorktree(): void {
+    if (!this.status().clean) {
+      throw new ObjectStoreError(
+        "dirty_worktree",
+        "The working tree has changes that are not committed. Commit or undo them before rewriting history.",
+      );
+    }
+  }
+
+  /**
+   * Turns a planning conflict into a repository error naming every path.
+   *
+   * @param error - The conflict planning raised.
+   * @returns The repository error to throw.
+   */
+  private rewriteConflictError(error: RewriteConflictError): ObjectStoreError {
+    const described = error.conflicts
+      .map((conflict) => (conflict.fields ? `${conflict.path} (${conflict.fields.join(", ")})` : conflict.path))
+      .join(", ");
+    return new ObjectStoreError(
+      "rewrite_conflict",
+      `The rewrite left ${error.conflicts.length} conflict(s): ${described}. `
+        + "Resolve the listed paths on one side first, or rewrite a range that does not span them.",
+    );
+  }
+
+  /**
+   * Runs a planner, translating a conflict into a message a caller can act on.
+   *
+   * One site rather than one per operation. Only a rewrite that *replays* a
+   * descendant against a changed tree can conflict — a rebase, or a squash that moves
+   * content between commits — so `describe`, `split`, `reset` and `restore` each
+   * carried a copy of this translation that no input could reach. Six copies of an
+   * arm that four of them cannot take is worse than one copy that all of them share:
+   * the duplicates read as though every operation can conflict, which is the opposite
+   * of what the design guarantees.
+   *
+   * `cherryPick` and `revert` do use it for real: both apply a change onto HEAD, so
+   * both can genuinely conflict. They return a commit id rather than a plan, hence the
+   * type parameter.
+   *
+   * @param plan - Thunk producing the value, so the throw happens inside this method.
+   * @returns Whatever the thunk produced.
+   * @throws ObjectStoreError When planning found conflicts, naming each path and, for
+   *   a record, the fields that disagreed.
+   */
+  private planned<T>(plan: () => T): T {
+    try {
+      return plan();
+    } catch (error) {
+      if (error instanceof RewriteConflictError) throw this.rewriteConflictError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Applies a rewrite plan in one operation-log entry, then re-materialises.
+   *
+   * Every ref move is a compare-and-swap against the value planning read, and all
+   * of them are recorded in a single operation-log entry, so `undo` reverses the
+   * whole rewrite at once. The working tree is re-materialised from wherever
+   * HEAD lands, so the tree and the refs never disagree after a rewrite.
+   *
+   * @param plan - The plan planning produced.
+   * @param now - Timestamp for the operation-log entry.
+   * @returns The commit HEAD ends up at, or null on an unborn branch.
+   */
+  private applyRewrite(plan: RewritePlan, now: Date): ObjectId | null {
+    this.refs.transaction(plan.moves.map((move) => ({
+      name: move.ref,
+      expected: move.before,
+      next: move.after,
+    })));
+    this.operations.append(plan.command, plan.summary, plan.moves, now);
+    const head = this.refs.resolveHead();
+    this.writeIndex(materializeTree(
+      this.objects,
+      this.root,
+      head === null ? null : readCommit(this.objects, head).tree,
+      CONTROL_DIRECTORY,
+      this.ignoreRules(),
+    ));
+    return head;
+  }
+
+  /**
+   * Replaces one commit's message, preserving its change id.
+   *
+   * @param revision - The commit to describe.
+   * @param message - The new message, verbatim.
+   * @param committer - Signature for the rewritten commit.
+   * @param now - Timestamp for the operation-log entry.
+   * @returns The commit HEAD ends up at.
+   */
+  describe(revision: string, message: string, committer: Signature, now: Date): ObjectId | null {
+    this.assertCleanWorktree();
+    const id = this.resolve(revision);
+    const plan = this.planned(() => (
+        planDescribe(this.rewriteContext(committer), id, message, this.refSnapshots(), this.headSnapshot())
+    ));
+    return this.applyRewrite(plan, now);
+  }
+
+  /**
+   * Rebases `source`'s side of the divergence onto `onto`.
+   *
+   * @param source - The tip whose commits are replayed.
+   * @param onto - The tip they are replayed onto.
+   * @param committer - Signature for the replayed commits.
+   * @param now - Timestamp for the operation-log entry.
+   * @returns The commit HEAD ends up at.
+   */
+  rebase(source: string, onto: string, committer: Signature, now: Date): ObjectId | null {
+    this.assertCleanWorktree();
+    const plan = this.planned(() => (
+        planRebase(
+          this.rewriteContext(committer),
+          this.resolve(source),
+          this.resolve(onto),
+          this.refSnapshots(),
+          this.headSnapshot(),
+        )
+    ));
+    return this.applyRewrite(plan, now);
+  }
+
+  /**
+   * Folds `revision` into its first parent.
+   *
+   * @param revision - The commit to squash.
+   * @param committer - Signature for the surviving commit.
+   * @param now - Timestamp for the operation-log entry.
+   * @returns The commit HEAD ends up at.
+   */
+  squash(revision: string, committer: Signature, now: Date): ObjectId | null {
+    this.assertCleanWorktree();
+    const plan = this.planned(() => (
+        planSquash(this.rewriteContext(committer), this.resolve(revision), this.refSnapshots(), this.headSnapshot())
+    ));
+    return this.applyRewrite(plan, now);
+  }
+
+  /**
+   * Splits `revision` into two commits: the named paths, then the rest.
+   *
+   * @param revision - The commit to split.
+   * @param patterns - Glob patterns selecting the first half's paths.
+   * @param committer - Signature for both new commits.
+   * @param now - Timestamp for the operation-log entry.
+   * @returns The commit HEAD ends up at.
+   */
+  split(revision: string, patterns: readonly string[], committer: Signature, now: Date): ObjectId | null {
+    this.assertCleanWorktree();
+    const plan = this.planned(() => (
+        planSplit(this.rewriteContext(committer), this.resolve(revision), patterns, this.refSnapshots(), this.headSnapshot())
+    ));
+    return this.applyRewrite(plan, now);
+  }
+
+  /**
+   * Applies one commit's change onto HEAD as a new commit.
+   *
+   * @param revision - The commit whose change is applied.
+   * @param committer - Signature for the new commit.
+   * @param now - Timestamp for the operation-log entry.
+   * @returns The new commit's id.
+   */
+  cherryPick(revision: string, committer: Signature, now: Date): ObjectId {
+    this.assertCleanWorktree();
+    const head = this.refs.readHead();
+    const ours = head.target;
+    if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to cherry-pick onto.");
+    const commit = this.planned(() => planCherryPick(this.rewriteContext(committer), this.resolve(revision), ours));
+    this.advanceHead(head, ours, commit, "cherry-pick", `Cherry-picked ${revision} as ${commit.slice(0, 12)}.`, now);
+    this.writeIndex(materializeTree(this.objects, this.root, readCommit(this.objects, commit).tree, CONTROL_DIRECTORY, this.ignoreRules()));
+    return commit;
+  }
+
+  /**
+   * Reverts one commit's change onto HEAD.
+   *
+   * @param revision - The commit to revert.
+   * @param message - The revert commit's message.
+   * @param committer - Signature for the new commit.
+   * @param now - Timestamp for the operation-log entry.
+   * @returns The new commit's id.
+   */
+  revert(revision: string, message: string, committer: Signature, now: Date): ObjectId {
+    this.assertCleanWorktree();
+    const head = this.refs.readHead();
+    const ours = head.target;
+    if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to revert onto.");
+    const commit = this.planned(() => planRevert(this.rewriteContext(committer), this.resolve(revision), ours, message));
+    this.advanceHead(head, ours, commit, "revert", `Reverted ${revision} as ${commit.slice(0, 12)}.`, now);
+    this.writeIndex(materializeTree(this.objects, this.root, readCommit(this.objects, commit).tree, CONTROL_DIRECTORY, this.ignoreRules()));
+    return commit;
+  }
+
+  /**
+   * Moves HEAD to a revision, and optionally the index and working tree.
+   *
+   * `soft` moves only the branch; `mixed` also rewrites the index to the
+   * revision's tree; `hard` also rewrites tracked working-tree content. The
+   * explicit hard mode permits discarding tracked edits, but refuses when any
+   * untracked path would be deleted because no object or undo can recover it.
+   *
+   * @param revision - Where HEAD should move.
+   * @param mode - How much to reset.
+   * @param now - Timestamp for the operation-log entry.
+   * @returns The commit HEAD moves to.
+   */
+  reset(revision: string, mode: ResetMode, now: Date): ObjectId {
+    const head = this.refs.readHead();
+    if (head.target === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to reset.");
+    const target = this.resolve(revision);
+    const targetTree = readCommit(this.objects, target).tree;
+    if (mode === "hard") {
+      const untracked = [...this.status().untracked].sort(compareByteOrder);
+      if (untracked.length > 0) {
+        throw new ObjectStoreError(
+          "reset_would_discard_untracked",
+          `A hard reset would delete untracked ${untracked.join(", ")}, which no commit holds. `
+          + "Stage and commit them, move them aside, or delete them first.",
+        );
+      }
+    }
+    this.advanceHead(head, head.target, target, "reset", `Reset to ${target.slice(0, 12)} (${mode}).`, now);
+    if (mode === "soft") return target;
+    if (mode === "mixed") {
+      this.writeIndex(this.indexEntriesForTree(targetTree));
+      return target;
+    }
+    this.writeIndex(materializeTree(this.objects, this.root, targetTree, CONTROL_DIRECTORY, this.ignoreRules()));
+    return target;
+  }
+
+  /**
+   * Restores named paths in the index and working tree from a revision.
+   *
+   * Unlike a rewrite, restore moves no ref: it copies the named paths' content
+   * from the revision's tree into the index and the working tree, the way
+   * `stage` copies working-tree content into the index. A path absent from the
+   * revision is removed.
+   *
+   * @param paths - Canonical or working-tree paths to restore.
+   * @param revision - The revision to restore from.
+   * @returns The paths that were restored.
+   */
+  restore(paths: readonly string[], revision: string): string[] {
+    const source = flattenTree(this.objects, readCommit(this.objects, this.resolve(revision)).tree);
+    const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
+    const restored: string[] = [];
+    for (const candidate of paths) {
+      const path = normalizeRepoPath(this.root, candidate);
+      const entry = source.get(path);
+      const absolute = join(this.root, ...path.split("/"));
+      if (entry === undefined) {
+        if (existsSync(absolute) && statSync(absolute).isDirectory()) {
+          throw new ObjectStoreError(
+            "restore_directory_unsupported",
+            `Restore path ${path} is a directory, but restore accepts file paths. Name the files to restore instead.`,
+          );
+        }
+        index.delete(path);
+        rmSync(absolute, { force: true });
+      } else {
+        mkdirSync(dirname(absolute), { recursive: true });
+        writeFileSync(absolute, this.objects.read(entry.id).payload);
+        chmodSync(absolute, entry.mode === "100755" ? 0o755 : 0o644);
+        index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644" });
+      }
+      restored.push(path);
+    }
+    this.writeIndex([...index.values()]);
+    return restored.sort();
+  }
+
+  /**
+   * The index entries a tree implies, for a mixed reset.
+   *
+   * @param tree - The tree to turn into index entries, or null for empty.
+   * @returns One index entry per file in the tree.
+   */
+  private indexEntriesForTree(tree: ObjectId | null): IndexEntry[] {
+    return [...flattenTree(this.objects, tree)].map(([path, value]) => ({
+      path,
+      id: value.id,
+      mode: value.mode === "100755" ? "100755" : "100644",
+    }));
+  }
+
 }
 
-
+/** How far a reset reaches: the ref, the index, or the working tree. */
+export type ResetMode = "soft" | "mixed" | "hard";
