@@ -14,6 +14,7 @@ import {
   optionalString,
   positiveInteger,
   signatureFor,
+  sourceWorkingRoot,
 } from "../vcs-commands.ts";
 import { CONTROL_DIRECTORY, Repository } from "../engine/repo.ts";
 import { flattenTree } from "../engine/worktree.ts";
@@ -95,6 +96,16 @@ test("openRepository throws a remediation when no repository contains the direct
   );
 });
 
+test("source working roots prefer a repository, then the portable workspace, then the tracker", () => {
+  const base = { command: "vcs init", args: [], options: {}, global: {}, pm_root: "/tracker" };
+  assert.equal(sourceWorkingRoot(base), "/tracker");
+  assert.equal(sourceWorkingRoot({ ...base, source_workspace_root: "/workspace" }), "/workspace");
+  assert.equal(
+    sourceWorkingRoot({ ...base, source_workspace_root: "/workspace", repo_root: "/repository" }),
+    "/repository",
+  );
+});
+
 test("option helpers treat blank and non-string values as absent", () => {
   assert.equal(optionalString({ x: "v" }, "x"), "v");
   assert.equal(optionalString({ x: "  " }, "x"), undefined);
@@ -133,6 +144,7 @@ test("a full repository workflow runs end to end through the host", async () => 
   // init
   const init = await harness.runCommand({ command: "vcs init", options: { branch: "main", recordPath: "items/*.toon" }, pmRoot: root });
   assert.equal(init.handled, true);
+  assert.equal(Object.hasOwn(init.result as object, "exit_code"), false, "successful payloads omit the host-reserved non-zero exit code");
   assert.equal((init.result as { repository: { branch: string } }).repository.branch, "main");
 
   // add + commit

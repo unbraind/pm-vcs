@@ -1,0 +1,28 @@
+id: pm-vcs-c590
+title: Initialize pm-vcs at the source workspace outside Git
+description: "A real Bun-installed fresh-project probe showed pm vcs init creates its control directory under .agents/pm when the host cannot resolve repo_root, even though SDK 2026.7.31 supplies source_workspace_root. Root selection must honor the portable workspace coordinate before the legacy pm_root fallback."
+type: Issue
+status: closed
+priority: 1
+tags[3]: real-e2e,sdk,workspace-root
+created_at: "2026-07-31T11:58:00.263Z"
+updated_at: "2026-07-31T11:59:32.486Z"
+deadline: "2026-08-01T00:00:00.000Z"
+closed_at: "2026-07-31T11:59:32.468Z"
+completed_at: "2026-07-31T11:59:32.468Z"
+claim_principal: "harness:codex"
+author: "harness:codex"
+estimated_minutes: 20
+acceptance_criteria: repo_root wins when present; source_workspace_root is used outside a VCS; pm_root remains the compatibility fallback; automated tests cover all three branches; packed npm and Bun fresh-project installs initialize at the project root
+parent: pm-vcs-ijj7
+resolution: "Added sourceWorkingRoot with repo, workspace, tracker precedence and routed repository initialization/opening through it."
+expected_result: Non-Git projects initialize pm-vcs at the source workspace while preserving repository and legacy tracker fallbacks.
+actual_result: Focused tests cover all three coordinates; freshly packed npm and Bun projects both initialized at their project roots and passed deep package doctor.
+notes[1]{created_at,author,text}:
+  "2026-07-31T11:59:32.117Z","harness:codex","Fresh packed-artifact E2E passed from /tmp with both npm and Bun: pm 2026.7.31 installed and activated all 27 commands, pm vcs init selected the source project root outside Git, and deep isolated package doctor returned zero warnings."
+files[1]{path,scope,note}:
+  vcs-commands.ts,project,Portable workspace root selection
+tests[1]{command,scope,timeout_seconds,note}:
+  "npm run release:check",project,240,Complete package gate
+close_reason: Portable workspace root honored and verified in real installed artifacts
+body: ""

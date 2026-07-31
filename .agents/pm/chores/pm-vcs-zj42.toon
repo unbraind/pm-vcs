@@ -1,0 +1,36 @@
+id: pm-vcs-zj42
+title: Adopt current pm SDK and release-tooling dependencies in Phase 2
+description: "Move the unreleased pm-vcs rewrite branch from pm CLI 2026.7.29, pm-changelog 2026.7.26, and Node types 26.1.1 to the current registry releases before review."
+type: Chore
+status: closed
+priority: 2
+tags[3]: dependencies,pm-sdk,release-readiness
+created_at: "2026-07-31T11:44:36.258Z"
+updated_at: "2026-07-31T12:04:13.727Z"
+deadline: "2026-08-01T11:44:36.258Z"
+closed_at: "2026-07-31T11:59:33.263Z"
+completed_at: "2026-07-31T11:59:33.263Z"
+author: "harness:codex"
+estimated_minutes: 20
+acceptance_criteria: "package.json and package-lock.json resolve @unbrained/pm-cli 2026.7.31, pm-changelog 2026.7.29-1, and @types/node 26.1.2; clean install, 100/100/100 coverage, audit, pack, changelog, npm, and Bun checks pass"
+resolution: "Updated dependency contracts, removed invalid successful exit_code payloads for the 2026.7.31 SDK, and verified clean package graphs and packed installs."
+expected_result: "Current dependencies resolve and all npm, Bun, coverage, audit, package, changelog, and installed-extension gates pass."
+actual_result: Dependencies resolve at the requested releases; no vulnerabilities; exact 100% coverage; npm and Bun fresh projects activate and execute pm-vcs successfully.
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-ijj7,parent,"2026-07-31T11:44:36.258Z","harness:codex","cli:create:dep",detected
+comments[1]{created_at,author,text}:
+  "2026-07-31T11:44:36.258Z","harness:codex","Registry verification on 2026-07-31 found pm CLI 2026.7.31, pm-changelog 2026.7.29-1, @types/node 26.1.2, and TypeScript 7.0.2 latest."
+notes[3]{created_at,author,text}:
+  "2026-07-31T11:44:36.258Z","harness:codex",Preserve the companion decision that new packages remain unpublished until maintainer approval.
+  "2026-07-31T11:59:32.885Z","harness:codex","Adopted @unbrained/pm-cli 2026.7.31, pm-changelog 2026.7.29-1, and @types/node 26.1.2. The stricter SDK exposed invalid successful exit_code:0 payloads; removed them and pinned the contract. Clean npm ci and Bun install pass; 341-test coverage gate is 100/100/100; audit has 0 vulnerabilities; npm pack and changelog gates pass; fresh npm and Bun installed-package probes activate all 27 commands."
+  "2026-07-31T12:04:13.727Z","harness:codex","Fresh-package validation also exposed an upstream pm CLI agent-UX gap: local npm tarballs are rejected as non-directory package sources. Filed unbraind/pm-cli#844 with safe extraction and provenance requirements; validation continued through the installed unpacked package directory."
+learnings[1]{created_at,author,text}:
+  "2026-07-31T11:44:36.258Z","harness:codex",An unreleased package still needs current SDK validation; release gating and dependency currency are independent controls.
+files[1]{path,scope,note}:
+  package.json,project,Development and release-tool versions
+tests[1]{command,scope,timeout_seconds,note}:
+  "npm run release:check",project,240,Complete unreleased package gate
+docs[1]{path,scope,note}:
+  README.md,project,Development and release-gating contract
+close_reason: Current SDK and release tooling adopted with real npm and Bun validation
+body: "This does not publish pm-vcs or enable its intentionally disabled daily release. It aligns development, PM merge preparation, changelog validation, and Node typechecking with the current fleet contract."

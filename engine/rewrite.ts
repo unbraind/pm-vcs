@@ -692,8 +692,12 @@ function planSplitTrees(
   for (const path of [...new Set([...base.keys(), ...full.keys()])].sort()) {
     const before = base.get(path);
     const after = full.get(path);
-    const changed = (before?.id ?? null) !== (after?.id ?? null)
-      || (before?.mode ?? null) !== (after?.mode ?? null);
+    // `path` comes from the union of both maps, so `before` and `after` cannot
+    // both be absent. Spell that invariant into the comparison: optional mode
+    // fallbacks would encode a both-absent arm that no caller can reach.
+    const changed = before === undefined
+      ? true
+      : after === undefined || before.id !== after.id || before.mode !== after.mode;
     if (!changed) continue;
     if (matches(path)) {
       matching.push(path);

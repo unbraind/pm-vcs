@@ -42,7 +42,16 @@ import type {
 /** Envelope every command returns, carrying an explicit verdict. */
 interface VcsEnvelope {
   readonly ok: boolean;
-  readonly exit_code: number;
+}
+
+/**
+ * Resolves the source working root from the host's portable workspace coordinates.
+ *
+ * @param context - The host-supplied command context.
+ * @returns The source repository/workspace root, with the tracker as a legacy fallback.
+ */
+export function sourceWorkingRoot(context: CommandHandlerContext): string {
+  return resolve(context.repo_root ?? context.source_workspace_root ?? context.pm_root);
 }
 
 /**
@@ -74,7 +83,7 @@ export function findRepositoryRoot(start: string): string | null {
  * @throws VcsError When no repository contains the working directory.
  */
 export function openRepository(context: CommandHandlerContext): Repository {
-  const start = context.repo_root ?? context.pm_root;
+  const start = sourceWorkingRoot(context);
   const root = findRepositoryRoot(start);
   if (root === null) {
     throw new VcsError(
@@ -240,7 +249,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       },
     ],
     run(context: CommandHandlerContext): VcsEnvelope & { repository: { root: string; branch: string; config: RepositoryConfig } } {
-      const root = resolve(context.repo_root ?? context.pm_root);
+      const root = sourceWorkingRoot(context);
       const branch = optionalString(context.options, "branch") ?? DEFAULT_BRANCH;
       const fields: Record<string, "scalar" | "set" | "sequence"> = {};
       for (const pair of commaSeparated(context.options, "setField")) {
@@ -268,7 +277,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         ? DEFAULT_CONFIG
         : { recordPaths, recordPolicy: { fields } };
       const repository = Repository.init(root, branch, config);
-      return { ok: true, exit_code: 0, repository: { root: repository.root, branch, config: repository.config } };
+      return { ok: true, repository: { root: repository.root, branch, config: repository.config } };
     },
   });
 
@@ -281,7 +290,6 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const head = repository.refs.readHead();
       return {
         ok: true,
-        exit_code: 0,
         status: repository.status(),
         head: head.target,
         branch: head.kind === "branch" ? head.ref.slice(BRANCH_PREFIX.length) : null,
@@ -296,7 +304,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
     arguments: [{ name: "paths", description: "Paths to stage; omit to stage everything", required: false, variadic: true }],
     run(context: CommandHandlerContext): VcsEnvelope & { staged: readonly string[] } {
       const repository = openRepository(context);
-      return { ok: true, exit_code: 0, staged: repository.stage(context.args) };
+      return { ok: true, staged: repository.stage(context.args) };
     },
   });
 
@@ -325,7 +333,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         author: signatureFor(context, now),
         allowEmpty: context.options?.allowEmpty === true,
       }, now);
-      return { ok: true, exit_code: 0, commit };
+      return { ok: true, commit };
     },
   });
 
@@ -346,7 +354,6 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const entries = repository.log(context.args[0]?.trim() || "HEAD", positiveInteger(context.options, "limit", 20));
       return {
         ok: true,
-        exit_code: 0,
         commits: entries.map((entry) => ({
           id: entry.id,
           // The change id is the stable identity a rebase or squash preserves;
@@ -385,7 +392,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       // HEAD's first parent. A root commit has none; comparing HEAD with itself
       // yields an empty diff, which is the honest answer to "what changed here".
       const left = from ?? repository.log(to, 2)[1]?.id ?? to;
-      return { ok: true, exit_code: 0, diff: repository.diff(left, to) };
+      return { ok: true, diff: repository.diff(left, to) };
     },
   });
 
@@ -404,7 +411,6 @@ export function registerVcsCommands(api: ExtensionApi): void {
       if (name === undefined || name === "") {
         return {
           ok: true,
-          exit_code: 0,
           branches: listing(
             repository.refs.list(BRANCH_PREFIX),
             BRANCH_PREFIX,
@@ -415,11 +421,10 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const now = new Date();
       if (context.options?.delete === true) {
         repository.deleteBranch(name, now);
-        return { ok: true, exit_code: 0, deleted: name };
+        return { ok: true, deleted: name };
       }
       return {
         ok: true,
-        exit_code: 0,
         created: repository.createBranch(name, optionalString(context.options, "at") ?? "HEAD", now),
       };
     },
@@ -433,7 +438,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext): VcsEnvelope & { head: ObjectId } {
       const repository = openRepository(context);
       const revision = requiredArgument(context, 0, "revision", "Pass a branch name or a commit id.");
-      return { ok: true, exit_code: 0, head: repository.switchTo(revision, new Date()) };
+      return { ok: true, head: repository.switchTo(revision, new Date()) };
     },
   });
 
@@ -470,7 +475,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
           "Resolve the listed paths, stage them, and commit; or run `pm vcs undo` to abandon the merge.",
         );
       }
-      return { ok: merge.clean, exit_code: 0, merge };
+      return { ok: merge.clean, merge };
     },
   });
 
@@ -484,7 +489,6 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const requested = optionalString(context.options, "operation");
       return {
         ok: true,
-        exit_code: 0,
         undo: repository.undo(requested === undefined ? null : positiveInteger(context.options, "operation", 1), new Date()),
       };
     },
@@ -497,7 +501,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext): VcsEnvelope & { operations: readonly Operation[] } {
       const repository = openRepository(context);
       const limit = positiveInteger(context.options, "limit", 20);
-      return { ok: true, exit_code: 0, operations: repository.operations.read().reverse().slice(0, limit) };
+      return { ok: true, operations: repository.operations.read().reverse().slice(0, limit) };
     },
   });
 
@@ -520,7 +524,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         commaSeparated(context.options, "since").map((revision) => repository.resolve(revision)),
       );
       writeFileSync(file, bytes);
-      return { ok: true, exit_code: 0, bundle: { file, bytes: bytes.length } };
+      return { ok: true, bundle: { file, bytes: bytes.length } };
     },
   });
 
@@ -532,7 +536,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext): VcsEnvelope & { import: ImportReport } {
       const repository = openRepository(context);
       const file = resolve(requiredArgument(context, 0, "file", "Pass the path of the bundle to import."));
-      return { ok: true, exit_code: 0, import: importBundle(repository.objects, repository.refs, readBundle(file)) };
+      return { ok: true, import: importBundle(repository.objects, repository.refs, readBundle(file)) };
     },
   });
 
@@ -545,11 +549,11 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const name = context.args[0]?.trim();
       if (name === undefined || name === "") {
-        return { ok: true, exit_code: 0, tags: listing(repository.refs.list(TAG_PREFIX), TAG_PREFIX, null) };
+        return { ok: true, tags: listing(repository.refs.list(TAG_PREFIX), TAG_PREFIX, null) };
       }
       const target = repository.resolve(optionalString(context.options, "at") ?? "HEAD");
       repository.refs.compareAndSwap(`${TAG_PREFIX}${name}`, null, target);
-      return { ok: true, exit_code: 0, created: target };
+      return { ok: true, created: target };
     },
   });
 
@@ -566,7 +570,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         throw new VcsError("missing_message", "pm vcs describe requires a message.", 'Pass --message "the new message".');
       }
       const now = new Date();
-      return { ok: true, exit_code: 0, head: repository.describe(revision, `${message}\n`, signatureFor(context, now), now) };
+      return { ok: true, head: repository.describe(revision, `${message}\n`, signatureFor(context, now), now) };
     },
   });
 
@@ -583,7 +587,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         throw new VcsError("missing_argument", "pm vcs rebase requires --onto.", "Pass --onto <revision> naming where the range should land.");
       }
       const now = new Date();
-      return { ok: true, exit_code: 0, head: repository.rebase(source, onto, signatureFor(context, now), now) };
+      return { ok: true, head: repository.rebase(source, onto, signatureFor(context, now), now) };
     },
   });
 
@@ -595,7 +599,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const revision = requiredArgument(context, 0, "revision", "Pass the commit to squash into its first parent.");
       const now = new Date();
-      return { ok: true, exit_code: 0, head: repository.squash(revision, signatureFor(context, now), now) };
+      return { ok: true, head: repository.squash(revision, signatureFor(context, now), now) };
     },
   });
 
@@ -614,7 +618,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         throw new VcsError("missing_argument", "pm vcs split needs at least one path.", "Pass the paths the first half should carry, e.g. `pm vcs split HEAD src/**`.");
       }
       const now = new Date();
-      return { ok: true, exit_code: 0, head: repository.split(revision, patterns, signatureFor(context, now), now) };
+      return { ok: true, head: repository.split(revision, patterns, signatureFor(context, now), now) };
     },
   });
 
@@ -626,7 +630,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const revision = requiredArgument(context, 0, "revision", "Pass the commit whose change should be applied.");
       const now = new Date();
-      return { ok: true, exit_code: 0, commit: repository.cherryPick(revision, signatureFor(context, now), now) };
+      return { ok: true, commit: repository.cherryPick(revision, signatureFor(context, now), now) };
     },
   });
 
@@ -642,7 +646,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const id = repository.resolve(revision);
       const firstLine = readCommit(repository.objects, id).message.trimEnd().split("\n")[0];
       const message = optionalString(context.options, "message") ?? `Revert ${id.slice(0, 12)}: ${firstLine}`;
-      return { ok: true, exit_code: 0, commit: repository.revert(revision, `${message}\n`, signatureFor(context, now), now) };
+      return { ok: true, commit: repository.revert(revision, `${message}\n`, signatureFor(context, now), now) };
     },
   });
 
@@ -660,7 +664,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         throw new VcsError("invalid_option", `--mode accepts soft, mixed or hard, not "${requested}".`, "Pass --mode soft, --mode mixed or --mode hard.");
       }
       const now = new Date();
-      return { ok: true, exit_code: 0, head: repository.reset(revision, mode, now) };
+      return { ok: true, head: repository.reset(revision, mode, now) };
     },
   });
 
@@ -680,7 +684,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const paths = explicit.length > 0
         ? explicit
         : [...flattenTree(repository.objects, readCommit(repository.objects, repository.resolve(revision)).tree).keys()].sort();
-      return { ok: true, exit_code: 0, restored: repository.restore(paths, revision) };
+      return { ok: true, restored: repository.restore(paths, revision) };
     },
   });
 
@@ -708,7 +712,6 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const parent = commit.parents[0];
       return {
         ok: true,
-        exit_code: 0,
         commit: {
           id,
           changeId: effectiveChangeId(id, commit),
@@ -769,8 +772,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
           "Re-import the affected history from a bundle or another copy of the repository.",
         );
       }
-      return { ok: true, exit_code: 0, verified, corrupt };
+      return { ok: true, verified, corrupt };
     },
   });
 }
-

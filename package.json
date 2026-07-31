@@ -95,9 +95,9 @@
   },
   "homepage": "https://github.com/unbraind/pm-vcs#readme",
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "@unbrained/pm-cli": "^2026.7.29",
-    "pm-changelog": "^2026.7.26",
+    "@types/node": "^26.1.2",
+    "@unbrained/pm-cli": "^2026.7.31",
+    "pm-changelog": "^2026.7.29-1",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {

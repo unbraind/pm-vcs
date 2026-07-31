@@ -2,13 +2,22 @@ id: pm-vcs-63kd
 title: Close the last five branch arms in the history-rewriting slab
 description: "Phase 2 stands at 337 tests, 100 percent functions, 99.96 percent lines and 99.59 percent branches. The gate demands 100, so this is what remains, identified exactly rather than left to rediscover. First and most interesting: engine/rewrite.ts lines 292 to 294 never execute, which means topoSort's inner push never happens - every caller already hands it a set whose parents precede their children, so the depth-first walk finds every parent already queued. That is either a redundant sort worth deleting with the ordering invariant written down at the callers, or a real safety net that needs a test constructing a deliberately unordered input. Deciding which requires reading rangeInOrder and descendants against their callers; do not delete it on the strength of coverage alone. Second: engine/rewrite.ts 696, the mode-only arm of the change detection in planSplitTrees, needs a fixture where a path's mode differs while its content does not AND the pattern does not match it. Third: engine/repo.ts 889, the unborn-HEAD arm of the post-rewrite re-materialise; if a rewrite cannot leave HEAD unborn the ternary should go. Fourth: engine/repo.ts 1081, the executable arm of indexEntriesForTree, which needs a reset whose target tree carries an executable file. Fifth: rewrite.ts 278. Also found and worth its own item: repo.diff reports content only, so a mode-only change produces an empty diff."
 type: Task
-status: open
+status: closed
 priority: 2
 tags: []
 created_at: "2026-07-31T08:32:25.361Z"
-updated_at: "2026-07-31T08:32:25.761Z"
+updated_at: "2026-07-31T11:44:02.752Z"
+closed_at: "2026-07-31T11:44:02.740Z"
+completed_at: "2026-07-31T11:44:02.740Z"
+claim_principal: "harness:codex"
 author: "harness:claude-code"
 acceptance_criteria: npm run coverage passes at 100/100/100 with no suppressions; any arm removed rather than covered has its invariant written down where the arm was; the topoSort decision is recorded as a decision item either way
+resolution: "History-rewriting slab has complete line, branch, and function coverage without suppressions"
+expected_result: "npm run coverage passes at 100/100/100 with explicit evidence for rewrite ordering, mode handling, unborn HEAD, and executable reset behavior."
+actual_result: "341 tests pass; all 19 source files report 100.00 lines, branches, and functions; pm-vcs-6ihf records the topoSort decision."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-ijj7,parent,"2026-07-31T08:32:25.740Z","harness:claude-code","cli:update:dep",detected
+comments[1]{created_at,author,text}:
+  "2026-07-31T11:44:02.407Z","harness:codex","Completed from the preserved unfinished test: multi-commit replay order now executes the topo parent queue; unmatched mode-only split, unborn-HEAD rewrite materialization, and executable mixed-reset index behavior have real repository tests. Replaced impossible both-absent optional mode arms with the union-of-paths invariant. Full coverage passes 341 tests at 100% lines, 100% branches, and 100% functions. Decision pm-vcs-6ihf retains iterative topo ordering."
+close_reason: All remaining history-rewrite branch arms are covered by real behavior or removed as impossible under a documented invariant; the required ordering ADR is closed and coverage is 100/100/100.
 body: ""

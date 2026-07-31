@@ -14,8 +14,9 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { type ObjectId, ObjectStoreError } from "../engine/objects.ts";
-import { type Signature, effectiveChangeId, readCommit } from "../engine/model.ts";
+import { type Signature, effectiveChangeId, readCommit, writeCommit, writeTree } from "../engine/model.ts";
 import { type RepositoryConfig } from "../engine/config.ts";
+import { BRANCH_PREFIX } from "../engine/refs.ts";
 import { Repository, type ResetMode } from "../engine/repo.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
@@ -777,4 +778,106 @@ test("a commit that only changes a file's mode counts as changing that path", ()
   assert.notEqual(firstHalf.tree, parentTree);
   // And the second half carries the other path, so the split really did divide them.
   assert.match(repo.diff(firstHalfId, head), /other\.txt/);
+});
+
+test("a mode-only change stays in the unmatched half of a split", () => {
+  // The mode comparison must run even when the path does not match the first
+  // half's pattern; otherwise the executable bit disappears from the second
+  // half's accounting and the split can incorrectly report it as empty.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "tool.sh", "#!/bin/sh\n", "add a tool", new Date(0));
+  writeFileSync(join(root, "selected.txt"), "selected\n");
+  chmodSync(join(root, "tool.sh"), 0o755);
+  repo.stage(["selected.txt", "tool.sh"]);
+  const mixed = repo.commit({ message: "add a file and make the tool executable\n", author }, new Date(1));
+
+  const head = repo.split(mixed, ["selected.txt"], committer, new Date(2));
+  assert.ok(head !== null);
+  const second = readCommit(repo.objects, head);
+  const first = readCommit(repo.objects, second.parents[0] as ObjectId);
+  assert.equal(statSync(join(root, "tool.sh")).mode & 0o100, 0o100);
+  assert.match(repo.diff(first.parents[0] as ObjectId, second.parents[0] as ObjectId), /selected\.txt/);
+  assert.notEqual(second.tree, first.tree, "the unmatched mode-only change produced the second half");
+});
+
+test("rewriting another branch while HEAD is unborn keeps the current checkout empty", () => {
+  // A repository can receive a branch through import while its current branch
+  // is still unborn. Rewriting that imported branch must move the branch but
+  // materialise the current unborn HEAD, not the branch that was rewritten.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const blob = repo.objects.write("blob", Buffer.from("subject\n"));
+  const tree = writeTree(repo.objects, [{ name: "subject.txt", mode: "100644", id: blob }]);
+  const subject = writeCommit(repo.objects, {
+    tree,
+    parents: [],
+    author,
+    committer: author,
+    message: "subject\n",
+  });
+  repo.refs.compareAndSwap(`${BRANCH_PREFIX}subject`, null, subject);
+
+  const result = repo.describe("subject", "rewritten subject\n", committer, new Date(1));
+  assert.equal(result, null, "HEAD remains unborn");
+  assert.equal(repo.refs.resolveHead(), null);
+  assert.notEqual(repo.refs.read(`${BRANCH_PREFIX}subject`), subject, "the other branch moved");
+  assert.deepEqual(repo.readIndex(), []);
+  assert.equal(existsSync(join(root, "subject.txt")), false);
+});
+
+test("mixed reset records an executable target mode in the index", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  writeFileSync(join(root, "run.sh"), "#!/bin/sh\n");
+  chmodSync(join(root, "run.sh"), 0o755);
+  repo.stage(["run.sh"]);
+  const executable = repo.commit({ message: "executable\n", author }, new Date(0));
+  chmodSync(join(root, "run.sh"), 0o644);
+  repo.stage(["run.sh"]);
+  repo.commit({ message: "non executable\n", author }, new Date(1));
+
+  repo.reset(executable, "mixed", new Date(2));
+  assert.equal(repo.readIndex().find((entry) => entry.path === "run.sh")?.mode, "100755");
+  assert.equal(statSync(join(root, "run.sh")).mode & 0o100, 0, "mixed reset leaves the working file alone");
+});
+
+test("a rebase of several commits replays them oldest first and keeps every change id", () => {
+  // The range comes from a walk back from the tip, so it arrives newest-first and has
+  // to be reordered before replay. A single-commit range never exercises that, which
+  // is why this test exists separately: replaying a two-commit range in the wrong
+  // order would build the second commit on a parent that does not exist yet.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const base = commitFile(repo, "base.txt", "base\n", "base", new Date(0));
+  repo.createBranch("feature", base, new Date(1));
+  repo.switchTo("feature", new Date(2));
+  const firstId = commitFile(repo, "one.txt", "one\n", "feature one", new Date(3));
+  const secondId = commitFile(repo, "two.txt", "two\n", "feature two", new Date(4));
+  const firstChange = effectiveChangeId(firstId, readCommit(repo.objects, firstId));
+  const secondChange = effectiveChangeId(secondId, readCommit(repo.objects, secondId));
+
+  // main moves on, touching a different path so nothing conflicts.
+  repo.switchTo("main", new Date(5));
+  const mainTip = commitFile(repo, "main.txt", "main\n", "main moves", new Date(6));
+
+  repo.rebase("feature", "main", committer, new Date(7));
+  // The rebase's return value is where HEAD lands, and HEAD is on main here, so the
+  // replayed tip has to be read from the branch that moved.
+  const featureTip = repo.refs.read(`${BRANCH_PREFIX}feature`) as ObjectId;
+  const tip = readCommit(repo.objects, featureTip);
+  const parentId = tip.parents[0] as ObjectId;
+  const parent = readCommit(repo.objects, parentId);
+  assert.deepEqual(parent.parents, [mainTip], "the older commit replayed onto main first");
+  assert.equal(tip.message.trim(), "feature two");
+  assert.equal(parent.message.trim(), "feature one");
+  // Each replayed commit is still the same change it was before the replay.
+  assert.equal(effectiveChangeId(featureTip, tip), secondChange);
+  assert.equal(effectiveChangeId(parentId, parent), firstChange);
+  // Every file is present in the replayed tip's tree, so neither replay dropped its
+  // predecessor's content. Checked through the tree rather than the working tree,
+  // which still holds main's checkout.
+  const flat = repo.diff(mainTip, featureTip);
+  assert.match(flat, /one\.txt/);
+  assert.match(flat, /two\.txt/);
 });
