@@ -9,6 +9,7 @@
 
 import {
   hashObject,
+  isObjectId,
   type ObjectId,
   ObjectStoreError,
   type ObjectStore,
@@ -136,8 +137,9 @@ export function encodeTree(entries: readonly TreeEntry[]): Buffer {
  *
  * @param payload - Canonical tree bytes.
  * @returns The entries, in the stored (name-sorted) order.
- * @throws ObjectStoreError When the bytes are truncated or an entry declares an
- *   unknown mode.
+ * @throws ObjectStoreError When the bytes are truncated, an entry declares an
+ *   unknown mode, an entry name is not a usable single path segment or is
+ *   duplicated, or an entry's id is not an object id.
  */
 export function decodeTree(payload: Buffer): TreeEntry[] {
   const entries: TreeEntry[] = [];
@@ -161,11 +163,22 @@ export function decodeTree(payload: Buffer): TreeEntry[] {
     if (idEnd > payload.length) {
       throw new ObjectStoreError("malformed_object", "Tree entry is truncated before its full object id.");
     }
-    entries.push({
-      name: header.slice(space + 1),
-      mode: mode as FileMode,
-      id: payload.subarray(idStart, idEnd).toString("utf8"),
-    });
+    const name = header.slice(space + 1);
+    // The encoder refuses these names; the decoder has to as well, because a tree
+    // read back from a bundle never went through this build's encoder. An entry
+    // named "" or ".." or carrying a separator is not representable as a directory
+    // entry, and materializing it would write outside the path it claims to be.
+    if (name.length === 0 || name.includes("/") || name === "." || name === "..") {
+      throw new ObjectStoreError("malformed_object", `Tree entry name "${name}" is not a single usable path segment.`);
+    }
+    const id = payload.subarray(idStart, idEnd).toString("utf8");
+    if (!isObjectId(id)) {
+      throw new ObjectStoreError("malformed_object", `Tree entry "${name}" names "${id}", which is not an object id.`);
+    }
+    if (entries.some((entry) => entry.name === name)) {
+      throw new ObjectStoreError("malformed_object", `Tree entry name "${name}" appears more than once.`);
+    }
+    entries.push({ name, mode: mode as FileMode, id });
     cursor = idEnd;
   }
   return entries;
@@ -253,8 +266,9 @@ export function encodeCommit(commit: Commit): Buffer {
  *
  * @param payload - Canonical commit bytes.
  * @returns The parsed commit.
- * @throws ObjectStoreError When a required header is absent or unrecognised, or
- *   the header block is not terminated by a blank line.
+ * @throws ObjectStoreError When a required header is absent, unrecognised or
+ *   repeated, an id is malformed, or the header block is not terminated by a blank
+ *   line.
  */
 export function decodeCommit(payload: Buffer): Commit {
   const text = payload.toString("utf8");
@@ -270,11 +284,35 @@ export function decodeCommit(payload: Buffer): Commit {
     const space = line.indexOf(" ");
     const keyword = space === -1 ? line : line.slice(0, space);
     const value = space === -1 ? "" : line.slice(space + 1);
-    if (keyword === "tree") tree = value;
-    else if (keyword === "parent") parents.push(value);
-    else if (keyword === "author") author = decodeSignature(value);
-    else if (keyword === "committer") committer = decodeSignature(value);
-    else throw new ObjectStoreError("malformed_object", `Commit carries unknown header "${keyword}".`);
+    // Each singleton header may appear once. A second one would make the commit's
+    // meaning depend on which occurrence a parser happened to keep — and two
+    // parsers keeping different ones is how one commit becomes two truths.
+    if (keyword === "tree") {
+      if (tree !== undefined) {
+        throw new ObjectStoreError("malformed_object", "Commit carries more than one tree header.");
+      }
+      if (!isObjectId(value)) {
+        throw new ObjectStoreError("malformed_object", `Commit names tree "${value}", which is not an object id.`);
+      }
+      tree = value;
+    } else if (keyword === "parent") {
+      if (!isObjectId(value)) {
+        throw new ObjectStoreError("malformed_object", `Commit names parent "${value}", which is not an object id.`);
+      }
+      parents.push(value);
+    } else if (keyword === "author") {
+      if (author !== undefined) {
+        throw new ObjectStoreError("malformed_object", "Commit carries more than one author header.");
+      }
+      author = decodeSignature(value);
+    } else if (keyword === "committer") {
+      if (committer !== undefined) {
+        throw new ObjectStoreError("malformed_object", "Commit carries more than one committer header.");
+      }
+      committer = decodeSignature(value);
+    } else {
+      throw new ObjectStoreError("malformed_object", `Commit carries unknown header "${keyword}".`);
+    }
   }
   if (!tree || !author || !committer) {
     throw new ObjectStoreError("malformed_object", "Commit is missing its tree, author or committer header.");
@@ -305,7 +343,8 @@ export function encodeRecord(document: RecordDocument): Buffer {
  *
  * @param payload - Canonical record bytes.
  * @returns The record's fields.
- * @throws ObjectStoreError When the bytes are not a JSON object.
+ * @throws ObjectStoreError When the bytes are not a JSON object, or a field holds a
+ *   value outside {@link RecordValue} — a nested object, or a non-finite number.
  */
 export function decodeRecord(payload: Buffer): RecordDocument {
   let parsed: unknown;
@@ -317,6 +356,25 @@ export function decodeRecord(payload: Buffer): RecordDocument {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new ObjectStoreError("malformed_object", "Record payload is not a JSON object.");
   }
+  // `RecordValue` admits scalars, null and arrays of those. Casting past that let a
+  // tampered bundle put a nested object or a non-finite number into a document whose
+  // type says neither can occur, and the first thing to notice would be the record
+  // merge, arbitrarily later and with no way to attribute it.
+  const assertValue = (value: unknown, path: string): void => {
+    if (value === null || typeof value === "string" || typeof value === "boolean") return;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) {
+        throw new ObjectStoreError("malformed_object", `Record field ${path} holds a non-finite number.`);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((member, index) => assertValue(member, `${path}[${index}]`));
+      return;
+    }
+    throw new ObjectStoreError("malformed_object", `Record field ${path} holds a value a record cannot carry.`);
+  };
+  for (const [field, value] of Object.entries(parsed)) assertValue(value, field);
   return parsed as RecordDocument;
 }
 

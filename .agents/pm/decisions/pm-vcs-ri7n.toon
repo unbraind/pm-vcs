@@ -1,0 +1,15 @@
+id: pm-vcs-ri7n
+title: Canonical encoders do not normalise Unicode
+description: "Raised in review: NFC and NFD forms of one logical name produce two object ids, so the encoders could normalise before hashing. Rejected, for tree entry names and record content alike. A tree entry name is a filesystem name, and on Linux two files whose names differ only by normalisation form can both exist in one directory; normalising would fold them into one tree entry and lose a file, which is worse than the inconvenience it fixes. It would also make the object id no longer a function of the bytes on disk, so a tree could not be checked out and re-staged to the same id. For record field names and values, the content is user data: a version control system that silently rewrites the data it is asked to preserve has failed at its only job. The invariant the encoders do hold is byte-order sorting, which is now uniform across all fourteen sites that order names, paths, fields or ids."
+type: Decision
+status: closed
+priority: 2
+tags: []
+created_at: "2026-07-31T07:35:09.037Z"
+updated_at: "2026-07-31T07:35:14.066Z"
+closed_at: "2026-07-31T07:35:14.051Z"
+completed_at: "2026-07-31T07:35:14.051Z"
+author: "harness:claude-code"
+acceptance_criteria: "No encoder applies Unicode normalisation; every name, path, field and id ordering goes through compareByteOrder; the reasoning is recorded in ARCHITECTURE so it is not relitigated"
+close_reason: "Accepted: encoders sort in byte order and do not normalise. The reasoning is recorded so it is not relitigated."
+body: ""

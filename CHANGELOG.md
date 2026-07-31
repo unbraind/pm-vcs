@@ -22,6 +22,8 @@
 
 ### Other
 
+- Rename the git interoperability commands under a pm vcs git prefix ([pm-vcs-nzw9](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-nzw9.toon))
+- Canonical encoders do not normalise Unicode ([pm-vcs-ri7n](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/decisions/pm-vcs-ri7n.toon))
 - pm-vcs is not git-compatible, and that is the point ([pm-vcs-ljkx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/decisions/pm-vcs-ljkx.toon))
 - 100/100/100 coverage test suite for pm-vcs engine ([pm-vcs-m6ld](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-m6ld.toon))
 - pm-vcs: branch-aware merge safety for pm trackers ([pm-vcs-ghql](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-ghql.toon))

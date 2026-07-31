@@ -21,7 +21,7 @@ import { exportBundle, importBundle, parseBundle } from "../engine/bundle.ts";
 import { diffLines } from "../engine/diff.ts";
 import { readIgnoreRules } from "../engine/ignore.ts";
 import { mergeContent } from "../engine/merge.ts";
-import { encodeCommit, type Signature } from "../engine/model.ts";
+import { decodeCommit, decodeRecord, decodeTree, encodeCommit, type Signature } from "../engine/model.ts";
 import { ObjectStore, ObjectStoreError } from "../engine/objects.ts";
 import { OperationLog } from "../engine/oplog.ts";
 import { mergeAppendOnlyLog } from "../engine/records.ts";
@@ -493,4 +493,78 @@ test("paths and refs sort in one order, including above the Basic Multilingual P
   const diff = repository.diff(first, second);
   assert.ok(diff.indexOf(bmp) < diff.indexOf(astral), "diff must follow the same order");
   assert.ok(diff.includes(CONTROL_DIRECTORY) === false, "the control directory is never diffed");
+});
+
+test("a decoder refuses a payload its own return type says cannot exist", () => {
+  // Every one of these arrives from a bundle in practice, so the decoders are the
+  // trust boundary. Accepting them let a tampered bundle put a value into the store
+  // that the type system says cannot be there, and the first thing to notice would
+  // be a crash in the record merge, arbitrarily later.
+  const id = "a".repeat(64);
+  const signature = `Author <a@b.invalid> 1 0`;
+
+  // A tree entry name that is not one usable path segment, or a duplicate.
+  const treeEntry = (name: string): Buffer => Buffer.concat([
+    Buffer.from(`100644 ${name}\0`, "utf8"),
+    Buffer.from(id, "utf8"),
+  ]);
+  for (const name of ["", ".", ".."]) {
+    assert.throws(
+      () => decodeTree(treeEntry(name)),
+      (error: unknown) => error instanceof ObjectStoreError && /not a single usable path segment/.test(error.message),
+      `tree entry named ${JSON.stringify(name)} must be refused`,
+    );
+  }
+  assert.throws(
+    () => decodeTree(Buffer.concat([treeEntry("same.txt"), treeEntry("same.txt")])),
+    (error: unknown) => error instanceof ObjectStoreError && /appears more than once/.test(error.message),
+  );
+  assert.throws(
+    () => decodeTree(Buffer.concat([
+      Buffer.from("100644 file.txt\0", "utf8"),
+      Buffer.from("z".repeat(64), "utf8"),
+    ])),
+    (error: unknown) => error instanceof ObjectStoreError && /not an object id/.test(error.message),
+  );
+
+  // A repeated singleton header makes the commit's meaning depend on which
+  // occurrence a parser keeps.
+  const commit = (headers: string): Buffer => Buffer.from(`${headers}\n\nmessage\n`, "utf8");
+  const base = `tree ${id}\nauthor ${signature}\ncommitter ${signature}`;
+  for (const [headers, expected] of [
+    [`${base}\ntree ${id}`, /more than one tree header/],
+    [`${base}\nauthor ${signature}`, /more than one author header/],
+    [`${base}\ncommitter ${signature}`, /more than one committer header/],
+    [`tree not-an-id\nauthor ${signature}\ncommitter ${signature}`, /names tree/],
+    [`${base}\nparent not-an-id`, /names parent/],
+  ] as Array<[string, RegExp]>) {
+    assert.throws(
+      () => decodeCommit(commit(headers)),
+      (error: unknown) => error instanceof ObjectStoreError && expected.test(error.message),
+      `headers ${headers} must be refused by ${expected}`,
+    );
+  }
+
+  // A record field holding something RecordValue excludes.
+  for (const [payload, expected] of [
+    ['{"nested":{"a":1}}', /a value a record cannot carry/],
+    ['{"list":[{"a":1}]}', /list\[0\] holds a value/],
+    ['{"tags":[1,null,"ok",true]}', null],
+  ] as Array<[string, RegExp | null]>) {
+    if (expected === null) {
+      assert.ok(decodeRecord(Buffer.from(payload, "utf8")));
+      continue;
+    }
+    assert.throws(
+      () => decodeRecord(Buffer.from(payload, "utf8")),
+      (error: unknown) => error instanceof ObjectStoreError && expected.test(error.message),
+      `record ${payload} must be refused`,
+    );
+  }
+  // JSON cannot express a non-finite number, so the only route in is a value that
+  // parses as one; `1e999` is Infinity after JSON.parse.
+  assert.throws(
+    () => decodeRecord(Buffer.from('{"ratio":1e999}', "utf8")),
+    (error: unknown) => error instanceof ObjectStoreError && /non-finite number/.test(error.message),
+  );
 });

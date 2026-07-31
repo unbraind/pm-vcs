@@ -132,6 +132,23 @@ by the operation log rather than by reachability alone.
 Every encoder is canonical: one logical value has exactly one byte representation. This is a
 correctness requirement rather than tidiness, because the id *is* the hash of those bytes.
 
+**Canonical does not mean normalised.** NFC and NFD forms of one logical name hash to two ids,
+and that is deliberate ([`pm-vcs-ri7n`](.agents/pm/decisions/pm-vcs-ri7n.toon)). A tree entry
+name is a filesystem name, and on Linux two files whose names differ only by normalisation form
+can both exist in one directory — normalising would fold them into one entry and lose a file.
+It would also stop the id being a function of the bytes on disk, so a tree could not be checked
+out and re-staged to the same id. For record fields and values the argument is shorter: that is
+user data, and a version control system which silently rewrites the data it was asked to
+preserve has failed at its only job.
+
+**Decoders enforce what the types claim.** Objects arrive from bundles, so a decoder is a trust
+boundary rather than a convenience. `decodeTree` refuses a name that is not one usable path
+segment, a duplicate name and a malformed id; `decodeCommit` refuses a repeated singleton
+header, because a second one makes the commit's meaning depend on which occurrence a parser
+keeps; `decodeRecord` refuses a nested object or a non-finite number, which `RecordValue` says
+cannot occur — casting past that let a tampered bundle put a value into the store whose first
+symptom would be a crash in the record merge, arbitrarily later and unattributable.
+
 - **Trees** sort entries by name in UTF-8 byte order via `compareByteOrder`. Not `<` on
   strings (UTF-16 code unit order, which disagrees for anything above the BMP), and not
   `localeCompare` (locale-sensitive, so the same tree would hash differently under two `LANG`
