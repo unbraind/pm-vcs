@@ -837,6 +837,35 @@ export class Repository {
   }
 
   /**
+   * Runs a planner, translating a conflict into a message a caller can act on.
+   *
+   * One site rather than one per operation. Only a rewrite that *replays* a
+   * descendant against a changed tree can conflict — a rebase, or a squash that moves
+   * content between commits — so `describe`, `split`, `reset` and `restore` each
+   * carried a copy of this translation that no input could reach. Six copies of an
+   * arm that four of them cannot take is worse than one copy that all of them share:
+   * the duplicates read as though every operation can conflict, which is the opposite
+   * of what the design guarantees.
+   *
+   * `cherryPick` and `revert` do use it for real: both apply a change onto HEAD, so
+   * both can genuinely conflict. They return a commit id rather than a plan, hence the
+   * type parameter.
+   *
+   * @param plan - Thunk producing the value, so the throw happens inside this method.
+   * @returns Whatever the thunk produced.
+   * @throws ObjectStoreError When planning found conflicts, naming each path and, for
+   *   a record, the fields that disagreed.
+   */
+  private planned<T>(plan: () => T): T {
+    try {
+      return plan();
+    } catch (error) {
+      if (error instanceof RewriteConflictError) throw this.rewriteConflictError(error);
+      throw error;
+    }
+  }
+
+  /**
    * Applies a rewrite plan in one operation-log entry, then re-materialises.
    *
    * Every ref move is a compare-and-swap against the value planning read, and all
@@ -876,13 +905,9 @@ export class Repository {
   describe(revision: string, message: string, committer: Signature, now: Date): ObjectId | null {
     this.assertCleanWorktree();
     const id = this.resolve(revision);
-    let plan: RewritePlan;
-    try {
-      plan = planDescribe(this.rewriteContext(committer), id, message, this.refSnapshots(), this.headSnapshot());
-    } catch (error) {
-      if (error instanceof RewriteConflictError) throw this.rewriteConflictError(error);
-      throw error;
-    }
+    const plan = this.planned(() => (
+        planDescribe(this.rewriteContext(committer), id, message, this.refSnapshots(), this.headSnapshot())
+    ));
     return this.applyRewrite(plan, now);
   }
 
@@ -897,19 +922,15 @@ export class Repository {
    */
   rebase(source: string, onto: string, committer: Signature, now: Date): ObjectId | null {
     this.assertCleanWorktree();
-    let plan: RewritePlan;
-    try {
-      plan = planRebase(
-        this.rewriteContext(committer),
-        this.resolve(source),
-        this.resolve(onto),
-        this.refSnapshots(),
-        this.headSnapshot(),
-      );
-    } catch (error) {
-      if (error instanceof RewriteConflictError) throw this.rewriteConflictError(error);
-      throw error;
-    }
+    const plan = this.planned(() => (
+        planRebase(
+          this.rewriteContext(committer),
+          this.resolve(source),
+          this.resolve(onto),
+          this.refSnapshots(),
+          this.headSnapshot(),
+        )
+    ));
     return this.applyRewrite(plan, now);
   }
 
@@ -923,13 +944,9 @@ export class Repository {
    */
   squash(revision: string, committer: Signature, now: Date): ObjectId | null {
     this.assertCleanWorktree();
-    let plan: RewritePlan;
-    try {
-      plan = planSquash(this.rewriteContext(committer), this.resolve(revision), this.refSnapshots(), this.headSnapshot());
-    } catch (error) {
-      if (error instanceof RewriteConflictError) throw this.rewriteConflictError(error);
-      throw error;
-    }
+    const plan = this.planned(() => (
+        planSquash(this.rewriteContext(committer), this.resolve(revision), this.refSnapshots(), this.headSnapshot())
+    ));
     return this.applyRewrite(plan, now);
   }
 
@@ -944,13 +961,9 @@ export class Repository {
    */
   split(revision: string, patterns: readonly string[], committer: Signature, now: Date): ObjectId | null {
     this.assertCleanWorktree();
-    let plan: RewritePlan;
-    try {
-      plan = planSplit(this.rewriteContext(committer), this.resolve(revision), patterns, this.refSnapshots(), this.headSnapshot());
-    } catch (error) {
-      if (error instanceof RewriteConflictError) throw this.rewriteConflictError(error);
-      throw error;
-    }
+    const plan = this.planned(() => (
+        planSplit(this.rewriteContext(committer), this.resolve(revision), patterns, this.refSnapshots(), this.headSnapshot())
+    ));
     return this.applyRewrite(plan, now);
   }
 
@@ -967,13 +980,7 @@ export class Repository {
     const head = this.refs.readHead();
     const ours = head.target;
     if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to cherry-pick onto.");
-    let commit: ObjectId;
-    try {
-      commit = planCherryPick(this.rewriteContext(committer), this.resolve(revision), ours);
-    } catch (error) {
-      if (error instanceof RewriteConflictError) throw this.rewriteConflictError(error);
-      throw error;
-    }
+    const commit = this.planned(() => planCherryPick(this.rewriteContext(committer), this.resolve(revision), ours));
     this.advanceHead(head, ours, commit, "cherry-pick", `Cherry-picked ${revision} as ${commit.slice(0, 12)}.`, now);
     this.writeIndex(materializeTree(this.objects, this.root, readCommit(this.objects, commit).tree, CONTROL_DIRECTORY, this.ignoreRules()));
     return commit;
@@ -993,13 +1000,7 @@ export class Repository {
     const head = this.refs.readHead();
     const ours = head.target;
     if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to revert onto.");
-    let commit: ObjectId;
-    try {
-      commit = planRevert(this.rewriteContext(committer), this.resolve(revision), ours, message);
-    } catch (error) {
-      if (error instanceof RewriteConflictError) throw this.rewriteConflictError(error);
-      throw error;
-    }
+    const commit = this.planned(() => planRevert(this.rewriteContext(committer), this.resolve(revision), ours, message));
     this.advanceHead(head, ours, commit, "revert", `Reverted ${revision} as ${commit.slice(0, 12)}.`, now);
     this.writeIndex(materializeTree(this.objects, this.root, readCommit(this.objects, commit).tree, CONTROL_DIRECTORY, this.ignoreRules()));
     return commit;

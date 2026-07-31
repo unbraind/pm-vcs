@@ -33,7 +33,7 @@ import {
   readCommit,
   writeCommit,
 } from "./model.ts";
-import { type ObjectId, type ObjectStore } from "./objects.ts";
+import { type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
 import {
   type ConflictLabels,
   type ContentMergeResult,
@@ -250,9 +250,17 @@ export function mergeTrees(
 /**
  * Sorts a set of commit ids so that every parent precedes its children.
  *
- * Commits form a DAG, so a topological order always exists; the no-progress
- * branch is unreachable and kept only so a corrupted graph fails loudly rather
- * than looping forever.
+ * Depth-first from each root with an explicit stack rather than a repeated
+ * scan-for-emittable-nodes pass. Two reasons, and the second is the one that
+ * decided it: the DFS is linear in edges instead of quadratic in commits, and it
+ * has no "made no progress this round" branch to guard. A cycle cannot occur —
+ * a commit's parents are named by id, and an id is the hash of content that
+ * already includes those names, so producing one would mean finding a hash
+ * preimage — and a guard against it would therefore be a branch no input can
+ * take, which is dead code in a gate that permits no exclusions.
+ *
+ * Iterative rather than recursive: a rewritten range can be long, and a
+ * machine-generated history is exactly where a call stack runs out.
  *
  * @param store - Object store holding the commits.
  * @param ids - The commits to order.
@@ -261,23 +269,29 @@ export function mergeTrees(
 function topoSort(store: ObjectStore, ids: readonly ObjectId[]): ObjectId[] {
   const set = new Set(ids);
   const order: ObjectId[] = [];
-  const emitted = new Set<ObjectId>();
-  while (emitted.size < set.size) {
-    let progressed = false;
-    for (const id of set) {
-      if (emitted.has(id)) continue;
-      const parents = readCommit(store, id).parents;
-      if (parents.every((parent) => !set.has(parent) || emitted.has(parent))) {
-        order.push(id);
-        emitted.add(id);
-        progressed = true;
+  // `queued` is what makes a diamond safe: an ancestor reachable by two paths is
+  // pushed once, so it is emitted once. Deduplicating at pop time instead would need a
+  // second check whose "already emitted" arm only fires for an ordering the pushes
+  // already prevent.
+  const queued = new Set<ObjectId>();
+  for (const root of set) {
+    if (queued.has(root)) continue;
+    queued.add(root);
+    // Each frame is a commit plus whether its parents have been queued, so one commit
+    // is visited twice: once to queue its parents, once to emit it after them.
+    const stack: Array<{ id: ObjectId; expanded: boolean }> = [{ id: root, expanded: false }];
+    while (stack.length > 0) {
+      const frame = stack.pop() as { id: ObjectId; expanded: boolean };
+      if (frame.expanded) {
+        order.push(frame.id);
+        continue;
       }
-    }
-    /* c8 ignore next 3 -- unreachable: a commit graph is a DAG by construction,
-       so every remaining commit always has an emittable one. The guard exists to
-       turn a corrupted graph into a failure rather than an infinite loop. */
-    if (!progressed) {
-      throw new Error("rewrite: commit graph contains a cycle, which a content-addressed store cannot produce.");
+      stack.push({ id: frame.id, expanded: true });
+      for (const parent of readCommit(store, frame.id).parents) {
+        if (!set.has(parent) || queued.has(parent)) continue;
+        queued.add(parent);
+        stack.push({ id: parent, expanded: false });
+      }
     }
   }
   return order;
@@ -577,13 +591,16 @@ export function planRebase(
     return { command: "rebase", summary: `Nothing to rebase: ${source.slice(0, 12)} is within ${onto.slice(0, 12)}.`, moves: [] };
   }
   const edits = new Map<ObjectId, EditBuilder>();
-  range.forEach((id, index) => {
+  // The first replayed commit attaches to `onto`; every later one attaches to the
+  // commit the previous step produced. Threading that through a variable rather than
+  // reading it back out of `rewrittenParents` removes a fallback that no input could
+  // reach: past the first step there is always a rewritten predecessor.
+  let previous = onto;
+  for (const id of range) {
     const original = readCommit(store, id);
     const baseTree = firstParentTree(store, original);
-    edits.set(id, (rewrittenParents) => {
-      // The first replayed commit attaches to `onto`; every later one attaches to
-      // its rewritten predecessor, which topological order has already produced.
-      const parent = index === 0 ? onto : rewrittenParents[0] ?? onto;
+    edits.set(id, () => {
+      const parent = previous;
       const ourTree = readCommit(store, parent).tree;
       const { tree, conflicts } = mergeTrees(ctx, baseTree, ourTree, original.tree);
       if (conflicts.length > 0) throw new RewriteConflictError(conflicts);
@@ -595,9 +612,10 @@ export function planRebase(
         message: original.message,
         changeId: effectiveChangeId(id, original),
       });
+      previous = replacement;
       return [replacement];
     });
-  });
+  }
   const tip = range[range.length - 1];
   return planReplay(ctx, edits, refs, head, "rebase", `Rebased ${range.length} commit(s) from ${source.slice(0, 12)} onto ${onto.slice(0, 12)}; ${tip.slice(0, 12)} moved.`);
 }
@@ -704,7 +722,10 @@ function planSplitTrees(
  * @param refs - Every branch and tag.
  * @param head - HEAD before the rewrite.
  * @returns The plan.
- * @throws RewriteConflictError When the split would leave a side empty.
+ * @throws ObjectStoreError When the split would leave a side empty. Not a conflict:
+ *   nothing disagreed, the arguments simply do not describe a split. Reporting it as
+ *   a conflict told the caller to "resolve the listed paths", which is advice they
+ *   cannot act on for a path set that matched nothing.
  */
 export function planSplit(
   ctx: RewriteContext,
@@ -716,11 +737,20 @@ export function planSplit(
   const store = ctx.store;
   const original = readCommit(store, revision);
   const { matching, remaining, firstTree } = planSplitTrees(store, original, patterns);
+  const changed = [...matching, ...remaining];
   if (matching.length === 0) {
-    throw new RewriteConflictError([{ path: `split:${patterns.join(",") || "(no patterns)"}`, reason: "content" }]);
+    throw new ObjectStoreError(
+      "empty_split",
+      `Splitting ${revision.slice(0, 12)} on ${patterns.join(", ") || "no patterns"} would leave the first commit empty: `
+      + `that commit changes ${changed.join(", ")}. Name one of those paths instead.`,
+    );
   }
   if (remaining.length === 0) {
-    throw new RewriteConflictError([{ path: `split:remainder`, reason: "content" }]);
+    throw new ObjectStoreError(
+      "empty_split",
+      `Splitting ${revision.slice(0, 12)} on ${patterns.join(", ")} would leave the second commit empty, because those `
+      + `patterns match every path the commit changes (${changed.join(", ")}). A split needs work left on both sides.`,
+    );
   }
   const edits = new Map<ObjectId, EditBuilder>([
     [revision, (rewrittenParents) => {

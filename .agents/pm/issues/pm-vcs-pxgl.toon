@@ -1,0 +1,14 @@
+id: pm-vcs-pxgl
+title: "A mode-only change produces an empty diff, so an executable bit can move invisibly"
+description: "Found while testing the split of a commit that only flips a file's executable bit. Repository.diff renders unified content diffs, and a mode change leaves content byte-identical, so the diff is empty. The change is real - the tree entry's mode differs and the object id does not - but nothing in the diff output says so, and a reviewer reading a diff sees no reason a script stopped being executable. Git reports old mode and new mode lines for exactly this reason. The tree is the source of truth and it is correct; only the rendering is silent."
+type: Issue
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T08:32:26.206Z"
+updated_at: "2026-07-31T08:32:26.597Z"
+author: "harness:claude-code"
+acceptance_criteria: A commit that changes only a path's mode produces diff output naming the path and both modes; a commit that changes both content and mode reports the mode alongside the hunks; the rendering stays a function of the trees rather than of the working tree
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-31T08:32:26.570Z","harness:claude-code","cli:update:dep",detected
+body: ""

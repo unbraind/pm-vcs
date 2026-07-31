@@ -9,7 +9,7 @@
 // halfway through changes no ref and no file.
 
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -354,7 +354,10 @@ test("split refuses when the named paths carry none of the commit's changes", ()
   commitFile(repo, "x.txt", "x", "x", new Date(1));
   assert.throws(
     () => repo.split("HEAD", ["nonexistent.txt"], committer, new Date(2)),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "rewrite_conflict",
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "empty_split"
+      && /would leave the first commit empty/.test(error.message)
+      && /x\.txt/.test(error.message),
   );
 });
 
@@ -365,9 +368,14 @@ test("split refuses when every change matches the named paths, leaving the remai
   commitFile(repo, "base.txt", "base", "base", now);
   commitFile(repo, "x.txt", "x", "x", new Date(1));
   // Every change the commit made is to x.txt, so the second half would be empty.
+  // Reported as empty_split rather than rewrite_conflict: nothing disagreed, the
+  // arguments simply do not describe a split, and a conflict's remediation ("resolve
+  // the listed paths") is advice nobody can act on here.
   assert.throws(
     () => repo.split("HEAD", ["x.txt"], committer, new Date(2)),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "rewrite_conflict",
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "empty_split"
+      && /every path the commit changes/.test(error.message),
   );
 });
 
@@ -614,4 +622,159 @@ test("record-merging helpers and the shared tree merge are reused by both merge 
   const report = repo.merge("feature", { message: "m\n", author }, new Date(6));
   assert.equal(report.clean, false);
   assert.deepEqual(report.conflicts[0].fields, ["status"]);
+});
+
+test("a rewrite spanning a diamond visits each ancestor once and orders parents first", () => {
+  // The replay order comes from a depth-first walk. A diamond gives two paths to one
+  // ancestor, so a walk that did not remember what it had already emitted would emit
+  // that ancestor twice — and the second copy would be replayed onto commits that
+  // already name the first, which is a corrupt graph rather than a slow one.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const base = commitFile(repo, "base.txt", "base\n", "base", new Date(0));
+  repo.createBranch("left", base, new Date(1));
+  repo.createBranch("right", base, new Date(2));
+
+  repo.switchTo("left", new Date(3));
+  commitFile(repo, "left.txt", "left\n", "left", new Date(4));
+  repo.switchTo("right", new Date(5));
+  commitFile(repo, "right.txt", "right\n", "right", new Date(6));
+  const mergeReport = repo.merge("left", { message: "merge left\n", author }, new Date(7));
+  assert.equal(mergeReport.kind, "merged");
+
+  // Rewording the shared base forces both sides and the merge to be replayed.
+  const head = repo.describe(base, "reworded base\n", committer, new Date(8));
+  assert.ok(head !== null);
+  const tip = readCommit(repo.objects, head);
+  assert.equal(tip.parents.length, 2, "the merge is still a merge after the replay");
+  // Both sides survived, so neither parent was dropped and neither was replayed twice.
+  assert.equal(readFileSync(join(root, "left.txt"), "utf8"), "left\n");
+  assert.equal(readFileSync(join(root, "right.txt"), "utf8"), "right\n");
+  // Every commit in the rewritten range appears exactly once in the new history.
+  const walked = new Set<ObjectId>();
+  const pending = [head];
+  let visits = 0;
+  while (pending.length > 0) {
+    const id = pending.pop() as ObjectId;
+    visits += 1;
+    if (walked.has(id)) continue;
+    walked.add(id);
+    pending.push(...readCommit(repo.objects, id).parents);
+  }
+  assert.equal(walked.size, 4, "base, left, right, merge");
+  assert.ok(visits > walked.size, "the diamond really is a diamond: one commit is reached twice");
+});
+
+test("split reports the paths a commit changed when the pattern set is empty", () => {
+  // Reachable through the engine even though the command surface requires a pattern,
+  // and the message has to name what the commit does change or the caller has nothing
+  // to correct.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "base.txt", "base\n", "base", new Date(0));
+  commitFile(repo, "x.txt", "x\n", "x", new Date(1));
+  assert.throws(
+    () => repo.split("HEAD", [], committer, new Date(2)),
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "empty_split"
+      && /on no patterns/.test(error.message)
+      && /x\.txt/.test(error.message),
+  );
+});
+
+test("split follows a mode change and a deletion, not only content", () => {
+  // A commit that only flips a file's executable bit, or only removes a file, has
+  // changed that path. A split that compared content alone would treat the change as
+  // absent and then refuse as though the pattern matched nothing.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "keep.txt", "keep\n", "keep", new Date(0));
+  commitFile(repo, "gone.txt", "gone\n", "gone", new Date(1));
+  writeFileSync(join(root, "script.sh"), "#!/bin/sh\n");
+  chmodSync(join(root, "script.sh"), 0o755);
+  rmSync(join(root, "gone.txt"));
+  repo.stage(["script.sh", "gone.txt"]);
+  const mixed = repo.commit({ message: "add a script and drop a file\n", author }, new Date(2));
+
+  // Splitting on the deletion puts it alone in the first half, proving a removal counts
+  // as a change to that path.
+  const head = repo.split(mixed, ["gone.txt"], committer, new Date(3));
+  assert.ok(head !== null);
+  const second = readCommit(repo.objects, head);
+  const first = readCommit(repo.objects, second.parents[0] as ObjectId);
+  const firstDiff = repo.diff(first.parents[0] as ObjectId, second.parents[0] as ObjectId);
+  assert.match(firstDiff, /gone\.txt/);
+  assert.doesNotMatch(firstDiff, /script\.sh/);
+  // The final tree is unchanged: the deletion and the new executable both survive.
+  assert.equal(existsSync(join(root, "gone.txt")), false);
+  assert.equal(statSync(join(root, "script.sh")).mode & 0o100, 0o100, "the executable bit survived the split");
+});
+
+test("restore puts an executable file back with its mode", () => {
+  // Restoring content without the mode leaves a script that cannot run, which is a
+  // failure the file's content gives no hint about.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  writeFileSync(join(root, "run.sh"), "#!/bin/sh\necho hi\n");
+  chmodSync(join(root, "run.sh"), 0o755);
+  repo.stage(["run.sh"]);
+  const committed = repo.commit({ message: "add a script\n", author }, new Date(0));
+
+  writeFileSync(join(root, "run.sh"), "mangled\n");
+  chmodSync(join(root, "run.sh"), 0o644);
+  const restored = repo.restore(["run.sh"], committed);
+  assert.deepEqual(restored, ["run.sh"]);
+  assert.equal(readFileSync(join(root, "run.sh"), "utf8"), "#!/bin/sh\necho hi\n");
+  assert.equal(statSync(join(root, "run.sh")).mode & 0o100, 0o100);
+});
+
+test("splitting a root commit merges against nothing, so every path is an addition", () => {
+  // A root commit has no first parent, so the replay's base is nothing at all. That is
+  // the one case where "the state the change was made against" does not exist.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  writeFileSync(join(root, "first.txt"), "first\n");
+  writeFileSync(join(root, "second.txt"), "second\n");
+  repo.stage(["first.txt", "second.txt"]);
+  const rootCommit = repo.commit({ message: "both files at once\n", author }, new Date(0));
+
+  const head = repo.split(rootCommit, ["first.txt"], committer, new Date(1));
+  assert.ok(head !== null);
+  const second = readCommit(repo.objects, head);
+  const first = readCommit(repo.objects, second.parents[0] as ObjectId);
+  assert.deepEqual(first.parents, [], "the first half is still a root commit");
+  // Both files survive, and the halves carry one each.
+  assert.equal(readFileSync(join(root, "first.txt"), "utf8"), "first\n");
+  assert.equal(readFileSync(join(root, "second.txt"), "utf8"), "second\n");
+  assert.match(repo.diff(second.parents[0] as ObjectId, head), /second\.txt/);
+});
+
+test("a commit that only changes a file's mode counts as changing that path", () => {
+  // Comparing content alone would treat an executable-bit flip as no change, so a
+  // split naming that path would refuse as though the pattern matched nothing — and
+  // the lost bit is invisible in every diff of the content.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "tool.sh", "#!/bin/sh\n", "add a tool", new Date(0));
+  writeFileSync(join(root, "other.txt"), "other\n");
+  chmodSync(join(root, "tool.sh"), 0o755);
+  repo.stage(["tool.sh", "other.txt"]);
+  const mixed = repo.commit({ message: "make it executable and add a file\n", author }, new Date(1));
+
+  // Splitting on the mode-only change succeeds, which is only possible if the mode
+  // difference registered as a change.
+  const head = repo.split(mixed, ["tool.sh"], committer, new Date(2));
+  assert.ok(head !== null);
+  assert.equal(statSync(join(root, "tool.sh")).mode & 0o100, 0o100);
+  assert.equal(readFileSync(join(root, "other.txt"), "utf8"), "other\n");
+  // The first half's tree differs from its parent's, which is what proves the mode
+  // change landed there. It cannot be shown through `diff`: a unified diff reports
+  // content, and the content is byte-identical — a gap tracked as pm-vcs-pxgl.
+  const secondCommit = readCommit(repo.objects, head);
+  const firstHalfId = secondCommit.parents[0] as ObjectId;
+  const firstHalf = readCommit(repo.objects, firstHalfId);
+  const parentTree = readCommit(repo.objects, firstHalf.parents[0] as ObjectId).tree;
+  assert.notEqual(firstHalf.tree, parentTree);
+  // And the second half carries the other path, so the split really did divide them.
+  assert.match(repo.diff(firstHalfId, head), /other\.txt/);
 });

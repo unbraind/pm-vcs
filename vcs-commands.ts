@@ -609,7 +609,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext): VcsEnvelope & { head: ObjectId | null } {
       const repository = openRepository(context);
       const revision = requiredArgument(context, 0, "revision", "Pass the commit to split.");
-      const patterns = (context.args.slice(1) ?? []).map((arg) => arg.trim()).filter((arg) => arg.length > 0);
+      const patterns = context.args.slice(1).map((arg) => arg.trim()).filter((arg) => arg.length > 0);
       if (patterns.length === 0) {
         throw new VcsError("missing_argument", "pm vcs split needs at least one path.", "Pass the paths the first half should carry, e.g. `pm vcs split HEAD src/**`.");
       }
@@ -640,7 +640,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const revision = requiredArgument(context, 0, "revision", "Pass the commit to revert.");
       const now = new Date();
       const id = repository.resolve(revision);
-      const firstLine = (repository.log(revision, 1)[0]?.commit.message.trimEnd().split("\n")[0] ?? "");
+      const firstLine = readCommit(repository.objects, id).message.trimEnd().split("\n")[0];
       const message = optionalString(context.options, "message") ?? `Revert ${id.slice(0, 12)}: ${firstLine}`;
       return { ok: true, exit_code: 0, commit: repository.revert(revision, `${message}\n`, signatureFor(context, now), now) };
     },
@@ -674,7 +674,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext): VcsEnvelope & { restored: readonly string[] } {
       const repository = openRepository(context);
       const revision = requiredArgument(context, 0, "revision", "Pass the revision to restore from.");
-      const explicit = (context.args.slice(1) ?? []).map((arg) => arg.trim()).filter((arg) => arg.length > 0);
+      const explicit = context.args.slice(1).map((arg) => arg.trim()).filter((arg) => arg.length > 0);
       // No paths means every path the revision carries, so `restore <rev>` returns
       // the whole working tree to that revision's content for tracked files.
       const paths = explicit.length > 0

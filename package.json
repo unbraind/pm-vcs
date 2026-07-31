@@ -58,7 +58,8 @@
       "test/vcs-commands.test.ts",
       "test/vcs-commands-edges.test.ts",
       "test/edges.test.ts",
-      "test/review-findings.test.ts"
+      "test/review-findings.test.ts",
+      "test/rewrite-commands.test.ts"
     ],
     "thresholds": {
       "lines": 100,

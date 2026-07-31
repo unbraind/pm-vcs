@@ -1,0 +1,14 @@
+id: pm-vcs-63kd
+title: Close the last five branch arms in the history-rewriting slab
+description: "Phase 2 stands at 337 tests, 100 percent functions, 99.96 percent lines and 99.59 percent branches. The gate demands 100, so this is what remains, identified exactly rather than left to rediscover. First and most interesting: engine/rewrite.ts lines 292 to 294 never execute, which means topoSort's inner push never happens - every caller already hands it a set whose parents precede their children, so the depth-first walk finds every parent already queued. That is either a redundant sort worth deleting with the ordering invariant written down at the callers, or a real safety net that needs a test constructing a deliberately unordered input. Deciding which requires reading rangeInOrder and descendants against their callers; do not delete it on the strength of coverage alone. Second: engine/rewrite.ts 696, the mode-only arm of the change detection in planSplitTrees, needs a fixture where a path's mode differs while its content does not AND the pattern does not match it. Third: engine/repo.ts 889, the unborn-HEAD arm of the post-rewrite re-materialise; if a rewrite cannot leave HEAD unborn the ternary should go. Fourth: engine/repo.ts 1081, the executable arm of indexEntriesForTree, which needs a reset whose target tree carries an executable file. Fifth: rewrite.ts 278. Also found and worth its own item: repo.diff reports content only, so a mode-only change produces an empty diff."
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T08:32:25.361Z"
+updated_at: "2026-07-31T08:32:25.761Z"
+author: "harness:claude-code"
+acceptance_criteria: npm run coverage passes at 100/100/100 with no suppressions; any arm removed rather than covered has its invariant written down where the arm was; the topoSort decision is recorded as a decision item either way
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-ijj7,parent,"2026-07-31T08:32:25.740Z","harness:claude-code","cli:update:dep",detected
+body: ""
