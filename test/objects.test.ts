@@ -152,8 +152,8 @@ test("read detects a corrupted stored object on read", () => {
       // The mutation either breaks decompression or, more rarely, yields a frame
       // whose content hashes to a different id. Both are corruption.
       assert.ok(
-        error.code === "corrupt_object" || error.code === "object_not_found",
-        `expected corruption detection, got ${error.code}`,
+        error.code === "corrupt_object",
+        `a present-but-altered object is corrupt, not missing; got ${error.code}`,
       );
       return true;
     },

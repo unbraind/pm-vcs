@@ -38,6 +38,16 @@ export type HeadState =
   /** HEAD names a commit directly, so commits made here advance no branch. */
   | { readonly kind: "detached"; readonly target: ObjectId };
 
+/** One ref update inside a {@link RefStore.transaction}. */
+export interface RefUpdate {
+  /** Full ref name. */
+  readonly name: string;
+  /** The value the caller believes the ref holds, or null to require absence. */
+  readonly expected: ObjectId | null;
+  /** The value to store, or null to delete the ref. */
+  readonly next: ObjectId | null;
+}
+
 /** A ref name paired with the commit it points at. */
 export interface RefEntry {
   /** Full ref name, e.g. `refs/heads/main`. */
@@ -166,30 +176,74 @@ export class RefStore {
    *   another process holds the lock.
    */
   compareAndSwap(name: string, expected: ObjectId | null, next: ObjectId | null): void {
-    assertRefName(name);
-    const path = this.pathFor(name);
-    const lockPath = `${path}.lock`;
-    mkdirSync(dirname(path), { recursive: true });
-    let lock: number;
-    try {
-      lock = openSync(lockPath, "wx");
-    } catch {
-      throw new ObjectStoreError("ref_locked", `Ref ${name} is locked by another process (${lockPath}).`);
-    }
-    try {
-      const current = readTrimmed(path);
-      if (current !== expected) {
-        throw new ObjectStoreError(
-          "ref_changed",
-          `Ref ${name} holds ${current ?? "nothing"} but the update expected ${expected ?? "nothing"}. `
-          + "Re-read the ref and retry: another agent advanced it.",
-        );
+    this.transaction([{ name, expected, next }]);
+  }
+
+  /**
+   * Applies several ref updates as one all-or-nothing step.
+   *
+   * Every lock is taken before any value is read, and every expectation is checked
+   * before any value is written. That ordering is what makes the operation atomic
+   * rather than merely sequential: a caller reverting three refs must not be able
+   * to revert two, discover the third moved, and leave a state that no later
+   * operation can describe — which is exactly what a loop of independent
+   * compare-and-swaps produces.
+   *
+   * Locks are acquired in byte order of ref name. Two transactions over an
+   * overlapping set therefore request them in the same order, so one waits for the
+   * other instead of each holding a lock the other needs.
+   *
+   * @param updates - The updates to apply, each stating the value it believes the
+   *   ref currently holds. `expected: null` requires that the ref not exist;
+   *   `next: null` deletes it.
+   * @throws ObjectStoreError When two updates name one ref, when a ref no longer
+   *   holds its expected value, or when another process holds a lock. In every
+   *   case no ref has been written.
+   */
+  transaction(updates: readonly RefUpdate[]): void {
+    for (const update of updates) assertRefName(update.name);
+    const ordered = [...updates].sort((left, right) => compareByteOrder(left.name, right.name));
+    for (let index = 1; index < ordered.length; index += 1) {
+      // Two updates to one ref would make "the value the caller believes"
+      // ambiguous, and the second check would be reading the first one's write.
+      if (ordered[index]!.name === ordered[index - 1]!.name) {
+        throw new ObjectStoreError("duplicate_ref_update", `Ref ${ordered[index]!.name} appears twice in one transaction.`);
       }
-      if (next === null) rmSync(path, { force: true });
-      else writeAtomic(path, next);
+    }
+    const held: Array<{ descriptor: number; lockPath: string }> = [];
+    try {
+      for (const update of ordered) {
+        const path = this.pathFor(update.name);
+        const lockPath = `${path}.lock`;
+        mkdirSync(dirname(path), { recursive: true });
+        let descriptor: number;
+        try {
+          descriptor = openSync(lockPath, "wx");
+        } catch {
+          throw new ObjectStoreError("ref_locked", `Ref ${update.name} is locked by another process (${lockPath}).`);
+        }
+        held.push({ descriptor, lockPath });
+      }
+      for (const update of ordered) {
+        const current = readTrimmed(this.pathFor(update.name));
+        if (current !== update.expected) {
+          throw new ObjectStoreError(
+            "ref_changed",
+            `Ref ${update.name} holds ${current ?? "nothing"} but the update expected ${update.expected ?? "nothing"}. `
+            + "Re-read the ref and retry: another agent advanced it.",
+          );
+        }
+      }
+      for (const update of ordered) {
+        const path = this.pathFor(update.name);
+        if (update.next === null) rmSync(path, { force: true });
+        else writeAtomic(path, update.next);
+      }
     } finally {
-      closeSync(lock);
-      unlinkSync(lockPath);
+      for (const lock of held) {
+        closeSync(lock.descriptor);
+        unlinkSync(lock.lockPath);
+      }
     }
   }
 
@@ -227,6 +281,25 @@ export class RefStore {
   }
 
   /**
+   * Reads HEAD's raw contents.
+   *
+   * Unparsed, because HEAD's two forms — `ref: refs/heads/x` and a bare object id —
+   * are not interchangeable and the operation log has to record whichever one was
+   * there in order to put it back. A parsed form would lose the distinction between
+   * "attached to a branch that happens to be at commit C" and "detached at C".
+   *
+   * @returns HEAD's trimmed contents.
+   * @throws ObjectStoreError When HEAD is absent.
+   */
+  rawHead(): string {
+    const raw = readTrimmed(join(this.root, "HEAD"));
+    if (raw === null) {
+      throw new ObjectStoreError("corrupt_head", "HEAD is missing. This directory is not an initialised repository.");
+    }
+    return raw;
+  }
+
+  /**
    * Reads HEAD.
    *
    * An unborn branch — HEAD naming a ref that does not exist yet — is a real and
@@ -238,10 +311,7 @@ export class RefStore {
    *   nor an object id.
    */
   readHead(): HeadState {
-    const raw = readTrimmed(join(this.root, "HEAD"));
-    if (raw === null) {
-      throw new ObjectStoreError("corrupt_head", "HEAD is missing. This directory is not an initialised repository.");
-    }
+    const raw = this.rawHead();
     if (raw.startsWith("ref: ")) {
       const ref = raw.slice(5).trim();
       assertRefName(ref);

@@ -46,7 +46,7 @@ test("a project pattern can be negated", () => {
   assert.equal(isIgnored("keep.log", rules), false);
 });
 
-test("parseIgnore treats a bare name as a basename match at any depth", () => {
+test("parseIgnore treats a pattern with no slash as a basename match at any depth", () => {
   const rules = parseIgnore("*.log");
   assert.equal(isIgnored("build.log", rules), true);
   // A basename pattern matches at any depth, which is what everyone expects of

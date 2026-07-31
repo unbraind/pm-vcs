@@ -13,7 +13,7 @@
 
 import { readFileSync } from "node:fs";
 
-import { readCommit, readTree } from "./model.ts";
+import { compareByteOrder, decodeCommit, decodeTree, readCommit, readTree } from "./model.ts";
 import {
   type ObjectId,
   type ObjectType,
@@ -86,6 +86,47 @@ function closure(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId
 }
 
 /**
+ * Refuses an advertised ref whose history is not fully present.
+ *
+ * A bundle arrives from outside and its header is a claim, not a fact. It can name
+ * a ref at a well-formed but absent object id while carrying no object lines and
+ * declaring no prerequisites. Publishing that ref would leave a branch pointing at
+ * nothing — and every later read reports that as a corrupt repository rather than
+ * as a bad import, so the diagnosis lands arbitrarily far from the cause.
+ *
+ * The whole closure is checked, not only the commits: a bundle missing one blob
+ * deep inside a tree is just as unusable, and finding out at checkout time is
+ * finding out too late.
+ *
+ * @param store - Destination store, already holding whatever the bundle carried.
+ * @param name - Ref name being advertised, for the message.
+ * @param target - Commit the ref would be published at.
+ * @throws ObjectStoreError When any object in the closure is absent.
+ */
+function assertClosurePresent(store: ObjectStore, name: string, target: ObjectId): void {
+  const seen = new Set<ObjectId>();
+  const pending: ObjectId[] = [target];
+  while (pending.length > 0) {
+    const id = pending.pop() as ObjectId;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (!store.has(id)) {
+      throw new ObjectStoreError(
+        "incomplete_bundle",
+        `The bundle advertises ${name} at ${target}, but object ${id} in its history is neither carried nor already present.`,
+      );
+    }
+    const object = store.read(id);
+    if (object.type === "commit") {
+      const commit = decodeCommit(object.payload);
+      pending.push(commit.tree, ...commit.parents);
+    } else if (object.type === "tree") {
+      for (const entry of decodeTree(object.payload)) pending.push(entry.id);
+    }
+  }
+}
+
+/**
  * Exports refs and their history as a bundle file.
  *
  * @param store - Object store to read from.
@@ -124,10 +165,10 @@ export function exportBundle(
     }
   }
 
-  const objects = [...closure(store, [...commits])].sort();
+  const objects = [...closure(store, [...commits])].sort(compareByteOrder);
   const header: BundleContents = {
     refs: selected,
-    prerequisites: [...since].sort(),
+    prerequisites: [...since].sort(compareByteOrder),
     objects,
   };
   const lines = [BUNDLE_FORMAT, JSON.stringify(header)];
@@ -160,8 +201,31 @@ export function parseBundle(bytes: Buffer): { header: BundleContents; lines: Bun
   } catch {
     throw new ObjectStoreError("bad_bundle", "Bundle header is not valid JSON.");
   }
-  if (header === null || typeof header !== "object" || typeof header.refs !== "object") {
+  // A bundle is untrusted input, so the header is validated as a schema rather than
+  // trusted as a type. `typeof null` is "object" and so is an array, so the obvious
+  // shape check admitted `{"refs": null}` and `{"refs": []}` — which then failed
+  // downstream as a TypeError from `Object.entries`, reported to the user as a crash
+  // rather than as the malformed bundle it is.
+  if (header === null || typeof header !== "object" || Array.isArray(header)) {
+    throw new ObjectStoreError("bad_bundle", "Bundle header is not a JSON object.");
+  }
+  if (header.refs === null || typeof header.refs !== "object" || Array.isArray(header.refs)) {
     throw new ObjectStoreError("bad_bundle", "Bundle header does not describe any refs.");
+  }
+  for (const [name, target] of Object.entries(header.refs)) {
+    if (typeof target !== "string" || !isObjectId(target)) {
+      throw new ObjectStoreError("bad_bundle", `Bundle advertises ref ${name} at "${String(target)}", which is not an object id.`);
+    }
+  }
+  if (header.prerequisites !== undefined) {
+    if (!Array.isArray(header.prerequisites)) {
+      throw new ObjectStoreError("bad_bundle", "Bundle prerequisites are not a list.");
+    }
+    for (const id of header.prerequisites) {
+      if (typeof id !== "string" || !isObjectId(id)) {
+        throw new ObjectStoreError("bad_bundle", `Bundle declares prerequisite "${String(id)}", which is not an object id.`);
+      }
+    }
   }
   const lines: BundleLine[] = [];
   for (const raw of rawLines.slice(2)) {
@@ -224,9 +288,15 @@ export function importBundle(store: ObjectStore, refs: RefStore, bytes: Buffer):
     store.write(line.type, line.payload);
     added.push(line.id);
   }
-  for (const [name, target] of Object.entries(header.refs)) {
-    refs.compareAndSwap(name, refs.read(name), target);
-  }
+  for (const [name, target] of Object.entries(header.refs)) assertClosurePresent(store, name, target);
+  // One transaction, not a loop of independent swaps: a bundle advertising three
+  // refs must not be able to publish two and fail on the third, which would leave
+  // the repository advertising a history it did not fully receive.
+  refs.transaction(Object.entries(header.refs).map(([name, target]) => ({
+    name,
+    expected: refs.read(name),
+    next: target,
+  })));
   return { added, skipped, refs: header.refs };
 }
 

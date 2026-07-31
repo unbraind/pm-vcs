@@ -55,7 +55,7 @@ test("a field both sides added independently merges by the inferred strategy", (
   const base: RecordDocument = {};
   const setResult = mergeRecords(base, { tags: ["a", "b"] }, { tags: ["b", "c"] });
   assert.equal(setResult.clean, true);
-  assert.deepEqual(setResult.document.tags, ["a", "b", "c"].sort());
+  assert.deepEqual(setResult.document.tags, ["a", "b", "c"]);
 
   const scalarResult = mergeRecords(base, { kind: "task" }, { kind: "bug" });
   assert.equal(scalarResult.clean, false);

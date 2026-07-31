@@ -172,8 +172,12 @@ test("parseBundle rejects a malformed bundle", () => {
 });
 
 test("readBundle reports a missing file", () => {
+  // Stands up its own directory rather than reaching for the shared `dir`, which is
+  // null until a fixture creates one: the previous form needed a `?? "/nonexistent"`
+  // fallback that no run could take.
+  const { root } = fresh();
   assert.throws(
-    () => readBundle(join(dir?.root ?? "/nonexistent", "missing.bundle")),
+    () => readBundle(join(root, "missing.bundle")),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "bundle_not_found",
   );
 });

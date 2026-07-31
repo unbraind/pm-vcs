@@ -19,6 +19,7 @@ import {
   type FileMode,
   type RecordDocument,
   type Signature,
+  compareByteOrder,
   decodeRecord,
   encodeRecord,
   readCommit,
@@ -270,7 +271,7 @@ export class Repository {
       changed.push(path);
     }
     this.writeIndex([...index.values()]);
-    return changed.sort();
+    return changed.sort(compareByteOrder);
   }
 
   /**
@@ -469,14 +470,22 @@ export class Repository {
   /**
    * Switches HEAD to a branch or, detached, to any revision.
    *
-   * Refuses before touching the working tree when a path that differs between the
-   * two trees also has uncommitted changes, since applying the switch would
-   * destroy work no commit holds.
+   * Refuses before touching the working tree when applying the switch would
+   * destroy work no commit holds. That covers two cases, not one: a tracked path
+   * with uncommitted changes that differs between the two trees, and an
+   * **untracked** file the target tree would write over. `materializeTree` also
+   * removes working-tree paths the target tree does not carry, so an untracked file
+   * would otherwise be deleted by a switch — content that exists in no object and
+   * cannot be recovered by any undo.
+   *
+   * The switch records HEAD's before and after contents in the operation log, which
+   * is what makes it undoable. Recording nothing left `undo` iterating an empty
+   * transition list and reporting success without moving HEAD.
    *
    * @param revision - Branch name, or any revision for a detached switch.
    * @param now - Timestamp for the operation log entry.
    * @returns The commit HEAD ended up at.
-   * @throws ObjectStoreError When uncommitted changes would be overwritten.
+   * @throws ObjectStoreError When uncommitted or untracked work would be lost.
    */
   switchTo(revision: string, now: Date): ObjectId {
     const target = this.resolve(revision);
@@ -490,7 +499,7 @@ export class Repository {
     ]);
     const wouldOverwrite = [...dirty].filter((path) => (
       (current.get(path)?.id ?? null) !== (next.get(path)?.id ?? null)
-    )).sort();
+    )).sort(compareByteOrder);
     if (wouldOverwrite.length > 0) {
       throw new ObjectStoreError(
         "switch_would_overwrite",
@@ -498,7 +507,14 @@ export class Repository {
         + "Commit or discard them first.",
       );
     }
-    this.writeIndex(materializeTree(this.objects, this.root, targetTree, CONTROL_DIRECTORY, this.ignoreRules()));
+    const untrackedLoss = status.untracked.filter((path) => next.has(path)).sort(compareByteOrder);
+    if (untrackedLoss.length > 0) {
+      throw new ObjectStoreError(
+        "switch_would_overwrite",
+        `Switching to ${revision} would overwrite untracked ${untrackedLoss.join(", ")}, which no commit holds. `
+        + "Stage and commit them, move them aside, or delete them first.",
+      );
+    }
     const branchRef = `${BRANCH_PREFIX}${revision}`;
     let exists = false;
     try {
@@ -508,13 +524,16 @@ export class Repository {
     }
     const before = this.refs.readHead();
     const beforeTarget = before.kind === "branch" ? before.ref : before.target;
+    const rawBefore = this.refs.rawHead();
     if (exists) this.refs.setHeadToRef(branchRef);
     else this.refs.setHeadDetached(target);
+    this.writeIndex(materializeTree(this.objects, this.root, targetTree, CONTROL_DIRECTORY, this.ignoreRules()));
     this.operations.append(
       "switch",
       `Switched from ${beforeTarget} to ${exists ? revision : target.slice(0, 12)}.`,
       [],
       now,
+      { before: rawBefore, after: this.refs.rawHead() },
     );
     return target;
   }
@@ -542,6 +561,34 @@ export class Repository {
   }
 
   /**
+   * Reads a tree entry's object as the text a diff should compare.
+   *
+   * Dispatches on the **stored** kind rather than assuming a blob. A configured
+   * record path is staged as a `record` object, so demanding a blob here made
+   * `diff` throw `object_type_mismatch` for every repository that configured one —
+   * that is, for every repository using the feature the package exists for.
+   *
+   * A record is rendered one field per line rather than as its canonical
+   * single-line bytes, because a per-field merge engine whose diff reports a
+   * one-field change as a whole-line replacement tells the reader nothing about
+   * what changed. The rendering is for display only and is never hashed.
+   *
+   * @param id - Object the path is bound to, or null when the path is absent on
+   *   that side.
+   * @returns The text to diff, empty for an absent path.
+   */
+  private diffText(id: ObjectId | null): string {
+    if (id === null) return "";
+    const object = this.objects.read(id);
+    if (object.type !== "record") return object.payload.toString("utf8");
+    const document = decodeRecord(object.payload);
+    return `${Object.keys(document)
+      .sort(compareByteOrder)
+      .map((field) => `${JSON.stringify(field)}: ${JSON.stringify(document[field])}`)
+      .join("\n")}\n`;
+  }
+
+  /**
    * Unified diff between two revisions' trees.
    *
    * @param fromRevision - The left side.
@@ -552,15 +599,15 @@ export class Repository {
     const left = flattenTree(this.objects, readCommit(this.objects, this.resolve(fromRevision)).tree);
     const right = flattenTree(this.objects, readCommit(this.objects, this.resolve(toRevision)).tree);
     const output: string[] = [];
-    for (const path of [...new Set([...left.keys(), ...right.keys()])].sort()) {
+    for (const path of [...new Set([...left.keys(), ...right.keys()])].sort(compareByteOrder)) {
       const before = left.get(path);
       const after = right.get(path);
-      // Two paths bound to the same blob id are byte-identical by construction,
+      // Two paths bound to the same object id are byte-identical by construction,
       // so there is nothing to read and nothing to diff.
       if (before?.id === after?.id) continue;
       output.push(unifiedDiff(
-        before ? this.objects.readTyped(before.id, "blob").toString("utf8") : "",
-        after ? this.objects.readTyped(after.id, "blob").toString("utf8") : "",
+        this.diffText(before?.id ?? null),
+        this.diffText(after?.id ?? null),
         before ? `a/${path}` : "/dev/null",
         after ? `b/${path}` : "/dev/null",
       ));
@@ -607,8 +654,14 @@ export class Repository {
     }
     if (isAncestor(this.objects, ours, theirs)) {
       const tree = readCommit(this.objects, theirs).tree;
-      this.writeIndex(materializeTree(this.objects, this.root, tree, CONTROL_DIRECTORY, this.ignoreRules()));
+      // Ref first, working tree second. `advanceHead` compare-and-swaps, so it can
+      // refuse — and materializing before that refusal would leave the index and
+      // working tree holding a result HEAD does not name, with nothing in the
+      // operation log describing it. That is the one state this engine promises
+      // cannot happen. Object writes before the ref update are harmless: they are
+      // content-addressed and simply unreferenced if the update fails.
       this.advanceHead(head, ours, theirs, "merge", `Fast-forwarded to ${theirs.slice(0, 12)}.`, now);
+      this.writeIndex(materializeTree(this.objects, this.root, tree, CONTROL_DIRECTORY, this.ignoreRules()));
       return { kind: "fast_forward", head: theirs, bases: [ours], merged: [], conflicts: [], clean: true };
     }
 
@@ -627,7 +680,6 @@ export class Repository {
       labels,
     );
     const tree = buildTree(this.objects, files);
-    this.writeIndex(materializeTree(this.objects, this.root, tree, CONTROL_DIRECTORY, this.ignoreRules()));
     const id = writeCommit(this.objects, {
       tree,
       parents: [ours, theirs],
@@ -635,7 +687,9 @@ export class Repository {
       committer: options.committer ?? options.author,
       message: options.message,
     });
+    // Same ordering as the fast-forward above, for the same reason.
     this.advanceHead(head, ours, id, "merge", `Merged ${revision} as ${id.slice(0, 12)}.`, now);
+    this.writeIndex(materializeTree(this.objects, this.root, tree, CONTROL_DIRECTORY, this.ignoreRules()));
     return { kind: "merged", head: id, bases, merged, conflicts, clean: conflicts.length === 0 };
   }
 
@@ -696,7 +750,7 @@ export class Repository {
     const merged: string[] = [];
     const conflicts: MergeConflict[] = [];
 
-    for (const path of [...new Set([...base.keys(), ...ours.keys(), ...theirs.keys()])].sort()) {
+    for (const path of [...new Set([...base.keys(), ...ours.keys(), ...theirs.keys()])].sort(compareByteOrder)) {
       const baseEntry = base.get(path);
       const ourEntry = ours.get(path);
       const theirEntry = theirs.get(path);
@@ -820,7 +874,7 @@ export class Repository {
     for (const ref of [...this.refs.list(BRANCH_PREFIX), ...this.refs.list(TAG_PREFIX)]) {
       for (const id of reachable(this.objects, ref.target)) found.add(id);
     }
-    return [...found].sort();
+    return [...found].sort(compareByteOrder);
   }
 
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { after, afterEach, test } from "node:test";
+import { after, test } from "node:test";
 
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
@@ -15,7 +15,8 @@ import {
   positiveInteger,
   signatureFor,
 } from "../vcs-commands.ts";
-import { Repository } from "../engine/repo.ts";
+import { CONTROL_DIRECTORY, Repository } from "../engine/repo.ts";
+import { flattenTree } from "../engine/worktree.ts";
 import type { RepositoryConfig } from "../engine/config.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 import { packageRoot } from "./helpers/sandbox.ts";
@@ -24,11 +25,6 @@ const sandboxes: Array<{ root: string; cleanup(): void }> = [];
 
 after(() => {
   for (const sandbox of sandboxes) sandbox.cleanup();
-});
-
-afterEach(() => {
-  // Each test's repository is torn down by the tracked sandboxes; no per-test
-  // state survives.
 });
 
 /** Capability list the harness accepts, derived from its own signature so a new capability surfaces automatically. */
@@ -250,9 +246,12 @@ test("required arguments are refused with a remediation, and invalid options rep
   const noMessage = await harness.runCommand({ command: "vcs commit", pmRoot: root });
   assert.ok(noMessage.errorMessage !== undefined || noMessage.handled === false);
 
-  // log with a non-positive limit.
+  // log with a non-positive limit. This one asserts the code as well as the
+  // failure: "it failed" would still pass if the limit were rejected for the wrong
+  // reason, or if the command failed before ever parsing it.
   const badLimit = await harness.runCommand({ command: "vcs log", options: { limit: "0" }, pmRoot: root });
-  assert.ok(badLimit.errorMessage !== undefined || badLimit.handled === false);
+  assert.equal(badLimit.handled, false);
+  assert.match(String(badLimit.errorMessage), /--limit/);
 
   // export and import with no file argument.
   const noExport = await harness.runCommand({ command: "vcs export", pmRoot: root });
@@ -280,6 +279,17 @@ test("vcs init refuses an invalid --set-field strategy", async () => {
   const { root } = freshRepoDir();
   const result = await harness.runCommand({ command: "vcs init", options: { setField: "priority:rocket" }, pmRoot: root });
   assert.ok(result.errorMessage !== undefined || result.handled === false);
+});
+
+test("vcs init refuses a --set-field entry that names no field", async () => {
+  // ":set" parses as a valid strategy with an empty field name, which would install
+  // a policy keyed on "" that no record field can ever match — a silently inert
+  // configuration is worse than a rejected one, because it looks applied.
+  const harness = await activate();
+  const { root } = freshRepoDir();
+  const result = await harness.runCommand({ command: "vcs init", options: { setField: ":set" }, pmRoot: root });
+  assert.equal(result.handled, false);
+  assert.match(String(result.errorMessage), /names no field/);
 });
 
 test("vcs merge --fail-on-conflict exits non-zero on a conflicted merge", async () => {
@@ -346,10 +356,7 @@ test("vcs verify reports corruption when an object is tampered with", async () =
 
   // Tamper with the only reachable blob on disk.
   const repo = Repository.open(root);
-  const blobId = repo.headTree();
-  // Flatten the head tree to find a blob to corrupt.
-  const { flattenTree } = await import("../engine/worktree.ts");
-  const flat = flattenTree(repo.objects, blobId);
+  const flat = flattenTree(repo.objects, repo.headTree());
   const target = [...flat.values()][0].id;
   const objectPath = join(root, ".pmvcs", "objects", target.slice(0, 2), target.slice(2));
   const original = readFileSync(objectPath);

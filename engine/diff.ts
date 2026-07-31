@@ -62,6 +62,10 @@ export function diffLines(left: readonly string[], right: readonly string[]): Ed
   const leftLength = left.length;
   const rightLength = right.length;
   const maximum = leftLength + rightLength;
+  // Two empty inputs have one edit script — the empty one — and the search below
+  // would read `furthest[1]` on an array of length 1 to find it, producing NaN
+  // cursors and falling out of the loop instead of returning from it.
+  if (maximum === 0) return [];
   // `trace[d][k]` records the furthest x reached on diagonal k at edit
   // distance d. Keeping every step is what lets the backtrack below recover
   // the actual script rather than only its length.
@@ -69,7 +73,14 @@ export function diffLines(left: readonly string[], right: readonly string[]): Ed
   // Diagonals run from -maximum to +maximum, offset into a flat array.
   const furthest = new Int32Array(2 * maximum + 1);
 
-  for (let d = 0; d <= maximum; d += 1) {
+  // The search runs until a script is found rather than to a fixed bound, and that
+  // is not an unbounded loop: `d` reaches at most `maximum`, since deleting every
+  // left line and inserting every right one is an edit script of exactly that
+  // length, and the both-empty case returned above. A `d <= maximum` condition would
+  // be one no input can make false — dead code, or a suppression in a gate that
+  // allows none.
+  let distance = -1;
+  for (let d = 0; distance < 0; d += 1) {
     trace.push(Int32Array.from(furthest));
     for (let k = -d; k <= d; k += 2) {
       // Step down (an insertion from the right side) when the diagonal below is
@@ -83,14 +94,12 @@ export function diffLines(left: readonly string[], right: readonly string[]): Ed
       }
       furthest[k + maximum] = x;
       if (x >= leftLength && y >= rightLength) {
-        return backtrack(left, right, trace, d, maximum);
+        distance = d;
+        break;
       }
     }
   }
-  /* c8 ignore next 2 -- unreachable: d = leftLength + rightLength always
-     suffices, since deleting every left line and inserting every right one is
-     an edit script of exactly that length. */
-  return [];
+  return backtrack(left, right, trace, distance, maximum);
 }
 
 /**

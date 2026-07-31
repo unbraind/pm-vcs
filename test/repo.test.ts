@@ -631,11 +631,6 @@ test("a commit made on a detached HEAD advances HEAD itself, not a branch", () =
   assert.equal(repo.refs.resolveHead(), tip);
 });
 
-/**
- * Removes a file, swallowing missing-file errors.
- *
- * @param path - The file to remove.
- */
 test("switch refuses when a dirty file exists only in the current tree and not the target", () => {
   // This exercises the `?.id ?? null` fallback in switchTo's overwrite check:
   // a path present in the current tree but absent from the target tree produces

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { ObjectStoreError } from "../engine/objects.ts";
@@ -185,7 +185,7 @@ test("setHeadDetached refuses a malformed id", () => {
   );
 });
 
-test("list skips a subdirectory it cannot read", () => {
+test("list skips a subdirectory it cannot read", (context) => {
   const { refs, root } = freshRefs();
   refs.compareAndSwap(`${BRANCH_PREFIX}main`, null, id);
   // A subdirectory under the ref tree that cannot be read is skipped rather than
@@ -194,6 +194,14 @@ test("list skips a subdirectory it cannot read", () => {
   mkdirSync(unreadable, { recursive: true });
   writeFileSync(join(unreadable, "inner"), `${id}\n`);
   chmodSync(unreadable, 0o000);
+  // Root ignores the mode bits, so the directory stays readable and the branch under
+  // test is never taken. Skipping is the honest outcome; asserting would fail for a
+  // reason that has nothing to do with the code.
+  if (process.getuid !== undefined && process.getuid() === 0) {
+    chmodSync(unreadable, 0o755);
+    context.skip("the unreadable-directory path cannot be produced as root");
+    return;
+  }
   try {
     const branches = refs.list(BRANCH_PREFIX);
     // The readable ref still appears; the unreadable subtree contributes nothing.
@@ -207,7 +215,7 @@ test("compareAndSwap reports a held lock", () => {
   const { refs, root } = freshRefs();
   const name = `${BRANCH_PREFIX}main`;
   const lockPath = join(root, ...name.split("/")) + ".lock";
-  mkdirSync(join(root, ...name.split("/")).replace(/\/[^/]+$/, ""), { recursive: true });
+  mkdirSync(dirname(join(root, ...name.split("/"))), { recursive: true });
   // Hold the lock by creating the .lock file first.
   writeFileSync(lockPath, "held");
   assert.throws(

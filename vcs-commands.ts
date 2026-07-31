@@ -252,7 +252,15 @@ export function registerVcsCommands(api: ExtensionApi): void {
             "Use field:strategy, where strategy is scalar, set or sequence.",
           );
         }
-        fields[pair.slice(0, colon)] = strategy;
+        const field = pair.slice(0, colon);
+        if (field.length === 0) {
+          throw new VcsError(
+            "invalid_option",
+            `--set-field entry "${pair}" names no field.`,
+            "Use field:strategy, where field is the record field the strategy applies to.",
+          );
+        }
+        fields[field] = strategy;
       }
       const recordPaths = commaSeparated(context.options, "recordPath");
       const config: RepositoryConfig = recordPaths.length === 0 && Object.keys(fields).length === 0
@@ -359,7 +367,10 @@ export function registerVcsCommands(api: ExtensionApi): void {
       // argument as the *right* side instead would make `pm vcs diff main` show
       // main against its own parent, which is neither what the argument is named
       // nor what anyone would expect.
-      const from = context.args[0]?.trim();
+      // A blank argument is treated as absent, matching `vcs log`: a caller that
+      // interpolated an empty variable meant "no revision", and resolving "" would
+      // fail with a message about an unknown revision named nothing.
+      const from = context.args[0]?.trim() || undefined;
       const to = context.args[1]?.trim() || "HEAD";
       // With no arguments at all there is no left side to name, so it defaults to
       // HEAD's first parent. A root commit has none; comparing HEAD with itself
@@ -567,7 +578,6 @@ export function registerVcsCommands(api: ExtensionApi): void {
           // Only ObjectStoreError is caught. `read` raises nothing else, and
           // labelling an unexpected failure "unreadable" would report a bug in
           // this process as corruption in the user's repository.
-          /* c8 ignore next 2 -- non-ObjectStoreError is a programming error, unreachable */
           if (!(error instanceof ObjectStoreError)) throw error;
           corrupt.push(`${id}: ${error.code}`);
         }

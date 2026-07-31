@@ -86,9 +86,7 @@ export function normalizeRepoPath(root: string, candidate: string): string {
  */
 export function encodeIndex(entries: readonly IndexEntry[]): string {
   return [...entries]
-    // Two arms, not three: the caller builds entries from a path-keyed map, so
-    // no two paths are equal and an equality arm would be dead code.
-    .sort((left, right) => (left.path < right.path ? -1 : 1))
+    .sort((left, right) => compareByteOrder(left.path, right.path))
     .map((entry) => `${entry.mode} ${entry.id} ${entry.path}`)
     .join("\n");
 }
@@ -145,7 +143,7 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
     }
   };
   walk(root);
-  return found.sort();
+  return found.sort(compareByteOrder);
 }
 
 /**
@@ -363,7 +361,7 @@ export function computeStatus(
     }
   }
 
-  const untracked = [...present].filter((path) => !staged.has(path)).sort();
+  const untracked = [...present].filter((path) => !staged.has(path)).sort(compareByteOrder);
   return {
     staged: stagedChanges.sort((left, right) => compareByteOrder(left.path, right.path)),
     unstaged: unstagedChanges.sort((left, right) => compareByteOrder(left.path, right.path)),

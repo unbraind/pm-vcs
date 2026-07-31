@@ -181,7 +181,7 @@ test("an executable file keeps its bit through a commit and a switch, and loses 
   assert.equal(repo.status().clean, true);
 });
 
-test("the working-tree walk skips an entry that is neither a file nor a symlink", () => {
+test("the working-tree walk skips an entry that is neither a file nor a symlink", (context) => {
   // A named pipe in a working tree is unusual but legal, and it has no content a
   // blob could hold. Walking into it would block on open; reporting it as
   // untracked would invite someone to stage it.
@@ -190,9 +190,9 @@ test("the working-tree walk skips an entry that is neither a file nor a symlink"
   try {
     execFileSync("mkfifo", [fifo]);
   } catch {
-    // No mkfifo on this platform: the branch is exercised on any POSIX host in
-    // CI, and skipping here is better than asserting on a fixture we could not
-    // build.
+    // No mkfifo on this platform. Reported as a skip rather than returning, because
+    // an early return counts as a pass for a test whose assertion never ran.
+    context.skip("mkfifo is unavailable on this platform");
     return;
   }
   writeFileSync(join(root, "real.txt"), "content\n");

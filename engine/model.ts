@@ -176,8 +176,36 @@ export function decodeTree(payload: Buffer): TreeEntry[] {
  *
  * @param signature - The signature to render.
  * @returns `Name <email> <epochMs> <tzMinutes>`.
+ * @throws ObjectStoreError When the name or email carries a line separator, the
+ *   email carries an angle bracket, or either number is not a safe integer — each
+ *   of which would produce a commit that cannot be decoded back to this signature.
  */
 function encodeSignature(signature: Signature): string {
+  // A commit's header block is line-oriented and this line sits inside it, so a
+  // name or email carrying a line separator would inject further headers into the
+  // commit — and a `\n\n` would terminate the header block early, moving the rest
+  // of the identity into the message. Angle brackets in the email would make the
+  // decoder's `<...>` capture ambiguous. Neither is representable, so neither is
+  // accepted.
+  for (const [field, value] of [["name", signature.name], ["email", signature.email]] as const) {
+    if (/[\r\n]/.test(value)) {
+      throw new ObjectStoreError("invalid_signature", `A signature ${field} cannot contain a line separator.`);
+    }
+  }
+  if (/[<>]/.test(signature.email)) {
+    throw new ObjectStoreError("invalid_signature", "A signature email cannot contain an angle bracket.");
+  }
+  // The decoder reads these back with a decimal-integer pattern, so anything the
+  // pattern cannot express — a fraction, NaN, an infinity, a value past 2^53 — would
+  // encode into a commit that no longer decodes, or decodes to a different number.
+  for (const [field, value] of [
+    ["timestamp", signature.timestamp],
+    ["timezone offset", signature.timezoneOffsetMinutes],
+  ] as const) {
+    if (!Number.isSafeInteger(value)) {
+      throw new ObjectStoreError("invalid_signature", `A signature ${field} must be a safe integer, not ${value}.`);
+    }
+  }
   return `${signature.name} <${signature.email}> ${signature.timestamp} ${signature.timezoneOffsetMinutes}`;
 }
 
@@ -267,7 +295,7 @@ export function decodeCommit(payload: Buffer): Commit {
  * @returns Canonical record bytes.
  */
 export function encodeRecord(document: RecordDocument): Buffer {
-  const fields = Object.keys(document).sort();
+  const fields = Object.keys(document).sort(compareByteOrder);
   const body = fields.map((field) => `${JSON.stringify(field)}:${JSON.stringify(document[field])}`);
   return Buffer.from(`{${body.join(",")}}`, "utf8");
 }

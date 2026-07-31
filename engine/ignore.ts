@@ -70,13 +70,23 @@ export function parseIgnore(text: string): IgnoreRules {
  * An absent file is not an error: most repositories do not need one, and the
  * always-ignored set already covers the cases that would cause damage.
  *
+ * An *unreadable* file is a different matter and is re-raised. If the rules exist
+ * but cannot be read — a permission denial, a directory where the file belongs —
+ * returning an empty rule set would let `stage` add paths the project excluded and
+ * let `materializeTree` write over them, silently, because both decide through
+ * `isIgnored`. That is precisely the damage this module exists to prevent, so it
+ * must fail loudly rather than degrade.
+ *
  * @param root - Absolute repository root.
  * @returns The compiled rules, empty when there is no ignore file.
+ * @throws Error The underlying I/O error, when an ignore file exists but cannot
+ *   be read.
  */
 export function readIgnoreRules(root: string): IgnoreRules {
   try {
     return parseIgnore(readFileSync(`${root}/${IGNORE_FILE}`, "utf8"));
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return { patterns: [], negations: [] };
   }
 }

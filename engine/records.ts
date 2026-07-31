@@ -11,7 +11,7 @@
 // values can conflict, and it conflicts alone rather than taking the document
 // with it.
 
-import type { RecordDocument, RecordValue } from "./model.ts";
+import { compareByteOrder, type RecordDocument, type RecordValue } from "./model.ts";
 
 /** How a field's concurrent edits are reconciled. */
 export type FieldStrategy =
@@ -142,9 +142,7 @@ function unionMembers(
   const baseKeys = new Set(base.map(keyOf));
   for (const member of ours) if (!baseKeys.has(keyOf(member))) emit(member);
   for (const member of theirs) if (!baseKeys.has(keyOf(member))) emit(member);
-  // Two arms: `emit` deduplicates by key, so no two members share one and an
-  // equality arm would be dead code.
-  return sorted ? result.sort((left, right) => (keyOf(left) < keyOf(right) ? -1 : 1)) : result;
+  return sorted ? result.sort((left, right) => compareByteOrder(keyOf(left), keyOf(right))) : result;
 }
 
 /**
@@ -169,7 +167,7 @@ export function mergeRecords(
   theirs: RecordDocument,
   policy: MergePolicy = {},
 ): RecordMergeResult {
-  const fields = [...new Set([...Object.keys(base), ...Object.keys(ours), ...Object.keys(theirs)])].sort();
+  const fields = [...new Set([...Object.keys(base), ...Object.keys(ours), ...Object.keys(theirs)])].sort(compareByteOrder);
   const merged: Record<string, RecordValue> = {};
   const conflicts: FieldConflict[] = [];
   const changedFields: string[] = [];
@@ -193,7 +191,6 @@ export function mergeRecords(
     } else {
       // At least one side has a value here: reaching this point means both sides
       // changed the field AND disagree, and two absent values would be equal.
-      /* c8 ignore next -- ?? fallback unreachable: both changed it, so ourValue is defined */
       const strategy = strategyFor(field, policy, ourValue ?? theirValue);
       if (strategy === "scalar") {
         conflicts.push({ field, base: baseValue, ours: ourValue, theirs: theirValue });
@@ -237,7 +234,28 @@ export function mergeAppendOnlyLog(
   theirs: readonly string[],
   timestampField = "at",
 ): string[] {
-  const seen = new Set<string>();
+  // Keyed by content, but counting occurrences rather than collapsing them. An
+  // append-only log can legitimately hold one line twice — two identical state
+  // transitions recorded at the same instant are two events, not one — and a
+  // content-keyed set would silently drop the second, which is exactly the loss
+  // this union exists to prevent. Keeping the highest count either side reached
+  // means a line one side appended twice survives twice, while a line both sides
+  // inherited from the base is not duplicated by the merge.
+  const kept = new Map<string, number>();
+  const counts = (lines: readonly string[]): Map<string, number> => {
+    const tally = new Map<string, number>();
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      tally.set(trimmed, (tally.get(trimmed) ?? 0) + 1);
+    }
+    return tally;
+  };
+  const sideCounts = [counts(base), counts(ours), counts(theirs)];
+  for (const tally of sideCounts) {
+    for (const [line, count] of tally) kept.set(line, Math.max(kept.get(line) ?? 0, count));
+  }
+  const emitted = new Map<string, number>();
   const ordered: Array<{ line: string; timestamp: string; arrival: number }> = [];
   // An entry with no usable timestamp inherits the last one seen in arrival
   // order. Defaulting it to the empty string instead would sort every such entry
@@ -247,8 +265,10 @@ export function mergeAppendOnlyLog(
   let lastTimestamp = "";
   for (const line of [...base, ...ours, ...theirs]) {
     const trimmed = line.trim();
-    if (trimmed.length === 0 || seen.has(trimmed)) continue;
-    seen.add(trimmed);
+    if (trimmed.length === 0) continue;
+    const already = emitted.get(trimmed) ?? 0;
+    if (already >= (kept.get(trimmed) as number)) continue;
+    emitted.set(trimmed, already + 1);
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);

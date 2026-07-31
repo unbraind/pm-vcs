@@ -8,7 +8,7 @@
 // several candidates rather than assuming one.
 
 import { diffLines, splitLines } from "./diff.ts";
-import { readCommit } from "./model.ts";
+import { compareByteOrder, readCommit } from "./model.ts";
 import type { ObjectId, ObjectStore } from "./objects.ts";
 
 /** How a three-way merge of one file turned out. */
@@ -98,10 +98,16 @@ export function isAncestor(store: ObjectStore, candidate: ObjectId, descendant: 
 export function mergeBases(store: ObjectStore, left: ObjectId, right: ObjectId): ObjectId[] {
   const fromLeft = reachable(store, left);
   const common = [...reachable(store, right)].filter((id) => fromLeft.has(id));
+  // One walk per candidate, cached, rather than one per *pair*. `isAncestor` inside
+  // a nested scan re-reads every commit object on each call, so a criss-cross
+  // history with many shared ancestors made base selection cost
+  // O(candidates squared times history) object reads and dominated the merge.
+  const ancestry = new Map<ObjectId, Set<ObjectId>>();
+  for (const candidate of common) ancestry.set(candidate, reachable(store, candidate));
   const minimal = common.filter((candidate) => !common.some((other) => (
-    other !== candidate && isAncestor(store, candidate, other)
+    other !== candidate && (ancestry.get(other) as Set<ObjectId>).has(candidate)
   )));
-  return minimal.sort();
+  return minimal.sort(compareByteOrder);
 }
 
 /**
@@ -275,9 +281,14 @@ export function mergeContent(
     );
   }
 
+  // Terminate the result only if a side that contributed content was terminated.
+  // Appending a newline unconditionally makes the merge record a one-byte content
+  // change neither side made, which then shows up as a diff against both parents.
+  const terminated = ours.endsWith("\n") || theirs.endsWith("\n");
+  const joined = output.join("\n");
   return {
     clean: conflicts.length === 0,
-    text: output.length === 0 ? "" : `${output.join("\n")}\n`,
+    text: output.length === 0 ? "" : terminated ? `${joined}\n` : joined,
     conflicts,
   };
 }
