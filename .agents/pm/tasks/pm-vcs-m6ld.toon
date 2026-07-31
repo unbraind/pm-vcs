@@ -2,13 +2,16 @@ id: pm-vcs-m6ld
 title: 100/100/100 coverage test suite for pm-vcs engine
 description: "Write node:test suites covering engine/objects, model, refs, diff, merge, records, worktree, ignore, config, oplog, bundle, repo and vcs-commands.ts so npm run coverage passes at 100/100/100. Fix surface.test.ts for the vcs git preflight/preview/items rename. Fix any engine bugs the tests find."
 type: Task
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-07-30T23:09:29.175Z"
-updated_at: "2026-07-30T23:09:35.808Z"
+updated_at: "2026-07-31T06:32:02.159Z"
+closed_at: "2026-07-31T06:32:02.136Z"
+completed_at: "2026-07-31T06:32:02.136Z"
 author: pi-agent
 acceptance_criteria: "npm run coverage passes with lines 100, branches 100, functions 100; every throw path tested with its code; no mocks of the engine; deterministic PRNG for the diff property test."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-tr2a,parent,"2026-07-30T23:09:35.790Z",pi-agent,"cli:update:dep",detected
+close_reason: "The suite reaches 100 percent lines, branches and functions repo-wide with no ignores anywhere, and the gate additionally fails when a source file is missing from the report."
 body: ""

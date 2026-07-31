@@ -1,0 +1,14 @@
+id: pm-vcs-5h6j
+title: "Phase 5: the forge and the patch series"
+description: "Forgejo is right that project metadata belongs inside the repository, and the kernel's lore workflow is right that a change under review is a first-class object with a lifecycle. This phase makes both native: a patch series is an object kind, review state is a record, and a served repository exposes them so agents can propose, review and land changes without a second system holding the state."
+type: Epic
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T06:28:25.155Z"
+updated_at: "2026-07-31T06:28:27.619Z"
+author: "harness:claude-code"
+acceptance_criteria: "A patch series can be produced from a commit range, transferred, applied and re-derived byte-identically; review state is a record that merges per field so two reviewers never conflict; a served repository exposes refs, objects and series over the transport from Phase 3"
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-31T06:28:27.601Z","harness:claude-code","cli:update:dep",detected
+body: ""

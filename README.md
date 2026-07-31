@@ -4,9 +4,19 @@
 whose most important content is structured, not textual.**
 
 Not a git wrapper. Not a helper around `git merge`. pm-vcs has its own content-addressed
-object store, its own refs, its own diff, its own three-way merge, its own operation log and
-its own distribution format. No code path in the engine shells out to `git`, and nothing it
-writes is git-compatible.
+object store, its own refs, its own index, its own diff, its own three-way merge, its own
+operation log and its own distribution format. No code path in the engine shells out to `git`,
+and nothing it writes is git-compatible.
+
+The scope is the whole system — the storage and history model of git, the rewriting and
+operation-log model of jujutsu, and the conviction Fossil, Forgejo and lore share that a
+project's own metadata and its changes under review belong *inside* the repository rather than
+in a service beside it. All of it written from scratch on the pm SDK, around one primitive git
+does not have: **the record**.
+
+**[ARCHITECTURE.md](ARCHITECTURE.md) is the design document** — every decision, why it was
+made, and an honest per-capability statement of what is shipped and what is still ahead. Read
+it before the command table if you want to know what this actually is.
 
 ```bash
 npm install --save-dev pm-vcs     # or: bun add -d pm-vcs
@@ -269,7 +279,8 @@ nothing while reporting success is how a commit ends up missing a file.
 
 ## Distribution
 
-There is no network protocol, on purpose. A bundle is one text file:
+There is no network protocol *yet* — remotes, `clone`, `fetch` and `push` are Phase 3. Until
+then a bundle is one text file, which is a transport every agent already has:
 
 ```console
 $ pm vcs export /tmp/work.bundle --ref refs/heads/feature
@@ -281,6 +292,22 @@ storing it, and fails whole — naming the missing ids — when a bundle depends
 receiver does not have. A file that can be copied, attached or piped is the transport an
 agent already has, and it works the same between two directories on one host, between a job
 and its runner, and across a review.
+
+---
+
+## Roadmap
+
+Everything below is tracked as an epic in this repository's own tracker, under
+[`pm-vcs-tr2a`](.agents/pm/epics/pm-vcs-tr2a.toon). The per-capability status table lives in
+[ARCHITECTURE.md §11](ARCHITECTURE.md#11-status).
+
+| phase | what it adds | epic |
+| --- | --- | --- |
+| **2** | Change identities that survive rewriting, plus `describe`, `rebase`, `squash`, `split`, `cherry-pick`, `revert`, `reset`, `restore`, and automatic descendant rebase | [`pm-vcs-ijj7`](.agents/pm/epics/pm-vcs-ijj7.toon) |
+| **3** | Named remotes, remote-tracking refs, and `clone`/`fetch`/`push` over a transport with reachability-based negotiation | [`pm-vcs-wm40`](.agents/pm/epics/pm-vcs-wm40.toon) |
+| **4** | pm-vcs versioning its own source, with a CI gate proving the tracked history matches the source tree byte for byte | [`pm-vcs-390t`](.agents/pm/epics/pm-vcs-390t.toon) |
+| **5** | The forge: a patch series as an object kind, review state as records, and a served repository | [`pm-vcs-5h6j`](.agents/pm/epics/pm-vcs-5h6j.toon) |
+| **6** | Scale: packed storage, a reachability index, shallow and partial history, and garbage collection bounded by the operation log | [`pm-vcs-b7cb`](.agents/pm/epics/pm-vcs-b7cb.toon) |
 
 ---
 

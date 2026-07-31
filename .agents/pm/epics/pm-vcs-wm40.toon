@@ -1,0 +1,14 @@
+id: pm-vcs-wm40
+title: "Phase 3: distribution over a real transport"
+description: "Bundles let two repositories exchange history offline, which is enough to prove the object model but is not distribution. This phase adds named remotes, remote-tracking refs, and clone, fetch and push over a transport, with object negotiation computed from reachability rather than sending the whole store, and non-fast-forward pushes refused by default."
+type: Epic
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T06:28:24.061Z"
+updated_at: "2026-07-31T06:28:26.673Z"
+author: "harness:claude-code"
+acceptance_criteria: pm vcs clone produces a repository whose object closure and refs are identical to the source; fetch transfers only objects the receiver lacks; push refuses a non-fast-forward without an explicit override and never leaves a ref pointing at an object that was not transferred; remote-tracking refs live under refs/remotes and are never confused with local branches
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-31T06:28:26.638Z","harness:claude-code","cli:update:dep",detected
+body: ""

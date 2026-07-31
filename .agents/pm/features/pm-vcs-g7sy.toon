@@ -2,13 +2,16 @@ id: pm-vcs-g7sy
 title: Myers diff and unified hunks over lines and trees
 description: "An O(ND) Myers diff producing edit scripts, grouped into hunks with context and rendered as unified diff. Tree diff walks two trees in sorted order and classifies each path as added, deleted or modified without reading blobs whose ids already match."
 type: Feature
-status: in_progress
+status: closed
 priority: 1
 tags[1]: "area:vcs"
 created_at: "2026-07-30T22:37:53.764Z"
-updated_at: "2026-07-30T22:55:28.762Z"
+updated_at: "2026-07-31T06:31:51.028Z"
+closed_at: "2026-07-31T06:31:51.008Z"
+completed_at: "2026-07-31T06:31:51.008Z"
 author: "harness:claude-code"
 acceptance_criteria: A diff between identical inputs is empty; applying a computed edit script to the left side reproduces the right side exactly; hunk context and line numbering match the unified diff format; a tree diff of two trees sharing a subtree id does not read that subtree
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-tr2a,parent,"2026-07-30T22:37:56.857Z","harness:claude-code","cli:update:dep",detected
+close_reason: "Implemented and covered on this branch: the module ships, its behaviour is exercised end to end against real repositories, and the repo-wide gate is at 100 percent lines, branches and functions."
 body: ""
