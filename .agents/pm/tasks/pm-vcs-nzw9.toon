@@ -1,0 +1,17 @@
+id: pm-vcs-nzw9
+title: Rename the git interoperability commands under a pm vcs git prefix
+description: "The three commands that reason about a git checkout moved from pm vcs preflight, pm vcs preview and pm vcs items to pm vcs git preflight, pm vcs git preview and pm vcs git items. The rename makes the boundary visible in the command surface itself: everything under pm vcs operates on a pm-vcs repository, and everything under pm vcs git touches git. Recorded as an item so the generated changelog carries it, since the changelog is produced from the tracker rather than hand-written. No installed user is affected because the package has never been published to npm, its release being gated on maintainer approval."
+type: Task
+status: closed
+priority: 2
+tags: []
+created_at: "2026-07-31T07:35:11.000Z"
+updated_at: "2026-07-31T07:35:14.652Z"
+closed_at: "2026-07-31T07:35:14.628Z"
+completed_at: "2026-07-31T07:35:14.628Z"
+author: "harness:claude-code"
+acceptance_criteria: "The changelog names all three old command paths and their replacements; no code path outside git.ts, preflight.ts, preview.ts and ledger.ts touches git"
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-31T07:35:13.045Z","harness:claude-code","cli:update:dep",detected
+close_reason: "Done on this branch: the three commands are registered under the pm vcs git prefix and nothing outside the four git-facing modules touches git."
+body: ""

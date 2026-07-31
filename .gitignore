@@ -6,6 +6,12 @@ dist/
 RELEASE_NOTES.md
 
 dist-test/
+
+# A pm-vcs repository created while dogfooding this package in its own checkout.
+# Never committed: it is local state, and an accidental `pm vcs add` in this
+# directory would otherwise stage a second copy of the whole tree.
+.pmvcs/
+
 .agents/pm/locks/
 .agents/pm/runtime/
 .agents/pm/search/

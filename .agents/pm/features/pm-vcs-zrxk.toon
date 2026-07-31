@@ -1,0 +1,17 @@
+id: pm-vcs-zrxk
+title: Merge base over the commit DAG and three-way content merge
+description: Ancestry queries and a lowest-common-ancestor search that handles multiple candidate bases from criss-cross merges rather than assuming a single one. On top of it a diff3 content merge that takes non-overlapping edits from both sides and emits conflict markers only where both sides changed the same region.
+type: Feature
+status: closed
+priority: 1
+tags[1]: "area:vcs"
+created_at: "2026-07-30T22:37:54.086Z"
+updated_at: "2026-07-31T06:31:51.674Z"
+closed_at: "2026-07-31T06:31:51.661Z"
+completed_at: "2026-07-31T06:31:51.661Z"
+author: "harness:claude-code"
+acceptance_criteria: The merge base of two branches off one commit is that commit; a fast-forward is detected and takes no merge; edits to different regions of one file both survive; overlapping edits produce a conflict with both sides preserved; a criss-cross history yields a correct result rather than an arbitrary base
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-30T22:37:57.329Z","harness:claude-code","cli:update:dep",detected
+close_reason: "Implemented and covered on this branch: the module ships, its behaviour is exercised end to end against real repositories, and the repo-wide gate is at 100 percent lines, branches and functions."
+body: ""

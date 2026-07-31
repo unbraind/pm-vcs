@@ -1,0 +1,17 @@
+id: pm-vcs-9c77
+title: "Content-addressed object store: blobs, trees, commits and records"
+description: "Four object kinds framed as '<type> <byteLength>\\0<payload>' and addressed by SHA-256 over the whole frame, so identical content always yields an identical id. Blobs hold bytes, trees hold sorted (mode, name, id) entries, commits hold a tree plus zero or more parents with author and message, and records hold a structured document as canonically ordered fields - the kind that makes per-field merging possible. Loose objects are zlib-deflated and written through a temp file plus rename so a torn write can never leave a half object under a valid id."
+type: Feature
+status: closed
+priority: 1
+tags[1]: "area:vcs"
+created_at: "2026-07-30T22:37:52.785Z"
+updated_at: "2026-07-31T06:31:50.038Z"
+closed_at: "2026-07-31T06:31:50.024Z"
+completed_at: "2026-07-31T06:31:50.024Z"
+author: "harness:claude-code"
+acceptance_criteria: Round-tripping any object of any kind returns byte-identical content; the same content written twice produces one object and one id; a corrupted payload is detected on read rather than returned; concurrent writers of the same object cannot observe a partial file
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-30T22:37:55.905Z","harness:claude-code","cli:update:dep",detected
+close_reason: "Implemented and covered on this branch: the module ships, its behaviour is exercised end to end against real repositories, and the repo-wide gate is at 100 percent lines, branches and functions."
+body: ""

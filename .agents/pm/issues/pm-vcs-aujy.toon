@@ -1,0 +1,17 @@
+id: pm-vcs-aujy
+title: A VCS with no ignore mechanism can stage and then overwrite another VCS's control directory
+description: "Found by driving pm vcs through the real host harness. 'pm vcs add' with no arguments staged every file the working-tree walk returned, which included .git/objects, .git/refs and node_modules - 70 MB, and more importantly the git repository's own state. The next 'pm vcs switch' then tried to materialize a tree over those paths and failed only because git writes its loose objects read-only, so EACCES stopped it. On a tree where those objects were writable, a switch would have rewritten git's object store with whatever the target commit happened to hold at those paths. The engine was correct in isolation; what was missing is that a working tree is not the same thing as the set of files in a directory. Needs an always-ignored set covering other version control systems and the package's own control directory, a .pmvcsignore for project-specific patterns, and materialization that refuses to remove or overwrite an ignored path even when a tree names one."
+type: Issue
+status: closed
+priority: 1
+tags[2]: "area:vcs",safety
+created_at: "2026-07-30T23:00:47.103Z"
+updated_at: "2026-07-30T23:02:54.211Z"
+closed_at: "2026-07-30T23:02:54.154Z"
+completed_at: "2026-07-30T23:02:54.154Z"
+author: "harness:claude-code"
+acceptance_criteria: "add with no arguments never stages a path under .git, .hg, .svn, node_modules or the control directory; a .pmvcsignore excludes further patterns; materializing a tree neither writes to nor removes an ignored path even if a commit names one; a test drives this through the host harness rather than the engine, since the engine in isolation looked correct"
+notes[1]{created_at,author,text}:
+  "2026-07-30T23:02:41.057Z","harness:claude-code","Fixed with two layers. ALWAYS_IGNORED covers .git, .hg, .svn, .bzr, _darcs, CVS and node_modules and cannot be negated - a project that could re-include .git could reintroduce the exact failure. .pmvcsignore adds project patterns with gitignore-like semantics (comments, trailing-slash directories, basename-at-any-depth for a pattern with no slash, ! to re-include). Three call sites needed it, not one: the working-tree walk, so nothing ignored is ever staged or reported untracked; materialization, which now filters the TARGET tree as well, so a commit recorded before the rules existed still cannot overwrite an ignored path; and empty-directory pruning. Verified against the real situation - a git checkout with a populated .git/objects - including a deliberately hostile commit whose tree names .git/HEAD, which materializes to nothing. Staging an ignored path by name is refused rather than skipped: staging nothing while reporting success is how a commit ends up missing a file. Rules are read per call, not cached, because .pmvcsignore is itself tracked and a switch can change it."
+close_reason: "Implemented and verified: an always-ignored set plus .pmvcsignore, applied at the working-tree walk, at materialization and at explicit staging"
+body: ""

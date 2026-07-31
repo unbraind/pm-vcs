@@ -260,6 +260,14 @@ const result = spawnSync(
   process.execPath,
   [
     "--test",
+    // One test process at a time. The runner otherwise runs test FILES
+    // concurrently and merges each worker's V8 coverage, and that merge is not
+    // reliable: repeated runs of an unchanged, fully passing suite reported a
+    // module anywhere between 38% and 100% of its lines, purely by which worker
+    // happened to flush. Under a hard 100% threshold that is not slow-and-correct
+    // versus fast-and-correct — it is a gate that fails releases at random, which
+    // is worse than no gate because the failure teaches people to re-run it.
+    "--test-concurrency=1",
     "--experimental-test-coverage",
     // Scope the report to exactly the files the presence check requires. Passing
     // the enumerated paths rather than a directory glob keeps the two in step by

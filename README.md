@@ -1,203 +1,354 @@
 # pm-vcs
 
-Branch-aware merge safety for [pm-cli](https://github.com/unbraind/pm-cli) trackers.
+**A version control system written from scratch, in TypeScript, on the pm SDK — for projects
+whose most important content is structured, not textual.**
 
-pm-cli already ships the *mechanism* that lets many agents work one project on many branches
-and merge without losing item data: `pm merge install` writes git merge drivers,
-`pm merge driver` performs field-aware merges of item documents and append-only history, and
-`pm merge reconcile` / `pm merge report` account for history afterwards.
+Not a git wrapper. Not a helper around `git merge`. pm-vcs has its own content-addressed
+object store, its own refs, its own index, its own diff, its own three-way merge, its own
+operation log and its own distribution format. No code path in the engine shells out to `git`,
+and nothing it writes is git-compatible.
 
-**pm-vcs covers what happens before you merge, and what git's history has to say about your
-items.** It does not reimplement the merge drivers — it calls them.
+The scope is the whole system — the storage and history model of git, the rewriting and
+operation-log model of jujutsu, and the conviction Fossil, Forgejo and lore share that a
+project's own metadata and its changes under review belong *inside* the repository rather than
+in a service beside it. All of it written from scratch on the pm SDK, around one primitive git
+does not have: **the record**.
+
+**[ARCHITECTURE.md](ARCHITECTURE.md) is the design document** — every decision, why it was
+made, and an honest per-capability statement of what is shipped and what is still ahead. Read
+it before the command table if you want to know what this actually is.
 
 ```bash
 npm install --save-dev pm-vcs     # or: bun add -d pm-vcs
 pm install pm-vcs
+pm vcs init
 ```
+
+---
+
+## Why write another version control system
+
+Git is superb at what it was built for. It was built for source files, and its merge is a
+merge of *lines*.
+
+Almost everything a team's context actually lives in is not lines. A tracker item is a
+record: a status, a priority, a set of tags, an assignee, an append-only history. Two agents
+working the same project on two branches routinely touch two *different fields* of one item.
+That is not a conflict in any meaningful sense — but whether git can merge it depends on how
+many lines apart the fields happen to be serialized, which is an accident of the file format
+rather than a property of the change.
+
+The ecosystem's existing answer is to bolt merge drivers onto git so that `.toon` items and
+`.jsonl` history get field-aware handling. That works, and pm-cli ships it. But it is a patch
+over a mismatch: the storage layer still thinks in lines, and every tool downstream has to be
+told not to.
+
+**pm-vcs removes the mismatch instead of patching it.** A record is a first-class object kind
+alongside blobs, trees and commits. Merging two revisions of a record compares fields, not
+lines. Two agents editing two different fields converge, always, with no line-merge hazard
+anywhere in the pipeline — because there is no line merge in the pipeline.
+
+This is the philosophy the rest of the ecosystem is built on —
+**project management = context management** — pushed down into the storage layer. If context
+is the thing worth preserving, the system that versions it should understand its shape.
+
+### Where it sits among the systems it learns from
+
+| | versions | merge unit | pm-vcs takes |
+| --- | --- | --- | --- |
+| **git** | file trees | lines | content addressing, the commit DAG, the object model |
+| **Subversion** | file trees | lines | nothing structural; a cautionary tale about central state |
+| **Jujutsu** | file trees | lines | the operation log, and `undo` as a first-class verb |
+| **Fossil / Forgejo** | files + project metadata | lines / a database | the conviction that project metadata belongs *inside* the VCS |
+| **pm-vcs** | file trees **and records** | **fields**, then lines | — |
+
+Jujutsu's operation log is the best idea in modern version control for agents: every command
+is recorded, so "put it back" is one verb rather than a reasoning problem about which id was
+the old tip. pm-vcs has it. Fossil is right that issues and project state belong in the
+repository rather than beside it — pm-vcs goes further and makes them a native object kind
+rather than a table in an attached database.
+
+---
+
+## Designed for many agents on one project
+
+Every decision below exists because the expected user is several autonomous agents working
+concurrently, not one person at a keyboard.
+
+**Ref updates are compare-and-swap under an exclusive lock.** Two agents that read the same
+branch tip and both commit on top of it cannot both win. The second write fails, loudly, and
+says to re-read and retry. A last-write-wins ref update is precisely how one agent's commit
+disappears with nothing anywhere reporting it.
+
+**Identical concurrent edits are agreement, not conflict.** Two agents reaching the same
+conclusion independently is the most common way an automated merge wastes attention. pm-vcs
+merges it cleanly.
+
+**A conflict is scoped to the thing that conflicted.** A genuine scalar disagreement on one
+field conflicts *on that field*, and every other field of that record still merges. A
+document does not become unreadable because one value disagreed.
+
+**Merge bases are computed, not assumed.** Two branches that have already merged each other
+once have several minimal common ancestors. pm-vcs finds all of them and builds a virtual
+base. Picking one arbitrarily is how a criss-cross merge silently reintroduces a change that
+was already reverted.
+
+**Nothing is destroyed before it is known to succeed.** A switch that would overwrite an
+uncommitted edit refuses *before writing anything*. A half-applied switch leaves an agent
+with a tree matching no commit and no way to describe what it has.
+
+**Objects are never removed**, so `undo` is always possible. Rewinding a ref makes a commit
+unreachable, not absent.
+
+---
 
 ## Commands
 
-### `pm vcs preflight`
-
-One call, one verdict: can *this* checkout merge tracker data field-aware?
+### The repository
 
 ```console
-$ pm vcs preflight
-ok: true
-preflight:
-  checks:
-    - name: "merge_fence_committed"
-      status: "pass"
-      detail: "The committed .gitattributes carries the pm merge fence."
-    - name: "merge_drivers_configured"
-      status: "pass"
-    - name: "merge_fence_coverage"
-      status: "pass"
-    - name: "merge_driver_runs"
-      status: "pass"
-      detail: "The configured merge driver executed successfully against a synthetic three-way input."
-    - name: "tracker_worktree_clean"
-      status: "pass"
+$ pm vcs init --record-path '.agents/pm/**/*.toon' --set-field 'tags:set,history:sequence'
+$ pm vcs add
+$ pm vcs commit --message "Close the deployment item"
+$ pm vcs log --limit 10
+$ pm vcs diff main feature
 ```
 
-Run it as the first thing you do in a new checkout. It exits non-zero when a check fails, and
-every failure names a remediation.
-
-**Why it matters.** `.gitattributes` is committed and travels with the repository, but it is
-inert on its own: the `merge.pm-*.driver` definitions live in **git config**. Without them git
-silently falls back to its default line-based merge on `.toon` items and history JSONL — you
-get a line-merged or conflicted item file and nothing anywhere says the field-aware driver
-never ran.
-
-Which checkouts actually have that hole is worth stating precisely, because the intuitive
-answer is wrong:
-
-| Checkout | Drivers present? | Why |
-| --- | --- | --- |
-| `git clone` | **No** | clone copies the committed fence but not git config — so every collaborator's clone and every CI checkout starts unprotected |
-| `git worktree add` | **Yes** | a linked worktree shares the repository's config file, so the main clone's drivers already apply |
-
-Both halves are pinned by tests, against real clones and real worktrees.
-
-`merge_driver_runs` goes further than checking that config exists: it **executes** the
-configured driver against a synthetic three-way input in a temporary directory. A driver
-command pointing into `node_modules` resolves in the clone it was installed from and fails in
-a checkout that never ran `npm install` — and it fails *during* a merge, once your working
-tree has already been rewritten.
-
-`merge_drivers_configured` grades a *missing* driver as a failure and a *drifted* driver
-command as a warning. Drift is the normal state for a repository that installed its drivers
-from a local devDependency; the driver still runs, so failing on it would keep preflight
-permanently red in exactly the repositories that took the more portable route.
-
-### `pm vcs preview <ref>`
-
-What would merging `<ref>` into HEAD do to your tracker data — per artifact, per field,
-**without touching the working tree**?
-
-```console
-$ pm vcs preview agent-b
-preview:
-  entries:
-    - path: ".agents/pm/history/sbx-o6a5.jsonl"
-      artifact: "history"
-      resolution: "union"
-      stream_strategy: "union_reanchor"
-      entries_total: 7
-    - path: ".agents/pm/tasks/sbx-o6a5.toon"
-      artifact: "item"
-      resolution: "conflict"
-      conflict_fields: ["priority"]
-      union_fields: ["notes"]
-  totals: { clean: 0, union: 1, conflict: 1, delete_modify: 0, unprotected: 0 }
-```
-
-Read that as: *both agents appended notes and they will union losslessly; both changed
-`priority` and someone has to decide.*
-
-| Resolution | Meaning |
+| command | what it does |
 | --- | --- |
-| `clean` | identical, or only one side changed — nothing to decide |
-| `union` | append-only streams and commutative collections that merge losslessly |
-| `conflict` | both sides changed the same scalar; the driver resolves toward `ours` and reports it |
-| `delete_modify` | one side deleted the artifact, the other changed it — git settles this at the tree level and never runs a driver |
-| `unprotected` | a tracker artifact no pm merge driver covers in this clone: a silent line-merge waiting to happen |
+| `pm vcs init` | Create a repository. `--record-path` declares which paths hold structured records; `--set-field` declares how their fields merge. |
+| `pm vcs status` | The three-way difference between HEAD, the index and the working tree. |
+| `pm vcs add [paths…]` | Stage paths, or everything. A path that no longer exists stages as a deletion. |
+| `pm vcs commit --message` | Record the index. Refuses an empty commit unless `--allow-empty`. |
+| `pm vcs log [rev]` | First-parent history, newest first. |
+| `pm vcs diff [from] [to]` | Unified diff between two revisions' trees. |
+| `pm vcs branch [name]` | List, create (`--at`) or delete (`--delete`) branches. |
+| `pm vcs switch <rev>` | Move HEAD and update the working tree. Refuses rather than overwrite uncommitted work. |
+| `pm vcs merge <rev>` | Three-way merge. `--fail-on-conflict` to gate CI. |
+| `pm vcs tag [name]` | List or create tags. |
+| `pm vcs undo` | Reverse a recorded operation, refs and working tree together. |
+| `pm vcs oplog` | Every operation, with the refs it moved and where from. |
+| `pm vcs export <file>` | Write refs and their history to a bundle. |
+| `pm vcs import <file>` | Import a bundle, verifying every object against its own id. |
+| `pm vcs verify` | Re-read every reachable object and check it against its id. |
 
-**Why you can trust it.** The preview reads the three blobs straight out of git
-(`merge-base`, `HEAD`, `<ref>`) and hands them to `mergeItemDocuments`,
-`mergeHistoryStreams`, `mergeRelationshipEventStreams` and `mergeJsonDocuments` — the exact
-functions `pm merge driver` runs, from `@unbrained/pm-cli/sdk/merge`. Both the preview and the
-real merge reduce to the same call on the same inputs, so the prediction cannot drift from the
-outcome: a rule change in the CLI changes both at once. Which driver applies to a path comes
-from `git check-attr`, so `.gitattributes` matching is git's answer, not a second
-implementation of it.
+### Git interoperability
 
-The test suite proves the claim rather than asserting it: it diverges one item on two real
-branches, records the prediction, performs the real `git merge`, and checks that git conflicts
-on exactly the predicted path, that `ours` won the predicted scalar, and that both agents'
-notes survived.
+pm items today mostly live in git repositories, and pm-vcs can reason about that without
+being git. These three are the only commands that touch git:
 
-Use `--fail-on` to turn it into a CI gate:
+| command | what it does |
+| --- | --- |
+| `pm vcs git preflight` | Can *this* git checkout merge tracker data field-aware? |
+| `pm vcs git preview <ref>` | What would merging `<ref>` do to tracker data, per item and per field? |
+| `pm vcs git items <range>` | Which pm items did this commit range create, modify and close? |
 
-```bash
-pm vcs preview origin/main --fail-on conflict      # unresolvable field collisions and delete/modify
-pm vcs preview origin/main --fail-on unprotected   # also fail on artifacts no driver covers
-```
+---
 
-Without `--fail-on` it is a report and always exits 0.
+## The part that matters: per-field merge
 
-### `pm vcs items <range>`
-
-Which pm items did this commit range create, modify or delete?
+Declare which paths hold records and how their fields reconcile:
 
 ```console
-$ pm vcs items main..HEAD
-items:
-  items:
-    - id: "sbx-k2p9"
-      kind: "created"
-      path: ".agents/pm/features/sbx-k2p9.toon"
-      commits:
-        - short: "a1b2c3d"
-          author: "agent-a"
-          date: "2026-07-30T09:14:02Z"
-          subject: "Add the export pipeline"
-  totals: { created: 1, modified: 0, deleted: 0 }
+$ pm vcs init --record-path 'items/*.json' --set-field 'tags:set,history:sequence'
 ```
 
-Directly consumable by a PR description or release notes. Only item *documents* are counted,
-never their history streams — a stream always changes alongside its document, so counting both
-would double every entry.
+Two agents, on two branches, edit the same item:
 
-**This is not the same set pm-changelog produces, and the difference is deliberate.**
-pm-changelog answers *"which items belong in this release's notes"* and lists completed work;
-`pm vcs items` answers *"which items did these commits touch"* and is status-blind. So for one
-range the changelog's set is a **subset**. Measured on a real pm-web release range
-(`v2026.07.29..v2026.07.30`): the changelog listed 2 items, this reported 4 — the extra two
-being open items that were touched but not finished. Use `pm vcs items` to describe what a
-branch did, and pm-changelog to describe what shipped.
+```jsonc
+// base
+{ "id": "pm-1", "title": "Ship the thing", "status": "open",
+  "priority": 3, "tags": ["area:vcs"], "history": ["created"] }
 
-## Design constraints
+// agent A closes it
+{ …, "status": "closed", "history": ["created", "closed by A"] }
 
-- **No state of its own.** Every answer is derived from git and the tracker, so pm-vcs can
-  never itself become a merge conflict.
-- **Read-only.** No command writes to the working tree or the index. `preflight` writes only
-  into a temporary directory it creates and removes, to execute the driver probe.
-- **Compose, never duplicate.** Merge outcomes come from the shipped merge primitives;
-  attribute matching comes from `git check-attr`; driver and fence audits come from
-  `auditMergeDriverConfiguration` and `auditMergeAttributeFence`.
-- **No shell.** Git is invoked with an argument array and no shell, so a branch or path
-  containing a space, quote or `$` cannot change the command that runs.
+// agent B retitles and reprioritises it
+{ …, "title": "Ship the thing (revised)", "priority": 1,
+      "tags": ["area:vcs", "urgent"], "history": ["created", "retitled by B"] }
+```
+
+```console
+$ pm vcs merge agent-b
+merge:
+  kind: "merged"
+  clean: true
+  conflicts: []
+```
+
+```jsonc
+{ "history": ["created", "closed by A", "retitled by B"],
+  "id": "pm-1", "priority": 1, "status": "closed",
+  "tags": ["area:vcs", "urgent"], "title": "Ship the thing (revised)" }
+```
+
+Every change survived. No conflict markers exist anywhere, because no line merge ran.
+
+### Field strategies
+
+| strategy | rule |
+| --- | --- |
+| `scalar` (default) | One side changed it, that side wins. Both changed it differently, it conflicts — alone. |
+| `set` | Both sides' members survive, duplicates collapse, order normalised. |
+| `sequence` | Append-only. Both sides' additions survive in deterministic order. |
+
+A genuine disagreement still conflicts, and says exactly what disagreed:
+
+```console
+$ pm vcs merge y --fail-on-conflict
+Error: Merging y left 1 conflict(s): items/pm-1.json (status)
+```
+
+`priority`, `tags` and `history` merged. Only `status` is unresolved.
+
+### Records are canonicalised on the way in
+
+A configured record path is parsed and re-encoded canonically when staged, so two agents
+whose editors disagree about key order or indentation produce **one object id**. A file whose
+formatting moved does not register as changed. This is not cosmetic: it is what keeps a
+reformat from presenting as a conflict.
+
+---
+
+## How it is built
+
+```
+engine/objects.ts    SHA-256 content addressing over `<type> <byteLength>\0<payload>`.
+                     zlib loose objects, temp-file-and-rename writes. Reads re-hash rather
+                     than trusting the filename, so silent corruption is detectable.
+engine/model.ts      Canonical encodings for trees, commits and records. Trees sort by byte
+                     order, never locale collation — a tree must not hash two ways under two
+                     LANG settings.
+engine/refs.ts       Branches, tags, HEAD (symbolic or detached), compare-and-swap updates.
+engine/diff.ts       Myers O(ND) line diff, hunk grouping, unified rendering.
+engine/merge.ts      Commit-DAG reachability, minimal merge bases, diff3 content merge.
+engine/records.ts    Per-field record merge; append-only log union.
+engine/worktree.ts   Index, working-tree scan, tree materialization, status.
+engine/ignore.ts     An always-ignored set plus `.pmvcsignore`.
+engine/config.ts     Which paths hold records and how their fields merge — per repository,
+                     so two agents cannot disagree about it.
+engine/oplog.ts      Append-only operation log; `undo`.
+engine/bundle.ts     Export and import, verifying every object against its own id.
+engine/repo.ts       The porcelain.
+```
+
+### Repository layout
+
+```
+.pmvcs/
+  format          repository format version
+  HEAD            "ref: refs/heads/main", or a raw object id when detached
+  config.json     record paths and field strategies
+  index           the staging area
+  refs/heads/*    branch tips
+  refs/tags/*
+  objects/ab/cd…  zlib-deflated, content-addressed by SHA-256
+  oplog.jsonl     append-only operation log
+```
+
+### The four object kinds
+
+| kind | holds |
+| --- | --- |
+| `blob` | raw bytes |
+| `tree` | sorted `(mode, name, id)` entries |
+| `commit` | a tree, zero or more parents, author, committer, message |
+| `record` | **a structured document as canonically ordered fields** |
+
+`record` is the one git does not have, and the reason this system exists.
+
+---
+
+## Safety
+
+pm-vcs is usually initialised *inside* an existing checkout, so it treats the working tree as
+something it shares rather than owns.
+
+`.git`, `.hg`, `.svn`, `.bzr`, `_darcs`, `CVS` and `node_modules` are **always** ignored and
+**cannot be re-included** — not by `.pmvcsignore`, and not by a commit whose tree names a path
+inside them. Materialization filters the target tree, so history recorded before the rules
+existed still cannot write over another tool's state. This is pinned by a test that builds a
+deliberately hostile commit naming `.git/HEAD` and asserts it materializes to nothing.
+
+`.pmvcsignore` adds project patterns with gitignore-like semantics: `#` comments, a trailing
+slash for a directory, a pattern without `/` matching by basename at any depth, and `!` to
+re-include. Staging an ignored path *by name* is refused rather than skipped — staging
+nothing while reporting success is how a commit ends up missing a file.
+
+---
+
+## Distribution
+
+There is no network protocol *yet* — remotes, `clone`, `fetch` and `push` are Phase 3. Until
+then a bundle is one text file, which is a transport every agent already has:
+
+```console
+$ pm vcs export /tmp/work.bundle --ref refs/heads/feature
+$ pm vcs import /tmp/work.bundle          # in another repository
+```
+
+Import reproduces **identical commit ids**, verifies every object against its own hash before
+storing it, and fails whole — naming the missing ids — when a bundle depends on history the
+receiver does not have. A file that can be copied, attached or piped is the transport an
+agent already has, and it works the same between two directories on one host, between a job
+and its runner, and across a review.
+
+---
+
+## Roadmap
+
+Everything below is tracked as an epic in this repository's own tracker, under
+[`pm-vcs-tr2a`](.agents/pm/epics/pm-vcs-tr2a.toon). The per-capability status table lives in
+[ARCHITECTURE.md §11](ARCHITECTURE.md#11-status).
+
+| phase | what it adds | epic |
+| --- | --- | --- |
+| **2** | Change identities that survive rewriting, plus `describe`, `rebase`, `squash`, `split`, `cherry-pick`, `revert`, `reset`, `restore`, and automatic descendant rebase | [`pm-vcs-ijj7`](.agents/pm/epics/pm-vcs-ijj7.toon) |
+| **3** | Named remotes, remote-tracking refs, and `clone`/`fetch`/`push` over a transport with reachability-based negotiation | [`pm-vcs-wm40`](.agents/pm/epics/pm-vcs-wm40.toon) |
+| **4** | pm-vcs versioning its own source, with a CI gate proving the tracked history matches the source tree byte for byte | [`pm-vcs-390t`](.agents/pm/epics/pm-vcs-390t.toon) |
+| **5** | The forge: a patch series as an object kind, review state as records, and a served repository | [`pm-vcs-5h6j`](.agents/pm/epics/pm-vcs-5h6j.toon) |
+| **6** | Scale: packed storage, a reachability index, shallow and partial history, and garbage collection bounded by the operation log | [`pm-vcs-b7cb`](.agents/pm/epics/pm-vcs-b7cb.toon) |
+
+---
 
 ## Requirements
 
-- Node.js >= 22.18.0 (`engines`), tested on 22 and 26
-- `@unbrained/pm-cli` >= 2026.7.29 (peer dependency)
+- Node.js ≥ 22.18 (`engines`), tested on 22 and 26
+- `@unbrained/pm-cli` ≥ 2026.7.29 (peer dependency)
 - Works under `npm`/`npx` and `bun`/`bunx`
+- No runtime dependencies beyond the Node standard library
 
 ## Development
 
 ```bash
 npm ci
 npm run check        # typecheck
-npm run coverage     # test suite behind the 100/100/100 coverage gate
+npm run coverage     # the suite behind a 100/100/100 gate
 npm run release:check
 ```
 
-Tests run against real git repositories holding real pm trackers, created by the real `pm`
-binary. There are no mocks and no hand-built `api` doubles: the package's whole claim is that
-it predicts what git and the shipped drivers do, and a fake of either would only assert
-against the suite's own assumptions.
+The coverage gate walks the source tree and fails when a file is **absent** from the report,
+not only when it is under threshold. Node omits never-loaded files entirely, so an untested
+module would otherwise pass a 100% threshold by not being measured.
+
+Tests run against real repositories and real filesystems. There are no mocks and no
+hand-built `api` doubles: this is filesystem and merge code, and a fake of either would only
+assert against the suite's own assumptions.
 
 ## Known upstream issues this package works around
 
 - [unbraind/pm-cli#825](https://github.com/unbraind/pm-cli/issues/825) — `FlagDefinition`'s
   index signature defeats excess-property checking, so a misnamed flag field type-checks and
-  then aborts activation. Flags here use `long` / `value_name` / `value_type`.
+  then aborts activation, dropping every later sibling command. Flags here use `long` /
+  `value_name` / `value_type`.
 - [unbraind/pm-cli#826](https://github.com/unbraind/pm-cli/issues/826) — an extension command
   cannot both return a structured report and exit non-zero, and a thrown handler error's
   remediation is replaced by a generic line. Gate commands therefore throw, with the
   remediation folded into the message.
+- [unbraind/pm-cli#832](https://github.com/unbraind/pm-cli/issues/832) — pm-cli bundles a
+  private `pm-vcs` exemplar that claims the `vcs` alias and registers `vcs log` / `vcs merge`,
+  with no way for a package author to detect the collision. Enabling both in one workspace is
+  not supported.
 
 ## License
 

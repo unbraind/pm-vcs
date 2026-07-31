@@ -1,9 +1,11 @@
-// pm-vcs — branch-aware merge safety for pm trackers
+// pm-vcs — a version control system for structured project data.
 //
-// Capabilities (see manifest.json):
-//   commands — `pm vcs preflight`, `pm vcs preview <ref>`, `pm vcs items <range>`
+// This module registers two command groups. `pm vcs <verb>` operates on pm-vcs's
+// own repositories (see vcs-commands.ts and engine/); `pm vcs git <verb>` is the
+// git-interoperability surface below, which reasons about tracker data living in
+// a git repository.
 //
-// The package composes what pm-cli already ships rather than reimplementing it:
+// The git group composes what pm-cli already ships rather than reimplementing it:
 // the merge-configuration audits and the field-aware three-way merge primitives
 // both come from `@unbrained/pm-cli/sdk/merge`, so a preview cannot drift from
 // what a real merge does, and preflight's verdict matches what a merge would
@@ -28,6 +30,7 @@ import type {
 import { relative, resolve } from "node:path";
 
 import { VcsError, resolveRepoRoot } from "./git.ts";
+import { registerVcsCommands } from "./vcs-commands.ts";
 import { itemsInRange, type RangeReport } from "./ledger.ts";
 import { type PreviewReport, previewMerge } from "./preview.ts";
 import { type PreflightReport, runPreflight } from "./preflight.ts";
@@ -77,13 +80,13 @@ interface CommandEnvelope {
   readonly exit_code: number;
 }
 
-/** `pm vcs preflight` result. */
+/** `pm vcs git preflight` result. */
 type PreflightEnvelope = CommandEnvelope & { readonly preflight: PreflightReport };
 
-/** `pm vcs preview` result. */
+/** `pm vcs git preview` result. */
 type PreviewEnvelope = CommandEnvelope & { readonly preview: PreviewReport };
 
-/** `pm vcs items` result. */
+/** `pm vcs git items` result. */
 type ItemsEnvelope = CommandEnvelope & { readonly items: RangeReport };
 
 /**
@@ -215,7 +218,7 @@ export function assertPreviewWithinThreshold(
  */
 function setupCommands(api: ExtensionApi): void {
   api.registerCommand({
-    name: "vcs preflight",
+    name: "vcs git preflight",
     description:
       "Verify this clone or worktree can merge tracker data field-aware: committed merge fence, per-clone driver configuration, fence coverage for every schema type, a driver that actually executes, and a clean tracker worktree.",
     async run(context: CommandHandlerContext): Promise<PreflightEnvelope> {
@@ -232,7 +235,7 @@ function setupCommands(api: ExtensionApi): void {
   });
 
   api.registerCommand({
-    name: "vcs preview",
+    name: "vcs git preview",
     description:
       "Predict what merging <ref> into HEAD would do to tracker data, per item and per field, without touching the working tree. Runs the shipped merge primitives against blobs read from git, so the prediction matches the real merge.",
     arguments: [{ name: "ref", description: "Ref to preview merging into HEAD", required: true }],
@@ -256,8 +259,8 @@ function setupCommands(api: ExtensionApi): void {
       if (ref === undefined || ref.trim() === "") {
         throw new VcsError(
           "missing_ref",
-          "pm vcs preview requires a ref to preview.",
-          "Pass the branch or commit you intend to merge, for example `pm vcs preview origin/main`.",
+          "pm vcs git preview requires a ref to preview.",
+          "Pass the branch or commit you intend to merge, for example `pm vcs git preview origin/main`.",
         );
       }
       const preview = previewMerge({
@@ -271,7 +274,7 @@ function setupCommands(api: ExtensionApi): void {
   });
 
   api.registerCommand({
-    name: "vcs items",
+    name: "vcs git items",
     description:
       "List the pm items a revision range created, modified or deleted, with the commits that touched each one. Directly consumable by a PR description or release notes.",
     arguments: [
@@ -283,8 +286,8 @@ function setupCommands(api: ExtensionApi): void {
       if (range === undefined || range.trim() === "") {
         throw new VcsError(
           "missing_range",
-          "pm vcs items requires a revision range.",
-          "Pass a range git accepts, for example `pm vcs items main..HEAD`.",
+          "pm vcs git items requires a revision range.",
+          "Pass a range git accepts, for example `pm vcs git items main..HEAD`.",
         );
       }
       const items = itemsInRange({
@@ -312,6 +315,10 @@ export default defineExtension({
   version: "2026.7.30",
 
   activate(api: ExtensionApi) {
+    // The repository commands register first: if a later registration is ever
+    // rejected the host drops it and every sibling after it, so the surface the
+    // package is named for should not be the part that goes missing.
+    registerVcsCommands(api);
     setupCommands(api);
   },
 });

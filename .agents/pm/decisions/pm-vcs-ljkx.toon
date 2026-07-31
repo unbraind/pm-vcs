@@ -1,0 +1,15 @@
+id: pm-vcs-ljkx
+title: "pm-vcs is not git-compatible, and that is the point"
+description: "pm-vcs object ids are sha-256 over its own framing, there is no packfile format, no .git directory and no wire protocol in common with git. A pm-vcs repository cannot be pushed to a git remote and never will be. The alternative considered was a git-compatible object format so existing hosting would work unchanged. It was rejected because git-compatibility forces the line as the merge unit back in through the object format: a record cannot be a first-class object kind in a format that only knows blobs, trees, commits and tags, so per-field merge would have to be re-implemented as a driver over serialized text, which is exactly the patch-over-a-mismatch that pm-vcs exists to remove. Git remains the transport to GitHub for this package's own source, and three quarantined commands reason about git checkouts for users whose items live in git. Nothing in engine/ depends on git."
+type: Decision
+status: closed
+priority: 2
+tags: []
+created_at: "2026-07-31T06:31:49.630Z"
+updated_at: "2026-07-31T06:32:21.368Z"
+closed_at: "2026-07-31T06:32:21.358Z"
+completed_at: "2026-07-31T06:32:21.358Z"
+author: "harness:claude-code"
+acceptance_criteria: No module under engine/ imports or executes git; the git interop commands live outside engine/; the README and ARCHITECTURE both state the incompatibility rather than implying interoperability
+close_reason: "Accepted. The boundary is enforced in code: nothing under engine/ imports or executes git, and both README and ARCHITECTURE state the incompatibility outright."
+body: ""

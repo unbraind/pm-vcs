@@ -1,0 +1,14 @@
+id: pm-vcs-ijj7
+title: "Phase 2: change identities and history rewriting"
+description: "A version control system that cannot rewrite history is a snapshot store. This phase gives every commit a change identity that survives rewriting, and adds describe, rebase, squash, split, cherry-pick, revert, reset and restore. Descendants are replayed automatically and every branch and tag pointing into a rewritten range is moved, so a rewrite can never orphan a ref. Every rewrite is one transactional operation-log entry, so undo reverses it whole."
+type: Epic
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-07-31T06:28:23.482Z"
+updated_at: "2026-07-31T06:32:03.385Z"
+author: "harness:claude-code"
+acceptance_criteria: "Every commit carries a change id that is preserved across describe, rebase, squash and split; rewriting a commit with descendants replays all of them and moves every affected branch and tag; a conflicting rewrite changes no ref and no working-tree byte; record paths merge per field during replay, never by line; 100 percent line, branch and function coverage"
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-31T06:28:26.258Z","harness:claude-code","cli:update:dep",detected
+body: ""

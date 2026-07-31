@@ -1,0 +1,17 @@
+id: pm-vcs-48q3
+title: Per-field record merge so structured data never line-merges
+description: "The reason the VCS exists. A record merge compares base, ours and theirs field by field: a field only one side changed takes that side, a field both sides changed to the same value is not a conflict, append-only sequences union while preserving order, and set-valued fields union. Only a genuine scalar disagreement conflicts, and it conflicts on that field alone rather than poisoning the whole document."
+type: Feature
+status: closed
+priority: 1
+tags[1]: "area:vcs"
+created_at: "2026-07-30T22:37:54.424Z"
+updated_at: "2026-07-31T06:31:52.125Z"
+closed_at: "2026-07-31T06:31:52.112Z"
+completed_at: "2026-07-31T06:31:52.112Z"
+author: "harness:claude-code"
+acceptance_criteria: "Two agents editing different fields of one record merge cleanly; identical concurrent edits do not conflict; append-only history from both sides unions with no loss and no duplication; a real scalar disagreement reports exactly the conflicting field with base, ours and theirs; no record merge path can emit line-based conflict markers"
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-30T22:37:57.813Z","harness:claude-code","cli:update:dep",detected
+close_reason: "Implemented and covered on this branch: the module ships, its behaviour is exercised end to end against real repositories, and the repo-wide gate is at 100 percent lines, branches and functions."
+body: ""

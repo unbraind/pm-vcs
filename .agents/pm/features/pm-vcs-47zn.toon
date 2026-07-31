@@ -1,0 +1,14 @@
+id: pm-vcs-47zn
+title: Stat cache in the index so status re-hashes only what changed
+description: "Raised in review: status calls readWorkingFile and hashes every indexed file on every invocation, so its cost grows with total tracked bytes rather than with the number of changed files, and stage with no arguments walks the same set. Record size and mtime in the index and re-hash only when either differs. Belongs with Phase 6 rather than with the object-format work already tracked there, because the index format changes and the fallback path when a stat is inconclusive has to be exactly right: treating a file as unchanged because its mtime matches is how a version control system loses a change that landed inside one filesystem timestamp tick."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T07:35:09.591Z"
+updated_at: "2026-07-31T07:35:11.772Z"
+author: "harness:claude-code"
+acceptance_criteria: status on a large repository does not read file content for paths whose size and mtime are unchanged; a change made within one mtime granularity tick is still detected; the index format change is forward and backward compatible or refuses loudly
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-b7cb,parent,"2026-07-31T07:35:11.720Z","harness:claude-code","cli:update:dep",detected
+body: ""

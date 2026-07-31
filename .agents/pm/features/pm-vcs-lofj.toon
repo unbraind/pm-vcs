@@ -1,0 +1,17 @@
+id: pm-vcs-lofj
+title: "Working tree, index and status"
+description: "Scanning the working tree into index entries, materializing a tree back onto disk, and computing status as the three-way difference between HEAD, the index and the working tree. Materialization removes paths the target tree does not carry, so switching between branches leaves no orphan files."
+type: Feature
+status: closed
+priority: 1
+tags[1]: "area:vcs"
+created_at: "2026-07-30T22:37:54.801Z"
+updated_at: "2026-07-31T06:31:52.601Z"
+closed_at: "2026-07-31T06:31:52.589Z"
+completed_at: "2026-07-31T06:31:52.589Z"
+author: "harness:claude-code"
+acceptance_criteria: Staging then committing produces a tree matching the working tree; status separates staged from unstaged changes and reports untracked paths; switching to a branch without a file removes it; switching with uncommitted changes to a path that would be overwritten is refused before anything is written
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-tr2a,parent,"2026-07-30T22:37:58.361Z","harness:claude-code","cli:update:dep",detected
+close_reason: "Implemented and covered on this branch: the module ships, its behaviour is exercised end to end against real repositories, and the repo-wide gate is at 100 percent lines, branches and functions."
+body: ""
