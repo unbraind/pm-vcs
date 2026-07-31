@@ -11,7 +11,7 @@
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
@@ -614,15 +614,18 @@ export class Repository {
     for (const path of [...new Set([...left.keys(), ...right.keys()])].sort(compareByteOrder)) {
       const before = left.get(path);
       const after = right.get(path);
-      // Two paths bound to the same object id are byte-identical by construction,
-      // so there is nothing to read and nothing to diff.
-      if (before?.id === after?.id) continue;
-      output.push(unifiedDiff(
-        this.diffText(before?.id ?? null),
-        this.diffText(after?.id ?? null),
-        before ? `a/${path}` : "/dev/null",
-        after ? `b/${path}` : "/dev/null",
-      ));
+      if (before?.id === after?.id && before?.mode === after?.mode) continue;
+      if (before !== undefined && after !== undefined && before.mode !== after.mode) {
+        output.push(`old mode ${before.mode}\nnew mode ${after.mode}\n`);
+      }
+      if (before?.id !== after?.id) {
+        output.push(unifiedDiff(
+          this.diffText(before?.id ?? null),
+          this.diffText(after?.id ?? null),
+          before ? `a/${path}` : "/dev/null",
+          after ? `b/${path}` : "/dev/null",
+        ));
+      }
     }
     return output.join("");
   }
@@ -878,9 +881,11 @@ export class Repository {
    * @returns The commit HEAD ends up at, or null on an unborn branch.
    */
   private applyRewrite(plan: RewritePlan, now: Date): ObjectId | null {
-    for (const move of plan.moves) {
-      this.refs.compareAndSwap(move.ref, move.before, move.after);
-    }
+    this.refs.transaction(plan.moves.map((move) => ({
+      name: move.ref,
+      expected: move.before,
+      next: move.after,
+    })));
     this.operations.append(plan.command, plan.summary, plan.moves, now);
     const head = this.refs.resolveHead();
     this.writeIndex(materializeTree(
@@ -1010,8 +1015,9 @@ export class Repository {
    * Moves HEAD to a revision, and optionally the index and working tree.
    *
    * `soft` moves only the branch; `mixed` also rewrites the index to the
-   * revision's tree; `hard` also rewrites the working tree. Objects are never
-   * deleted, so `undo` recovers whatever the reset moved away from.
+   * revision's tree; `hard` also rewrites tracked working-tree content. The
+   * explicit hard mode permits discarding tracked edits, but refuses when any
+   * untracked path would be deleted because no object or undo can recover it.
    *
    * @param revision - Where HEAD should move.
    * @param mode - How much to reset.
@@ -1023,6 +1029,16 @@ export class Repository {
     if (head.target === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to reset.");
     const target = this.resolve(revision);
     const targetTree = readCommit(this.objects, target).tree;
+    if (mode === "hard") {
+      const untracked = [...this.status().untracked].sort(compareByteOrder);
+      if (untracked.length > 0) {
+        throw new ObjectStoreError(
+          "reset_would_discard_untracked",
+          `A hard reset would delete untracked ${untracked.join(", ")}, which no commit holds. `
+          + "Stage and commit them, move them aside, or delete them first.",
+        );
+      }
+    }
     this.advanceHead(head, head.target, target, "reset", `Reset to ${target.slice(0, 12)} (${mode}).`, now);
     if (mode === "soft") return target;
     if (mode === "mixed") {
@@ -1054,6 +1070,12 @@ export class Repository {
       const entry = source.get(path);
       const absolute = join(this.root, ...path.split("/"));
       if (entry === undefined) {
+        if (existsSync(absolute) && statSync(absolute).isDirectory()) {
+          throw new ObjectStoreError(
+            "restore_directory_unsupported",
+            `Restore path ${path} is a directory, but restore accepts file paths. Name the files to restore instead.`,
+          );
+        }
         index.delete(path);
         rmSync(absolute, { force: true });
       } else {
@@ -1086,5 +1108,3 @@ export class Repository {
 
 /** How far a reset reaches: the ref, the index, or the working tree. */
 export type ResetMode = "soft" | "mixed" | "hard";
-
-

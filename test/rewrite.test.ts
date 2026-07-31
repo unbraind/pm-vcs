@@ -9,7 +9,7 @@
 // halfway through changes no ref and no file.
 
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -17,7 +17,7 @@ import { type ObjectId, ObjectStoreError } from "../engine/objects.ts";
 import { type Signature, effectiveChangeId, readCommit, writeCommit, writeTree } from "../engine/model.ts";
 import { type RepositoryConfig } from "../engine/config.ts";
 import { BRANCH_PREFIX } from "../engine/refs.ts";
-import { Repository, type ResetMode } from "../engine/repo.ts";
+import { CONTROL_DIRECTORY, Repository, type ResetMode } from "../engine/repo.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 let dir: { root: string; cleanup(): void } | null = null;
@@ -171,6 +171,57 @@ test("rebase onto an already-contained tip is a no-op", () => {
   assert.equal(repo.refs.read("refs/heads/main"), mainBefore);
 });
 
+test("rebase preserves a merge commit's rewritten parent topology", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const base = commitFile(repo, "base.txt", "base", "base", new Date(0));
+  repo.createBranch("feature", base, new Date(1));
+  repo.createBranch("side", base, new Date(2));
+
+  repo.switchTo("feature", new Date(3));
+  commitFile(repo, "feature.txt", "feature", "feature", new Date(4));
+  repo.switchTo("side", new Date(5));
+  commitFile(repo, "side.txt", "side", "side", new Date(6));
+  repo.switchTo("feature", new Date(7));
+  const merged = repo.merge("side", { message: "merge side\n", author }, new Date(8));
+  assert.equal(merged.kind, "merged");
+  assert.equal(readCommit(repo.objects, merged.head).parents.length, 2);
+
+  repo.switchTo("main", new Date(9));
+  const mainTip = commitFile(repo, "main.txt", "main", "main", new Date(10));
+  repo.rebase("feature", "main", committer, new Date(11));
+
+  const featureTip = repo.refs.read(`${BRANCH_PREFIX}feature`) as ObjectId;
+  const rewrittenMerge = readCommit(repo.objects, featureTip);
+  assert.equal(rewrittenMerge.parents.length, 2, "the rebased merge keeps both rewritten parents");
+  assert.ok(rewrittenMerge.parents.every((parent) => readCommit(repo.objects, parent).parents[0] === mainTip));
+  const diff = repo.diff(mainTip, featureTip);
+  assert.match(diff, /feature\.txt/);
+  assert.match(diff, /side\.txt/);
+});
+
+test("rebase attaches an unrelated root commit directly to the new base", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const mainTip = commitFile(repo, "main.txt", "main", "main", new Date(0));
+  const blob = repo.objects.write("blob", Buffer.from("root"));
+  const tree = writeTree(repo.objects, [{ name: "root.txt", mode: "100644", id: blob }]);
+  const unrelated = writeCommit(repo.objects, {
+    tree,
+    parents: [],
+    author,
+    committer: author,
+    message: "unrelated root\n",
+  });
+  repo.refs.compareAndSwap(`${BRANCH_PREFIX}feature`, null, unrelated);
+
+  repo.rebase("feature", "main", committer, new Date(1));
+  const featureTip = repo.refs.read(`${BRANCH_PREFIX}feature`) as ObjectId;
+  const replayed = readCommit(repo.objects, featureTip);
+  assert.deepEqual(replayed.parents, [mainTip]);
+  assert.match(repo.diff(mainTip, featureTip), /root\.txt/);
+});
+
 test("two agents editing different fields of one record converge across a rebase with no conflict", () => {
   // The multi-agent property: agent A and agent B branch from one record and each
   // edit a *different* scalar field. Rebased across each other, both edits survive
@@ -315,7 +366,9 @@ test("squash refuses a root commit, which has no parent to fold into", () => {
   commitFile(repo, "a.txt", "a", "only", new Date(0));
   assert.throws(
     () => repo.squash("HEAD", committer, new Date(1)),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "rewrite_conflict",
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "empty_squash"
+      && /has no first parent/.test(error.message),
   );
 });
 
@@ -480,6 +533,24 @@ test("reset on an unborn head is refused", () => {
   );
 });
 
+test("hard reset refuses before moving HEAD when untracked data would be lost", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const first = commitFile(repo, "tracked.txt", "one", "first", new Date(0));
+  const second = commitFile(repo, "tracked.txt", "two", "second", new Date(1));
+  writeFileSync(join(root, "untracked.txt"), "irreplaceable");
+
+  assert.throws(
+    () => repo.reset(first, "hard", new Date(2)),
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "reset_would_discard_untracked"
+      && /untracked\.txt/.test(error.message),
+  );
+  assert.equal(repo.refs.resolveHead(), second);
+  assert.equal(readFileSync(join(root, "tracked.txt"), "utf8"), "two");
+  assert.equal(readFileSync(join(root, "untracked.txt"), "utf8"), "irreplaceable");
+});
+
 test("restore copies named paths from a revision into the index and working tree", () => {
   const { root } = freshDir();
   const repo = Repository.init(root);
@@ -505,6 +576,41 @@ test("restore removes a path that the revision does not carry", () => {
   repo.restore(["b.txt"], first);
   assert.throws(() => readFileSync(join(root, "b.txt"), "utf8"), "the added file is removed");
   assert.equal(repo.readIndex().find((entry) => entry.path === "b.txt"), undefined, "and dropped from the index");
+});
+
+test("restore refuses a directory path instead of recursively deleting its contents", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "tracked.txt", "tracked", "base", new Date(0));
+  mkdirSync(join(root, "untracked-dir"));
+  writeFileSync(join(root, "untracked-dir", "keep.txt"), "keep");
+
+  assert.throws(
+    () => repo.restore(["untracked-dir"], "HEAD"),
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "restore_directory_unsupported",
+  );
+  assert.equal(readFileSync(join(root, "untracked-dir", "keep.txt"), "utf8"), "keep");
+  assert.deepEqual(repo.restore(["absent.txt"], "HEAD"), ["absent.txt"]);
+});
+
+test("a rewrite applies every affected ref atomically when a later ref is locked", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const first = commitFile(repo, "a.txt", "a", "first", new Date(0));
+  commitFile(repo, "b.txt", "b", "second", new Date(1));
+  repo.createBranch("a-first", "HEAD", new Date(2));
+  repo.createBranch("z-locked", "HEAD", new Date(3));
+  const before = new Map(repo.refs.list(BRANCH_PREFIX).map((ref) => [ref.name, ref.target]));
+  const operations = repo.operations.read().length;
+  writeFileSync(join(root, CONTROL_DIRECTORY, "refs", "heads", "z-locked.lock"), "held");
+
+  assert.throws(
+    () => repo.describe(first, "reworded\n", committer, new Date(4)),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "ref_locked",
+  );
+  assert.deepEqual(new Map(repo.refs.list(BRANCH_PREFIX).map((ref) => [ref.name, ref.target])), before);
+  assert.equal(repo.operations.read().length, operations, "a failed transaction records no undo entry");
 });
 
 test("every rewrite refuses a dirty working tree before changing anything", () => {

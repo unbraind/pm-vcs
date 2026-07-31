@@ -26,6 +26,7 @@ import {
   type Commit,
   type FileMode,
   type Signature,
+  compareByteOrder,
   decodeRecord,
   effectiveChangeId,
   encodeRecord,
@@ -206,7 +207,7 @@ export function mergeTrees(
   const merged: string[] = [];
   const conflicts: MergeConflict[] = [];
 
-  for (const path of [...new Set([...base.keys(), ...ours.keys(), ...theirs.keys()])].sort()) {
+  for (const path of [...new Set([...base.keys(), ...ours.keys(), ...theirs.keys()])].sort(compareByteOrder)) {
     const baseEntry = base.get(path);
     const ourEntry = ours.get(path);
     const theirEntry = theirs.get(path);
@@ -591,28 +592,32 @@ export function planRebase(
     return { command: "rebase", summary: `Nothing to rebase: ${source.slice(0, 12)} is within ${onto.slice(0, 12)}.`, moves: [] };
   }
   const edits = new Map<ObjectId, EditBuilder>();
-  // The first replayed commit attaches to `onto`; every later one attaches to the
-  // commit the previous step produced. Threading that through a variable rather than
-  // reading it back out of `rewrittenParents` removes a fallback that no input could
-  // reach: past the first step there is always a rewritten predecessor.
-  let previous = onto;
+  const rangeSet = new Set(range);
   for (const id of range) {
     const original = readCommit(store, id);
     const baseTree = firstParentTree(store, original);
-    edits.set(id, () => {
-      const parent = previous;
-      const ourTree = readCommit(store, parent).tree;
+    edits.set(id, (rewrittenParents) => {
+      // Parents inside the replay range keep their rewritten counterparts. A
+      // parent outside it is part of the old base and is replaced by `onto`.
+      // De-duplication handles a merge whose two external parents both collapse
+      // to that same new base without inventing a duplicate parent edge.
+      const parents = [...new Set(original.parents.length === 0
+        ? [onto]
+        : original.parents.map((parent, index) => (
+            rangeSet.has(parent) ? rewrittenParents[index] as ObjectId : onto
+          )))];
+      const firstParent = parents[0] as ObjectId;
+      const ourTree = readCommit(store, firstParent).tree;
       const { tree, conflicts } = mergeTrees(ctx, baseTree, ourTree, original.tree);
       if (conflicts.length > 0) throw new RewriteConflictError(conflicts);
       const replacement = writeCommit(store, {
         tree,
-        parents: [parent],
+        parents,
         author: original.author,
         committer: ctx.committer,
         message: original.message,
         changeId: effectiveChangeId(id, original),
       });
-      previous = replacement;
       return [replacement];
     });
   }
@@ -645,7 +650,10 @@ export function planSquash(
   const store = ctx.store;
   const revisionCommit = readCommit(store, revision);
   if (revisionCommit.parents.length === 0) {
-    throw new RewriteConflictError([{ path: revision, reason: "content" }]);
+    throw new ObjectStoreError(
+      "empty_squash",
+      `${revision.slice(0, 12)} is a root commit, so it has no first parent to fold into. Squash a commit that has a parent instead.`,
+    );
   }
   const parentId = revisionCommit.parents[0];
   const parentCommit = readCommit(store, parentId);
@@ -689,7 +697,7 @@ function planSplitTrees(
   const firstFiles = new Map(base);
   const matching: string[] = [];
   const remaining: string[] = [];
-  for (const path of [...new Set([...base.keys(), ...full.keys()])].sort()) {
+  for (const path of [...new Set([...base.keys(), ...full.keys()])].sort(compareByteOrder)) {
     const before = base.get(path);
     const after = full.get(path);
     // `path` comes from the union of both maps, so `before` and `after` cannot

@@ -217,6 +217,28 @@ test("log walks first-parent history and diff shows changed lines", () => {
   assert.match(diff, /\+line2/);
 });
 
+test("diff reports mode-only and combined content-and-mode changes", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  writeFileSync(join(root, "tool.sh"), "echo one\n");
+  repo.stage(["tool.sh"]);
+  const regular = repo.commit({ message: "regular\n", author }, new Date(0));
+
+  chmodSync(join(root, "tool.sh"), 0o755);
+  repo.stage(["tool.sh"]);
+  const executable = repo.commit({ message: "executable\n", author }, new Date(1));
+  assert.equal(repo.diff(regular, executable), "old mode 100644\nnew mode 100755\n");
+
+  writeFileSync(join(root, "tool.sh"), "echo two\n");
+  chmodSync(join(root, "tool.sh"), 0o644);
+  repo.stage(["tool.sh"]);
+  const changed = repo.commit({ message: "changed\n", author }, new Date(2));
+  const combined = repo.diff(executable, changed);
+  assert.match(combined, /^old mode 100755\nnew mode 100644\n/);
+  assert.match(combined, /-echo one/);
+  assert.match(combined, /\+echo two/);
+});
+
 test("stage stages all, stages a deletion, and refuses an explicitly-named ignored path", () => {
   const { root } = freshDir();
   const repo = Repository.init(root);

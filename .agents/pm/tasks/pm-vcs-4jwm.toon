@@ -1,12 +1,12 @@
 id: pm-vcs-4jwm
 title: Implement cherry-pick operation
-description: Engine + command for cherry-pick with change-id preservation and descendant replay
+description: Engine and command for applying a selected change onto HEAD as a distinct cherry-pick with a fresh change identity.
 type: Task
 status: closed
 priority: 2
 tags: []
 created_at: "2026-07-31T07:01:01.831Z"
-updated_at: "2026-07-31T12:05:48.637Z"
+updated_at: "2026-07-31T12:27:03.130Z"
 closed_at: "2026-07-31T12:05:48.625Z"
 completed_at: "2026-07-31T12:05:48.625Z"
 author: pi-agent

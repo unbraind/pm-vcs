@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags[4]: architecture,coverage,history-rewrite,ordering
 created_at: "2026-07-31T11:43:39.209Z"
-updated_at: "2026-07-31T11:44:02.046Z"
+updated_at: "2026-07-31T12:27:05.146Z"
 deadline: "2026-08-01T11:43:39.209Z"
 closed_at: "2026-07-31T11:44:02.023Z"
 completed_at: "2026-07-31T11:44:02.023Z"
@@ -20,8 +20,9 @@ dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-63kd,parent,"2026-07-31T11:43:39.209Z","harness:codex","cli:create:dep",detected
 comments[1]{created_at,author,text}:
   "2026-07-31T11:43:39.209Z","harness:codex",The new two-commit rebase test executes topoSort's parent queue and asserts the older change is replayed onto the new base before its child.
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-07-31T11:43:39.209Z","harness:codex","The traversal is a correctness boundary, not coverage scaffolding: deleting it would apply a child before its rewritten parent exists."
+  "2026-07-31T12:27:05.145Z","harness:codex","The recorded 341-test count was the exact passing scope when this item closed. The subsequent portable source-workspace regression added one test, making the Phase 2 final gate 342 before review; PR review follow-up later expands the suite again. Append-only history intentionally preserves each time-scoped result."
 learnings[1]{created_at,author,text}:
   "2026-07-31T11:43:39.209Z","harness:codex","Reachability order and replay order have opposite semantics: graph discovery starts at the tip, while replay must start at the oldest included ancestor."
 files[1]{path,scope,note}:
