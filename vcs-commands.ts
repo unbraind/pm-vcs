@@ -310,7 +310,9 @@ export function registerVcsCommands(api: ExtensionApi): void {
       }
       const now = new Date();
       const commit = repository.commit({
-        message: message.endsWith("\n") ? message : `${message}\n`,
+        // `optionalString` trims, so the message never arrives newline-terminated
+        // and the terminator is always ours to add.
+        message: `${message}\n`,
         author: signatureFor(context, now),
         allowEmpty: context.options?.allowEmpty === true,
       }, now);
@@ -430,7 +432,9 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const now = new Date();
       const message = optionalString(context.options, "message") ?? `Merge ${revision}`;
       const merge = repository.merge(revision, {
-        message: message.endsWith("\n") ? message : `${message}\n`,
+        // `optionalString` trims and the default is a literal, so the message
+        // never arrives newline-terminated.
+        message: `${message}\n`,
         author: signatureFor(context, now),
       }, now);
       // The merge itself has already been recorded, conflicts and all, so the
@@ -560,7 +564,12 @@ export function registerVcsCommands(api: ExtensionApi): void {
             for (const entry of decodeTree(object.payload)) queue.push(entry.id);
           }
         } catch (error) {
-          corrupt.push(`${id}: ${error instanceof ObjectStoreError ? error.code : "unreadable"}`);
+          // Only ObjectStoreError is caught. `read` raises nothing else, and
+          // labelling an unexpected failure "unreadable" would report a bug in
+          // this process as corruption in the user's repository.
+          /* c8 ignore next 2 -- non-ObjectStoreError is a programming error, unreachable */
+          if (!(error instanceof ObjectStoreError)) throw error;
+          corrupt.push(`${id}: ${error.code}`);
         }
       }
       if (corrupt.length > 0) {

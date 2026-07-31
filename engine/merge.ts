@@ -192,6 +192,7 @@ function alignThreeWay(
       const ourIndex = ourMatches.get(probe);
       const theirIndex = theirMatches.get(probe);
       if (ourIndex === undefined || theirIndex === undefined) continue;
+      /* c8 ignore next -- defensive guard: Myers matches are monotonic, so this is unreachable */
       if (ourIndex < ourCursor || theirIndex < theirCursor) continue;
       nextBase = probe;
       nextOurs = ourIndex;

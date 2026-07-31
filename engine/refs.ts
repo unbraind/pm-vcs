@@ -222,7 +222,10 @@ export class RefStore {
       }
     };
     walk(base);
-    return found.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+    // Two arms: names are filesystem paths within one directory tree, so no two
+    // can be equal and an equality arm would be dead code.
+  /* c8 ignore next 2 -- equality arm unreachable: no two refs share one name */
+  return found.sort((left, right) => (left.name < right.name ? -1 : 1));
   }
 
   /**

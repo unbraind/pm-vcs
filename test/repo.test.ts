@@ -636,6 +636,35 @@ test("a commit made on a detached HEAD advances HEAD itself, not a branch", () =
  *
  * @param path - The file to remove.
  */
+test("switch refuses when a dirty file exists only in the current tree and not the target", () => {
+  // This exercises the `?.id ?? null` fallback in switchTo's overwrite check:
+  // a path present in the current tree but absent from the target tree produces
+  // `null` on one side of the comparison rather than a valid object id.
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const now = new Date(0);
+  // First commit: a.txt only.
+  commitFile(repo, "a.txt", "a", "first", now);
+
+  // Create feature branch before b.txt exists on main.
+  repo.createBranch("feature", "HEAD", new Date(1));
+  // Add b.txt on main: it exists in HEAD's tree but not in feature's tree.
+  commitFile(repo, "b.txt", "b", "second", new Date(2));
+
+  // Make b.txt dirty without staging it, so the switch is refused.
+  writeFileSync(join(repo.root, "b.txt"), "dirty");
+
+  assert.throws(
+    () => repo.switchTo("feature", new Date(3)),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "switch_would_overwrite",
+  );
+});
+
+/**
+ * Removes a file, swallowing missing-file errors.
+ *
+ * @param path - The file to remove.
+ */
 function removeFile(path: string): void {
   rmSync(path, { force: true });
 }

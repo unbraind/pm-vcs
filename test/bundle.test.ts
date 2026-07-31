@@ -189,3 +189,26 @@ test("export without named refs exports every branch and tag", () => {
   const { header } = parseBundle(bytes);
   assert.deepEqual(header.refs, { [`${BRANCH_PREFIX}main`]: a, [`${TAG_PREFIX}v1`]: b });
 });
+
+test("importBundle accepts a bundle whose header has no prerequisites field", () => {
+  const source = fresh();
+  const tip = makeCommit(source.store, [], "only", "only");
+  source.refs.compareAndSwap(`${BRANCH_PREFIX}main`, null, tip);
+
+  // Export a full bundle, then delete the prerequisites key from its header so
+  // the `?? []` fallback in importBundle is exercised: the field is absent, so
+  // the fallback reduces to an empty array rather than the bundle failing.
+  const exported = exportBundle(source.store, source.refs, [`${BRANCH_PREFIX}main`]);
+  const text = exported.toString("utf8");
+  const parts = text.split("\n");
+  const header = JSON.parse(parts[1]);
+  delete header.prerequisites;
+  parts[1] = JSON.stringify(header);
+  const modified = Buffer.from(parts.join("\n"));
+
+  const target = fresh();
+  const report = importBundle(target.store, target.refs, modified);
+  assert.equal(report.skipped.length, 0);
+  assert.ok(report.added.length > 0);
+  assert.equal(target.refs.read(`${BRANCH_PREFIX}main`), tip);
+});

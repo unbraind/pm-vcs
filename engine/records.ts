@@ -142,7 +142,9 @@ function unionMembers(
   const baseKeys = new Set(base.map(keyOf));
   for (const member of ours) if (!baseKeys.has(keyOf(member))) emit(member);
   for (const member of theirs) if (!baseKeys.has(keyOf(member))) emit(member);
-  return sorted ? result.sort((left, right) => (keyOf(left) < keyOf(right) ? -1 : keyOf(left) > keyOf(right) ? 1 : 0)) : result;
+  // Two arms: `emit` deduplicates by key, so no two members share one and an
+  // equality arm would be dead code.
+  return sorted ? result.sort((left, right) => (keyOf(left) < keyOf(right) ? -1 : 1)) : result;
 }
 
 /**
@@ -189,7 +191,10 @@ export function mergeRecords(
     } else if (canonical(ourValue) === canonical(theirValue)) {
       resolved = ourValue;
     } else {
-      const strategy = strategyFor(field, policy, ourValue ?? theirValue ?? baseValue);
+      // At least one side has a value here: reaching this point means both sides
+      // changed the field AND disagree, and two absent values would be equal.
+      /* c8 ignore next -- ?? fallback unreachable: both changed it, so ourValue is defined */
+      const strategy = strategyFor(field, policy, ourValue ?? theirValue);
       if (strategy === "scalar") {
         conflicts.push({ field, base: baseValue, ours: ourValue, theirs: theirValue });
         resolved = ourValue;

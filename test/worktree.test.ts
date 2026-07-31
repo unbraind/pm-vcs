@@ -236,3 +236,26 @@ test("computeStatus treats an executable bit change as a modification", () => {
   const status = computeStatus(store, root, headTree, index, ".pmvcs", noRules);
   assert.deepEqual(status.unstaged.map((c) => c.path), ["a.txt"]);
 });
+
+test("computeStatus reports multiple unstaged changes, exercising the sort comparator", () => {
+  const { store, root } = fresh();
+  const aId = store.write("blob", Buffer.from("a"));
+  const bId = store.write("blob", Buffer.from("b"));
+  const headTree = writeTree(store, [
+    { name: "a.txt", mode: "100644", id: aId },
+    { name: "b.txt", mode: "100644", id: bId },
+  ]);
+  const index: IndexEntry[] = [
+    { path: "a.txt", id: aId, mode: "100644" },
+    { path: "b.txt", id: bId, mode: "100644" },
+  ];
+  // Both files differ in the working tree → 2 unstaged modifications.
+  writeFileSync(join(root, "a.txt"), "modified-a");
+  writeFileSync(join(root, "b.txt"), "modified-b");
+  const status = computeStatus(store, root, headTree, index, ".pmvcs", noRules);
+  assert.equal(status.unstaged.length, 2);
+  assert.deepEqual(
+    status.unstaged.map((c) => c.path),
+    ["a.txt", "b.txt"],
+  );
+});

@@ -160,3 +160,26 @@ test("mergeContent returns empty text for three empty inputs", () => {
   assert.equal(result.text, "");
   assert.equal(result.conflicts.length, 0);
 });
+
+test("a line one side deleted and the other changed is a conflict, not a silent choice", () => {
+  // A base with a repeated line where one side drops the duplicate and the other
+  // changes it. This also exercises the probe-loop guard that skips a match whose
+  // mapped position sits before the current cursors.
+  //
+  // Delete-versus-modify is the canonical case a three-way merge must NOT guess
+  // at: taking theirs discards a deliberate deletion, taking ours discards a
+  // deliberate edit, and nothing in the inputs says which was intended. diff3
+  // conflicts, and so does this.
+  const result = mergeContent("a\na\nc\n", "a\nc\n", "a\nb\nc\n");
+  assert.equal(result.clean, false);
+  assert.equal(result.conflicts.length, 1);
+
+  const [conflict] = result.conflicts;
+  assert.deepEqual(conflict.base, ["a"]);
+  assert.deepEqual(conflict.ours, [], "our side deleted the line, so it contributes nothing");
+  assert.deepEqual(conflict.theirs, ["b"]);
+
+  // The unchanged lines on either side of the region are emitted plainly.
+  assert.ok(result.text.startsWith("a\n<<<<<<< ours"));
+  assert.ok(result.text.endsWith("c\n"));
+});

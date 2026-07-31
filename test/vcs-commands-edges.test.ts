@@ -242,3 +242,41 @@ test("switching to a tag still works when a corrupt branch file shares its name"
   // HEAD detached rather than attaching to the corrupt branch.
   assert.equal(Repository.open(root).refs.readHead().kind, "detached");
 });
+
+test("a record conflict names the fields that disagreed, not just the path", async () => {
+  // The gate message has two shapes. A text conflict can only name a path; a
+  // record conflict knows exactly which fields disagreed, and saying so is the
+  // difference between "resolve this file" and "these two values disagree".
+  const handle = makeTempDir();
+  sandboxes.push(handle);
+  const root = handle.root;
+  Repository.init(root, "main", { recordPaths: ["*.rec"], recordPolicy: { fields: {} } });
+  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const run = async (command: string, args: string[] = [], options: Record<string, unknown> = {}) => (
+    await harness.runCommand({ command, args, options, global: { author: AUTHOR }, pmRoot: root })
+  ) as { handled: boolean; result: unknown; errorMessage?: string };
+
+  writeFileSync(join(root, "item.rec"), JSON.stringify({ id: "x", status: "open", owner: "nobody" }));
+  await run("vcs add");
+  await run("vcs commit", [], { message: "base" });
+
+  await run("vcs branch", ["side"]);
+  await run("vcs switch", ["side"]);
+  writeFileSync(join(root, "item.rec"), JSON.stringify({ id: "x", status: "closed", owner: "nobody" }));
+  await run("vcs add");
+  await run("vcs commit", [], { message: "side closes it" });
+
+  await run("vcs switch", ["main"]);
+  writeFileSync(join(root, "item.rec"), JSON.stringify({ id: "x", status: "blocked", owner: "someone" }));
+  await run("vcs add");
+  await run("vcs commit", [], { message: "main blocks it" });
+
+  // No trailing newline on the merge message: the handler supplies one.
+  const merged = await run("vcs merge", ["side"], { message: "merge side", failOnConflict: true });
+  assert.equal(merged.handled, false);
+  // `status` disagreed; `owner` did not and merged silently.
+  assert.match(String(merged.errorMessage), /item\.rec \(status\)/);
+
+  const resolved = JSON.parse(readFileSync(join(root, "item.rec"), "utf8")) as Record<string, string>;
+  assert.equal(resolved.owner, "someone", "the field that did not conflict still merged");
+});

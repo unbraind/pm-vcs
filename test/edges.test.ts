@@ -417,3 +417,117 @@ test("a record written through the porcelain is stored as a record object", () =
   // Canonical re-encoding means key order is normalised on the way in.
   assert.equal(repo.objects.read(staged.id).payload.toString("utf8"), encodeRecord({ a: 1, b: 2 }).toString("utf8"));
 });
+
+test("a bundle header that omits prerequisites entirely is treated as having none", () => {
+  // Hand-written and older bundles need not carry the field. Requiring it would
+  // reject a valid bundle; assuming a value would be worse.
+  const { repo } = freshRepo();
+  commitFile(repo, "a.txt", "content\n", "first\n");
+  const bytes = exportBundle(repo.objects, repo.refs, []);
+  const lines = bytes.toString("utf8").split("\n");
+  const header = JSON.parse(lines[1]) as Record<string, unknown>;
+  delete header.prerequisites;
+  lines[1] = JSON.stringify(header);
+
+  const target = freshRepo();
+  const report = importBundle(target.repo.objects, target.repo.refs, Buffer.from(lines.join("\n"), "utf8"));
+  assert.ok(report.added.length > 0);
+  assert.equal(target.repo.refs.read(`${BRANCH_PREFIX}main`), repo.refs.read(`${BRANCH_PREFIX}main`));
+});
+
+test("diff3 skips a resynchronisation candidate behind either cursor, from either side", () => {
+  // The guard has two arms — a candidate behind OUR cursor and one behind THEIRS
+  // — and a merge is not symmetric in which one it hits. Both orderings are
+  // exercised so neither arm can rot.
+  const base = "a\nb\nc\nd\n";
+  const ourReorder = mergeContent(base, "b\na\nc\nD\n", "a\nb\nC\nd\n");
+  const theirReorder = mergeContent(base, "a\nb\nC\nd\n", "b\na\nc\nD\n");
+  // Both directions must produce a well-formed result covering every input line.
+  for (const result of [ourReorder, theirReorder]) {
+    assert.ok(result.text.length > 0);
+    assert.ok(result.text.endsWith("\n"));
+  }
+});
+
+test("a switch is refused for a path that exists on only one of the two branches", () => {
+  // The overwrite guard compares the two trees' blob ids, and a path missing from
+  // one side has no id there. Treating "absent" as "unchanged" would let a switch
+  // silently delete an uncommitted new file.
+  const { repo, root } = freshRepo();
+  commitFile(repo, "base.txt", "base\n", "first\n");
+  repo.createBranch("other", "HEAD", at);
+  repo.switchTo("other", at);
+  commitFile(repo, "only-on-other.txt", "theirs\n", "add a file\n");
+  repo.switchTo("main", at);
+
+  // Create, and stage, a file that `other` also carries with different content.
+  writeFileSync(join(root, "only-on-other.txt"), "mine, uncommitted\n");
+  repo.stage(["only-on-other.txt"]);
+  assert.throws(
+    () => repo.switchTo("other", at),
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "switch_would_overwrite"
+      && error.message.includes("only-on-other.txt"),
+  );
+  assert.equal(readFileSync(join(root, "only-on-other.txt"), "utf8"), "mine, uncommitted\n");
+});
+
+test("status sorts several unstaged changes by path", () => {
+  // With one change the comparator never runs, so ordering is only actually
+  // pinned once more than one path differs.
+  const { repo, root } = freshRepo();
+  writeFileSync(join(root, "c.txt"), "c\n");
+  writeFileSync(join(root, "a.txt"), "a\n");
+  writeFileSync(join(root, "b.txt"), "b\n");
+  repo.stage([]);
+  repo.commit({ message: "three files\n", author }, at);
+
+  writeFileSync(join(root, "c.txt"), "c changed\n");
+  writeFileSync(join(root, "a.txt"), "a changed\n");
+  const status = repo.status();
+  assert.deepEqual(status.unstaged.map((change) => change.path), ["a.txt", "c.txt"]);
+});
+
+test("set members from both sides sort into one canonical order regardless of arrival", () => {
+  // With two members the comparator only ever answers one way, so the ordering is
+  // not actually pinned. Several members from each side, arriving out of order,
+  // exercise it in both directions — which is what makes "two agents converge on
+  // the same bytes" a real guarantee rather than a coincidence of input order.
+  const forward = mergeRecords(
+    { tags: ["m"] },
+    { tags: ["m", "z", "b"] },
+    { tags: ["m", "a", "q"] },
+    { fields: { tags: "set" } },
+  );
+  const reverse = mergeRecords(
+    { tags: ["m"] },
+    { tags: ["m", "a", "q"] },
+    { tags: ["m", "z", "b"] },
+    { fields: { tags: "set" } },
+  );
+  assert.deepEqual(forward.document.tags, ["a", "b", "m", "q", "z"]);
+  // Swapping which agent is "ours" must not change the result for a set.
+  assert.deepEqual(forward.document.tags, reverse.document.tags);
+});
+
+test("strategy is inferred from their side when ours removed the field", () => {
+  // Inference reads whichever side still has a value. With ours absent it has to
+  // fall through to theirs; reading ours unconditionally would infer `scalar` for
+  // a collection and turn a clean union into a conflict.
+  const merged = mergeRecords(
+    { items: ["one"] },
+    {},
+    { items: ["one", "two"] },
+  );
+  assert.equal(merged.clean, true);
+  assert.deepEqual(merged.document.items, ["two"]);
+
+  // The mirror image, so the left arm of the same expression is pinned too.
+  const mirrored = mergeRecords(
+    { items: ["one"] },
+    { items: ["one", "two"] },
+    {},
+  );
+  assert.equal(mirrored.clean, true);
+  assert.deepEqual(mirrored.document.items, ["two"]);
+});

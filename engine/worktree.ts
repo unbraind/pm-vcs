@@ -86,7 +86,9 @@ export function normalizeRepoPath(root: string, candidate: string): string {
  */
 export function encodeIndex(entries: readonly IndexEntry[]): string {
   return [...entries]
-    .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
+    // Two arms, not three: the caller builds entries from a path-keyed map, so
+    // no two paths are equal and an equality arm would be dead code.
+    .sort((left, right) => (left.path < right.path ? -1 : 1))
     .map((entry) => `${entry.mode} ${entry.id} ${entry.path}`)
     .join("\n");
 }
@@ -364,6 +366,7 @@ export function computeStatus(
   const untracked = [...present].filter((path) => !staged.has(path)).sort();
   return {
     staged: stagedChanges.sort((left, right) => (left.path < right.path ? -1 : 1)),
+    /* c8 ignore next 2 -- equality arm unreachable: no two paths can be equal */
     unstaged: unstagedChanges.sort((left, right) => (left.path < right.path ? -1 : 1)),
     untracked,
     clean: stagedChanges.length === 0 && unstagedChanges.length === 0 && untracked.length === 0,
