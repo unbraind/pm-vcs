@@ -1,0 +1,13 @@
+id: pm-vcs-8zdp
+title: Implement split operation
+description: Engine + command for split with change-id preservation and descendant replay
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T07:01:00.563Z"
+updated_at: "2026-07-31T07:01:01.103Z"
+author: pi-agent
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-bddk,parent,"2026-07-31T07:01:01.037Z",pi-agent,"cli:update:dep",detected
+body: ""

@@ -1,0 +1,13 @@
+id: pm-vcs-eqo5
+title: Implement describe operation
+description: Engine + command for describe with change-id preservation and descendant replay
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T07:00:57.975Z"
+updated_at: "2026-07-31T07:00:58.443Z"
+author: pi-agent
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-bddk,parent,"2026-07-31T07:00:58.417Z",pi-agent,"cli:update:dep",detected
+body: ""

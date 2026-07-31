@@ -1,0 +1,12 @@
+id: pm-vcs-bddk
+title: Change identities and history rewriting
+description: "Add change identities to commits and build the transactional history-rewriting engine: describe, rebase, squash, split, cherry-pick, revert, reset, restore, show."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T06:41:40.043Z"
+updated_at: "2026-07-31T06:41:40.043Z"
+author: pi-agent
+acceptance_criteria: "npm run typecheck, coverage, audit:prod and pack:dry-run all pass; pm health reports no flag collisions; multi-agent per-field convergence and transactional-abort properties covered end to end"
+body: ""

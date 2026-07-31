@@ -1,0 +1,13 @@
+id: pm-vcs-167g
+title: Implement rebase operation
+description: Engine + command for rebase with change-id preservation and descendant replay
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T07:00:58.899Z"
+updated_at: "2026-07-31T07:00:59.304Z"
+author: pi-agent
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-bddk,parent,"2026-07-31T07:00:59.281Z",pi-agent,"cli:update:dep",detected
+body: ""

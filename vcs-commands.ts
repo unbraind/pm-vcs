@@ -22,17 +22,18 @@ import {
   readBundle,
 } from "./engine/bundle.ts";
 import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
-import { type Signature, decodeCommit, decodeTree } from "./engine/model.ts";
+import { type Signature, decodeCommit, decodeTree, effectiveChangeId, readCommit } from "./engine/model.ts";
 import { ObjectStoreError, type ObjectId } from "./engine/objects.ts";
 import { type Operation } from "./engine/oplog.ts";
 import {
   CONTROL_DIRECTORY,
   DEFAULT_BRANCH,
   type MergeReport,
+  type ResetMode,
   Repository,
 } from "./engine/repo.ts";
 import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./engine/refs.ts";
-import { type StatusReport } from "./engine/worktree.ts";
+import { type StatusReport, flattenTree } from "./engine/worktree.ts";
 import type {
   CommandHandlerContext,
   ExtensionApi,
@@ -333,17 +334,25 @@ export function registerVcsCommands(api: ExtensionApi): void {
     description:
       "Walk first-parent history from a revision, newest first, so the output reads as the changes that landed on this branch rather than as every branch interleaved.",
     arguments: [{ name: "revision", description: "Where to start (default HEAD)", required: false }],
-    flags: [{ long: "--limit", value_name: "count", description: "Maximum commits to report (default 20)", value_type: "string" }],
+    flags: [
+      { long: "--limit", value_name: "count", description: "Maximum commits to report (default 20)", value_type: "string" },
+      { long: "--change-ids", description: "Include each commit's stable change id in the output", value_type: "boolean" },
+    ],
     run(context: CommandHandlerContext): VcsEnvelope & {
-      commits: ReadonlyArray<{ id: ObjectId; message: string; author: string; at: string; parents: readonly ObjectId[] }>;
+      commits: ReadonlyArray<{ id: ObjectId; changeId?: ObjectId; message: string; author: string; at: string; parents: readonly ObjectId[] }>;
     } {
       const repository = openRepository(context);
+      const includeChangeIds = context.options?.changeIds === true;
       const entries = repository.log(context.args[0]?.trim() || "HEAD", positiveInteger(context.options, "limit", 20));
       return {
         ok: true,
         exit_code: 0,
         commits: entries.map((entry) => ({
           id: entry.id,
+          // The change id is the stable identity a rebase or squash preserves;
+          // including it only on request keeps the default output focused on
+          // what landed and when.
+          ...(includeChangeIds ? { changeId: entry.changeId } : {}),
           message: entry.commit.message.trimEnd(),
           author: `${entry.commit.author.name} <${entry.commit.author.email}>`,
           at: new Date(entry.commit.author.timestamp).toISOString(),
@@ -541,6 +550,177 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const target = repository.resolve(optionalString(context.options, "at") ?? "HEAD");
       repository.refs.compareAndSwap(`${TAG_PREFIX}${name}`, null, target);
       return { ok: true, exit_code: 0, created: target };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs describe",
+    description: "Replace one commit's message, preserving its change id and replaying every descendant so no branch is orphaned.",
+    arguments: [{ name: "revision", description: "The commit to reword", required: true }],
+    flags: [{ long: "--message", value_name: "text", description: "The new commit message", value_type: "string" }],
+    run(context: CommandHandlerContext): VcsEnvelope & { head: ObjectId | null } {
+      const repository = openRepository(context);
+      const revision = requiredArgument(context, 0, "revision", "Pass the commit to describe, for example HEAD or a commit id.");
+      const message = optionalString(context.options, "message");
+      if (message === undefined) {
+        throw new VcsError("missing_message", "pm vcs describe requires a message.", 'Pass --message "the new message".');
+      }
+      const now = new Date();
+      return { ok: true, exit_code: 0, head: repository.describe(revision, `${message}\n`, signatureFor(context, now), now) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs rebase",
+    description: "Replay source's side of the divergence onto another revision, merging per field for records and preserving change ids across the replay.",
+    arguments: [{ name: "source", description: "The tip whose commits are replayed", required: true }],
+    flags: [{ long: "--onto", value_name: "revision", description: "The tip the range is replayed onto", value_type: "string" }],
+    run(context: CommandHandlerContext): VcsEnvelope & { head: ObjectId | null } {
+      const repository = openRepository(context);
+      const source = requiredArgument(context, 0, "source", "Pass the branch or commit whose commits should be replayed.");
+      const onto = optionalString(context.options, "onto");
+      if (onto === undefined) {
+        throw new VcsError("missing_argument", "pm vcs rebase requires --onto.", "Pass --onto <revision> naming where the range should land.");
+      }
+      const now = new Date();
+      return { ok: true, exit_code: 0, head: repository.rebase(source, onto, signatureFor(context, now), now) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs squash",
+    description: "Fold a commit into its first parent. The survivor carries the combined tree and both messages joined by a blank line, and keeps the parent's change id.",
+    arguments: [{ name: "revision", description: "The commit to fold into its first parent", required: true }],
+    run(context: CommandHandlerContext): VcsEnvelope & { head: ObjectId | null } {
+      const repository = openRepository(context);
+      const revision = requiredArgument(context, 0, "revision", "Pass the commit to squash into its first parent.");
+      const now = new Date();
+      return { ok: true, exit_code: 0, head: repository.squash(revision, signatureFor(context, now), now) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs split",
+    description: "Replace one commit with two: the first carrying only the changes to the named paths, the second the rest. Refuses when either side would be empty.",
+    arguments: [
+      { name: "revision", description: "The commit to split", required: true },
+      { name: "paths", description: "Glob patterns for the paths the first half should carry", required: false, variadic: true },
+    ],
+    run(context: CommandHandlerContext): VcsEnvelope & { head: ObjectId | null } {
+      const repository = openRepository(context);
+      const revision = requiredArgument(context, 0, "revision", "Pass the commit to split.");
+      const patterns = (context.args.slice(1) ?? []).map((arg) => arg.trim()).filter((arg) => arg.length > 0);
+      if (patterns.length === 0) {
+        throw new VcsError("missing_argument", "pm vcs split needs at least one path.", "Pass the paths the first half should carry, e.g. `pm vcs split HEAD src/**`.");
+      }
+      const now = new Date();
+      return { ok: true, exit_code: 0, head: repository.split(revision, patterns, signatureFor(context, now), now) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs cherry-pick",
+    description: "Apply one commit's change onto HEAD as a new commit with a new change id and the original's message preserved.",
+    arguments: [{ name: "revision", description: "The commit whose change to apply", required: true }],
+    run(context: CommandHandlerContext): VcsEnvelope & { commit: ObjectId } {
+      const repository = openRepository(context);
+      const revision = requiredArgument(context, 0, "revision", "Pass the commit whose change should be applied.");
+      const now = new Date();
+      return { ok: true, exit_code: 0, commit: repository.cherryPick(revision, signatureFor(context, now), now) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs revert",
+    description: "Apply the inverse of one commit's change onto HEAD as a new commit, refusing cleanly when the inverse does not apply.",
+    arguments: [{ name: "revision", description: "The commit to revert", required: true }],
+    flags: [{ long: "--message", value_name: "text", description: "Message for the revert commit (default a generated one)", value_type: "string" }],
+    run(context: CommandHandlerContext): VcsEnvelope & { commit: ObjectId } {
+      const repository = openRepository(context);
+      const revision = requiredArgument(context, 0, "revision", "Pass the commit to revert.");
+      const now = new Date();
+      const id = repository.resolve(revision);
+      const firstLine = (repository.log(revision, 1)[0]?.commit.message.trimEnd().split("\n")[0] ?? "");
+      const message = optionalString(context.options, "message") ?? `Revert ${id.slice(0, 12)}: ${firstLine}`;
+      return { ok: true, exit_code: 0, commit: repository.revert(revision, `${message}\n`, signatureFor(context, now), now) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs reset",
+    description: "Move HEAD to a revision. --mode soft moves only the branch; mixed also rewrites the index; hard also rewrites the working tree. Objects are never deleted, so undo recovers.",
+    arguments: [{ name: "revision", description: "Where HEAD should move", required: true }],
+    flags: [{ long: "--mode", value_name: "mode", description: "How far to reset: soft, mixed or hard (default mixed)", value_type: "string" }],
+    run(context: CommandHandlerContext): VcsEnvelope & { head: ObjectId } {
+      const repository = openRepository(context);
+      const revision = requiredArgument(context, 0, "revision", "Pass the revision to reset to.");
+      const requested = optionalString(context.options, "mode");
+      const mode: ResetMode = requested === "soft" || requested === "hard" ? requested : "mixed";
+      if (requested !== undefined && mode !== requested) {
+        throw new VcsError("invalid_option", `--mode accepts soft, mixed or hard, not "${requested}".`, "Pass --mode soft, --mode mixed or --mode hard.");
+      }
+      const now = new Date();
+      return { ok: true, exit_code: 0, head: repository.reset(revision, mode, now) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs restore",
+    description: "Restore named paths in the index and working tree from a revision. A path absent from the revision is removed.",
+    arguments: [
+      { name: "revision", description: "The revision to restore from", required: true },
+      { name: "paths", description: "Paths to restore; omit to restore everything the revision carries", required: false, variadic: true },
+    ],
+    run(context: CommandHandlerContext): VcsEnvelope & { restored: readonly string[] } {
+      const repository = openRepository(context);
+      const revision = requiredArgument(context, 0, "revision", "Pass the revision to restore from.");
+      const explicit = (context.args.slice(1) ?? []).map((arg) => arg.trim()).filter((arg) => arg.length > 0);
+      // No paths means every path the revision carries, so `restore <rev>` returns
+      // the whole working tree to that revision's content for tracked files.
+      const paths = explicit.length > 0
+        ? explicit
+        : [...flattenTree(repository.objects, readCommit(repository.objects, repository.resolve(revision)).tree).keys()].sort();
+      return { ok: true, exit_code: 0, restored: repository.restore(paths, revision) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs show",
+    description: "Show a commit's metadata, including its change id, and the unified diff of its change against its first parent.",
+    arguments: [{ name: "revision", description: "The commit to show (default HEAD)", required: false }],
+    run(context: CommandHandlerContext): VcsEnvelope & {
+      commit: {
+        id: ObjectId;
+        changeId: ObjectId;
+        tree: ObjectId;
+        parents: readonly ObjectId[];
+        author: string;
+        committer: string;
+        at: string;
+        message: string;
+      };
+      diff: string;
+    } {
+      const repository = openRepository(context);
+      const revision = context.args[0]?.trim() || "HEAD";
+      const id = repository.resolve(revision);
+      const commit = readCommit(repository.objects, id);
+      const parent = commit.parents[0];
+      return {
+        ok: true,
+        exit_code: 0,
+        commit: {
+          id,
+          changeId: effectiveChangeId(id, commit),
+          tree: commit.tree,
+          parents: commit.parents,
+          author: `${commit.author.name} <${commit.author.email}>`,
+          committer: `${commit.committer.name} <${commit.committer.email}>`,
+          at: new Date(commit.author.timestamp).toISOString(),
+          message: commit.message.trimEnd(),
+        },
+        diff: parent === undefined ? "" : repository.diff(parent, id),
+      };
     },
   });
 

@@ -1,0 +1,13 @@
+id: pm-vcs-zdrk
+title: Implement restore operation
+description: Engine + command for restore with change-id preservation and descendant replay
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-31T07:01:05.650Z"
+updated_at: "2026-07-31T07:01:06.605Z"
+author: pi-agent
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-bddk,parent,"2026-07-31T07:01:06.578Z",pi-agent,"cli:update:dep",detected
+body: ""

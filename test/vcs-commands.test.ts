@@ -62,17 +62,19 @@ const COMMANDS = [
   "vcs init", "vcs status", "vcs add", "vcs commit", "vcs log", "vcs diff",
   "vcs branch", "vcs switch", "vcs merge", "vcs undo", "vcs oplog",
   "vcs export", "vcs import", "vcs tag", "vcs verify",
+  "vcs describe", "vcs rebase", "vcs squash", "vcs split",
+  "vcs cherry-pick", "vcs revert", "vcs reset", "vcs restore", "vcs show",
   "vcs git preflight", "vcs git preview", "vcs git items",
 ];
 
-test("activation registers all 18 commands with no sibling dropped", async () => {
+test("activation registers all 27 commands with no sibling dropped", async () => {
   const harness = await activate();
   // A registration rejected by the loader aborts at that command and silently
   // drops every later sibling, so asserting each one's contract is the invariant.
   for (const command of COMMANDS) {
     harness.assertCommandContract({ command });
   }
-  assert.equal(COMMANDS.length, 18);
+  assert.equal(COMMANDS.length, 27);
 });
 
 test("findRepositoryRoot walks up to a control directory and returns null past the root", () => {
