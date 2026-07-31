@@ -352,11 +352,18 @@ export function registerVcsCommands(api: ExtensionApi): void {
     ],
     run(context: CommandHandlerContext): VcsEnvelope & { diff: string } {
       const repository = openRepository(context);
-      const to = context.args[1]?.trim() || context.args[0]?.trim() || "HEAD";
-      const from = context.args[1] === undefined
-        ? repository.log(to, 2)[1]?.id ?? to
-        : (context.args[0] as string).trim();
-      return { ok: true, exit_code: 0, diff: repository.diff(from, to) };
+      // Positional order follows the declared arguments, `[from] [to]`. One
+      // argument therefore means "this revision against HEAD" — reading a lone
+      // argument as the *right* side instead would make `pm vcs diff main` show
+      // main against its own parent, which is neither what the argument is named
+      // nor what anyone would expect.
+      const from = context.args[0]?.trim();
+      const to = context.args[1]?.trim() || "HEAD";
+      // With no arguments at all there is no left side to name, so it defaults to
+      // HEAD's first parent. A root commit has none; comparing HEAD with itself
+      // yields an empty diff, which is the honest answer to "what changed here".
+      const left = from ?? repository.log(to, 2)[1]?.id ?? to;
+      return { ok: true, exit_code: 0, diff: repository.diff(left, to) };
     },
   });
 

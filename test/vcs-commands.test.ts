@@ -187,7 +187,7 @@ test("a full repository workflow runs end to end through the host", async () => 
   assert.ok((branches.result as { branches: { name: string }[] }).branches.length >= 1);
 });
 
-test("vcs diff with a single argument compares the revision's parent with the revision", async () => {
+test("vcs diff reads a single argument as the left side, matching its declared arguments", async () => {
   const harness = await activate();
   const { root } = freshRepoDir();
   await harness.runCommand({ command: "vcs init", pmRoot: root });
@@ -199,9 +199,16 @@ test("vcs diff with a single argument compares the revision's parent with the re
   await harness.runCommand({ command: "vcs add", pmRoot: root });
   await harness.runCommand({ command: "vcs commit", options: { message: "second" }, global: { author: "A <a@b>" }, pmRoot: root });
 
-  // Single-arg form diffs HEAD against its first parent.
-  const diff = await harness.runCommand({ command: "vcs diff", args: ["HEAD"], pmRoot: root });
-  assert.match((diff.result as { diff: string }).diff, /\+two/);
+  // The command declares `[from] [to]`, so one argument is the LEFT side and the
+  // right defaults to HEAD. `vcs diff HEAD` therefore compares HEAD with itself
+  // and is empty; `vcs diff <first>` is the form that shows the change.
+  const headWithItself = await harness.runCommand({ command: "vcs diff", args: ["HEAD"], pmRoot: root });
+  assert.equal((headWithItself.result as { diff: string }).diff, "");
+  const fromFirst = await harness.runCommand({ command: "vcs diff", args: [firstId], pmRoot: root });
+  assert.match((fromFirst.result as { diff: string }).diff, /\+two/);
+  // With no arguments at all the left side falls back to HEAD's first parent.
+  const implicit = await harness.runCommand({ command: "vcs diff", pmRoot: root });
+  assert.match((implicit.result as { diff: string }).diff, /\+two/);
   // Two-arg form with the same revision on both sides is empty.
   const same = await harness.runCommand({ command: "vcs diff", args: [firstId, firstId], pmRoot: root });
   assert.equal((same.result as { diff: string }).diff, "");

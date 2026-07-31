@@ -54,7 +54,8 @@
       "test/oplog.test.ts",
       "test/bundle.test.ts",
       "test/repo.test.ts",
-      "test/vcs-commands.test.ts"
+      "test/vcs-commands.test.ts",
+      "test/vcs-commands-edges.test.ts"
     ],
     "thresholds": {
       "lines": 100,
