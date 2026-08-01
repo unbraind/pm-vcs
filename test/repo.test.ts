@@ -268,12 +268,14 @@ test("stage skips content work for a stable cached index entry", () => {
   const repo = Repository.init(root);
   writeFileSync(join(root, "stable.txt"), "stable\n");
   const actualNow = Date.now;
-  Date.now = () => actualNow() + 2_000;
+  Date.now = () => actualNow() + 3_000;
   try {
     assert.deepEqual(repo.stage(["stable.txt"]), ["stable.txt"]);
     const cached = repo.readIndex()[0];
     assert.ok(cached?.stat);
-    assert.deepEqual(repo.stage(["stable.txt"]), []);
+    assert.deepEqual(repo.stage(["stable.txt"], () => {
+      throw new Error("content reader must not run for a stable cache hit");
+    }), []);
   } finally {
     Date.now = actualNow;
   }

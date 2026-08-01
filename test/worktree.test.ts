@@ -15,6 +15,7 @@ import {
   materializeTree,
   normalizeRepoPath,
   readWorkingFile,
+  sameIndexStat,
 } from "../engine/worktree.ts";
 import { writeTree } from "../engine/model.ts";
 import type { IgnoreRules } from "../engine/ignore.ts";
@@ -100,12 +101,18 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
     JSON.stringify(["100600", "1".repeat(64), "a.txt", null]),
     JSON.stringify(["100644", "1".repeat(64), "a.txt", ["1", "2"]]),
     JSON.stringify(["100644", "1".repeat(64), "a.txt", ["-1", "2", "3", "4", "5", "6"]]),
+    ...["/absolute", "../outside", "a\\b", "a//b", "a/./b", "a/../b"].map((path) =>
+      JSON.stringify(["100644", "1".repeat(64), path, null])),
   ]) {
     assert.throws(
       () => decodeIndex(`pm-vcs-index 2\n${line}`),
       (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
     );
   }
+  assert.throws(
+    () => decodeIndex(`100644 ${"1".repeat(64)} ../outside`),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
 });
 
 test("listWorkingTree skips the control directory and prunable directories", () => {
@@ -136,7 +143,7 @@ test("readWorkingFile returns cache metadata once a file is outside the racy win
   const root = dir.root;
   writeFileSync(join(root, "stable"), "stable");
   const actualNow = Date.now;
-  Date.now = () => actualNow() + 2_000;
+  Date.now = () => actualNow() + 3_000;
   try {
     assert.ok(readWorkingFile(root, "stable").stat);
   } finally {
@@ -271,14 +278,34 @@ test("computeStatus does not read unchanged cached file content", () => {
       ctimeNs: file.ctimeNs,
       dev: file.dev,
       ino: file.ino,
-      observedAtNs: (file.ctimeNs > file.mtimeNs ? file.ctimeNs : file.mtimeNs) + 1_000_000_000n,
+      observedAtNs: (file.ctimeNs > file.mtimeNs ? file.ctimeNs : file.mtimeNs) + 2_000_000_000n,
     },
   }];
 
-  const status = computeStatus(store, root, tree, index, ".pmvcs", noRules, undefined, () => {
-    throw new Error("content reader must not run for a cache hit");
-  });
-  assert.equal(status.clean, true);
+  const actualNow = Date.now;
+  Date.now = () => actualNow() + 3_000;
+  try {
+    const status = computeStatus(store, root, tree, index, ".pmvcs", noRules, undefined, () => {
+      throw new Error("content reader must not run for a cache hit");
+    });
+    assert.equal(status.clean, true);
+  } finally {
+    Date.now = actualNow;
+  }
+});
+
+test("sameIndexStat rejects current racy observations and detects ctime changes", () => {
+  const stable = {
+    size: 6n,
+    mtimeNs: 10n,
+    ctimeNs: 20n,
+    dev: 30n,
+    ino: 40n,
+    observedAtNs: 2_000_000_020n,
+  };
+  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 1_000_000_020n }), false);
+  assert.equal(sameIndexStat(stable, { ...stable, ctimeNs: 21n }), false);
+  assert.equal(sameIndexStat(stable, stable), true);
 });
 
 test("computeStatus detects a same-size edit even when its mtime is restored", () => {
@@ -290,6 +317,12 @@ test("computeStatus detects a same-size edit even when its mtime is restored", (
   const original = statSync(path, { bigint: true });
   const id = store.write("blob", Buffer.from("before"));
   const tree = writeTree(store, [{ name: "racy.txt", mode: "100644", id }]);
+  writeFileSync(path, "after!");
+  utimesSync(path, fixed, fixed);
+  const changed = statSync(path, { bigint: true });
+  assert.equal(changed.size, original.size);
+  assert.equal(changed.mtimeNs, original.mtimeNs);
+  const newestOriginal = original.ctimeNs > original.mtimeNs ? original.ctimeNs : original.mtimeNs;
   const index: IndexEntry[] = [{
     path: "racy.txt",
     id,
@@ -300,17 +333,9 @@ test("computeStatus detects a same-size edit even when its mtime is restored", (
       ctimeNs: original.ctimeNs,
       dev: original.dev,
       ino: original.ino,
-      observedAtNs: (original.ctimeNs > original.mtimeNs ? original.ctimeNs : original.mtimeNs)
-        + 1_000_000_000n,
+      observedAtNs: changed.ctimeNs === original.ctimeNs ? newestOriginal : newestOriginal + 2_000_000_000n,
     },
   }];
-
-  writeFileSync(path, "after!");
-  utimesSync(path, fixed, fixed);
-  const changed = statSync(path, { bigint: true });
-  assert.equal(changed.size, original.size);
-  assert.equal(changed.mtimeNs, original.mtimeNs);
-  assert.notEqual(changed.ctimeNs, original.ctimeNs);
 
   const status = computeStatus(store, root, tree, index, ".pmvcs", noRules);
   assert.deepEqual(status.unstaged, [{ path: "racy.txt", kind: "modified" }]);

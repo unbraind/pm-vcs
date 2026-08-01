@@ -243,9 +243,11 @@ export class Repository {
    * remove command whose only job is to say what `add` already knows.
    *
    * @param paths - Paths to stage, or an empty array for everything.
+   * @param read - Working-file reader; injectable so the cache bypass remains
+   *   directly testable without relying on elapsed-time benchmarks.
    * @returns The paths whose staged state changed.
    */
-  stage(paths: readonly string[]): string[] {
+  stage(paths: readonly string[], read: typeof readWorkingFile = readWorkingFile): string[] {
     const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
     const rules = this.ignoreRules();
     const targets = paths.length === 0
@@ -272,7 +274,7 @@ export class Repository {
         const existing = index.get(path);
         const observedMode = observed.executable ? "100755" : "100644";
         if (existing && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
-        ({ content, executable, stat } = readWorkingFile(this.root, path));
+        ({ content, executable, stat } = read(this.root, path));
       } catch {
         if (index.delete(path)) changed.push(path);
         continue;

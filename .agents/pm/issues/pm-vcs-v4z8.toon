@@ -1,0 +1,23 @@
+id: pm-vcs-v4z8
+title: Refresh verified stat cache after materialization without trusting concurrent bytes
+description: "Cubic review exposed a tension in the initial materialization cache: recording a post-write stat can pair the expected object id with bytes concurrently replaced by another process, while omitting metadata makes status re-read restored or switched files until a later stage. Design a safe cache warm-up that verifies content and updates metadata only after the timestamp window, without turning a read-only status into a racy index overwrite."
+type: Issue
+status: open
+priority: 2
+tags[4]: concurrency,performance,review-followup,stat-cache
+created_at: "2026-08-01T04:50:06.115Z"
+updated_at: "2026-08-01T04:50:06.115Z"
+author: codex
+estimated_minutes: 240
+acceptance_criteria: "After restore or switch, an aged unchanged file reaches metadata-only status without explicit add; a concurrent write at every materialization and refresh boundary is detected; index updates use compare-and-swap or locking so status cannot overwrite a concurrent stage; installed-CLI strace acceptance proves content reads stop; full coverage remains 100/100/100"
+parent: pm-vcs-tr2a
+severity: medium
+expected_result: Materialized files safely warm the stat cache and later status calls avoid content reads.
+actual_result: Correctness-first materialization currently omits stat metadata because an unverified post-write stat can hide a concurrent edit.
+component: engine/worktree
+files[2]{path,scope,note}:
+  engine/worktree.ts,project,materialization and cache identity boundary
+  engine/repo.ts,project,status and index update ownership
+tests[1]{command,scope,timeout_seconds,note}:
+  "NPM_CONFIG_USERCONFIG=/dev/null npm run release:check",project,2400,authoritative coverage and release gate
+body: ""

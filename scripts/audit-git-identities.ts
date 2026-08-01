@@ -17,15 +17,16 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..");
+const gitOutputLimit = 256 * 1024 * 1024;
 
 /** Runs Git and returns its standard output, refusing incomplete inventories. */
-function runGit(arguments_: readonly string[], acceptedStatuses: readonly number[] = [0]): string {
-  const result = spawnSync("git", arguments_, { cwd: repoRoot, encoding: "utf8" });
-  if (result.status === null || !acceptedStatuses.includes(result.status)) {
-    const detail = result.stderr.trim();
+function runGit(arguments_: readonly string[]): string {
+  const result = spawnSync("git", arguments_, { cwd: repoRoot, encoding: "utf8", maxBuffer: gitOutputLimit });
+  if (result.status !== 0) {
+    const detail = result.error?.message ?? result.stderr?.trim() ?? "";
     throw new Error(`git ${arguments_.join(" ")} failed${detail.length > 0 ? `: ${detail}` : "."}`);
   }
-  return result.stdout;
+  return result.stdout ?? "";
 }
 
 const addresses = new Set(
@@ -37,12 +38,13 @@ const addresses = new Set(
 const fsck = spawnSync("git", ["fsck", "--full", "--no-reflogs", "--unreachable"], {
   cwd: repoRoot,
   encoding: "utf8",
+  maxBuffer: gitOutputLimit,
 });
-if (fsck.status === null || fsck.status > 1) {
-  const detail = fsck.stderr.trim();
+if (fsck.status !== 0) {
+  const detail = fsck.error?.message ?? fsck.stderr?.trim() ?? "";
   throw new Error(`git fsck failed${detail.length > 0 ? `: ${detail}` : "."}`);
 }
-for (const line of `${fsck.stdout}\n${fsck.stderr}`.split("\n")) {
+for (const line of `${fsck.stdout ?? ""}\n${fsck.stderr ?? ""}`.split("\n")) {
   const match = /^(?:unreachable|dangling) commit ([0-9a-f]+)$/.exec(line);
   if (!match) continue;
   for (const address of runGit(["show", "-s", "--format=%ae%n%ce", match[1]!]).split("\n")) {

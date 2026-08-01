@@ -25,7 +25,15 @@ import { compareByteOrder, type FileMode, type TreeEntry, readTree, writeTree } 
 import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
 
 const INDEX_HEADER = "pm-vcs-index 2";
-const RACY_WINDOW_NS = 1_000_000_000n;
+const RACY_WINDOW_NS = 2_000_000_000n;
+
+/** Whether a stored path is already in the canonical repository-relative form. */
+function isCanonicalRepoPath(path: string): boolean {
+  return path.length > 0
+    && !path.startsWith("/")
+    && !path.includes("\\")
+    && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
 
 /** Filesystem identity recorded with an index entry to avoid re-reading unchanged content. */
 export interface IndexStat {
@@ -163,7 +171,7 @@ export function decodeIndex(contents: string): IndexEntry[] {
       }
       const [mode, id, path, encodedStat] = value;
       if ((mode !== "100644" && mode !== "100755") || typeof id !== "string" || !isObjectId(id)
-        || typeof path !== "string" || path.length === 0) {
+        || typeof path !== "string" || !isCanonicalRepoPath(path)) {
         throw new ObjectStoreError("corrupt_index", `Index line "${line}" has an invalid mode, object id, or path.`);
       }
       if (encodedStat === null) {
@@ -198,6 +206,9 @@ export function decodeIndex(contents: string): IndexEntry[] {
     const match = /^(100644|100755) ([0-9a-f]{64}) (.+)$/.exec(line);
     if (!match) {
       throw new ObjectStoreError("corrupt_index", `Index line "${line}" is not well-formed.`);
+    }
+    if (!isCanonicalRepoPath(match[3])) {
+      throw new ObjectStoreError("corrupt_index", `Index line "${line}" has a non-canonical path.`);
     }
     entries.push({ mode: match[1] as IndexEntry["mode"], id: match[2], path: match[3] });
   }
@@ -306,6 +317,7 @@ export function readWorkingStat(
 export function sameIndexStat(left: IndexStat | undefined, right: IndexStat): boolean {
   return left !== undefined
     && left.observedAtNs - (left.ctimeNs > left.mtimeNs ? left.ctimeNs : left.mtimeNs) >= RACY_WINDOW_NS
+    && right.observedAtNs - (right.ctimeNs > right.mtimeNs ? right.ctimeNs : right.mtimeNs) >= RACY_WINDOW_NS
     && left.size === right.size
     && left.mtimeNs === right.mtimeNs
     && left.ctimeNs === right.ctimeNs
@@ -418,7 +430,9 @@ export function materializeTree(
     // never see the tree it just materialised as clean.
     chmodSync(absolute, value.mode === "100755" ? 0o755 : 0o644);
     const mode = value.mode === "100755" ? "100755" : "100644";
-    entries.push({ path, id: value.id, mode, stat: readWorkingStat(root, path).stat });
+    // A concurrent writer can race the write and chmod above. Do not pair the
+    // expected object id with metadata from bytes that were never verified.
+    entries.push({ path, id: value.id, mode });
   }
   // Directories left empty by the removals above are pruned, so switching away
   // from a branch that introduced a directory does not leave its skeleton.

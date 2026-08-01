@@ -3,11 +3,12 @@ title: Documented TOON record paths fail staging because the record codec accept
 description: "The README's primary init example configures .agents/pm/**/*.toon as first-class records, but staging a real pm-initialized tracker calls the JSON-only record decoder and aborts with record payload is not valid JSON. This prevents pm-vcs from using pm's native item format as the structured merge primitive it advertises."
 type: Issue
 status: open
-priority: 1
-tags[4]: "format:toon",pm-sdk,real-data,records
+priority: 0
+tags[5]: "format:toon",pm-sdk,real-data,records,release-blocker
 created_at: "2026-08-01T03:59:00.345Z"
-updated_at: "2026-08-01T03:59:00.345Z"
+updated_at: "2026-08-01T04:44:55.780Z"
 author: codex
+estimated_minutes: 480
 acceptance_criteria: A real installed-CLI test stages native TOON item and history data through the registered extension; canonical TOON decoding and encoding preserve all supported pm fields; per-field merge handles concurrent PM item edits; JSON record paths remain compatible; README examples are executable.
 parent: pm-vcs-tr2a
 severity: high
@@ -16,6 +17,8 @@ expected_result: Native PM TOON items stage as record objects and later merge pe
 actual_result: pm vcs add aborts with Record payload is not valid JSON.
 affected_version: 2026.7.30
 component: engine/records
+notes[1]{created_at,author,text}:
+  "2026-08-01T04:44:55.760Z",codex,Cubic correctly identified that the native TOON failure is described as a release blocker but was not machine-tagged as one. Priority and tags now match the release boundary; no publishing is permitted until its installed-CLI acceptance passes.
 files[2]{path,scope,note}:
   engine/model.ts,project,record codec boundary
   README.md,project,documented TOON example

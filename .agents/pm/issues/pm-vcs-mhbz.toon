@@ -6,16 +6,17 @@ status: open
 priority: 0
 tags[4]: do-not-publish,git-history,privacy,release-blocker
 created_at: "2026-08-01T04:14:51.644Z"
-updated_at: "2026-08-01T04:29:47.708Z"
+updated_at: "2026-08-01T04:44:56.167Z"
 author: codex
 estimated_minutes: 180
 acceptance_criteria: "Choose a public noreply identity; rewrite all reachable branches and tags plus audit unreachable objects; independently scan the rewritten object database and working tree; coordinate force updates and invalidate stale clones; verify GitHub, npm provenance, changelog links, and PR refs; document the migration without publishing the removed personal value."
 severity: critical
 component: release/privacy
 customer_impact: Publishing releases before remediation would preserve personal data in every distributed clone and package provenance link.
-notes[2]{created_at,author,text}:
+notes[3]{created_at,author,text}:
   "2026-08-01T04:15:38.103Z",codex,"Immediate containment: replaced the tracked mailmap entries with name-only aliases targeting the GitHub noreply identity, and configured this clone to use that noreply address for new commits. Raw historical commit objects remain unchanged and keep this issue release-blocking."
   "2026-08-01T04:25:46.765Z",codex,First review confirmed that the prior name-only mailmap syntax was invalid. Removed it instead of tracking historical private addresses. Added a TypeScript audit that scans author and committer metadata in all refs plus unreachable or dangling commit objects; it currently fails with two non-public addresses and keeps this item release-blocking.
+  "2026-08-01T04:44:56.149Z",codex,"Cubic second-round review strengthened the audit implementation: Git failures now require exact status zero, launch errors remain actionable, and a 256 MiB output ceiling avoids the default spawnSync ENOBUFS limit for large histories."
 files[2]{path,scope,note}:
   scripts/audit-git-identities.ts,project,fail-closed reachable and unreachable author and committer identity inventory
   .github/approved-git-identities.txt,project,approved public commit metadata addresses
