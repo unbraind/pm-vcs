@@ -135,6 +135,16 @@ test("identity inventory streams a large commit message after parsing its header
   assert.deepEqual(await collectGitIdentities(root), new Set(["public@example.test"]));
 });
 
+test("identity inventory rejects an oversized unterminated identity header", async () => {
+  const { root } = repository();
+  git(
+    root,
+    ["hash-object", "--literally", "-w", "-t", "commit", "--stdin"],
+    `author ${"x".repeat(1024 * 1024)}\n`,
+  );
+  await assert.rejects(collectGitIdentities(root), /has an oversized identity header/);
+});
+
 test("identity inventory includes annotated taggers", async () => {
   const { root, allowlist } = repository();
   git(root, ["config", "user.email", "tagger-private@example.test"]);

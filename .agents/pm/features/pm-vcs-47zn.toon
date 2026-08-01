@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-07-31T07:35:09.591Z"
-updated_at: "2026-08-01T06:17:02.531Z"
+updated_at: "2026-08-01T06:38:22.803Z"
 closed_at: "2026-08-01T04:02:50.391Z"
 completed_at: "2026-08-01T04:02:50.391Z"
 author: "harness:claude-code"
@@ -17,7 +17,7 @@ expected_result: Stable indexed paths avoid content reads while metadata changes
 actual_result: Installed-CLI acceptance skipped every stable content read across 16 MiB and detected a same-size edit with restored mtime; 352 tests retain complete coverage.
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-b7cb,parent,"2026-07-31T07:35:11.720Z","harness:claude-code","cli:update:dep",detected
-notes[11]{created_at,author,text}:
+notes[12]{created_at,author,text}:
   "2026-08-01T04:02:03.256Z",codex,"TDD exposed a real same-timestamp false-clean failure in existing merge tests. The final design records size, mtime, ctime, device, inode, and observation time; it never trusts entries observed inside the one-second filesystem timestamp window. Focused tests pass 71/71 and the full coverage gate passes at 100/100/100. Installed pm 2026.7.31 acceptance used 64 indexed files totaling 16 MiB: strace observed zero content opens on clean cached status, and a same-size edit with restored mtime was reported modified. The exact temporary workspace was deleted afterward. The same run discovered the separate native TOON record failure now tracked as pm-vcs-l8jv."
   "2026-08-01T04:11:17.666Z",codex,"The first strict coverage run failed closed at 99.90 percent lines and 99.42 percent branches, naming the untested v2 decoder refusals and cache-state arms. Added direct corrupt-index, legacy blank-line, stable-read, and repository cached-stage tests without changing the thresholds. Final coverage gate: 352 tests, 352 passed, 100.00 percent lines, 100.00 percent branches, 100.00 percent functions across all 19 source files."
   "2026-08-01T04:25:45.870Z",codex,"CodeRabbit review identified two correctness gaps: v2 decoding rejected signed pre-epoch timestamps that the encoder can write, and the restored-mtime regression fixture stopped at the racy guard before exercising ctime comparison. Signed timestamp decoding, unsigned field rejection, and a non-racy ctime fixture now cover both paths."
@@ -29,6 +29,7 @@ notes[11]{created_at,author,text}:
   "2026-08-01T05:27:53.738Z",codex,"Coverage after the cross-process/coarse-tick reconciliation remains 100.00 percent for lines, branches, and functions across all 19 shipped source files. The suite now includes the empty-repository privacy case in addition to raw reachable/unreachable/replacement/malformed coverage."
   "2026-08-01T05:56:43.228Z",codex,"Final Cubic and CodeRabbit review hardening: the raw Git identity gate now streams every physical commit and annotated tag with a uniform 120-second subprocess timeout, parses only the header block, requires exactly one author and committer per commit and one tagger per annotated tag, and rejects message impostors or duplicate identity headers. POSIX backslash filenames remain compatible in legacy and v2 indexes; Windows input separators still normalize to canonical slashes. The strict gate passes 361 tests with 100.00 percent line, branch, and function coverage across all 19 shipped source files. Production audit reports zero vulnerabilities, pack dry-run and changelog check pass. Release remains blocked because the expanded raw-object audit correctly rejects two non-public historical identities under pm-vcs-mhbz."
   "2026-08-01T06:17:02.508Z",codex,"Latest Cubic exact-head review added fail-closed NUL and Windows native-separator validation, duplicate-path rejection in legacy/v2 index decode and encode, strict single-angle Git identity parsing, truly incremental large-message discard after header parsing, and independent multi-angle, duplicate-header, message-impostor, annotated-tagger, and 2 MiB message tests. Final strict gate: 364 tests passed with 100.00 percent line, branch, and function coverage across all 19 shipped source files. The post-materialization performance suggestion remains owned by pm-vcs-v4z8 because any persistent status refresh needs index CAS or locking."
+  "2026-08-01T06:38:22.779Z",codex,"Final CodeRabbit review added child-stdin error routing for the streamed Git audit, restored sameIndexStat doc attachment, covered the 1 MiB unterminated-header guard, made POSIX-backslash assertions Windows-safe, and added an independent installed-CLI native TOON acceptance under pm-vcs-l8jv."
 files[7]{path,scope,note}:
   engine/repo.ts,project,staging cache integration
   engine/worktree.ts,project,index format stat cache and status bypass

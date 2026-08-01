@@ -87,7 +87,7 @@ test("encodeIndex and decodeIndex round-trip cached metadata in path order", () 
   assert.deepEqual(decodeIndex(encoded), [...entries].sort((l, r) => (l.path < r.path ? -1 : 1)));
   assert.deepEqual(decodeIndex(""), []);
   const backslashEntry = { path: "back\\slash", id: "1".repeat(64), mode: "100644" as const };
-  assert.deepEqual(decodeIndex(encodeIndex([backslashEntry])), [backslashEntry]);
+  if (sep !== "\\") assert.deepEqual(decodeIndex(encodeIndex([backslashEntry])), [backslashEntry]);
   assert.throws(
     () => encodeIndex([{ ...backslashEntry, path: "../outside" }]),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
@@ -141,10 +141,12 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
     () => decodeIndex(`pm-vcs-index 2\n${duplicateV2}\n${duplicateV2}`),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
-  assert.deepEqual(
-    decodeIndex(`100644 ${"1".repeat(64)} back\\slash`),
-    [{ path: "back\\slash", id: "1".repeat(64), mode: "100644" }],
-  );
+  if (sep !== "\\") {
+    assert.deepEqual(
+      decodeIndex(`100644 ${"1".repeat(64)} back\\slash`),
+      [{ path: "back\\slash", id: "1".repeat(64), mode: "100644" }],
+    );
+  }
 });
 
 test("listWorkingTree skips the control directory and prunable directories", () => {

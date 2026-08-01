@@ -334,6 +334,15 @@ export function readWorkingStat(
   };
 }
 
+/** Whether two observations carry the same filesystem identity fields. */
+function sameFileIdentity(left: IndexStat, right: IndexStat): boolean {
+  return left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+    && left.dev === right.dev
+    && left.ino === right.ino;
+}
+
 /**
  * Whether two cache observations identify the same non-racy filesystem state.
  *
@@ -347,15 +356,6 @@ export function readWorkingStat(
  * @param right - Current working-tree metadata.
  * @returns True only when content hashing can safely be skipped.
  */
-/** Whether two observations carry the same filesystem identity fields. */
-function sameFileIdentity(left: IndexStat, right: IndexStat): boolean {
-  return left.size === right.size
-    && left.mtimeNs === right.mtimeNs
-    && left.ctimeNs === right.ctimeNs
-    && left.dev === right.dev
-    && left.ino === right.ino;
-}
-
 export function sameIndexStat(left: IndexStat | undefined, right: IndexStat): boolean {
   return left !== undefined
     && left.observedAtNs - (left.ctimeNs > left.mtimeNs ? left.ctimeNs : left.mtimeNs) >= RACY_WINDOW_NS

@@ -83,7 +83,12 @@ async function streamGit(
       }
       resolvePromise();
     });
-    if (input !== undefined) child.stdin!.end(input);
+    if (input !== undefined) {
+      child.stdin!.on("error", (error) => {
+        fail(new Error(`git ${arguments_.join(" ")} stdin failed: ${error.message}`));
+      });
+      child.stdin!.end(input);
+    }
   });
 }
 
