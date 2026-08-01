@@ -1,0 +1,15 @@
+id: pm-vcs-vmmx
+title: Stream arbitrary large files through fragment and range storage
+description: "Replace whole-blob memory assumptions with versioned chunk-list objects, content-defined and fixed chunking modes, streaming reads and writes, byte-range access, resumable fragment transfer, and compression metadata separated from uncompressed content identity."
+type: Feature
+status: open
+priority: 1
+tags: []
+created_at: "2026-08-01T19:32:33.387Z"
+updated_at: "2026-08-01T19:37:46.559Z"
+author: "harness:codex"
+estimated_minutes: 2400
+acceptance_criteria: Multi-gigabyte logical files can be staged transferred verified and restored within a fixed memory ceiling; Insertion into content-defined content reuses unaffected fragments while fixed chunks support direct range reads; Interrupted transfer resumes missing fragments and no ref advances before remote closure verification; Algorithm and threshold choices are justified by reproducible TypeScript benchmarks rather than copied constants
+parent: pm-vcs-b7cb
+risk: high
+body: ""

@@ -106,6 +106,44 @@ test("a fallback strategy applies to fields the policy does not name", () => {
   assert.deepEqual(setResult.document.x, [10, 11].sort());
 });
 
+test("timestamp strategy keeps the latest valid concurrent update and refuses malformed values", () => {
+  const base = { updated_at: "2026-08-01T00:00:00.000Z" };
+  const merged = mergeRecords(
+    base,
+    { updated_at: "2026-08-01T02:00:00.000+02:00" },
+    { updated_at: "2026-08-01T01:00:00.000Z" },
+    { fields: { updated_at: "timestamp" } },
+  );
+  assert.equal(merged.clean, true);
+  assert.equal(merged.document.updated_at, "2026-08-01T01:00:00.000Z");
+
+  const equalInstants = mergeRecords(
+    { updated_at: "2026-07-31T23:00:00.000Z" },
+    { updated_at: "2026-08-01T02:00:00.000+02:00" },
+    { updated_at: "2026-08-01T00:00:00.000Z" },
+    { fields: { updated_at: "timestamp" } },
+  );
+  assert.equal(equalInstants.document.updated_at, "2026-08-01T02:00:00.000+02:00");
+
+  const malformed = mergeRecords(
+    base,
+    { updated_at: "not-a-timestamp" },
+    { updated_at: "2026-08-01T01:00:00.000Z" },
+    { fields: { updated_at: "timestamp" } },
+  );
+  assert.equal(malformed.clean, false);
+  assert.deepEqual(malformed.conflicts.map((conflict) => conflict.field), ["updated_at"]);
+
+  const nonStrings = mergeRecords(
+    base,
+    { updated_at: 1 },
+    { updated_at: 2 },
+    { fields: { updated_at: "timestamp" } },
+  );
+  assert.equal(nonStrings.clean, false);
+  assert.deepEqual(nonStrings.conflicts.map((conflict) => conflict.field), ["updated_at"]);
+});
+
 test("mergeAppendOnlyLog unions, de-duplicates and orders by timestamp", () => {
   const base = [
     JSON.stringify({ at: "2024-01-01T00:00:00Z", v: 1 }),

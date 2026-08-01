@@ -145,9 +145,9 @@ preserve has failed at its only job.
 boundary rather than a convenience. `decodeTree` refuses a name that is not one usable path
 segment, a duplicate name and a malformed id; `decodeCommit` refuses a repeated singleton
 header, because a second one makes the commit's meaning depend on which occurrence a parser
-keeps; `decodeRecord` refuses a nested object or a non-finite number, which `RecordValue` says
-cannot occur — casting past that let a tampered bundle put a value into the store whose first
-symptom would be a crash in the record merge, arbitrarily later and unattributable.
+keeps; `decodeRecord` recursively validates nested arrays and objects and refuses non-finite
+numbers. Nested objects are necessary for native pm metadata, but casting past validation
+would still let a tampered bundle fail later and without attribution during record merge.
 
 - **Trees** sort entries by name in UTF-8 byte order via `compareByteOrder`. Not `<` on
   strings (UTF-16 code unit order, which disagrees for anything above the BMP), and not
@@ -157,10 +157,11 @@ symptom would be a crash in the record merge, arbitrarily later and unattributab
   `parent` (repeated, first-parent first), `author`, `committer`. The timezone offset is stored
   beside the absolute timestamp rather than folded into it, so a commit renders in the zone it
   was made in without that zone ever affecting ordering or the id.
-- **Records** are re-serialized with sorted keys and normalized scalars, so two agents whose
+- **Records** are re-serialized with recursively sorted object keys and normalized scalars, so two agents whose
   editors disagree about key order or indentation produce **one** object id. A file whose
   formatting moved does not register as changed. This is not cosmetic: it is what keeps a
-  reformat from presenting as a conflict.
+  reformat from presenting as a conflict. Native PM `.toon` documents are parsed and rendered
+  through the public pm SDK, while configured JSON records retain their canonical JSON form.
 
 ---
 
@@ -237,6 +238,7 @@ human's attention. Only genuine disagreement produces markers.
 | `scalar` (default) | One side changed it, that side wins. Both changed it differently, it conflicts — *alone*. |
 | `set` | Both sides' members survive, duplicates collapse, order normalizes. |
 | `sequence` | Append-only. Both sides' additions survive in deterministic order. |
+| `timestamp` | Both sides must provide valid timestamps; the chronologically latest value wins. |
 
 A conflict is scoped to the thing that conflicted. A scalar disagreement on `status` conflicts
 on `status`; `priority`, `tags` and `history` still merge. A document does not become
@@ -335,10 +337,10 @@ on every commit.
 | bundles with prerequisites | `git bundle` | **shipped** |
 | integrity verification | `git fsck` | **shipped** |
 | ignore rules | `.gitignore` | **shipped** |
-| change ids stable across rewrite | `jj` change ids | **Phase 2** |
-| describe / rebase / squash / split | `jj` / `git rebase -i` | **Phase 2** |
-| cherry-pick / revert / reset / restore | git equivalents | **Phase 2** |
-| automatic descendant rebase | `jj` | **Phase 2** |
+| change ids stable across rewrite | `jj` change ids | **shipped** |
+| describe / rebase / squash / split | `jj` / `git rebase -i` | **shipped** |
+| cherry-pick / revert / reset / restore | git equivalents | **shipped** |
+| automatic descendant rebase | `jj` | **shipped** |
 | remotes, clone, fetch, push | git transport | **Phase 3** |
 | self-hosted source, CI-gated | — | **Phase 4** |
 | patch series as an object | lore / `git format-patch` | **Phase 5** |

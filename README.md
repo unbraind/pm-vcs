@@ -107,7 +107,7 @@ unreachable, not absent.
 ### The repository
 
 ```console
-$ pm vcs init --record-path '.agents/pm/**/*.toon' --set-field 'tags:set,history:sequence'
+$ pm vcs init --record-path '.agents/pm/**/*.toon' --set-field 'tags:set,notes:sequence,updated_at:timestamp'
 $ pm vcs add
 $ pm vcs commit --message "Close the deployment item"
 $ pm vcs log --limit 10
@@ -150,7 +150,7 @@ being git. These three are the only commands that touch git:
 Declare which paths hold records and how their fields reconcile:
 
 ```console
-$ pm vcs init --record-path 'items/*.json' --set-field 'tags:set,history:sequence'
+$ pm vcs init --record-path 'items/*.json' --set-field 'tags:set,history:sequence,updated_at:timestamp'
 ```
 
 Two agents, on two branches, edit the same item:
@@ -191,6 +191,7 @@ Every change survived. No conflict markers exist anywhere, because no line merge
 | `scalar` (default) | One side changed it, that side wins. Both changed it differently, it conflicts — alone. |
 | `set` | Both sides' members survive, duplicates collapse, order normalised. |
 | `sequence` | Append-only. Both sides' additions survive in deterministic order. |
+| `timestamp` | Both sides must provide valid timestamps; the chronologically latest value wins. |
 
 A genuine disagreement still conflicts, and says exactly what disagreed:
 

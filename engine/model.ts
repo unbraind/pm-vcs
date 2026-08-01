@@ -80,12 +80,36 @@ export interface Commit {
   readonly message: string;
 }
 
-/** A field value a record can hold. */
-export type RecordValue = string | number | boolean | null | readonly RecordValue[];
+/** A field value a record can hold, including recursively structured PM metadata. */
+export type RecordValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly RecordValue[]
+  | { readonly [field: string]: RecordValue };
 
 /** A structured document stored as named fields. */
 export interface RecordDocument {
   readonly [field: string]: RecordValue;
+}
+
+/**
+ * Serializes one record value with object keys in canonical byte order.
+ *
+ * @param value - Recursively structured record value.
+ * @returns Stable JSON whose bytes depend only on the value, not insertion order.
+ */
+export function canonicalRecordValue(value: RecordValue): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalRecordValue).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const objectValue = value as Readonly<Record<string, RecordValue>>;
+    return `{${Object.keys(objectValue)
+      .sort(compareByteOrder)
+      .map((field) => `${JSON.stringify(field)}:${canonicalRecordValue(objectValue[field]!)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /**
@@ -411,7 +435,7 @@ export function decodeCommit(payload: Buffer): Commit {
  */
 export function encodeRecord(document: RecordDocument): Buffer {
   const fields = Object.keys(document).sort(compareByteOrder);
-  const body = fields.map((field) => `${JSON.stringify(field)}:${JSON.stringify(document[field])}`);
+  const body = fields.map((field) => `${JSON.stringify(field)}:${canonicalRecordValue(document[field]!)}`);
   return Buffer.from(`{${body.join(",")}}`, "utf8");
 }
 
@@ -449,7 +473,12 @@ export function decodeRecord(payload: Buffer): RecordDocument {
       value.forEach((member, index) => assertValue(member, `${path}[${index}]`));
       return;
     }
-    throw new ObjectStoreError("malformed_object", `Record field ${path} holds a value a record cannot carry.`);
+    // JSON.parse cannot produce undefined, bigint, symbol or functions. After
+    // the scalar and array cases above, the only remaining JSON value is an
+    // object, so recurse without retaining an unreachable defensive branch.
+    for (const [field, member] of Object.entries(value as Readonly<Record<string, unknown>>)) {
+      assertValue(member, `${path}.${field}`);
+    }
   };
   for (const [field, value] of Object.entries(parsed)) assertValue(value, field);
   return parsed as RecordDocument;

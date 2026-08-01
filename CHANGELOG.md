@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Documented TOON record paths fail staging because the record codec accepts JSON only ([pm-vcs-l8jv](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-l8jv.toon))
 - Close PR 3 transactional rewrite data-integrity findings ([pm-vcs-ntht](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ntht.toon))
 - A mode-only change produces an empty diff, so an executable bit can move invisibly ([pm-vcs-pxgl](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-pxgl.toon))
 - Initialize pm-vcs at the source workspace outside Git ([pm-vcs-c590](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-c590.toon))
@@ -31,6 +32,7 @@
 
 ### Other
 
+- Research Epic Lore and map its general-VCS design into pm-vcs ([pm-vcs-rmqh](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-rmqh.toon))
 - Implement show operation ([pm-vcs-z400](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-z400.toon))
 - Implement restore operation ([pm-vcs-zdrk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-zdrk.toon))
 - Implement reset operation ([pm-vcs-lccx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-lccx.toon))

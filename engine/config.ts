@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { ObjectStoreError } from "./objects.ts";
-import type { FieldStrategy, MergePolicy } from "./records.ts";
+import { FIELD_STRATEGIES, type FieldStrategy, type MergePolicy } from "./records.ts";
 
 /** Settings that shape how a repository stores and merges content. */
 export interface RepositoryConfig {
@@ -86,9 +86,6 @@ export function isRecordPath(path: string, config: RepositoryConfig): boolean {
   return config.recordPaths.some((pattern) => matchesGlob(path, pattern));
 }
 
-/** Field strategies this build understands. */
-const STRATEGIES: readonly FieldStrategy[] = ["scalar", "set", "sequence"];
-
 /**
  * Parses configuration, rejecting anything it does not understand.
  *
@@ -122,19 +119,19 @@ export function parseConfig(raw: unknown): RepositoryConfig {
   }
   const fields: Record<string, FieldStrategy> = {};
   for (const [field, strategy] of Object.entries(fieldsSource as Record<string, unknown>)) {
-    if (typeof strategy !== "string" || !(STRATEGIES as readonly string[]).includes(strategy)) {
+    if (typeof strategy !== "string" || !(FIELD_STRATEGIES as readonly string[]).includes(strategy)) {
       throw new ObjectStoreError(
         "bad_config",
-        `Field "${field}" declares strategy "${String(strategy)}", which is not one of ${STRATEGIES.join(", ")}.`,
+        `Field "${field}" declares strategy "${String(strategy)}", which is not one of ${FIELD_STRATEGIES.join(", ")}.`,
       );
     }
     fields[field] = strategy as FieldStrategy;
   }
   const fallback = policyRecord.fallback;
-  if (fallback !== undefined && (typeof fallback !== "string" || !(STRATEGIES as readonly string[]).includes(fallback))) {
+  if (fallback !== undefined && (typeof fallback !== "string" || !(FIELD_STRATEGIES as readonly string[]).includes(fallback))) {
     throw new ObjectStoreError(
       "bad_config",
-      `Fallback strategy "${String(fallback)}" is not one of ${STRATEGIES.join(", ")}.`,
+      `Fallback strategy "${String(fallback)}" is not one of ${FIELD_STRATEGIES.join(", ")}.`,
     );
   }
   return {

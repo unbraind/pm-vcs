@@ -545,10 +545,10 @@ test("a decoder refuses a payload its own return type says cannot exist", () => 
     );
   }
 
-  // A record field holding something RecordValue excludes.
+  // Recursively structured PM metadata is valid, including objects in arrays.
   for (const [payload, expected] of [
-    ['{"nested":{"a":1}}', /a value a record cannot carry/],
-    ['{"list":[{"a":1}]}', /list\[0\] holds a value/],
+    ['{"nested":{"a":1}}', null],
+    ['{"list":[{"a":1}]}', null],
     ['{"tags":[1,null,"ok",true]}', null],
   ] as Array<[string, RegExp | null]>) {
     if (expected === null) {
