@@ -6,6 +6,7 @@ import { afterEach, test } from "node:test";
 import { type ObjectId, ObjectStore, ObjectStoreError } from "../engine/objects.ts";
 import {
   type IndexEntry,
+  RACY_WINDOW_NS,
   buildTree,
   computeStatus,
   decodeIndex,
@@ -391,12 +392,18 @@ test("computeStatus detects a same-size edit even when its mtime is restored", (
       ctimeNs: original.ctimeNs,
       dev: original.dev,
       ino: original.ino,
-      observedAtNs: BigInt(Date.now()) * 1_000_000n,
+      observedAtNs: (original.ctimeNs > original.mtimeNs ? original.ctimeNs : original.mtimeNs) + RACY_WINDOW_NS,
     },
   }];
 
-  const status = computeStatus(store, root, tree, index, ".pmvcs", noRules);
-  assert.deepEqual(status.unstaged, [{ path: "racy.txt", kind: "modified" }]);
+  const actualNow = Date.now;
+  Date.now = () => Number((index[0]!.stat!.observedAtNs + RACY_WINDOW_NS) / 1_000_000n) + 1;
+  try {
+    const status = computeStatus(store, root, tree, index, ".pmvcs", noRules);
+    assert.deepEqual(status.unstaged, [{ path: "racy.txt", kind: "modified" }]);
+  } finally {
+    Date.now = actualNow;
+  }
 });
 
 test("materializeTree preserves a prunable directory rather than pruning it", () => {

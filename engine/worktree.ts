@@ -359,7 +359,6 @@ function sameFileIdentity(left: IndexStat, right: IndexStat): boolean {
 export function sameIndexStat(left: IndexStat | undefined, right: IndexStat): boolean {
   return left !== undefined
     && left.observedAtNs - (left.ctimeNs > left.mtimeNs ? left.ctimeNs : left.mtimeNs) >= RACY_WINDOW_NS
-    && right.observedAtNs >= left.observedAtNs
     && right.observedAtNs - left.observedAtNs >= RACY_WINDOW_NS
     && sameFileIdentity(left, right);
 }

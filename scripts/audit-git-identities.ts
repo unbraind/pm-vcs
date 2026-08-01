@@ -130,6 +130,16 @@ function collectIdentity(
   addresses.add(matches[0]!);
 }
 
+/** Collects the identity fields required by one raw Git object kind. */
+function collectObjectIdentities(addresses: Set<string>, object: GitObject, header: string): void {
+  if (object.type === "commit") {
+    collectIdentity(addresses, object, header, "author");
+    collectIdentity(addresses, object, header, "committer");
+  } else {
+    collectIdentity(addresses, object, header, "tagger");
+  }
+}
+
 /**
  * Inventories raw identity metadata from every physical commit and tag object.
  *
@@ -169,12 +179,7 @@ export async function collectGitIdentities(root: string): Promise<Set<string>> {
           const delimiter = identityHeader.indexOf("\n\n");
           if (delimiter >= 0) {
             const header = identityHeader.subarray(0, delimiter).toString("utf8");
-            if (object.type === "commit") {
-              collectIdentity(addresses, object, header, "author");
-              collectIdentity(addresses, object, header, "committer");
-            } else {
-              collectIdentity(addresses, object, header, "tagger");
-            }
+            collectObjectIdentities(addresses, object, header);
             identityHeader = Buffer.alloc(0);
             identityCollected = true;
           } else if (identityHeader.length > maxIdentityHeaderBytes) {
@@ -187,12 +192,7 @@ export async function collectGitIdentities(root: string): Promise<Set<string>> {
       if (remainingObjectBytes > 0) return;
       if (!identityCollected) {
         const header = identityHeader.toString("utf8");
-        if (object.type === "commit") {
-          collectIdentity(addresses, object, header, "author");
-          collectIdentity(addresses, object, header, "committer");
-        } else {
-          collectIdentity(addresses, object, header, "tagger");
-        }
+        collectObjectIdentities(addresses, object, header);
       }
       if (pending.length === 0) return;
       if (pending[0] !== 0x0a) throw new Error(`git cat-file omitted the separator for ${object.id}.`);
