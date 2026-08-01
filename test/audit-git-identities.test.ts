@@ -36,20 +36,20 @@ function repository(): { root: string; allowlist: string; first: string } {
   return { root, allowlist, first: git(root, ["rev-parse", "HEAD"]) };
 }
 
-test("identity audit accepts an allowlisted reachable history", () => {
+test("identity audit accepts an allowlisted reachable history", async () => {
   const { root, allowlist } = repository();
-  assert.doesNotThrow(() => auditGitIdentities(root, allowlist));
+  await assert.doesNotReject(auditGitIdentities(root, allowlist));
 });
 
-test("identity audit accepts an initialized repository with no commits", () => {
+test("identity audit accepts an initialized repository with no commits", async () => {
   dir = makeTempDir();
   git(dir.root, ["init", "-q"]);
   const allowlist = join(dir.root, "approved.txt");
   writeFileSync(allowlist, "public@example.test\n");
-  assert.doesNotThrow(() => auditGitIdentities(dir!.root, allowlist));
+  await assert.doesNotReject(auditGitIdentities(dir!.root, allowlist));
 });
 
-test("identity audit finds unreachable ancestors and ignores replacement refs", () => {
+test("identity audit finds unreachable ancestors and ignores replacement refs", async () => {
   const { root, allowlist, first } = repository();
   git(root, ["config", "user.email", "private@example.test"]);
   writeFileSync(join(root, "file"), "private");
@@ -60,15 +60,38 @@ test("identity audit finds unreachable ancestors and ignores replacement refs", 
   git(root, ["commit", "-qam", "public child"]);
   git(root, ["replace", privateCommit, first]);
   git(root, ["reset", "--hard", "-q", first]);
-  assert.throws(
-    () => auditGitIdentities(root, allowlist),
+  await assert.rejects(
+    auditGitIdentities(root, allowlist),
     /rejected 1 non-public address/,
   );
 });
 
-test("identity inventory refuses malformed commits and unusable repositories", () => {
+test("identity inventory refuses malformed commits and unusable repositories", async () => {
   const { root } = repository();
   git(root, ["hash-object", "--literally", "-w", "-t", "commit", "--stdin"], "malformed\n");
-  assert.throws(() => collectGitIdentities(root), /well-formed author identity/);
-  assert.throws(() => collectGitIdentities(join(root, "missing")), /git cat-file.*failed/);
+  await assert.rejects(collectGitIdentities(root), /exactly one well-formed author identity/);
+  await assert.rejects(collectGitIdentities(join(root, "missing")), /git cat-file.*failed/);
+});
+
+test("identity inventory rejects message impostors and duplicate commit headers", async () => {
+  const { root } = repository();
+  const tree = git(root, ["rev-parse", "HEAD^{tree}"]);
+  const timestamp = "0 +0000";
+  git(root, ["hash-object", "--literally", "-w", "-t", "commit", "--stdin"], [
+    `tree ${tree}`,
+    `author Public <public@example.test> ${timestamp}`,
+    `author Private <private@example.test> ${timestamp}`,
+    `committer Public <public@example.test> ${timestamp}`,
+    "",
+    `committer Impostor <message@example.test> ${timestamp}`,
+    "",
+  ].join("\n"));
+  await assert.rejects(collectGitIdentities(root), /exactly one well-formed author identity/);
+});
+
+test("identity inventory includes annotated taggers", async () => {
+  const { root, allowlist } = repository();
+  git(root, ["config", "user.email", "tagger-private@example.test"]);
+  git(root, ["tag", "-am", "release", "v1"]);
+  await assert.rejects(auditGitIdentities(root, allowlist), /rejected 1 non-public address/);
 });

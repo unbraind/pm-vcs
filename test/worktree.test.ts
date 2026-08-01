@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { type ObjectId, ObjectStore, ObjectStoreError } from "../engine/objects.ts";
@@ -59,10 +59,7 @@ test("normalizeRepoPath canonicalises paths and rejects escapes", () => {
     () => normalizeRepoPath(root, "../escape"),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "path_outside_repo",
   );
-  assert.throws(
-    () => normalizeRepoPath(root, "back\\slash.txt"),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "path_outside_repo",
-  );
+  assert.equal(normalizeRepoPath(root, "back\\slash.txt"), sep === "\\" ? "back/slash.txt" : "back\\slash.txt");
 });
 
 test("encodeIndex and decodeIndex round-trip cached metadata in path order", () => {
@@ -81,8 +78,10 @@ test("encodeIndex and decodeIndex round-trip cached metadata in path order", () 
   assert.deepEqual(encoded.split("\n").slice(1).map((line) => JSON.parse(line)[2]), ["a.txt", "z.txt"]);
   assert.deepEqual(decodeIndex(encoded), [...entries].sort((l, r) => (l.path < r.path ? -1 : 1)));
   assert.deepEqual(decodeIndex(""), []);
+  const backslashEntry = { path: "back\\slash", id: "1".repeat(64), mode: "100644" as const };
+  assert.deepEqual(decodeIndex(encodeIndex([backslashEntry])), [backslashEntry]);
   assert.throws(
-    () => encodeIndex([{ path: "back\\slash", id: "1".repeat(64), mode: "100644" }]),
+    () => encodeIndex([{ ...backslashEntry, path: "../outside" }]),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
 });
@@ -109,7 +108,7 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
     JSON.stringify(["100600", "1".repeat(64), "a.txt", null]),
     JSON.stringify(["100644", "1".repeat(64), "a.txt", ["1", "2"]]),
     JSON.stringify(["100644", "1".repeat(64), "a.txt", ["-1", "2", "3", "4", "5", "6"]]),
-    ...["/absolute", "../outside", "a\\b", "a//b", "a/./b", "a/../b"].map((path) =>
+    ...["/absolute", "../outside", "a//b", "a/./b", "a/../b"].map((path) =>
       JSON.stringify(["100644", "1".repeat(64), path, null])),
   ]) {
     assert.throws(
@@ -120,6 +119,10 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
   assert.throws(
     () => decodeIndex(`100644 ${"1".repeat(64)} ../outside`),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
+  assert.deepEqual(
+    decodeIndex(`100644 ${"1".repeat(64)} back\\slash`),
+    [{ path: "back\\slash", id: "1".repeat(64), mode: "100644" }],
   );
 });
 
@@ -134,11 +137,10 @@ test("listWorkingTree skips the control directory and prunable directories", () 
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "a.ts"), "x");
   assert.deepEqual(listWorkingTree(root, ".pmvcs", noRules), ["src/a.ts", "tracked.txt"]);
-  writeFileSync(join(root, "back\\slash"), "x");
-  assert.throws(
-    () => listWorkingTree(root, ".pmvcs", noRules),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "path_outside_repo",
-  );
+  if (sep !== "\\") {
+    writeFileSync(join(root, "back\\slash"), "x");
+    assert.deepEqual(listWorkingTree(root, ".pmvcs", noRules), ["back\\slash", "src/a.ts", "tracked.txt"]);
+  }
 });
 
 test("readWorkingFile reads a regular file and reports its executable bit", () => {

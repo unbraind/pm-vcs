@@ -25,13 +25,13 @@ import { compareByteOrder, type FileMode, type TreeEntry, readTree, writeTree } 
 import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
 
 const INDEX_HEADER = "pm-vcs-index 2";
-const RACY_WINDOW_NS = 2_000_000_000n;
+/** Conservative upper bound for one coarse filesystem timestamp tick. */
+export const RACY_WINDOW_NS = 2_000_000_000n;
 
 /** Whether a stored path is already in the canonical repository-relative form. */
 function isCanonicalRepoPath(path: string): boolean {
   return path.length > 0
     && !path.startsWith("/")
-    && !path.includes("\\")
     && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
@@ -95,13 +95,7 @@ export interface StatusReport {
  */
 export function normalizeRepoPath(root: string, candidate: string): string {
   const portableCandidate = candidate.split(sep).join("/");
-  if (portableCandidate.includes("\\")) {
-    throw new ObjectStoreError(
-      "path_outside_repo",
-      `"${candidate}" contains a backslash, which is not portable in canonical slash-separated paths.`,
-    );
-  }
-  const absolute = resolve(root, candidate);
+  const absolute = resolve(root, portableCandidate);
   const rooted = relative(root, absolute);
   if (rooted.length === 0) {
     throw new ObjectStoreError("path_outside_repo", `"${candidate}" is the repository root, not a path inside it.`);
@@ -255,12 +249,6 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
       }
       if (!entry.isFile() && !entry.isSymbolicLink()) continue;
       const path = relative(root, absolute).split(sep).join("/");
-      if (!isCanonicalRepoPath(path)) {
-        throw new ObjectStoreError(
-          "path_outside_repo",
-          `Working-tree path "${path}" cannot be represented as a canonical slash-separated path.`,
-        );
-      }
       if (!isIgnored(path, rules)) found.push(path);
     }
   };

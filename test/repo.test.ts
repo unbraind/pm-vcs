@@ -7,7 +7,7 @@ import { type ObjectId, ObjectStoreError } from "../engine/objects.ts";
 import { CONTROL_DIRECTORY, type MergeReport, REPOSITORY_FORMAT, Repository } from "../engine/repo.ts";
 import { type RepositoryConfig } from "../engine/config.ts";
 import { type Commit, type Signature, writeCommit } from "../engine/model.ts";
-import { buildTree } from "../engine/worktree.ts";
+import { buildTree, RACY_WINDOW_NS } from "../engine/worktree.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 let dir: { root: string; cleanup(): void } | null = null;
@@ -271,9 +271,9 @@ test("stage skips content work for a stable cached index entry", () => {
   const cached = repo.readIndex()[0];
   assert.ok(cached?.stat);
   const newest = cached.stat.ctimeNs > cached.stat.mtimeNs ? cached.stat.ctimeNs : cached.stat.mtimeNs;
-  repo.writeIndex([{ ...cached, stat: { ...cached.stat, observedAtNs: newest + 2_000_000_000n } }]);
+  repo.writeIndex([{ ...cached, stat: { ...cached.stat, observedAtNs: newest + RACY_WINDOW_NS } }]);
   const actualNow = Date.now;
-  Date.now = () => actualNow() + 5_000;
+  Date.now = () => actualNow() + Number((RACY_WINDOW_NS * 2n) / 1_000_000n) + 1_000;
   try {
     assert.deepEqual(repo.stage(["stable.txt"], () => {
       throw new Error("content reader must not run for a stable cache hit");

@@ -1,10 +1,10 @@
 /**
- * Audits every author and committer email in the physical Git object database.
+ * Audits every identity email in the physical Git object database.
  *
- * `cat-file --batch-all-objects` enumerates reachable and unreachable commits,
- * including ancestors hidden behind dangling tips. Replacement refs are disabled
- * for every subprocess so the audit reads raw objects rather than their overlays.
- * One batch process then returns every commit body, avoiding a process per object.
+ * `cat-file --batch-all-objects` inventories reachable and unreachable commits
+ * and annotated tags, including objects hidden behind replacement refs. A
+ * second, streamed batch reads the raw objects without imposing a repository-
+ * wide output buffer. Replacement refs are disabled for both subprocesses.
  *
  * @example
  * ```bash
@@ -12,88 +12,164 @@
  * ```
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const defaultRepoRoot = resolve(import.meta.dirname, "..");
-const gitOutputLimit = 256 * 1024 * 1024;
 const gitEnvironment = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
+const gitTimeoutMs = 120_000;
+const identityPatterns = {
+  author: /^author .*<([^<>\n]+)> \d+ [+-]\d+$/,
+  committer: /^committer .*<([^<>\n]+)> \d+ [+-]\d+$/,
+  tagger: /^tagger .*<([^<>\n]+)> \d+ [+-]\d+$/,
+} as const;
 
-/** Runs Git and returns text output, refusing partial or replaced inventories. */
-function runGit(root: string, arguments_: readonly string[]): string {
-  const result = spawnSync("git", ["--no-replace-objects", ...arguments_], {
-    cwd: root,
-    encoding: "utf8",
-    env: gitEnvironment,
-    maxBuffer: gitOutputLimit,
-  });
-  if (result.status !== 0) {
-    const detail = result.error?.message ?? result.stderr?.trim() ?? "";
-    throw new Error(`git ${arguments_.join(" ")} failed${detail.length > 0 ? `: ${detail}` : "."}`);
-  }
-  return result.stdout ?? "";
+interface GitObject {
+  readonly id: string;
+  readonly type: "commit" | "tag";
 }
 
-/** Returns raw batch output for a newline-delimited set of object ids. */
-function readCommitBatch(root: string, objectIds: readonly string[]): Buffer {
-  const result = spawnSync("git", ["--no-replace-objects", "cat-file", "--batch"], {
-    cwd: root,
-    input: `${objectIds.join("\n")}\n`,
-    env: gitEnvironment,
-    maxBuffer: gitOutputLimit,
+/** Runs a bounded Git subprocess while its stdout is consumed incrementally. */
+async function streamGit(
+  root: string,
+  arguments_: readonly string[],
+  input: string | undefined,
+  consume: (chunk: Buffer) => void,
+): Promise<void> {
+  await new Promise<void>((resolvePromise, reject) => {
+    const child = spawn("git", ["--no-replace-objects", ...arguments_], {
+      cwd: root,
+      env: gitEnvironment,
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+    let settled = false;
+    let stderr = "";
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      reject(error);
+    };
+    const timer = setTimeout(() => {
+      fail(new Error(`git ${arguments_.join(" ")} timed out after ${gitTimeoutMs}ms.`));
+    }, gitTimeoutMs);
+    child.on("error", (error) => {
+      fail(new Error(`git ${arguments_.join(" ")} failed: ${error.message}`));
+    });
+    child.stderr!.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.stdout!.on("data", (chunk: Buffer) => {
+      try {
+        consume(chunk);
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error("git output consumer failed."));
+      }
+    });
+    child.on("close", (status, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (status !== 0) {
+        const detail = stderr.trim();
+        reject(new Error(
+          `git ${arguments_.join(" ")} failed${detail.length > 0 ? `: ${detail}` : signal ? ` with ${signal}` : "."}`,
+        ));
+        return;
+      }
+      resolvePromise();
+    });
+    if (input !== undefined) child.stdin!.end(input);
   });
-  if (result.status !== 0) {
-    const detail = result.error?.message ?? result.stderr?.toString("utf8").trim() ?? "";
-    throw new Error(`git cat-file --batch failed${detail.length > 0 ? `: ${detail}` : "."}`);
-  }
-  return result.stdout;
 }
 
-/**
- * Inventories raw commit metadata from every physical commit object.
- *
- * @param root - Git repository whose object database is audited.
- * @returns Unique author and committer email addresses.
- */
-export function collectGitIdentities(root: string): Set<string> {
-  const objectIds = runGit(root, [
+/** Inventories every physical commit and annotated-tag object. */
+async function listIdentityObjects(root: string): Promise<GitObject[]> {
+  const objects: GitObject[] = [];
+  let pending = "";
+  await streamGit(root, [
     "cat-file",
     "--batch-all-objects",
     "--batch-check=%(objectname) %(objecttype)",
-  ])
-    .split("\n")
-    .flatMap((line) => {
-      const match = /^([0-9a-f]+) commit$/.exec(line);
-      return match ? [match[1]!] : [];
-    });
-  if (objectIds.length === 0) return new Set();
-  const batch = readCommitBatch(root, objectIds);
-  const addresses = new Set<string>();
-  let offset = 0;
-  for (const expectedId of objectIds) {
-    const headerEnd = batch.indexOf(0x0a, offset);
-    if (headerEnd < 0) throw new Error("git cat-file returned a truncated batch header.");
-    const header = batch.subarray(offset, headerEnd).toString("utf8");
-    const match = /^([0-9a-f]+) commit (\d+)$/.exec(header);
-    if (!match || match[1] !== expectedId) throw new Error(`git cat-file returned an invalid header for ${expectedId}.`);
-    const size = Number.parseInt(match[2]!, 10);
-    const contentStart = headerEnd + 1;
-    const contentEnd = contentStart + size;
-    if (!Number.isSafeInteger(size) || contentEnd >= batch.length) {
-      throw new Error(`git cat-file returned truncated content for ${expectedId}.`);
+  ], undefined, (chunk) => {
+    pending += chunk.toString("utf8");
+    const lines = pending.split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      const match = /^([0-9a-f]+) (commit|tag)$/.exec(line);
+      if (match) objects.push({ id: match[1]!, type: match[2] as GitObject["type"] });
     }
-    const commit = batch.subarray(contentStart, contentEnd).toString("utf8");
-    for (const field of ["author", "committer"] as const) {
-      const identity = new RegExp(`^${field} .*<([^<>\\n]+)> \\d+ [+-]\\d+$`, "m").exec(commit);
-      if (!identity) throw new Error(`Commit ${expectedId} has no well-formed ${field} identity.`);
-      addresses.add(identity[1]!);
-    }
-    if (batch[contentEnd] !== 0x0a) throw new Error(`git cat-file omitted the separator for ${expectedId}.`);
-    offset = contentEnd + 1;
+  });
+  if (pending.length > 0) throw new Error("git cat-file returned a truncated object inventory.");
+  return objects;
+}
+
+/** Extracts exactly one required identity from an object's header block. */
+function collectIdentity(
+  addresses: Set<string>,
+  object: GitObject,
+  header: string,
+  field: keyof typeof identityPatterns,
+): void {
+  const matches = header.split("\n").flatMap((line) => {
+    const match = identityPatterns[field].exec(line);
+    return match ? [match[1]!] : [];
+  });
+  if (matches.length !== 1) {
+    throw new Error(`${object.type === "commit" ? "Commit" : "Tag"} ${object.id} must have exactly one well-formed ${field} identity.`);
   }
-  if (offset !== batch.length) throw new Error("git cat-file returned unrequested trailing data.");
+  addresses.add(matches[0]!);
+}
+
+/**
+ * Inventories raw identity metadata from every physical commit and tag object.
+ *
+ * @param root - Git repository whose object database is audited.
+ * @returns Unique author, committer, and tagger email addresses.
+ */
+export async function collectGitIdentities(root: string): Promise<Set<string>> {
+  const objects = await listIdentityObjects(root);
+  if (objects.length === 0) return new Set();
+  const addresses = new Set<string>();
+  let pending: Buffer = Buffer.alloc(0);
+  let position = 0;
+  let expectedSize: number | undefined;
+  await streamGit(root, ["cat-file", "--batch"], `${objects.map((object) => object.id).join("\n")}\n`, (chunk) => {
+    pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+    while (position < objects.length) {
+      const object = objects[position]!;
+      if (expectedSize === undefined) {
+        const headerEnd = pending.indexOf(0x0a);
+        if (headerEnd < 0) return;
+        const match = /^([0-9a-f]+) (commit|tag) (\d+)$/.exec(pending.subarray(0, headerEnd).toString("utf8"));
+        if (!match || match[1] !== object.id || match[2] !== object.type) {
+          throw new Error(`git cat-file returned an invalid header for ${object.id}.`);
+        }
+        expectedSize = Number.parseInt(match[3]!, 10);
+        if (!Number.isSafeInteger(expectedSize)) throw new Error(`git cat-file returned an invalid size for ${object.id}.`);
+        pending = pending.subarray(headerEnd + 1);
+      }
+      if (pending.length <= expectedSize) return;
+      if (pending[expectedSize] !== 0x0a) throw new Error(`git cat-file omitted the separator for ${object.id}.`);
+      const raw = pending.subarray(0, expectedSize).toString("utf8");
+      const header = raw.split("\n\n", 1)[0]!;
+      if (object.type === "commit") {
+        collectIdentity(addresses, object, header, "author");
+        collectIdentity(addresses, object, header, "committer");
+      } else {
+        collectIdentity(addresses, object, header, "tagger");
+      }
+      pending = pending.subarray(expectedSize + 1);
+      expectedSize = undefined;
+      position += 1;
+    }
+  });
+  if (position !== objects.length || expectedSize !== undefined || pending.length !== 0) {
+    throw new Error("git cat-file returned truncated or unrequested batch data.");
+  }
   return addresses;
 }
 
@@ -103,14 +179,14 @@ export function collectGitIdentities(root: string): Set<string> {
  * @param root - Git repository to audit.
  * @param allowlistPath - Text file containing one approved address per line.
  */
-export function auditGitIdentities(root: string, allowlistPath: string): void {
+export async function auditGitIdentities(root: string, allowlistPath: string): Promise<void> {
   const approved = new Set(
     readFileSync(allowlistPath, "utf8")
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.length > 0 && !line.startsWith("#")),
   );
-  const addresses = collectGitIdentities(root);
+  const addresses = await collectGitIdentities(root);
   const rejected = [...addresses].filter((address) => !approved.has(address));
   if (rejected.length > 0) throw new Error(`git identity audit rejected ${rejected.length} non-public address(es).`);
   console.log(`git identity audit approved ${addresses.size} unique address(es).`);
@@ -118,7 +194,7 @@ export function auditGitIdentities(root: string, allowlistPath: string): void {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
-    auditGitIdentities(defaultRepoRoot, resolve(defaultRepoRoot, ".github/approved-git-identities.txt"));
+    await auditGitIdentities(defaultRepoRoot, resolve(defaultRepoRoot, ".github/approved-git-identities.txt"));
   } catch (error) {
     console.error(error instanceof Error ? error.message : "git identity audit failed.");
     process.exitCode = 1;

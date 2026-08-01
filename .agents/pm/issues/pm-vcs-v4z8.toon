@@ -6,7 +6,7 @@ status: open
 priority: 2
 tags[4]: concurrency,performance,review-followup,stat-cache
 created_at: "2026-08-01T04:50:06.115Z"
-updated_at: "2026-08-01T05:25:22.218Z"
+updated_at: "2026-08-01T05:56:43.755Z"
 author: codex
 estimated_minutes: 240
 acceptance_criteria: "After restore or switch, an aged unchanged file reaches metadata-only status without explicit add; a concurrent write at every materialization and refresh boundary is detected; index updates use compare-and-swap or locking so status cannot overwrite a concurrent stage; installed-CLI strace acceptance proves content reads stop; full coverage remains 100/100/100"
@@ -15,8 +15,9 @@ severity: medium
 expected_result: Materialized files safely warm the stat cache and later status calls avoid content reads.
 actual_result: Correctness-first materialization currently omits stat metadata because an unverified post-write stat can hide a concurrent edit.
 component: engine/worktree
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-08-01T05:25:22.200Z",codex,"Cubic reiterated the post-materialization performance gap on the latest head. It remains intentionally open: the current PR removes unsafe metadata to prevent a concurrent false-clean; this item owns the correctness-safe verified warm-up with index CAS or locking."
+  "2026-08-01T05:56:43.716Z",codex,"Cubic again proposed warming cache metadata after materialization. This remains intentionally deferred: attaching an expected object id to a post-write stat without verifying the bytes can hide a concurrent replacement. The accepted PR keeps correctness first; this item requires a verified refresh plus index compare-and-swap or locking before enabling metadata-only status after switch, merge, or undo."
 files[2]{path,scope,note}:
   engine/worktree.ts,project,materialization and cache identity boundary
   engine/repo.ts,project,status and index update ownership
