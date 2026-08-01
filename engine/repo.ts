@@ -28,6 +28,7 @@ import {
   writeCommit,
 } from "./model.ts";
 import { type ObjectId, ObjectStore, ObjectStoreError, hashObject, isObjectId } from "./objects.ts";
+import type { StoredObject } from "./objects.ts";
 import {
   type ConflictLabels,
   isAncestor,
@@ -60,6 +61,7 @@ import {
 } from "./worktree.ts";
 import { splitLines, unifiedDiff } from "./diff.ts";
 import { type IgnoreRules, isIgnored, readIgnoreRules } from "./ignore.ts";
+import { parseWorkingRecord, renderWorkingRecord } from "./record-format.ts";
 import {
   type HeadSnapshot,
   type MergeConflict,
@@ -306,7 +308,7 @@ export class Repository {
    */
   private stageContent(path: string, content: Buffer): ObjectId {
     if (!isRecordPath(path, this.config)) return this.objects.write("blob", content);
-    return this.objects.write("record", encodeRecord(decodeRecord(content)));
+    return this.objects.write("record", encodeRecord(parseWorkingRecord(path, content)));
   }
 
   /**
@@ -337,10 +339,33 @@ export class Repository {
       this.ignoreRules(),
       (path, content) => (
         isRecordPath(path, this.config)
-          ? hashObject("record", encodeRecord(decodeRecord(content)))
+          ? hashObject("record", encodeRecord(parseWorkingRecord(path, content)))
           : hashObject("blob", content)
       ),
     );
+  }
+
+  /**
+   * Converts one stored object to the bytes its working-tree path promises.
+   *
+   * @param path - Canonical repository-relative path.
+   * @param object - Stored object at that path.
+   * @returns Native PM TOON for item records, or the object's raw bytes otherwise.
+   */
+  private workingContent(path: string, object: StoredObject): Buffer {
+    return object.type === "record" ? renderWorkingRecord(path, decodeRecord(object.payload)) : object.payload;
+  }
+
+  /** Materializes a tree with record-aware working-tree serialization. */
+  private materialize(tree: ObjectId | null): void {
+    this.writeIndex(materializeTree(
+      this.objects,
+      this.root,
+      tree,
+      CONTROL_DIRECTORY,
+      this.ignoreRules(),
+      (path, object) => this.workingContent(path, object),
+    ));
   }
 
   /**
@@ -547,7 +572,7 @@ export class Repository {
     const rawBefore = this.refs.rawHead();
     if (exists) this.refs.setHeadToRef(branchRef);
     else this.refs.setHeadDetached(target);
-    this.writeIndex(materializeTree(this.objects, this.root, targetTree, CONTROL_DIRECTORY, this.ignoreRules()));
+    this.materialize(targetTree);
     this.operations.append(
       "switch",
       `Switched from ${beforeTarget} to ${exists ? revision : target.slice(0, 12)}.`,
@@ -684,7 +709,7 @@ export class Repository {
       // cannot happen. Object writes before the ref update are harmless: they are
       // content-addressed and simply unreferenced if the update fails.
       this.advanceHead(head, ours, theirs, "merge", `Fast-forwarded to ${theirs.slice(0, 12)}.`, now);
-      this.writeIndex(materializeTree(this.objects, this.root, tree, CONTROL_DIRECTORY, this.ignoreRules()));
+      this.materialize(tree);
       return { kind: "fast_forward", head: theirs, bases: [ours], merged: [], conflicts: [], clean: true };
     }
 
@@ -713,7 +738,7 @@ export class Repository {
     const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
     // Ref before working tree, as in the fast-forward above and for the same reason.
     this.advanceHead(head, ours, id, "merge", `Merged ${revision} as ${id.slice(0, 12)}.`, now);
-    this.writeIndex(materializeTree(this.objects, this.root, tree, CONTROL_DIRECTORY, this.ignoreRules()));
+    this.materialize(tree);
     return { kind: "merged", head: id, bases, merged, conflicts, clean: conflicts.length === 0 };
   }
 
@@ -757,13 +782,7 @@ export class Repository {
   undo(sequence: number | null, now: Date): Operation {
     const operation = this.operations.undo(this.refs, sequence, now);
     const head = this.refs.resolveHead();
-    this.writeIndex(materializeTree(
-      this.objects,
-      this.root,
-      head === null ? null : readCommit(this.objects, head).tree,
-      CONTROL_DIRECTORY,
-      this.ignoreRules(),
-    ));
+    this.materialize(head === null ? null : readCommit(this.objects, head).tree);
     return operation;
   }
 
@@ -896,13 +915,7 @@ export class Repository {
     })));
     this.operations.append(plan.command, plan.summary, plan.moves, now);
     const head = this.refs.resolveHead();
-    this.writeIndex(materializeTree(
-      this.objects,
-      this.root,
-      head === null ? null : readCommit(this.objects, head).tree,
-      CONTROL_DIRECTORY,
-      this.ignoreRules(),
-    ));
+    this.materialize(head === null ? null : readCommit(this.objects, head).tree);
     return head;
   }
 
@@ -995,7 +1008,7 @@ export class Repository {
     if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to cherry-pick onto.");
     const commit = this.planned(() => planCherryPick(this.rewriteContext(committer), this.resolve(revision), ours));
     this.advanceHead(head, ours, commit, "cherry-pick", `Cherry-picked ${revision} as ${commit.slice(0, 12)}.`, now);
-    this.writeIndex(materializeTree(this.objects, this.root, readCommit(this.objects, commit).tree, CONTROL_DIRECTORY, this.ignoreRules()));
+    this.materialize(readCommit(this.objects, commit).tree);
     return commit;
   }
 
@@ -1015,7 +1028,7 @@ export class Repository {
     if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to revert onto.");
     const commit = this.planned(() => planRevert(this.rewriteContext(committer), this.resolve(revision), ours, message));
     this.advanceHead(head, ours, commit, "revert", `Reverted ${revision} as ${commit.slice(0, 12)}.`, now);
-    this.writeIndex(materializeTree(this.objects, this.root, readCommit(this.objects, commit).tree, CONTROL_DIRECTORY, this.ignoreRules()));
+    this.materialize(readCommit(this.objects, commit).tree);
     return commit;
   }
 
@@ -1053,7 +1066,7 @@ export class Repository {
       this.writeIndex(this.indexEntriesForTree(targetTree));
       return target;
     }
-    this.writeIndex(materializeTree(this.objects, this.root, targetTree, CONTROL_DIRECTORY, this.ignoreRules()));
+    this.materialize(targetTree);
     return target;
   }
 
@@ -1088,7 +1101,7 @@ export class Repository {
         rmSync(absolute, { force: true });
       } else {
         mkdirSync(dirname(absolute), { recursive: true });
-        writeFileSync(absolute, this.objects.read(entry.id).payload);
+        writeFileSync(absolute, this.workingContent(path, this.objects.read(entry.id)));
         chmodSync(absolute, entry.mode === "100755" ? 0o755 : 0o644);
         index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644" });
       }

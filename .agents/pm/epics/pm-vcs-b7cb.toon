@@ -1,14 +1,14 @@
 id: pm-vcs-b7cb
 title: "Phase 6: scale"
-description: "A loose object per blob and a full closure walk per operation are correct and simple, and they stop being adequate at a hundred thousand objects. This phase adds packed object storage, a reachability index, shallow and partial history, and garbage collection that can never remove an object the operation log still needs for undo."
+description: "Scale and lifecycle for arbitrary files: stable file identities and PM attribution; fragment and pack storage; content-defined and fixed chunking; range reads; reachability; shallow and partial history; shared sparse instances; repository links and local layers; oplog-safe garbage collection; and typed obliteration as a separate authorized operation."
 type: Epic
 status: open
 priority: 2
 tags: []
 created_at: "2026-07-31T06:28:25.736Z"
-updated_at: "2026-07-31T06:28:27.981Z"
+updated_at: "2026-08-01T19:36:37.428Z"
 author: "harness:claude-code"
-acceptance_criteria: Packed storage round-trips every object kind bit-for-bit; a reachability index answers ancestry without walking the full graph; a shallow clone can be deepened; garbage collection provably retains everything reachable from any ref or any operation-log entry
+acceptance_criteria: Stable FileIds survive moves and make PM-linked arbitrary files traceable across change IDs; Chunked binary content streams and range-reads without whole-file materialization and preserves content identity across compression; Sparse instances never silently omit merge conflicts or PM attribution and can share immutable storage safely; Links and layers preserve their committed-versus-local boundary; GC retains every ref/oplog-reachable object while authorized obliteration returns a typed state distinct from missing or corrupt content
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-tr2a,parent,"2026-07-31T06:28:27.963Z","harness:claude-code","cli:update:dep",detected
 body: ""

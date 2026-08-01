@@ -22,7 +22,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { type IgnoreRules, isIgnored, isPrunableDirectory } from "./ignore.ts";
 import { compareByteOrder, type FileMode, type TreeEntry, readTree, writeTree } from "./model.ts";
-import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
+import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError, type StoredObject } from "./objects.ts";
 
 const INDEX_HEADER = "pm-vcs-index 2";
 /** Conservative upper bound for one coarse filesystem timestamp tick. */
@@ -441,6 +441,7 @@ export function buildTree(
  * @param rules - Ignore rules. A tree entry matching one is skipped rather than
  *   written, so a commit that recorded an ignored path before the rules existed
  *   still cannot overwrite it.
+ * @param render - Converts a stored object to its path-specific working-tree bytes.
  * @returns The index entries describing what was written.
  */
 export function materializeTree(
@@ -449,6 +450,7 @@ export function materializeTree(
   treeIdentifier: ObjectId | null,
   controlDirectory: string,
   rules: IgnoreRules,
+  render: (path: string, object: StoredObject) => Buffer = (_path, object) => object.payload,
 ): IndexEntry[] {
   const target = new Map(
     [...flattenTree(store, treeIdentifier)].filter(([path]) => !isIgnored(path, rules)),
@@ -459,7 +461,7 @@ export function materializeTree(
   const entries: IndexEntry[] = [];
   for (const [path, value] of target) {
     const absolute = join(root, ...path.split("/"));
-    const content = store.read(value.id).payload;
+    const content = render(path, store.read(value.id));
     mkdirSync(dirname(absolute), { recursive: true });
     writeFileSync(absolute, content);
     // chmod in addition to the write's mode: `writeFileSync` applies `mode` only

@@ -25,6 +25,7 @@ import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
 import { type Signature, decodeCommit, decodeTree, effectiveChangeId, readCommit } from "./engine/model.ts";
 import { ObjectStoreError, type ObjectId } from "./engine/objects.ts";
 import { type Operation } from "./engine/oplog.ts";
+import { FIELD_STRATEGIES, type FieldStrategy } from "./engine/records.ts";
 import {
   CONTROL_DIRECTORY,
   DEFAULT_BRANCH,
@@ -244,22 +245,22 @@ export function registerVcsCommands(api: ExtensionApi): void {
       {
         long: "--set-field",
         value_name: "pairs",
-        description: "Comma-separated field:strategy pairs controlling how record fields merge; strategy is scalar, set or sequence",
+        description: `Comma-separated field:strategy pairs controlling how record fields merge; strategy is ${FIELD_STRATEGIES.join(", ")}`,
         value_type: "string",
       },
     ],
     run(context: CommandHandlerContext): VcsEnvelope & { repository: { root: string; branch: string; config: RepositoryConfig } } {
       const root = sourceWorkingRoot(context);
       const branch = optionalString(context.options, "branch") ?? DEFAULT_BRANCH;
-      const fields: Record<string, "scalar" | "set" | "sequence"> = {};
+      const fields: Record<string, FieldStrategy> = {};
       for (const pair of commaSeparated(context.options, "setField")) {
         const colon = pair.lastIndexOf(":");
         const strategy = colon === -1 ? "" : pair.slice(colon + 1);
-        if (strategy !== "scalar" && strategy !== "set" && strategy !== "sequence") {
+        if (!(FIELD_STRATEGIES as readonly string[]).includes(strategy)) {
           throw new VcsError(
             "invalid_option",
             `--set-field entry "${pair}" does not name a strategy.`,
-            "Use field:strategy, where strategy is scalar, set or sequence.",
+            `Use field:strategy, where strategy is ${FIELD_STRATEGIES.join(", ")}.`,
           );
         }
         const field = pair.slice(0, colon);
@@ -270,7 +271,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
             "Use field:strategy, where field is the record field the strategy applies to.",
           );
         }
-        fields[field] = strategy;
+        fields[field] = strategy as FieldStrategy;
       }
       const recordPaths = commaSeparated(context.options, "recordPath");
       const config: RepositoryConfig = recordPaths.length === 0 && Object.keys(fields).length === 0

@@ -1,0 +1,15 @@
+id: pm-vcs-8xis
+title: Design committed repository links local layers and typed obliteration
+description: "Add native repository composition and lifecycle operations: committed links pin authorized repository and revision identities, local layers overlay an instance without changing commits, and authorized obliteration produces a typed payload state distinct from garbage collection, missing data or corruption."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-08-01T19:32:34.077Z"
+updated_at: "2026-08-01T19:37:47.369Z"
+author: "harness:codex"
+estimated_minutes: 1800
+acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
+parent: pm-vcs-b7cb
+risk: high
+body: ""

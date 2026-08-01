@@ -2,25 +2,34 @@ id: pm-vcs-l8jv
 title: Documented TOON record paths fail staging because the record codec accepts JSON only
 description: "The README's primary init example configures .agents/pm/**/*.toon as first-class records, but staging a real pm-initialized tracker calls the JSON-only record decoder and aborts with record payload is not valid JSON. This prevents pm-vcs from using pm's native item format as the structured merge primitive it advertises."
 type: Issue
-status: open
+status: closed
 priority: 0
 tags[5]: "format:toon",pm-sdk,real-data,records,release-blocker
 created_at: "2026-08-01T03:59:00.345Z"
-updated_at: "2026-08-01T10:09:05.575Z"
+updated_at: "2026-08-01T20:10:29.314Z"
+closed_at: "2026-08-01T19:40:23.817Z"
+completed_at: "2026-08-01T19:40:23.817Z"
+claim_principal: codex
 author: codex
 estimated_minutes: 480
 acceptance_criteria: A real installed-CLI test stages native TOON item and history data through the registered extension; canonical TOON decoding and encoding preserve all supported pm fields; per-field merge handles concurrent PM item edits; JSON record paths remain compatible; README examples are executable.
 parent: pm-vcs-tr2a
 severity: high
 repro_steps: Initialize a fresh pm workspace; install pm-vcs; run pm vcs init with record path .agents/pm/**/*.toon; create a Task with pm; run pm vcs add.
-expected_result: Native PM TOON items stage as record objects and later merge per field without losing TOON semantics or history.
-actual_result: pm vcs add aborts with Record payload is not valid JSON.
+resolution: "Added a public-SDK TOON codec boundary, recursive canonical record values and timestamp reconciliation, then routed every staging and materialization path through it."
+expected_result: Real PM TOON items behave as first-class record objects without data loss and JSON record paths remain compatible.
+actual_result: "Installed-CLI native TOON acceptance passes; 367 real-filesystem tests pass at 100.00 percent line, branch and function coverage across all 20 source files."
 affected_version: 2026.7.30
+fixed_version: 2026.7.30-next
 component: engine/records
-notes[3]{created_at,author,text}:
+notes[7]{created_at,author,text}:
   "2026-08-01T04:44:55.760Z",codex,Cubic correctly identified that the native TOON failure is described as a release blocker but was not machine-tagged as one. Priority and tags now match the release boundary; no publishing is permitted until its installed-CLI acceptance passes.
   "2026-08-01T06:38:22.439Z",codex,"CodeRabbit correctly separated this blocker from release:check. npm run accept:native-toon initializes a disposable real PM tracker, installs this checkout through the installed pm CLI, configures the documented TOON record path, creates a real Task, and runs pm vcs add. It currently fails at the expected JSON-only record decoder and always removes the temporary project."
   "2026-08-01T10:09:05.557Z",codex,"The independent acceptance harness now invokes the installed pm CLI JavaScript entrypoint through process.execPath on every platform, preserves stdout-only diagnostics, and exposes an init-only launcher smoke for Node 22 and 26 Windows CI. The full native TOON acceptance still fails closed at the expected JSON-only record decoder under pm CLI 2026.8.1."
+  "2026-08-01T19:37:47.679Z",codex,Native PM TOON is now parsed and serialized through the public pm SDK; nested PM metadata is recursively canonicalized; timestamp fields merge by latest valid instant; JSON record paths remain compatible. Installed-CLI acceptance passes and the complete suite exercises real repositories without mocks.
+  "2026-08-01T19:56:29.938Z",codex,"CodeRabbit exact-head review was fully addressed: native parser diagnostics are preserved; timestamp tie behavior and shipped rewrite state are documented consistently; command examples pass markdown lint; complete coverage remains 100/100/100."
+  "2026-08-01T20:02:45.771Z",codex,"CodeRabbit review summary exposed an outside-diff hostile-bundle recursion risk. Record decoding now refuses metadata beyond 32 recursive containers with ObjectStoreError rather than allowing a stack overflow; a direct malformed-object regression is included. Final local gate: 368 tests,100.00 percent lines,branches and functions."
+  "2026-08-01T20:10:29.294Z","harness:codex","Exact-head CodeRabbit follow-up found an off-by-one in the recursive record guard. Defined the boundary as 32 nested value containers excluding the root record object; scalar leaves at depth 32 remain valid, the 32nd container is accepted, and a 33rd is rejected. Added explicit boundary acceptance/rejection coverage. Full coverage gate: 368/368 tests; 100% lines, branches, and functions across all 20 source files."
 files[3]{path,scope,note}:
   engine/model.ts,project,record codec boundary
   README.md,project,documented TOON example
@@ -37,4 +46,5 @@ tests[3]:
   - command: "npm run release:check"
     scope: project
     timeout_seconds: 2400
+close_reason: "Native PM TOON records now stage, canonicalize, merge, materialize and verify through the public pm SDK with JSON compatibility retained."
 body: ""

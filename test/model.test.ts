@@ -224,14 +224,15 @@ test("decodeCommit rejects a malformed signature", () => {
 });
 
 test("encodeRecord sorts keys so two routes to one document produce one id", () => {
-  const oneWay: RecordDocument = { z: 1, a: "two", m: [1, 2, 3] };
-  const otherWay: RecordDocument = { a: "two", m: [1, 2, 3], z: 1 };
+  const oneWay: RecordDocument = { z: 1, a: "two", m: [1, 2, 3], nested: { z: true, a: "first" } };
+  const otherWay: RecordDocument = { nested: { a: "first", z: true }, a: "two", m: [1, 2, 3], z: 1 };
   // Canonical encoding means identical documents serialise identically.
   assert.deepEqual(encodeRecord(oneWay), encodeRecord(otherWay));
 
   const decoded = decodeRecord(encodeRecord(oneWay));
   assert.equal(decoded.a, "two");
   assert.deepEqual(decoded.m, [1, 2, 3]);
+  assert.deepEqual(decoded.nested, { a: "first", z: true });
 });
 
 test("decodeRecord rejects non-object payloads", () => {
@@ -249,6 +250,18 @@ test("decodeRecord rejects non-object payloads", () => {
   assert.throws(
     () => decodeRecord(Buffer.from("null", "utf8")),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object",
+  );
+});
+
+test("decodeRecord bounds recursive metadata from untrusted objects", () => {
+  const maximum = `${'{"next":'.repeat(32)}null${"}".repeat(32)}`;
+  const excessive = `${'{"next":'.repeat(33)}null${"}".repeat(33)}`;
+  assert.doesNotThrow(() => decodeRecord(Buffer.from(`{"metadata":${maximum}}`, "utf8")));
+  assert.throws(
+    () => decodeRecord(Buffer.from(`{"metadata":${excessive}}`, "utf8")),
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "malformed_object"
+      && error.message.includes("exceeds the maximum nesting depth"),
   );
 });
 

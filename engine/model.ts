@@ -80,12 +80,39 @@ export interface Commit {
   readonly message: string;
 }
 
-/** A field value a record can hold. */
-export type RecordValue = string | number | boolean | null | readonly RecordValue[];
+/** A field value a record can hold, including recursively structured PM metadata. */
+export type RecordValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly RecordValue[]
+  | { readonly [field: string]: RecordValue };
 
 /** A structured document stored as named fields. */
 export interface RecordDocument {
   readonly [field: string]: RecordValue;
+}
+
+/** Maximum nested value containers, excluding the root record object. */
+const MAX_RECORD_DEPTH = 32;
+
+/**
+ * Serializes one record value with object keys in canonical byte order.
+ *
+ * @param value - Recursively structured record value.
+ * @returns Stable JSON whose bytes depend only on the value, not insertion order.
+ */
+export function canonicalRecordValue(value: RecordValue): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalRecordValue).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const objectValue = value as Readonly<Record<string, RecordValue>>;
+    return `{${Object.keys(objectValue)
+      .sort(compareByteOrder)
+      .map((field) => `${JSON.stringify(field)}:${canonicalRecordValue(objectValue[field]!)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /**
@@ -411,7 +438,7 @@ export function decodeCommit(payload: Buffer): Commit {
  */
 export function encodeRecord(document: RecordDocument): Buffer {
   const fields = Object.keys(document).sort(compareByteOrder);
-  const body = fields.map((field) => `${JSON.stringify(field)}:${JSON.stringify(document[field])}`);
+  const body = fields.map((field) => `${JSON.stringify(field)}:${canonicalRecordValue(document[field]!)}`);
   return Buffer.from(`{${body.join(",")}}`, "utf8");
 }
 
@@ -437,7 +464,7 @@ export function decodeRecord(payload: Buffer): RecordDocument {
   // tampered bundle put a nested object or a non-finite number into a document whose
   // type says neither can occur, and the first thing to notice would be the record
   // merge, arbitrarily later and with no way to attribute it.
-  const assertValue = (value: unknown, path: string): void => {
+  const assertValue = (value: unknown, path: string, depth = 0): void => {
     if (value === null || typeof value === "string" || typeof value === "boolean") return;
     if (typeof value === "number") {
       if (!Number.isFinite(value)) {
@@ -445,11 +472,23 @@ export function decodeRecord(payload: Buffer): RecordDocument {
       }
       return;
     }
+    // `depth` is the number of value containers outside this value. The root
+    // record object is not counted, so a container at depth 31 is the 32nd and
+    // remains valid, while another container at depth 32 is rejected. Scalar
+    // leaves at depth 32 are valid because they add no container of their own.
+    if (depth >= MAX_RECORD_DEPTH) {
+      throw new ObjectStoreError("malformed_object", `Record field ${path} exceeds the maximum nesting depth.`);
+    }
     if (Array.isArray(value)) {
-      value.forEach((member, index) => assertValue(member, `${path}[${index}]`));
+      value.forEach((member, index) => assertValue(member, `${path}[${index}]`, depth + 1));
       return;
     }
-    throw new ObjectStoreError("malformed_object", `Record field ${path} holds a value a record cannot carry.`);
+    // JSON.parse cannot produce undefined, bigint, symbol or functions. After
+    // the scalar and array cases above, the only remaining JSON value is an
+    // object, so recurse without retaining an unreachable defensive branch.
+    for (const [field, member] of Object.entries(value as Readonly<Record<string, unknown>>)) {
+      assertValue(member, `${path}.${field}`, depth + 1);
+    }
   };
   for (const [field, value] of Object.entries(parsed)) assertValue(value, field);
   return parsed as RecordDocument;

@@ -11,16 +11,13 @@
 // values can conflict, and it conflicts alone rather than taking the document
 // with it.
 
-import { compareByteOrder, type RecordDocument, type RecordValue } from "./model.ts";
+import { canonicalRecordValue, compareByteOrder, type RecordDocument, type RecordValue } from "./model.ts";
+
+/** Supported per-field reconciliation strategies. */
+export const FIELD_STRATEGIES = ["scalar", "set", "sequence", "timestamp"] as const;
 
 /** How a field's concurrent edits are reconciled. */
-export type FieldStrategy =
-  /** Last-writer-wins is unsafe, so a genuine disagreement conflicts. */
-  | "scalar"
-  /** Unordered: both sides' members survive, duplicates collapse. */
-  | "set"
-  /** Append-only: both sides' additions survive in a deterministic order. */
-  | "sequence";
+export type FieldStrategy = (typeof FIELD_STRATEGIES)[number];
 
 /** Per-field strategies, with a fallback for fields not named. */
 export interface MergePolicy {
@@ -70,7 +67,7 @@ export interface RecordMergeResult {
  * @returns A string that is equal exactly when the values are equal.
  */
 function canonical(value: RecordValue | undefined): string {
-  return value === undefined ? "\0absent" : JSON.stringify(value);
+  return value === undefined ? "\0absent" : canonicalRecordValue(value);
 }
 
 /**
@@ -122,7 +119,7 @@ function unionMembers(
   theirs: readonly RecordValue[],
   sorted: boolean,
 ): RecordValue[] {
-  const keyOf = (value: RecordValue): string => JSON.stringify(value);
+  const keyOf = (value: RecordValue): string => canonicalRecordValue(value);
   const ourKeys = new Set(ours.map(keyOf));
   const theirKeys = new Set(theirs.map(keyOf));
   const result: RecordValue[] = [];
@@ -195,6 +192,17 @@ export function mergeRecords(
       if (strategy === "scalar") {
         conflicts.push({ field, base: baseValue, ours: ourValue, theirs: theirValue });
         resolved = ourValue;
+      } else if (strategy === "timestamp") {
+        const ourTime = typeof ourValue === "string" ? Date.parse(ourValue) : Number.NaN;
+        const theirTime = typeof theirValue === "string" ? Date.parse(theirValue) : Number.NaN;
+        if (Number.isFinite(ourTime) && Number.isFinite(theirTime)) {
+          resolved = ourTime === theirTime
+            ? (compareByteOrder(ourValue as string, theirValue as string) >= 0 ? ourValue : theirValue)
+            : (ourTime > theirTime ? ourValue : theirValue);
+        } else {
+          conflicts.push({ field, base: baseValue, ours: ourValue, theirs: theirValue });
+          resolved = ourValue;
+        }
       } else {
         resolved = unionMembers(
           asMembers(baseValue),

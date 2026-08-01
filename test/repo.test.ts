@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
+import { parseItemDocument, serializeItemDocument, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
 import { type ObjectId, ObjectStoreError } from "../engine/objects.ts";
 import { CONTROL_DIRECTORY, type MergeReport, REPOSITORY_FORMAT, Repository } from "../engine/repo.ts";
@@ -533,6 +534,63 @@ test("merge resolves record fields independently when record paths are configure
   assert.deepEqual(merged.tags, ["a", "b"].sort());
 });
 
+test("native PM TOON items stage, materialize and merge per field", () => {
+  const config: RepositoryConfig = {
+    recordPaths: [".agents/pm/**/*.toon"],
+    recordPolicy: { fields: { tags: "set", notes: "sequence", updated_at: "timestamp" } },
+  };
+  const { root } = freshDir();
+  const itemPath = join(root, ".agents", "pm", "tasks", "native-1.toon");
+  mkdirSync(dirname(itemPath), { recursive: true });
+  const repo = Repository.init(root, "main", config);
+  const base: ItemDocument = {
+    metadata: {
+      id: "native-1",
+      title: "Native item",
+      description: "A real PM document",
+      type: "Task",
+      status: "open",
+      priority: 2,
+      tags: ["base"],
+      created_at: "2026-08-01T00:00:00.000Z",
+      updated_at: "2026-08-01T00:00:00.000Z",
+      author: "acceptance",
+    },
+    body: "Base body\n",
+  };
+  const write = (document: ItemDocument): void => {
+    writeFileSync(itemPath, serializeItemDocument(document, { format: "toon" }));
+  };
+
+  write(base);
+  repo.stage([".agents/pm/tasks/native-1.toon"]);
+  repo.commit({ message: "base\n", author }, new Date(0));
+  repo.createBranch("feature", "HEAD", new Date(1));
+  repo.switchTo("feature", new Date(2));
+  write({
+    ...base,
+    metadata: { ...base.metadata, tags: ["base", "feature"], updated_at: "2026-08-01T01:00:00.000Z" },
+  });
+  repo.stage([".agents/pm/tasks/native-1.toon"]);
+  repo.commit({ message: "feature\n", author }, new Date(3));
+  repo.switchTo("main", new Date(4));
+  write({
+    ...base,
+    metadata: { ...base.metadata, priority: 1, updated_at: "2026-08-01T02:00:00.000Z" },
+  });
+  repo.stage([".agents/pm/tasks/native-1.toon"]);
+  repo.commit({ message: "main\n", author }, new Date(5));
+
+  const report = repo.merge("feature", { message: "merge\n", author }, new Date(6));
+  assert.equal(report.clean, true, JSON.stringify(report.conflicts));
+  const merged = parseItemDocument(readFileSync(itemPath, "utf8"), { format: "toon" });
+  assert.equal(merged.metadata.priority, 1);
+  assert.deepEqual(merged.metadata.tags, ["base", "feature"]);
+  assert.equal(merged.metadata.updated_at, "2026-08-01T02:00:00.000Z");
+  assert.equal(merged.body, "Base body");
+  assert.equal(repo.status().clean, true);
+});
+
 test("merge conflicts on a single record field while others still merge", () => {
   const config: RepositoryConfig = { recordPaths: ["item.toon"], recordPolicy: { fields: { priority: "scalar" } } };
   const { root } = freshDir();
@@ -570,7 +628,9 @@ test("staging a non-JSON file at a configured record path is refused", () => {
   writeFileSync(join(root, "item.toon"), "this is not json");
   assert.throws(
     () => repo.stage(["item.toon"]),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object",
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "malformed_object"
+      && error.message.includes("Native TOON parser: Invalid item metadata"),
   );
 });
 

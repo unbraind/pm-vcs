@@ -41,7 +41,11 @@ try {
     console.log("native TOON acceptance launcher passed");
   } else {
     run(["install", packageRoot, "--project"]);
-    run(["vcs", "init", "--record-path", ".agents/pm/**/*.toon", "--set-field", "tags:set,history:sequence"]);
+    run([
+      "vcs", "init",
+      "--record-path", ".agents/pm/**/*.toon",
+      "--set-field", "tags:set,notes:sequence,updated_at:timestamp",
+    ]);
     run(["create", "Task", "Native TOON acceptance", "--author", "acceptance"]);
     run(["vcs", "add"]);
     console.log("native TOON acceptance passed");
