@@ -28,11 +28,29 @@ const INDEX_HEADER = "pm-vcs-index 2";
 /** Conservative upper bound for one coarse filesystem timestamp tick. */
 export const RACY_WINDOW_NS = 2_000_000_000n;
 
-/** Whether a stored path is already in the canonical repository-relative form. */
-function isCanonicalRepoPath(path: string): boolean {
+/**
+ * Whether a stored path is already in canonical repository-relative form.
+ *
+ * @param path - Stored slash-separated path.
+ * @param nativeSeparator - Host path separator; injectable for cross-platform safety tests.
+ */
+export function isCanonicalRepoPath(path: string, nativeSeparator: string = sep): boolean {
   return path.length > 0
     && !path.startsWith("/")
+    && !path.includes("\0")
+    && (nativeSeparator !== "\\" || !path.includes("\\"))
     && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+/** Refuses an index whose one-path/one-entry invariant is ambiguous. */
+function assertUniqueIndexPaths(entries: readonly IndexEntry[]): void {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry.path)) {
+      throw new ObjectStoreError("corrupt_index", `Index contains duplicate path "${entry.path}".`);
+    }
+    seen.add(entry.path);
+  }
 }
 
 /** Filesystem identity recorded with an index entry to avoid re-reading unchanged content. */
@@ -103,7 +121,11 @@ export function normalizeRepoPath(root: string, candidate: string): string {
   if (rooted === ".." || rooted.startsWith(`..${sep}`)) {
     throw new ObjectStoreError("path_outside_repo", `"${candidate}" resolves outside the repository.`);
   }
-  return rooted.split(sep).join("/");
+  const normalized = rooted.split(sep).join("/");
+  if (!isCanonicalRepoPath(normalized)) {
+    throw new ObjectStoreError("path_outside_repo", `"${candidate}" cannot be represented as a canonical path.`);
+  }
+  return normalized;
 }
 
 /**
@@ -117,6 +139,7 @@ export function normalizeRepoPath(root: string, candidate: string): string {
  * @returns The index file's contents.
  */
 export function encodeIndex(entries: readonly IndexEntry[]): string {
+  assertUniqueIndexPaths(entries);
   const lines = [...entries]
     .sort((left, right) => compareByteOrder(left.path, right.path))
     .map((entry) => {
@@ -204,6 +227,7 @@ export function decodeIndex(contents: string): IndexEntry[] {
         },
       });
     }
+    assertUniqueIndexPaths(entries);
     return entries;
   }
   const entries: IndexEntry[] = [];
@@ -218,6 +242,7 @@ export function decodeIndex(contents: string): IndexEntry[] {
     }
     entries.push({ mode: match[1] as IndexEntry["mode"], id: match[2], path: match[3] });
   }
+  assertUniqueIndexPaths(entries);
   return entries;
 }
 

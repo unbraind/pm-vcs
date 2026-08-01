@@ -20,10 +20,11 @@ import { pathToFileURL } from "node:url";
 const defaultRepoRoot = resolve(import.meta.dirname, "..");
 const gitEnvironment = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
 const gitTimeoutMs = 120_000;
+const maxIdentityHeaderBytes = 1024 * 1024;
 const identityPatterns = {
-  author: /^author .*<([^<>\n]+)> \d+ [+-]\d+$/,
-  committer: /^committer .*<([^<>\n]+)> \d+ [+-]\d+$/,
-  tagger: /^tagger .*<([^<>\n]+)> \d+ [+-]\d+$/,
+  author: /^author [^<>\n]*<([^<>\n]+)> \d+ [+-]\d+$/,
+  committer: /^committer [^<>\n]*<([^<>\n]+)> \d+ [+-]\d+$/,
+  tagger: /^tagger [^<>\n]*<([^<>\n]+)> \d+ [+-]\d+$/,
 } as const;
 
 interface GitObject {
@@ -137,6 +138,9 @@ export async function collectGitIdentities(root: string): Promise<Set<string>> {
   let pending: Buffer = Buffer.alloc(0);
   let position = 0;
   let expectedSize: number | undefined;
+  let remainingObjectBytes = 0;
+  let identityHeader = Buffer.alloc(0);
+  let identityCollected = false;
   await streamGit(root, ["cat-file", "--batch"], `${objects.map((object) => object.id).join("\n")}\n`, (chunk) => {
     pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
     while (position < objects.length) {
@@ -150,20 +154,47 @@ export async function collectGitIdentities(root: string): Promise<Set<string>> {
         }
         expectedSize = Number.parseInt(match[3]!, 10);
         if (!Number.isSafeInteger(expectedSize)) throw new Error(`git cat-file returned an invalid size for ${object.id}.`);
+        remainingObjectBytes = expectedSize;
         pending = pending.subarray(headerEnd + 1);
       }
-      if (pending.length <= expectedSize) return;
-      if (pending[expectedSize] !== 0x0a) throw new Error(`git cat-file omitted the separator for ${object.id}.`);
-      const raw = pending.subarray(0, expectedSize).toString("utf8");
-      const header = raw.split("\n\n", 1)[0]!;
-      if (object.type === "commit") {
-        collectIdentity(addresses, object, header, "author");
-        collectIdentity(addresses, object, header, "committer");
-      } else {
-        collectIdentity(addresses, object, header, "tagger");
+      if (remainingObjectBytes > 0 && pending.length > 0) {
+        const consumed = Math.min(remainingObjectBytes, pending.length);
+        if (!identityCollected) {
+          identityHeader = Buffer.concat([identityHeader, pending.subarray(0, consumed)]);
+          const delimiter = identityHeader.indexOf("\n\n");
+          if (delimiter >= 0) {
+            const header = identityHeader.subarray(0, delimiter).toString("utf8");
+            if (object.type === "commit") {
+              collectIdentity(addresses, object, header, "author");
+              collectIdentity(addresses, object, header, "committer");
+            } else {
+              collectIdentity(addresses, object, header, "tagger");
+            }
+            identityHeader = Buffer.alloc(0);
+            identityCollected = true;
+          } else if (identityHeader.length > maxIdentityHeaderBytes) {
+            throw new Error(`${object.type === "commit" ? "Commit" : "Tag"} ${object.id} has an oversized identity header.`);
+          }
+        }
+        remainingObjectBytes -= consumed;
+        pending = pending.subarray(consumed);
       }
-      pending = pending.subarray(expectedSize + 1);
+      if (remainingObjectBytes > 0) return;
+      if (!identityCollected) {
+        const header = identityHeader.toString("utf8");
+        if (object.type === "commit") {
+          collectIdentity(addresses, object, header, "author");
+          collectIdentity(addresses, object, header, "committer");
+        } else {
+          collectIdentity(addresses, object, header, "tagger");
+        }
+      }
+      if (pending.length === 0) return;
+      if (pending[0] !== 0x0a) throw new Error(`git cat-file omitted the separator for ${object.id}.`);
+      pending = pending.subarray(1);
       expectedSize = undefined;
+      identityHeader = Buffer.alloc(0);
+      identityCollected = false;
       position += 1;
     }
   });

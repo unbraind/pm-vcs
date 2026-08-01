@@ -11,6 +11,7 @@ import {
   decodeIndex,
   encodeIndex,
   flattenTree,
+  isCanonicalRepoPath,
   listWorkingTree,
   materializeTree,
   normalizeRepoPath,
@@ -60,6 +61,13 @@ test("normalizeRepoPath canonicalises paths and rejects escapes", () => {
     (error: unknown) => error instanceof ObjectStoreError && error.code === "path_outside_repo",
   );
   assert.equal(normalizeRepoPath(root, "back\\slash.txt"), sep === "\\" ? "back/slash.txt" : "back\\slash.txt");
+  assert.equal(isCanonicalRepoPath("back\\slash.txt", "/"), true);
+  assert.equal(isCanonicalRepoPath("back\\slash.txt", "\\"), false);
+  assert.equal(isCanonicalRepoPath("nul\0path", "/"), false);
+  assert.throws(
+    () => normalizeRepoPath(root, "nul\0path"),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "path_outside_repo",
+  );
 });
 
 test("encodeIndex and decodeIndex round-trip cached metadata in path order", () => {
@@ -82,6 +90,10 @@ test("encodeIndex and decodeIndex round-trip cached metadata in path order", () 
   assert.deepEqual(decodeIndex(encodeIndex([backslashEntry])), [backslashEntry]);
   assert.throws(
     () => encodeIndex([{ ...backslashEntry, path: "../outside" }]),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
+  assert.throws(
+    () => encodeIndex([backslashEntry, backslashEntry]),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
 });
@@ -118,6 +130,15 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
   }
   assert.throws(
     () => decodeIndex(`100644 ${"1".repeat(64)} ../outside`),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
+  assert.throws(
+    () => decodeIndex(`100644 ${"1".repeat(64)} duplicate\n100755 ${"2".repeat(64)} duplicate`),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
+  const duplicateV2 = JSON.stringify(["100644", "1".repeat(64), "duplicate", null]);
+  assert.throws(
+    () => decodeIndex(`pm-vcs-index 2\n${duplicateV2}\n${duplicateV2}`),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
   assert.deepEqual(

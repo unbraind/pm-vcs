@@ -73,20 +73,66 @@ test("identity inventory refuses malformed commits and unusable repositories", a
   await assert.rejects(collectGitIdentities(join(root, "missing")), /git cat-file.*failed/);
 });
 
-test("identity inventory rejects message impostors and duplicate commit headers", async () => {
+test("identity inventory rejects a multi-angle commit identity", async () => {
+  const { root } = repository();
+  const tree = git(root, ["rev-parse", "HEAD^{tree}"]);
+  const timestamp = "0 +0000";
+  git(root, ["hash-object", "--literally", "-w", "-t", "commit", "--stdin"], [
+    `tree ${tree}`,
+    `author Public <private@example.test> <public@example.test> ${timestamp}`,
+    `committer Public <public@example.test> ${timestamp}`,
+    "",
+    "message",
+    "",
+  ].join("\n"));
+  await assert.rejects(collectGitIdentities(root), /exactly one well-formed author identity/);
+});
+
+test("identity inventory rejects duplicate commit identity headers", async () => {
   const { root } = repository();
   const tree = git(root, ["rev-parse", "HEAD^{tree}"]);
   const timestamp = "0 +0000";
   git(root, ["hash-object", "--literally", "-w", "-t", "commit", "--stdin"], [
     `tree ${tree}`,
     `author Public <public@example.test> ${timestamp}`,
-    `author Private <private@example.test> ${timestamp}`,
+    `author Duplicate <public@example.test> ${timestamp}`,
     `committer Public <public@example.test> ${timestamp}`,
     "",
-    `committer Impostor <message@example.test> ${timestamp}`,
+    "message",
     "",
   ].join("\n"));
   await assert.rejects(collectGitIdentities(root), /exactly one well-formed author identity/);
+});
+
+test("identity inventory ignores identity-shaped commit message lines", async () => {
+  const { root } = repository();
+  const tree = git(root, ["rev-parse", "HEAD^{tree}"]);
+  const timestamp = "0 +0000";
+  git(root, ["hash-object", "--literally", "-w", "-t", "commit", "--stdin"], [
+    `tree ${tree}`,
+    `author Public <public@example.test> ${timestamp}`,
+    `committer Public <public@example.test> ${timestamp}`,
+    "",
+    `author Impostor <message@example.test> ${timestamp}`,
+    `committer Impostor <message@example.test> ${timestamp}`,
+    "",
+  ].join("\n"));
+  assert.deepEqual(await collectGitIdentities(root), new Set(["public@example.test"]));
+});
+
+test("identity inventory streams a large commit message after parsing its header", async () => {
+  const { root } = repository();
+  const tree = git(root, ["rev-parse", "HEAD^{tree}"]);
+  const timestamp = "0 +0000";
+  git(root, ["hash-object", "--literally", "-w", "-t", "commit", "--stdin"], [
+    `tree ${tree}`,
+    `author Public <public@example.test> ${timestamp}`,
+    `committer Public <public@example.test> ${timestamp}`,
+    "",
+    "x".repeat(2 * 1024 * 1024),
+    "",
+  ].join("\n"));
+  assert.deepEqual(await collectGitIdentities(root), new Set(["public@example.test"]));
 });
 
 test("identity inventory includes annotated taggers", async () => {
