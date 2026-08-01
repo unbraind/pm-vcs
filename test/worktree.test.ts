@@ -77,17 +77,18 @@ test("encodeIndex and decodeIndex round-trip cached metadata in path order", () 
       path: "z.txt",
       id: "1".repeat(64),
       mode: "100644",
+      fileId: "a".repeat(32),
       stat: { size: 3n, mtimeNs: -4n, ctimeNs: -5n, dev: 6n, ino: 7n, observedAtNs: 1_000_000_005n },
     },
-    { path: "a.txt", id: "2".repeat(64), mode: "100755" },
+    { path: "a.txt", id: "2".repeat(64), mode: "100755", fileId: "b".repeat(32), copiedFrom: "c".repeat(32) },
   ];
   const encoded = encodeIndex(entries);
-  assert.equal(encoded.split("\n")[0], "pm-vcs-index 2");
+  assert.equal(encoded.split("\n")[0], "pm-vcs-index 3");
   // Sorted by path: a.txt (mode 100755, id 2s) before z.txt (mode 100644, id 1s).
   assert.deepEqual(encoded.split("\n").slice(1).map((line) => JSON.parse(line)[2]), ["a.txt", "z.txt"]);
   assert.deepEqual(decodeIndex(encoded), [...entries].sort((l, r) => (l.path < r.path ? -1 : 1)));
   assert.deepEqual(decodeIndex(""), []);
-  const backslashEntry = { path: "back\\slash", id: "1".repeat(64), mode: "100644" as const };
+  const backslashEntry = { path: "back\\slash", id: "1".repeat(64), mode: "100644" as const, fileId: "d".repeat(32) };
   if (sep !== "\\") assert.deepEqual(decodeIndex(encodeIndex([backslashEntry])), [backslashEntry]);
   assert.throws(
     () => encodeIndex([{ ...backslashEntry, path: "../outside" }]),
@@ -105,15 +106,28 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
     [{ path: "path with spaces.txt", id: "1".repeat(64), mode: "100644" }],
   );
   assert.deepEqual(decodeIndex("pm-vcs-index 2\n"), []);
+  assert.deepEqual(
+    decodeIndex(`pm-vcs-index 3\n${JSON.stringify(["100644", "1".repeat(64), "identity-pending", null, null, null])}`),
+    [{ path: "identity-pending", id: "1".repeat(64), mode: "100644" }],
+  );
+  assert.deepEqual(
+    decodeIndex(`pm-vcs-index 3\n${JSON.stringify(["100644", "1".repeat(64), "identity-pending", null, null, ["1", "2", "3", "4", "5", "6"]])}`),
+    [{
+      path: "identity-pending",
+      id: "1".repeat(64),
+      mode: "100644",
+      stat: { size: 1n, mtimeNs: 2n, ctimeNs: 3n, dev: 4n, ino: 5n, observedAtNs: 6n },
+    }],
+  );
   assert.throws(
     () => decodeIndex("garbage line"),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
   assert.throws(
-    () => decodeIndex("pm-vcs-index 3"),
+    () => decodeIndex("pm-vcs-index 4"),
     (error: unknown) => error instanceof ObjectStoreError
       && error.code === "unsupported_index_version"
-      && /version 3/.test(error.message),
+      && /version 4/.test(error.message),
   );
   for (const line of [
     "not-json",

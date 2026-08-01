@@ -24,6 +24,7 @@
 
 import {
   type Commit,
+  type FileId,
   type FileMode,
   type Signature,
   compareByteOrder,
@@ -203,7 +204,7 @@ export function mergeTrees(
   const base = flattenTree(ctx.store, baseTree);
   const ours = flattenTree(ctx.store, ourTree);
   const theirs = flattenTree(ctx.store, theirTree);
-  const files = new Map<string, { id: ObjectId; mode: FileMode }>();
+  const files = new Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId }>();
   const merged: string[] = [];
   const conflicts: MergeConflict[] = [];
 
@@ -212,9 +213,13 @@ export function mergeTrees(
     const ourEntry = ours.get(path);
     const theirEntry = theirs.get(path);
     const ourChanged = (ourEntry?.id ?? null) !== (baseEntry?.id ?? null)
-      || (ourEntry?.mode ?? null) !== (baseEntry?.mode ?? null);
+      || (ourEntry?.mode ?? null) !== (baseEntry?.mode ?? null)
+      || ourEntry?.fileId !== baseEntry?.fileId
+      || ourEntry?.copiedFrom !== baseEntry?.copiedFrom;
     const theirChanged = (theirEntry?.id ?? null) !== (baseEntry?.id ?? null)
-      || (theirEntry?.mode ?? null) !== (baseEntry?.mode ?? null);
+      || (theirEntry?.mode ?? null) !== (baseEntry?.mode ?? null)
+      || theirEntry?.fileId !== baseEntry?.fileId
+      || theirEntry?.copiedFrom !== baseEntry?.copiedFrom;
 
     if (!theirChanged) {
       if (ourEntry) files.set(path, ourEntry);
@@ -225,7 +230,19 @@ export function mergeTrees(
       continue;
     }
     if (ourEntry?.id === theirEntry?.id && ourEntry?.mode === theirEntry?.mode) {
-      if (ourEntry) files.set(path, ourEntry);
+      if (ourEntry?.fileId !== undefined && theirEntry?.fileId !== undefined
+        && ourEntry.fileId !== theirEntry.fileId) {
+        throw new ObjectStoreError("file_identity_conflict", `Both sides bind ${path} to the same bytes with different file identities.`);
+      }
+      if (ourEntry?.copiedFrom !== undefined && theirEntry?.copiedFrom !== undefined
+        && ourEntry.copiedFrom !== theirEntry.copiedFrom) {
+        throw new ObjectStoreError("file_identity_conflict", `Both sides bind ${path} with different copy provenance.`);
+      }
+      if (ourEntry) files.set(path, {
+        ...ourEntry,
+        fileId: ourEntry.fileId ?? theirEntry?.fileId,
+        copiedFrom: ourEntry.copiedFrom ?? theirEntry?.copiedFrom,
+      });
       continue;
     }
     // Both sides changed it. A delete on one side against an edit on the other
@@ -240,10 +257,32 @@ export function mergeTrees(
       files.set(path, ourEntry);
       continue;
     }
+    if (ourEntry.fileId !== undefined && theirEntry.fileId !== undefined
+      && ourEntry.fileId !== theirEntry.fileId) {
+      throw new ObjectStoreError("file_identity_conflict", `Both sides changed ${path} as different logical files.`);
+    }
+    if (ourEntry.copiedFrom !== undefined && theirEntry.copiedFrom !== undefined
+      && ourEntry.copiedFrom !== theirEntry.copiedFrom) {
+      throw new ObjectStoreError("file_identity_conflict", `Both sides changed ${path} with different copy provenance.`);
+    }
     const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels);
-    files.set(path, { id: resolution.id, mode: ourEntry.mode });
+    files.set(path, {
+      id: resolution.id,
+      mode: ourEntry.mode,
+      fileId: ourEntry.fileId ?? theirEntry.fileId,
+      copiedFrom: ourEntry.copiedFrom ?? theirEntry.copiedFrom,
+    });
     if (resolution.conflict) conflicts.push(resolution.conflict);
     else merged.push(path);
+  }
+  const identities = new Map<string, string>();
+  for (const [path, entry] of files) {
+    if (entry.fileId === undefined) continue;
+    const previous = identities.get(entry.fileId);
+    if (previous !== undefined && previous !== path) {
+      throw new ObjectStoreError("file_identity_conflict", `Paths ${previous} and ${path} claim file identity ${entry.fileId}.`);
+    }
+    identities.set(entry.fileId, path);
   }
   return { tree: buildTree(ctx.store, files), merged, conflicts };
 }
@@ -344,6 +383,7 @@ function repointDescendant(
     author: original.author,
     committer,
     message: original.message,
+    items: original.items,
     // A descendant's content did not change; only its ancestry did. Keeping its
     // effective change id (its own when it predates change ids) is what lets log
     // speak of the same change before and after an ancestor was rewritten.
@@ -555,6 +595,7 @@ export function planDescribe(
         author: original.author,
         committer: ctx.committer,
         message,
+        items: original.items,
         // Describing a commit changes its message, not the change it records.
         changeId: effectiveChangeId(revision, original),
       });
@@ -616,6 +657,7 @@ export function planRebase(
         author: original.author,
         committer: ctx.committer,
         message: original.message,
+        items: original.items,
         changeId: effectiveChangeId(id, original),
       });
       return [replacement];
@@ -666,6 +708,7 @@ export function planSquash(
         author: parentCommit.author,
         committer: ctx.committer,
         message,
+        items: [...new Set([...(parentCommit.items ?? []), ...(revisionCommit.items ?? [])])].sort(compareByteOrder),
         changeId: effectiveChangeId(parentId, parentCommit),
       });
       return [survivor];
@@ -772,6 +815,7 @@ export function planSplit(
         author: original.author,
         committer: ctx.committer,
         message: original.message,
+        items: original.items,
         changeId: effectiveChangeId(revision, original),
       });
       const secondBase = {
@@ -780,6 +824,7 @@ export function planSplit(
         author: original.author,
         committer: ctx.committer,
         message: original.message,
+        items: original.items,
       };
       const secondId = writeCommit(store, { ...secondBase, changeId: identityWithoutChangeLine(secondBase) });
       return [firstId, secondId];
@@ -809,7 +854,14 @@ export function planCherryPick(ctx: RewriteContext, revision: ObjectId, headTarg
   const ourTree = readCommit(store, headTarget).tree;
   const { tree, conflicts } = mergeTrees(ctx, baseTree, ourTree, original.tree);
   if (conflicts.length > 0) throw new RewriteConflictError(conflicts);
-  const base = { tree, parents: [headTarget], author: original.author, committer: ctx.committer, message: original.message };
+  const base = {
+    tree,
+    parents: [headTarget],
+    author: original.author,
+    committer: ctx.committer,
+    message: original.message,
+    items: original.items,
+  };
   return writeCommit(store, { ...base, changeId: identityWithoutChangeLine(base) });
 }
 
@@ -836,6 +888,13 @@ export function planRevert(ctx: RewriteContext, revision: ObjectId, headTarget: 
   const ourTree = readCommit(store, headTarget).tree;
   const { tree, conflicts } = mergeTrees(ctx, baseTree, ourTree, theirTree);
   if (conflicts.length > 0) throw new RewriteConflictError(conflicts);
-  const base = { tree, parents: [headTarget], author: ctx.committer, committer: ctx.committer, message };
+  const base = {
+    tree,
+    parents: [headTarget],
+    author: ctx.committer,
+    committer: ctx.committer,
+    message,
+    items: original.items,
+  };
   return writeCommit(store, { ...base, changeId: identityWithoutChangeLine(base) });
 }

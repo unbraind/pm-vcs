@@ -21,10 +21,10 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { type IgnoreRules, isIgnored, isPrunableDirectory } from "./ignore.ts";
-import { compareByteOrder, type FileMode, type TreeEntry, readTree, writeTree } from "./model.ts";
+import { compareByteOrder, type FileId, type FileMode, isFileId, type TreeEntry, readTree, writeTree } from "./model.ts";
 import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError, type StoredObject } from "./objects.ts";
 
-const INDEX_HEADER = "pm-vcs-index 2";
+const INDEX_HEADER = "pm-vcs-index 3";
 /** Conservative upper bound for one coarse filesystem timestamp tick. */
 export const RACY_WINDOW_NS = 2_000_000_000n;
 
@@ -77,6 +77,10 @@ export interface IndexEntry {
   readonly id: ObjectId;
   /** Whether the staged file is executable. */
   readonly mode: Extract<FileMode, "100644" | "100755">;
+  /** Stable logical file identity, absent only in indexes written before version 3. */
+  readonly fileId?: FileId;
+  /** Source identity when this entry was created as a copy. */
+  readonly copiedFrom?: FileId;
   /** Filesystem identity observed while the staged content was read. */
   readonly stat?: IndexStat;
 }
@@ -150,6 +154,8 @@ export function encodeIndex(entries: readonly IndexEntry[]): string {
         entry.mode,
         entry.id,
         entry.path,
+        entry.fileId ?? null,
+        entry.copiedFrom ?? null,
         entry.stat === undefined
           ? null
           : [
@@ -180,10 +186,10 @@ export function decodeIndex(contents: string): IndexEntry[] {
   if (contents.length === 0) return [];
   const lines = contents.split("\n");
   if (lines[0]?.startsWith("pm-vcs-index ")) {
-    if (lines[0] !== INDEX_HEADER) {
+    if (lines[0] !== INDEX_HEADER && lines[0] !== "pm-vcs-index 2") {
       throw new ObjectStoreError(
         "unsupported_index_version",
-        `Index version ${lines[0].slice("pm-vcs-index ".length)} is newer than the supported version 2.`,
+        `Index version ${lines[0].slice("pm-vcs-index ".length)} is newer than the supported version 3.`,
       );
     }
     const entries: IndexEntry[] = [];
@@ -195,16 +201,23 @@ export function decodeIndex(contents: string): IndexEntry[] {
       } catch {
         throw new ObjectStoreError("corrupt_index", `Index line "${line}" is not valid JSON.`);
       }
-      if (!Array.isArray(value) || value.length !== 4) {
-        throw new ObjectStoreError("corrupt_index", `Index line "${line}" does not contain four fields.`);
+      const versionTwo = lines[0] === "pm-vcs-index 2";
+      if (!Array.isArray(value) || value.length !== (versionTwo ? 4 : 6)) {
+        throw new ObjectStoreError("corrupt_index", `Index line "${line}" has the wrong field count.`);
       }
-      const [mode, id, path, encodedStat] = value;
+      const [mode, id, path, encodedFileId, encodedCopiedFrom, encodedStat] = versionTwo
+        ? [value[0], value[1], value[2], null, null, value[3]]
+        : value;
       if ((mode !== "100644" && mode !== "100755") || typeof id !== "string" || !isObjectId(id)
-        || typeof path !== "string" || !isCanonicalRepoPath(path)) {
+        || typeof path !== "string" || !isCanonicalRepoPath(path)
+        || (!versionTwo && (encodedFileId !== null && (typeof encodedFileId !== "string" || !isFileId(encodedFileId))
+          || (encodedCopiedFrom !== null && (typeof encodedCopiedFrom !== "string" || !isFileId(encodedCopiedFrom)))))) {
         throw new ObjectStoreError("corrupt_index", `Index line "${line}" has an invalid mode, object id, or path.`);
       }
       if (encodedStat === null) {
-        entries.push({ mode, id, path });
+        entries.push({ mode, id, path,
+          ...(typeof encodedFileId === "string" ? { fileId: encodedFileId } : {}),
+          ...(typeof encodedCopiedFrom === "string" ? { copiedFrom: encodedCopiedFrom } : {}) });
         continue;
       }
       const statPatterns = [/^\d+$/, /^-?\d+$/, /^-?\d+$/, /^\d+$/, /^\d+$/, /^\d+$/] as const;
@@ -217,6 +230,8 @@ export function decodeIndex(contents: string): IndexEntry[] {
         mode,
         id,
         path,
+        ...(typeof encodedFileId === "string" ? { fileId: encodedFileId } : {}),
+        ...(typeof encodedCopiedFrom === "string" ? { copiedFrom: encodedCopiedFrom } : {}),
         stat: {
           size: BigInt(encodedStat[0]),
           mtimeNs: BigInt(encodedStat[1]),
@@ -375,8 +390,8 @@ export function flattenTree(
   store: ObjectStore,
   treeIdentifier: ObjectId | null,
   prefix = "",
-): Map<string, { id: ObjectId; mode: FileMode }> {
-  const flat = new Map<string, { id: ObjectId; mode: FileMode }>();
+): Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId }> {
+  const flat = new Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId }>();
   if (treeIdentifier === null) return flat;
   for (const entry of readTree(store, treeIdentifier)) {
     const path = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
@@ -384,7 +399,9 @@ export function flattenTree(
       for (const [nested, value] of flattenTree(store, entry.id, path)) flat.set(nested, value);
       continue;
     }
-    flat.set(path, { id: entry.id, mode: entry.mode });
+    flat.set(path, { id: entry.id, mode: entry.mode,
+      ...(entry.fileId === undefined ? {} : { fileId: entry.fileId }),
+      ...(entry.copiedFrom === undefined ? {} : { copiedFrom: entry.copiedFrom }) });
   }
   return flat;
 }
@@ -398,12 +415,12 @@ export function flattenTree(
  */
 export function buildTree(
   store: ObjectStore,
-  files: ReadonlyMap<string, { id: ObjectId; mode: FileMode }>,
+  files: ReadonlyMap<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId }>,
 ): ObjectId {
   // Group by first segment: names with no further segment become file entries,
   // the rest recurse into a subtree built from their remaining path.
-  const directChildren = new Map<string, { id: ObjectId; mode: FileMode }>();
-  const subdirectories = new Map<string, Map<string, { id: ObjectId; mode: FileMode }>>();
+  const directChildren = new Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId }>();
+  const subdirectories = new Map<string, Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId }>>();
   for (const [path, value] of files) {
     const slash = path.indexOf("/");
     if (slash === -1) {
@@ -417,7 +434,9 @@ export function buildTree(
     subdirectories.set(head, nested);
   }
   const entries: TreeEntry[] = [
-    ...[...directChildren].map(([name, value]) => ({ name, mode: value.mode, id: value.id })),
+    ...[...directChildren].map(([name, value]) => ({ name, mode: value.mode, id: value.id,
+      ...(value.fileId === undefined ? {} : { fileId: value.fileId }),
+      ...(value.copiedFrom === undefined ? {} : { copiedFrom: value.copiedFrom }) })),
     ...[...subdirectories].map(([name, nested]) => ({
       name,
       mode: "40000" as FileMode,
@@ -472,7 +491,13 @@ export function materializeTree(
     const mode = value.mode === "100755" ? "100755" : "100644";
     // A concurrent writer can race the write and chmod above. Do not pair the
     // expected object id with metadata from bytes that were never verified.
-    entries.push({ path, id: value.id, mode });
+    entries.push({
+      path,
+      id: value.id,
+      mode,
+      fileId: value.fileId,
+      copiedFrom: value.copiedFrom,
+    });
   }
   // Directories left empty by the removals above are pruned, so switching away
   // from a branch that introduced a directory does not leave its skeleton.

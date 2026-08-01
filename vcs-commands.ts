@@ -22,7 +22,9 @@ import {
   readBundle,
 } from "./engine/bundle.ts";
 import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
-import { type Signature, decodeCommit, decodeTree, effectiveChangeId, readCommit } from "./engine/model.ts";
+import { resolveFileId, traceFile, type FileChangeTrace } from "./engine/attribution.ts";
+import { reachable } from "./engine/merge.ts";
+import { type Signature, compareByteOrder, decodeCommit, decodeTree, effectiveChangeId, readCommit } from "./engine/model.ts";
 import { ObjectStoreError, type ObjectId } from "./engine/objects.ts";
 import { type Operation } from "./engine/oplog.ts";
 import { FIELD_STRATEGIES, type FieldStrategy } from "./engine/records.ts";
@@ -39,6 +41,7 @@ import type {
   CommandHandlerContext,
   ExtensionApi,
 } from "@unbrained/pm-cli/sdk/authoring";
+import { PmClient } from "@unbrained/pm-cli/sdk";
 
 /** Envelope every command returns, carrying an explicit verdict. */
 interface VcsEnvelope {
@@ -94,6 +97,15 @@ export function openRepository(context: CommandHandlerContext): Repository {
     );
   }
   return Repository.open(root);
+}
+
+/** Return the host-bound SDK client, with a tracker-bound fallback for test and legacy hosts. */
+export function pmClient(context: CommandHandlerContext): PmClient {
+  return context.sdk?.client ?? new PmClient({
+    pmRoot: context.pm_root,
+    cwd: sourceWorkingRoot(context),
+    noExtensions: true,
+  });
 }
 
 /**
@@ -315,8 +327,9 @@ export function registerVcsCommands(api: ExtensionApi): void {
     flags: [
       { long: "--message", value_name: "text", description: "Commit message", value_type: "string" },
       { long: "--allow-empty", description: "Record a commit even when nothing staged differs from HEAD", value_type: "boolean" },
+      { long: "--item", value_name: "ids", description: "Comma-separated PM item ids to associate with this immutable change", value_type: "string" },
     ],
-    run(context: CommandHandlerContext): VcsEnvelope & { commit: ObjectId } {
+    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { commit: ObjectId; items: readonly string[] }> {
       const repository = openRepository(context);
       const message = optionalString(context.options, "message");
       if (message === undefined) {
@@ -326,6 +339,8 @@ export function registerVcsCommands(api: ExtensionApi): void {
           "Pass --message \"what changed and why\".",
         );
       }
+      const items = commaSeparated(context.options, "item");
+      for (const item of items) await pmClient(context).get(item, { fields: "id" });
       const now = new Date();
       const commit = repository.commit({
         // `optionalString` trims, so the message never arrives newline-terminated
@@ -333,8 +348,120 @@ export function registerVcsCommands(api: ExtensionApi): void {
         message: `${message}\n`,
         author: signatureFor(context, now),
         allowEmpty: context.options?.allowEmpty === true,
+        items,
       }, now);
-      return { ok: true, commit };
+      return { ok: true, commit, items };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs trace",
+    description: "Trace a logical file across moves, copies, edits and deletion using immutable file and change identities.",
+    arguments: [{ name: "path-or-file-id", description: "Current or historical path, or a 32-hex FileId", required: true }],
+    run(context: CommandHandlerContext): VcsEnvelope & { fileId: string; changes: readonly FileChangeTrace[] } {
+      const repository = openRepository(context);
+      const selector = requiredArgument(context, 0, "path-or-file-id", "Pass a repository-relative path or FileId.");
+      const commits = repository.allReachable().sort((left, right) => (
+        readCommit(repository.objects, right).committer.timestamp - readCommit(repository.objects, left).committer.timestamp
+      ));
+      const fileId = resolveFileId(repository.objects, commits, selector);
+      if (fileId === null) {
+        throw new VcsError("unknown_file", `No identity is recorded for ${selector}.`, "Stage and commit the file with this pm-vcs version, or pass a known FileId.");
+      }
+      return { ok: true, fileId, changes: traceFile(repository.objects, commits, fileId) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs items",
+    description: "Resolve a native revision range to PM items explicitly associated with its commits or linked to files it changed.",
+    arguments: [{ name: "from..to", description: "Native revision range (default: every commit reachable from HEAD)", required: false }],
+    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { commits: readonly ObjectId[]; items: readonly string[] }> {
+      const repository = openRepository(context);
+      const range = context.args[0]?.trim();
+      let history: Set<ObjectId>;
+      let commits: Set<ObjectId>;
+      if (range === undefined) {
+        history = reachable(repository.objects, repository.resolve("HEAD"));
+        commits = history;
+      } else {
+        const match = /^(.+)\.\.(.+)$/.exec(range);
+        if (match === null) {
+          throw new VcsError("invalid_range", `Native revision range ${range} is invalid.`, "Pass revisions as <from>..<to>, for example main..feature.");
+        }
+        history = reachable(repository.objects, repository.resolve(match[2] as string));
+        const excluded = reachable(repository.objects, repository.resolve(match[1] as string));
+        commits = new Set([...history].filter((commit) => !excluded.has(commit)));
+      }
+      const orderedHistory = [...history].sort((left, right) => (
+        readCommit(repository.objects, right).committer.timestamp - readCommit(repository.objects, left).committer.timestamp
+      ));
+      const items = new Set<string>();
+      for (const commitId of commits) {
+        for (const item of readCommit(repository.objects, commitId).items ?? []) items.add(item);
+      }
+      const client = pmClient(context);
+      const listed = await client.list({ status: "all", fields: "id", noTruncate: true, strictRead: true });
+      for (const listedItem of listed.items) {
+        // The explicit `fields: "id"` projection guarantees this field. The
+        // public ListResult union cannot currently preserve option correlation.
+        const id = listedItem.id as string;
+        const result = await client.get(id, { full: true });
+        for (const linked of result.linked!.files) {
+          const fileId = resolveFileId(repository.objects, orderedHistory, linked.path.replace(/^\.\//, ""));
+          if (fileId === null) continue;
+          if (traceFile(repository.objects, orderedHistory, fileId).some((trace) => commits.has(trace.commit))) {
+            items.add(id);
+          }
+        }
+      }
+      return {
+        ok: true,
+        commits: [...commits].sort(compareByteOrder),
+        items: [...items].sort(compareByteOrder),
+      };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs files",
+    description: "Resolve a PM item's linked arbitrary files to stable identities and native pm-vcs changes.",
+    arguments: [{ name: "item-id", description: "PM item whose linked files should be traced", required: true }],
+    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { item: string; files: ReadonlyArray<{ path: string; fileId: string | null; changes: readonly FileChangeTrace[] }> }> {
+      const repository = openRepository(context);
+      const item = requiredArgument(context, 0, "item-id", "Pass the PM item whose file history you need.");
+      const result = await pmClient(context).get(item, { full: true });
+      const commits = repository.allReachable().sort((left, right) => (
+        readCommit(repository.objects, right).committer.timestamp - readCommit(repository.objects, left).committer.timestamp
+      ));
+      const files = result.linked!.files.map((linked) => {
+        const path = linked.path.replace(/^\.\//, "");
+        const fileId = resolveFileId(repository.objects, commits, path);
+        return { path, fileId, changes: fileId === null ? [] : traceFile(repository.objects, commits, fileId) };
+      });
+      return { ok: true, item, files };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs changes",
+    description: "Report stable native change identities explicitly associated with a PM item or touching its linked files.",
+    arguments: [{ name: "item-id", description: "PM item to resolve", required: true }],
+    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { item: string; changes: readonly ObjectId[] }> {
+      const repository = openRepository(context);
+      const item = requiredArgument(context, 0, "item-id", "Pass the PM item whose changes you need.");
+      const result = await pmClient(context).get(item, { full: true });
+      const commits = repository.allReachable().sort(compareByteOrder);
+      const changes = new Set<ObjectId>();
+      for (const commitId of commits) {
+        const commit = readCommit(repository.objects, commitId);
+        if (commit.items?.includes(item) === true) changes.add(effectiveChangeId(commitId, commit));
+      }
+      for (const linked of result.linked!.files) {
+        const fileId = resolveFileId(repository.objects, commits, linked.path.replace(/^\.\//, ""));
+        if (fileId !== null) for (const trace of traceFile(repository.objects, commits, fileId)) changes.add(trace.changeId);
+      }
+      return { ok: true, item, changes: [...changes].sort(compareByteOrder) };
     },
   });
 

@@ -68,6 +68,28 @@ test("encodeTree and decodeTree round-trip and canonicalise to one id", () => {
   assert.equal(treeId(entries), treeId([...entries].reverse()));
 });
 
+test("versioned trees preserve file identity and reject malformed identity metadata", () => {
+  const fileId = "a".repeat(32);
+  const copiedFrom = "b".repeat(32);
+  const entries: TreeEntry[] = [
+    { name: "asset.bin", mode: "100644", id, fileId, copiedFrom },
+    { name: "legacy.bin", mode: "100644", id },
+  ];
+  assert.deepEqual(decodeTree(encodeTree(entries)), entries);
+  assert.throws(() => encodeTree([{ name: "bad", mode: "100644", id, fileId: "bad" }]),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_tree_entry");
+  assert.throws(() => encodeTree([{ name: "dir", mode: "40000", id, fileId }]),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_tree_entry");
+  for (const payload of [
+    "pm-vcs-tree 9\n",
+    "pm-vcs-tree 2\nnot-json",
+    `pm-vcs-tree 2\n${JSON.stringify(["100644"] )}`,
+    `pm-vcs-tree 2\n${JSON.stringify(["100600", id, fileId, null, "asset"] )}`,
+    `pm-vcs-tree 2\n${JSON.stringify(["40000", id, fileId, null, "dir"] )}`,
+    `pm-vcs-tree 2\n${JSON.stringify(["100644", id, "bad", null, "asset"] )}`,
+  ]) assert.throws(() => decodeTree(Buffer.from(payload)), (error: unknown) => error instanceof ObjectStoreError);
+});
+
 test("encodeTree rejects every disallowed entry name", () => {
   const at = (name: string): TreeEntry => ({ name, mode: "100644", id });
   // Empty name.
@@ -133,6 +155,20 @@ test("encodeCommit writes the change line immediately after the tree line and ro
   const decoded = decodeCommit(encodeCommit(commit));
   assert.equal(decoded.changeId, change);
   assert.equal(decoded.tree, id);
+});
+
+test("commit item associations are canonical, validated and decoded once", () => {
+  const commit: Commit = {
+    tree: id, parents: [], author: signature, committer: signature, message: "items\n",
+    items: ["task-b", "task-a", "task-a"],
+  };
+  const encoded = encodeCommit(commit);
+  assert.match(encoded.toString(), /item task-a\nitem task-b/);
+  assert.deepEqual(decodeCommit(encoded).items, ["task-a", "task-b"]);
+  assert.throws(() => encodeCommit({ ...commit, items: [""] }),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_commit_item");
+  assert.throws(() => decodeCommit(Buffer.from(`tree ${id}\nitem duplicate\nitem duplicate\nauthor Ada <ada@example.invalid> 1 0\ncommitter Ada <ada@example.invalid> 1 0\n\nmessage`)),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object");
 });
 
 test("a commit with no change line decodes without one, and is its own change", () => {

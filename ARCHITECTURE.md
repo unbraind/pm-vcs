@@ -48,7 +48,8 @@ shape.
 | **Jujutsu** | the operation log; `undo` as a verb; change ids stable across rewrite; automatic descendant rebase | all four | nothing significant — jj is the closest relative |
 | **Subversion** | a single monotonic revision number is genuinely easy to talk about | nothing structural | central state; a working copy that cannot function offline |
 | **Fossil / Forgejo** | project metadata belongs *inside* the repository, not in a service beside it | the conviction, and then further: metadata is a native object kind, not a table in an attached database | a bundled web application as the primary interface |
-| **lore / git-send-email** | a change under review is a first-class artifact with a lifecycle, transferable without a server | the patch series as an object kind | email as the transport, and threading as the data model |
+| **Epic Games Lore** | binary-first fragments, stable file identity, sparse instances and atomic remote publication | the general-file and scale invariants | its byte format and mandatory centralized authority |
+| **kernel lore / git-send-email** | a change under review is transferable without a forge | the patch series as an object kind | email threading as the data model |
 
 The honest summary of pm-vcs's position: **it is jujutsu's model, with records as a native
 object kind, and with the forge's data folded into the repository rather than sitting beside
@@ -78,6 +79,7 @@ it.**
    engine/repo.ts      the transaction boundary: refs + oplog + worktree
   ─────────────────────────────────────────────────────────────
    engine/worktree.ts  index, status, tree materialization
+   engine/attribution.ts stable file identity and PM-linked change traces
    engine/rewrite.ts   change identities and history rewriting
    engine/merge.ts     merge bases, diff3 content merge
    engine/records.ts   per-field record merge
@@ -152,11 +154,14 @@ would still let a tampered bundle fail later and without attribution during reco
 - **Trees** sort entries by name in UTF-8 byte order via `compareByteOrder`. Not `<` on
   strings (UTF-16 code unit order, which disagrees for anything above the BMP), and not
   `localeCompare` (locale-sensitive, so the same tree would hash differently under two `LANG`
-  settings).
+  settings). Version 2 entries additionally carry stable file identity and optional copy
+  provenance; the decoder retains the legacy tree format so identity migration never rewrites
+  old history.
 - **Commits** are headers then a blank line then the message: `tree`, `change` (Phase 2),
-  `parent` (repeated, first-parent first), `author`, `committer`. The timezone offset is stored
-  beside the absolute timestamp rather than folded into it, so a commit renders in the zone it
-  was made in without that zone ever affecting ordering or the id.
+  `parent` (repeated, first-parent first), `author`, `committer`, then canonical repeated
+  `item` associations. The timezone offset is stored beside the absolute timestamp rather
+  than folded into it, so a commit renders in the zone it was made in without that zone ever
+  affecting ordering or the id.
 - **Records** are re-serialized with recursively sorted object keys and normalised scalars, so two agents whose
   editors disagree about key order or indentation produce **one** object id. A file whose
   formatting moved does not register as changed. This is not cosmetic: it is what keeps a
@@ -187,12 +192,13 @@ phantom ref.
 
 ## 5. Index, working tree, status
 
-The index is a versioned flat text file: a `pm-vcs-index 2` header followed by one canonical
-JSON tuple per path with mode, object id and filesystem identity. Version 2 records size,
+The index is a versioned flat text file: a `pm-vcs-index 3` header followed by one canonical
+JSON tuple per path with mode, object id, stable `FileId`, copy provenance and filesystem
+identity. The stat cache records size,
 mtime, ctime, device, inode and the time the observation was made. `status` and `add`
 therefore `lstat` every indexed path but read and hash content only when that identity
-changed. A legacy three-field index remains
-readable and is upgraded by the next stage; an unknown future version is refused loudly.
+changed. Legacy unversioned and version 2 indexes remain readable and are upgraded by the
+next stage; an unknown future version is refused loudly.
 
 Metadata is an optimisation, never an authority. An indexed observation must be at least
 two seconds newer than the file metadata it verified, and the current observation must be
@@ -248,6 +254,27 @@ disagreement into a broken file.
 
 ---
 
+### Stable file identity and PM attribution
+
+Object identity answers “are these bytes identical?” A `FileId` answers “is this the same
+logical file?” pm-vcs stores a cryptographically random 128-bit identity in tree entries.
+Edits and unambiguous moves preserve it; copies mint a new identity and retain `copiedFrom`;
+deletion keeps the identity discoverable in history. Merge refuses different identities at
+one path and duplicate claims of one identity across paths. Legacy migration derives identity
+from the old path and object ID, so agents upgrading the same checkout independently converge;
+filesystem identity preserves a move even when its bytes change before staging.
+
+Commits may carry validated PM item IDs. `engine/attribution.ts` derives file traces from
+immutable parent/tree deltas and joins them to the pm SDK's linked-file records. The join is
+bidirectional: `vcs files` and `vcs changes` go from PM item to history; `vcs items` goes from
+a native revision range back to explicit or file-linked PM work. The derived view is never an
+authoritative side database and never mutates a PM item merely because content changed.
+
+The complete Epic Lore research and the retain/adopt/adapt/reject map behind this model are in
+[LORE.md](LORE.md).
+
+---
+
 ## 7. The operation log
 
 Every command that changes a ref appends one entry: what ran, when, and every ref transition
@@ -288,7 +315,8 @@ not need an attached database to hold them — a review is a record, an issue is
 both merge per field, which means two reviewers commenting concurrently converge instead of
 conflicting.
 
-lore's insight is that a change under review is a first-class artifact: a patch series exists,
+Kernel lore and `git send-email` show that a change under review can be a first-class,
+forge-independent artifact: a patch series exists,
 can be transferred, re-derived, and applied, without a server mediating it. pm-vcs makes the
 series an object kind rather than a text convention, so "the same series" is an identity
 question with an answer instead of a diff comparison.
@@ -341,14 +369,17 @@ on every commit.
 | describe / rebase / squash / split | `jj` / `git rebase -i` | **shipped** |
 | cherry-pick / revert / reset / restore | git equivalents | **shipped** |
 | automatic descendant rebase | `jj` | **shipped** |
+| stable file IDs across edit/move/copy/delete | Epic Games Lore | **shipped** |
+| PM item ↔ native file/change attribution | pm SDK | **shipped** |
 | remotes, clone, fetch, push | git transport | **Phase 3** |
 | self-hosted source, CI-gated | — | **Phase 4** |
-| patch series as an object | lore / `git format-patch` | **Phase 5** |
+| patch series as an object | kernel lore / `git format-patch` | **Phase 5** |
 | review + issues as native records | Forgejo, but in-repository | **Phase 5** |
 | served repository | Forgejo / `git daemon` | **Phase 5** |
 | packed storage, reachability index | git packfiles | **Phase 6** |
 | shallow / partial history | git `--depth` / partial clone | **Phase 6** |
 | garbage collection bounded by the oplog | `git gc`, but oplog-aware | **Phase 6** |
+| fragmented large files, sparse/lazy instances | Epic Games Lore | **Phase 6** |
 | conflicts stored in commits | `jj` conflict objects | **considered, not scheduled** |
 | signed commits | git signing | **considered, not scheduled** |
 | submodules / large-file offloading | git submodules / LFS | **rejected for now** |

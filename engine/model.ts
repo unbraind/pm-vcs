@@ -21,6 +21,14 @@ export const FILE_MODES = ["100644", "100755", "40000"] as const;
 /** A tree entry's mode: regular file, executable file, or subtree. */
 export type FileMode = (typeof FILE_MODES)[number];
 
+/** Stable identity of one logical file across path and content changes. */
+export type FileId = string;
+
+/** Whether a value is a canonical file identity. */
+export function isFileId(value: string): boolean {
+  return /^[0-9a-f]{32}$/.test(value);
+}
+
 /** One name-to-object binding inside a tree. */
 export interface TreeEntry {
   /** Entry name. A single path segment: never empty, never containing `/`. */
@@ -29,6 +37,10 @@ export interface TreeEntry {
   readonly mode: FileMode;
   /** The object this name binds to. */
   readonly id: ObjectId;
+  /** Logical identity; required for files in the versioned tree format. */
+  readonly fileId?: FileId;
+  /** Source identity when this file was created as a copy. */
+  readonly copiedFrom?: FileId;
 }
 
 /** Who made a change and when. */
@@ -66,6 +78,8 @@ export interface Commit {
    * change ids existed, which {@link effectiveChangeId} treats as their own id.
    */
   readonly changeId?: ObjectId;
+  /** PM items explicitly associated with this immutable change. */
+  readonly items?: readonly string[];
   /**
    * Parent commits, oldest lineage first.
    *
@@ -153,6 +167,7 @@ export function compareByteOrder(left: string, right: string): number {
  */
 export function encodeTree(entries: readonly TreeEntry[]): Buffer {
   const seen = new Set<string>();
+  const versioned = entries.some((entry) => entry.fileId !== undefined || entry.copiedFrom !== undefined);
   for (const entry of entries) {
     if (entry.name.length === 0) {
       throw new ObjectStoreError("invalid_tree_entry", "A tree entry name cannot be empty.");
@@ -164,12 +179,27 @@ export function encodeTree(entries: readonly TreeEntry[]): Buffer {
       throw new ObjectStoreError("invalid_tree_entry", `Tree entry name "${entry.name}" appears more than once.`);
     }
     seen.add(entry.name);
+    if (entry.mode === "40000") {
+      if (entry.fileId !== undefined || entry.copiedFrom !== undefined) {
+        throw new ObjectStoreError("invalid_tree_entry", `Directory "${entry.name}" cannot carry a file identity.`);
+      }
+    } else if ((entry.fileId !== undefined && !isFileId(entry.fileId))
+      || (entry.copiedFrom !== undefined && !isFileId(entry.copiedFrom))) {
+      throw new ObjectStoreError("invalid_tree_entry", `File "${entry.name}" carries invalid identity metadata.`);
+    }
   }
   const sorted = [...entries].sort((left, right) => compareByteOrder(left.name, right.name));
-  return Buffer.concat(sorted.map((entry) => Buffer.concat([
+  if (!versioned) return Buffer.concat(sorted.map((entry) => Buffer.concat([
     Buffer.from(`${entry.mode} ${entry.name}\0`, "utf8"),
     Buffer.from(entry.id, "utf8"),
   ])));
+  return Buffer.from(`pm-vcs-tree 2\n${sorted.map((entry) => JSON.stringify([
+    entry.mode,
+    entry.id,
+    entry.fileId ?? null,
+    entry.copiedFrom ?? null,
+    entry.name,
+  ])).join("\n")}`, "utf8");
 }
 
 /**
@@ -182,6 +212,44 @@ export function encodeTree(entries: readonly TreeEntry[]): Buffer {
  *   duplicated, or an entry's id is not an object id.
  */
 export function decodeTree(payload: Buffer): TreeEntry[] {
+  const versioned = payload.toString("utf8");
+  if (versioned.startsWith("pm-vcs-tree ")) {
+    const lines = versioned.split("\n");
+    if (lines.shift() !== "pm-vcs-tree 2") {
+      throw new ObjectStoreError("unsupported_tree_version", "Tree uses an unsupported version.");
+    }
+    const entries: TreeEntry[] = [];
+    for (const line of lines) {
+      if (line.length === 0) continue;
+      let value: unknown;
+      try { value = JSON.parse(line); } catch {
+        throw new ObjectStoreError("malformed_object", "Tree entry is not valid JSON.");
+      }
+      if (!Array.isArray(value) || value.length !== 5) {
+        throw new ObjectStoreError("malformed_object", "Tree entry does not contain five fields.");
+      }
+      const [mode, id, fileId, copiedFrom, name] = value;
+      if (!(FILE_MODES as readonly unknown[]).includes(mode) || typeof id !== "string" || !isObjectId(id)
+        || typeof name !== "string" || name.length === 0 || name.includes("/") || name.includes("\0")
+        || name === "." || name === ".." || entries.some((entry) => entry.name === name)) {
+        throw new ObjectStoreError("malformed_object", "Tree entry has an invalid mode, object id, or name.");
+      }
+      if (mode === "40000") {
+        if (fileId !== null || copiedFrom !== null) {
+          throw new ObjectStoreError("malformed_object", `Directory "${name}" carries file identity metadata.`);
+        }
+        entries.push({ name, mode, id });
+      } else {
+        if ((fileId !== null && (typeof fileId !== "string" || !isFileId(fileId)))
+          || (copiedFrom !== null && (typeof copiedFrom !== "string" || !isFileId(copiedFrom)))) {
+          throw new ObjectStoreError("malformed_object", `File "${name}" has invalid identity metadata.`);
+        }
+        entries.push({ name, mode, id, ...(fileId === null ? {} : { fileId }),
+          ...(copiedFrom === null ? {} : { copiedFrom }) });
+      }
+    }
+    return entries;
+  }
   const entries: TreeEntry[] = [];
   let cursor = 0;
   while (cursor < payload.length) {
@@ -299,6 +367,13 @@ function decodeSignature(line: string): Signature {
 export function encodeCommit(commit: Commit): Buffer {
   const lines = [`tree ${commit.tree}`];
   if (commit.changeId !== undefined) lines.push(`change ${commit.changeId}`);
+  const items = [...new Set(commit.items ?? [])].sort(compareByteOrder);
+  for (const item of items) {
+    if (item.length === 0 || /[\r\n]/.test(item)) {
+      throw new ObjectStoreError("invalid_commit_item", "A commit item id must be non-empty and single-line.");
+    }
+    lines.push(`item ${item}`);
+  }
   lines.push(
     ...commit.parents.map((parent) => `parent ${parent}`),
     `author ${encodeSignature(commit.author)}`,
@@ -322,7 +397,7 @@ export function encodeCommit(commit: Commit): Buffer {
  * @returns The id the commit would be stored under with no change line.
  */
 export function identityWithoutChangeLine(
-  commit: Pick<Commit, "tree" | "parents" | "author" | "committer" | "message">,
+  commit: Pick<Commit, "tree" | "parents" | "author" | "committer" | "message"> & Pick<Commit, "items">,
 ): ObjectId {
   return hashObject("commit", encodeCommit({
     tree: commit.tree,
@@ -330,6 +405,7 @@ export function identityWithoutChangeLine(
     author: commit.author,
     committer: commit.committer,
     message: commit.message,
+    ...(commit.items === undefined ? {} : { items: commit.items }),
   }));
 }
 
@@ -367,6 +443,7 @@ export function decodeCommit(payload: Buffer): Commit {
   }
   let tree: ObjectId | undefined;
   let changeId: ObjectId | undefined;
+  const items: string[] = [];
   const parents: ObjectId[] = [];
   let author: Signature | undefined;
   let committer: Signature | undefined;
@@ -398,6 +475,11 @@ export function decodeCommit(payload: Buffer): Commit {
         throw new ObjectStoreError("malformed_object", `Commit names parent "${value}", which is not an object id.`);
       }
       parents.push(value);
+    } else if (keyword === "item") {
+      if (value.length === 0 || items.includes(value)) {
+        throw new ObjectStoreError("malformed_object", "Commit carries an empty or duplicate item header.");
+      }
+      items.push(value);
     } else if (keyword === "author") {
       if (author !== undefined) {
         throw new ObjectStoreError("malformed_object", "Commit carries more than one author header.");
@@ -419,9 +501,8 @@ export function decodeCommit(payload: Buffer): Commit {
   // none, and is its own change. Assembling the object with it only when present
   // is what keeps the encoder's `changeId !== undefined` check honest on a
   // round-trip.
-  return changeId === undefined
-    ? { tree, parents, author, committer, message: text.slice(blankLine + 2) }
-    : { tree, changeId, parents, author, committer, message: text.slice(blankLine + 2) };
+  const base = { tree, parents, author, committer, message: text.slice(blankLine + 2), ...(items.length === 0 ? {} : { items }) };
+  return changeId === undefined ? base : { ...base, changeId };
 }
 
 /**
