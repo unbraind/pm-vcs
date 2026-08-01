@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -60,23 +60,51 @@ test("normalizeRepoPath canonicalises paths and rejects escapes", () => {
   );
 });
 
-test("encodeIndex and decodeIndex round-trip, sorted by path", () => {
+test("encodeIndex and decodeIndex round-trip cached metadata in path order", () => {
   const entries: IndexEntry[] = [
-    { path: "z.txt", id: "1".repeat(64), mode: "100644" },
+    {
+      path: "z.txt",
+      id: "1".repeat(64),
+      mode: "100644",
+      stat: { size: 3n, mtimeNs: 4n, ctimeNs: 5n, dev: 6n, ino: 7n, observedAtNs: 1_000_000_005n },
+    },
     { path: "a.txt", id: "2".repeat(64), mode: "100755" },
   ];
   const encoded = encodeIndex(entries);
+  assert.equal(encoded.split("\n")[0], "pm-vcs-index 2");
   // Sorted by path: a.txt (mode 100755, id 2s) before z.txt (mode 100644, id 1s).
-  assert.match(encoded, /^100755 2{64} a\.txt\n100644 1{64} z\.txt$/);
+  assert.deepEqual(encoded.split("\n").slice(1).map((line) => JSON.parse(line)[2]), ["a.txt", "z.txt"]);
   assert.deepEqual(decodeIndex(encoded), [...entries].sort((l, r) => (l.path < r.path ? -1 : 1)));
   assert.deepEqual(decodeIndex(""), []);
 });
 
-test("decodeIndex rejects a malformed line", () => {
+test("decodeIndex reads the legacy format and refuses malformed or future indexes", () => {
+  assert.deepEqual(
+    decodeIndex(`100644 ${"1".repeat(64)} path with spaces.txt\n\n`),
+    [{ path: "path with spaces.txt", id: "1".repeat(64), mode: "100644" }],
+  );
+  assert.deepEqual(decodeIndex("pm-vcs-index 2\n"), []);
   assert.throws(
     () => decodeIndex("garbage line"),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
+  assert.throws(
+    () => decodeIndex("pm-vcs-index 3"),
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "unsupported_index_version"
+      && /version 3/.test(error.message),
+  );
+  for (const line of [
+    "not-json",
+    JSON.stringify(["100644"]),
+    JSON.stringify(["100600", "1".repeat(64), "a.txt", null]),
+    JSON.stringify(["100644", "1".repeat(64), "a.txt", ["1", "2"]]),
+  ]) {
+    assert.throws(
+      () => decodeIndex(`pm-vcs-index 2\n${line}`),
+      (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+    );
+  }
 });
 
 test("listWorkingTree skips the control directory and prunable directories", () => {
@@ -100,6 +128,19 @@ test("readWorkingFile reads a regular file and reports its executable bit", () =
   assert.equal(readWorkingFile(root, "plain").executable, false);
   assert.equal(readWorkingFile(root, "exe").executable, true);
   assert.deepEqual(readWorkingFile(root, "plain").content, Buffer.from("plain"));
+});
+
+test("readWorkingFile returns cache metadata once a file is outside the racy window", () => {
+  dir = makeTempDir();
+  const root = dir.root;
+  writeFileSync(join(root, "stable"), "stable");
+  const actualNow = Date.now;
+  Date.now = () => actualNow() + 2_000;
+  try {
+    assert.ok(readWorkingFile(root, "stable").stat);
+  } finally {
+    Date.now = actualNow;
+  }
 });
 
 test("readWorkingFile reads a symlink's target rather than following it", () => {
@@ -209,6 +250,68 @@ test("computeStatus reports an unstaged deletion of an indexed file", () => {
   rmSync(join(root, "a.txt"), { force: true });
   const status = computeStatus(store, root, headTree, index, ".pmvcs", noRules);
   assert.deepEqual(status.unstaged.map((c) => c.kind), ["deleted"]);
+});
+
+test("computeStatus does not read unchanged cached file content", () => {
+  const { store, root } = fresh();
+  const path = join(root, "large.bin");
+  writeFileSync(path, Buffer.alloc(8 * 1024 * 1024, 7));
+  const content = readFileSync(path);
+  const id = store.write("blob", content);
+  const file = statSync(path, { bigint: true });
+  const tree = writeTree(store, [{ name: "large.bin", mode: "100644", id }]);
+  const index: IndexEntry[] = [{
+    path: "large.bin",
+    id,
+    mode: "100644",
+    stat: {
+      size: file.size,
+      mtimeNs: file.mtimeNs,
+      ctimeNs: file.ctimeNs,
+      dev: file.dev,
+      ino: file.ino,
+      observedAtNs: (file.ctimeNs > file.mtimeNs ? file.ctimeNs : file.mtimeNs) + 1_000_000_000n,
+    },
+  }];
+
+  const status = computeStatus(store, root, tree, index, ".pmvcs", noRules, undefined, () => {
+    throw new Error("content reader must not run for a cache hit");
+  });
+  assert.equal(status.clean, true);
+});
+
+test("computeStatus detects a same-size edit even when its mtime is restored", () => {
+  const { store, root } = fresh();
+  const path = join(root, "racy.txt");
+  writeFileSync(path, "before");
+  const fixed = new Date(Math.floor((Date.now() - 5_000) / 1_000) * 1_000);
+  utimesSync(path, fixed, fixed);
+  const original = statSync(path, { bigint: true });
+  const id = store.write("blob", Buffer.from("before"));
+  const tree = writeTree(store, [{ name: "racy.txt", mode: "100644", id }]);
+  const index: IndexEntry[] = [{
+    path: "racy.txt",
+    id,
+    mode: "100644",
+    stat: {
+      size: original.size,
+      mtimeNs: original.mtimeNs,
+      ctimeNs: original.ctimeNs,
+      dev: original.dev,
+      ino: original.ino,
+      observedAtNs: original.ctimeNs,
+    },
+  }];
+
+  writeFileSync(path, "after!");
+  utimesSync(path, fixed, fixed);
+  const changed = statSync(path, { bigint: true });
+  assert.equal(changed.size, original.size);
+  assert.equal(changed.mtimeNs, original.mtimeNs);
+  assert.notEqual(changed.ctimeNs, original.ctimeNs);
+
+  const status = computeStatus(store, root, tree, index, ".pmvcs", noRules);
+  assert.deepEqual(status.unstaged, [{ path: "racy.txt", kind: "modified" }]);
 });
 
 test("materializeTree preserves a prunable directory rather than pruning it", () => {

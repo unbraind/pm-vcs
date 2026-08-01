@@ -263,6 +263,22 @@ test("stage stages all, stages a deletion, and refuses an explicitly-named ignor
   assert.deepEqual(repo.stage(["b.txt"]), ["b.txt"]);
 });
 
+test("stage skips content work for a stable cached index entry", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  writeFileSync(join(root, "stable.txt"), "stable\n");
+  const actualNow = Date.now;
+  Date.now = () => actualNow() + 2_000;
+  try {
+    assert.deepEqual(repo.stage(["stable.txt"]), ["stable.txt"]);
+    const cached = repo.readIndex()[0];
+    assert.ok(cached?.stat);
+    assert.deepEqual(repo.stage(["stable.txt"]), []);
+  } finally {
+    Date.now = actualNow;
+  }
+});
+
 test("status reports a clean tree after committing everything", () => {
   const { root } = freshDir();
   const repo = Repository.init(root);

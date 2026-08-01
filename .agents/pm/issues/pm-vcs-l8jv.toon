@@ -1,0 +1,24 @@
+id: pm-vcs-l8jv
+title: Documented TOON record paths fail staging because the record codec accepts JSON only
+description: "The README's primary init example configures .agents/pm/**/*.toon as first-class records, but staging a real pm-initialized tracker calls the JSON-only record decoder and aborts with record payload is not valid JSON. This prevents pm-vcs from using pm's native item format as the structured merge primitive it advertises."
+type: Issue
+status: open
+priority: 1
+tags[4]: "format:toon",pm-sdk,real-data,records
+created_at: "2026-08-01T03:59:00.345Z"
+updated_at: "2026-08-01T03:59:00.345Z"
+author: codex
+acceptance_criteria: A real installed-CLI test stages native TOON item and history data through the registered extension; canonical TOON decoding and encoding preserve all supported pm fields; per-field merge handles concurrent PM item edits; JSON record paths remain compatible; README examples are executable.
+parent: pm-vcs-tr2a
+severity: high
+repro_steps: Initialize a fresh pm workspace; install pm-vcs; run pm vcs init with record path .agents/pm/**/*.toon; create a Task with pm; run pm vcs add.
+expected_result: Native PM TOON items stage as record objects and later merge per field without losing TOON semantics or history.
+actual_result: pm vcs add aborts with Record payload is not valid JSON.
+affected_version: 2026.7.30
+component: engine/records
+files[2]{path,scope,note}:
+  engine/model.ts,project,record codec boundary
+  README.md,project,documented TOON example
+tests[1]{command,scope,timeout_seconds}:
+  "npm run release:check",project,2400
+body: ""

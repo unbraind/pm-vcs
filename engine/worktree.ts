@@ -8,6 +8,7 @@
 // a check at each call site.
 
 import {
+  type BigIntStats,
   chmodSync,
   lstatSync,
   mkdirSync,
@@ -21,7 +22,26 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { type IgnoreRules, isIgnored, isPrunableDirectory } from "./ignore.ts";
 import { compareByteOrder, type FileMode, type TreeEntry, readTree, writeTree } from "./model.ts";
-import { hashObject, type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
+import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
+
+const INDEX_HEADER = "pm-vcs-index 2";
+const RACY_WINDOW_NS = 1_000_000_000n;
+
+/** Filesystem identity recorded with an index entry to avoid re-reading unchanged content. */
+export interface IndexStat {
+  /** File size in bytes. */
+  readonly size: bigint;
+  /** Last-content-modification timestamp at the filesystem's native precision. */
+  readonly mtimeNs: bigint;
+  /** Metadata-change timestamp, which catches same-size writes whose mtime is restored. */
+  readonly ctimeNs: bigint;
+  /** Device identity, so replacing a mount cannot reuse another file's cache entry. */
+  readonly dev: bigint;
+  /** Inode identity, so an atomic same-metadata replacement is still re-read. */
+  readonly ino: bigint;
+  /** Wall-clock observation time used to identify a cache entry made inside a coarse timestamp tick. */
+  readonly observedAtNs: bigint;
+}
 
 /** One staged path: what content and mode the next commit should record for it. */
 export interface IndexEntry {
@@ -31,6 +51,8 @@ export interface IndexEntry {
   readonly id: ObjectId;
   /** Whether the staged file is executable. */
   readonly mode: Extract<FileMode, "100644" | "100755">;
+  /** Filesystem identity observed while the staged content was read. */
+  readonly stat?: IndexStat;
 }
 
 /** How a path differs across HEAD, the index and the working tree. */
@@ -78,29 +100,98 @@ export function normalizeRepoPath(root: string, candidate: string): string {
 /**
  * Serializes the index.
  *
- * One line per entry, sorted by path, so the file is diffable and its bytes are
- * a function of its content alone.
+ * A version header is followed by one JSON tuple per entry, sorted by path, so
+ * the file is diffable and its bytes are a function of its content alone. JSON
+ * preserves paths containing spaces without making the stat fields ambiguous.
  *
  * @param entries - The staged entries in any order.
  * @returns The index file's contents.
  */
 export function encodeIndex(entries: readonly IndexEntry[]): string {
-  return [...entries]
+  const lines = [...entries]
     .sort((left, right) => compareByteOrder(left.path, right.path))
-    .map((entry) => `${entry.mode} ${entry.id} ${entry.path}`)
-    .join("\n");
+    .map((entry) => JSON.stringify([
+      entry.mode,
+      entry.id,
+      entry.path,
+      entry.stat === undefined
+        ? null
+        : [
+            entry.stat.size.toString(),
+            entry.stat.mtimeNs.toString(),
+            entry.stat.ctimeNs.toString(),
+            entry.stat.dev.toString(),
+            entry.stat.ino.toString(),
+            entry.stat.observedAtNs.toString(),
+          ],
+    ]));
+  return [INDEX_HEADER, ...lines].join("\n");
 }
 
 /**
  * Parses the index.
  *
  * @param contents - The index file's contents, or the empty string.
+ * Legacy three-field lines remain readable and acquire cache metadata on their
+ * next stage. A newer version is refused rather than guessed at.
+ *
  * @returns The staged entries.
- * @throws ObjectStoreError When a line is not three fields with a valid mode.
+ * @throws ObjectStoreError When a line is malformed or the version is newer
+ *   than this build supports.
  */
 export function decodeIndex(contents: string): IndexEntry[] {
+  if (contents.length === 0) return [];
+  const lines = contents.split("\n");
+  if (lines[0]?.startsWith("pm-vcs-index ")) {
+    if (lines[0] !== INDEX_HEADER) {
+      throw new ObjectStoreError(
+        "unsupported_index_version",
+        `Index version ${lines[0].slice("pm-vcs-index ".length)} is newer than the supported version 2.`,
+      );
+    }
+    const entries: IndexEntry[] = [];
+    for (const line of lines.slice(1)) {
+      if (line.length === 0) continue;
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        throw new ObjectStoreError("corrupt_index", `Index line "${line}" is not valid JSON.`);
+      }
+      if (!Array.isArray(value) || value.length !== 4) {
+        throw new ObjectStoreError("corrupt_index", `Index line "${line}" does not contain four fields.`);
+      }
+      const [mode, id, path, encodedStat] = value;
+      if ((mode !== "100644" && mode !== "100755") || typeof id !== "string" || !isObjectId(id)
+        || typeof path !== "string" || path.length === 0) {
+        throw new ObjectStoreError("corrupt_index", `Index line "${line}" has an invalid mode, object id, or path.`);
+      }
+      if (encodedStat === null) {
+        entries.push({ mode, id, path });
+        continue;
+      }
+      if (!Array.isArray(encodedStat) || encodedStat.length !== 6
+        || !encodedStat.every((field) => typeof field === "string" && /^\d+$/.test(field))) {
+        throw new ObjectStoreError("corrupt_index", `Index line "${line}" has invalid cached file metadata.`);
+      }
+      entries.push({
+        mode,
+        id,
+        path,
+        stat: {
+          size: BigInt(encodedStat[0]),
+          mtimeNs: BigInt(encodedStat[1]),
+          ctimeNs: BigInt(encodedStat[2]),
+          dev: BigInt(encodedStat[3]),
+          ino: BigInt(encodedStat[4]),
+          observedAtNs: BigInt(encodedStat[5]),
+        },
+      });
+    }
+    return entries;
+  }
   const entries: IndexEntry[] = [];
-  for (const line of contents.split("\n")) {
+  for (const line of lines) {
     if (line.trim().length === 0) continue;
     const match = /^(100644|100755) ([0-9a-f]{64}) (.+)$/.exec(line);
     if (!match) {
@@ -154,17 +245,70 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
  *
  * @param root - Absolute repository root.
  * @param path - Canonical repository-relative path.
- * @returns The content, and whether the file is executable.
+ * @returns The content, executable state, and stable stat observation when the
+ *   file did not change during the read.
  */
-export function readWorkingFile(root: string, path: string): { content: Buffer; executable: boolean } {
+export function readWorkingFile(
+  root: string,
+  path: string,
+): { readonly content: Buffer; readonly executable: boolean; readonly stat?: IndexStat } {
   const absolute = join(root, ...path.split("/"));
-  const stats = lstatSync(absolute, { throwIfNoEntry: true });
-  if (stats.isSymbolicLink()) {
-    return { content: Buffer.from(readlinkSync(absolute), "utf8"), executable: false };
-  }
+  const before = readWorkingStat(root, path);
+  const content = before.symbolicLink
+    ? Buffer.from(readlinkSync(absolute), "utf8")
+    : readFileSync(absolute);
+  const after = readWorkingStat(root, path);
   // The owner-execute bit alone decides, so a file's mode does not change with
   // the umask of whichever agent happened to create it.
-  return { content: readFileSync(absolute), executable: (stats.mode & 0o100) !== 0 };
+  return {
+    content,
+    executable: after.executable,
+    ...(sameIndexStat(before.stat, after.stat) ? { stat: after.stat } : {}),
+  };
+}
+
+/** Filesystem identity and executable state for a working-tree path, without reading its content. */
+export function readWorkingStat(
+  root: string,
+  path: string,
+): { readonly stat: IndexStat; readonly executable: boolean; readonly symbolicLink: boolean } {
+  const stats: BigIntStats = lstatSync(join(root, ...path.split("/")), { bigint: true, throwIfNoEntry: true });
+  const symbolicLink = stats.isSymbolicLink();
+  return {
+    stat: {
+      size: stats.size,
+      mtimeNs: stats.mtimeNs,
+      ctimeNs: stats.ctimeNs,
+      dev: stats.dev,
+      ino: stats.ino,
+      observedAtNs: BigInt(Date.now()) * 1_000_000n,
+    },
+    executable: !symbolicLink && (stats.mode & 0o100n) !== 0n,
+    symbolicLink,
+  };
+}
+
+/**
+ * Whether two cache observations identify the same non-racy filesystem state.
+ *
+ * An observation made less than one timestamp tick after mtime or ctime is
+ * deliberately never trusted. On a coarse filesystem, another same-size write
+ * in that tick can preserve every visible stat field; re-reading is the only
+ * lossless answer. A later stage refreshes the entry after the tick and makes
+ * subsequent status calls metadata-only.
+ *
+ * @param left - Metadata stored in the index.
+ * @param right - Current working-tree metadata.
+ * @returns True only when content hashing can safely be skipped.
+ */
+export function sameIndexStat(left: IndexStat | undefined, right: IndexStat): boolean {
+  return left !== undefined
+    && left.observedAtNs - (left.ctimeNs > left.mtimeNs ? left.ctimeNs : left.mtimeNs) >= RACY_WINDOW_NS
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+    && left.dev === right.dev
+    && left.ino === right.ino;
 }
 
 /**
@@ -271,7 +415,8 @@ export function materializeTree(
     // entry would otherwise leave the executable bit set and `status` would
     // never see the tree it just materialised as clean.
     chmodSync(absolute, value.mode === "100755" ? 0o755 : 0o644);
-    entries.push({ path, id: value.id, mode: value.mode === "100755" ? "100755" : "100644" });
+    const mode = value.mode === "100755" ? "100755" : "100644";
+    entries.push({ path, id: value.id, mode, stat: readWorkingStat(root, path).stat });
   }
   // Directories left empty by the removals above are pruned, so switching away
   // from a branch that introduced a directory does not leave its skeleton.
@@ -332,6 +477,7 @@ export function computeStatus(
   controlDirectory: string,
   rules: IgnoreRules,
   identify: (path: string, content: Buffer) => ObjectId = (_path, content) => hashObject("blob", content),
+  read: typeof readWorkingFile = readWorkingFile,
 ): StatusReport {
   const committed = flattenTree(store, headTree);
   const staged = new Map(index.map((entry) => [entry.path, entry]));
@@ -354,9 +500,11 @@ export function computeStatus(
       unstagedChanges.push({ path: entry.path, kind: "deleted" });
       continue;
     }
-    const { content, executable } = readWorkingFile(root, entry.path);
-    const expectedMode = executable ? "100755" : "100644";
-    if (expectedMode !== entry.mode || identify(entry.path, content) !== entry.id) {
+    const observed = readWorkingStat(root, entry.path);
+    const expectedMode = observed.executable ? "100755" : "100644";
+    if (expectedMode === entry.mode && sameIndexStat(entry.stat, observed.stat)) continue;
+    const { content, executable } = read(root, entry.path);
+    if ((executable ? "100755" : "100644") !== entry.mode || identify(entry.path, content) !== entry.id) {
       unstagedChanges.push({ path: entry.path, kind: "modified" });
     }
   }

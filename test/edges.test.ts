@@ -207,7 +207,7 @@ test("index and status output are ordered by path, whichever order the entries a
     { path: "z.txt", id: "b".repeat(64), mode: "100644" },
     { path: "a.txt", id: "a".repeat(64), mode: "100755" },
   ]);
-  assert.deepEqual(encoded.split("\n").map((line) => line.split(" ")[2]), ["a.txt", "z.txt"]);
+  assert.deepEqual(encoded.split("\n").slice(1).map((line) => JSON.parse(line)[2]), ["a.txt", "z.txt"]);
 
   const { repo, root } = freshRepo();
   commitFile(repo, "b.txt", "b\n", "first\n");
