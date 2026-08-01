@@ -78,6 +78,10 @@ test("versioned trees preserve file identity and reject malformed identity metad
   assert.deepEqual(decodeTree(encodeTree(entries)), entries);
   assert.throws(() => encodeTree([{ name: "bad", mode: "100644", id, fileId: "bad" }]),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_tree_entry");
+  assert.throws(() => encodeTree([{ name: "bad-copy", mode: "100644", id, copiedFrom }]),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_tree_entry");
+  assert.throws(() => encodeTree([{ name: "self-copy", mode: "100644", id, fileId, copiedFrom: fileId }]),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_tree_entry");
   assert.throws(() => encodeTree([{ name: "dir", mode: "40000", id, fileId }]),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_tree_entry");
   for (const payload of [
@@ -87,6 +91,8 @@ test("versioned trees preserve file identity and reject malformed identity metad
     `pm-vcs-tree 2\n${JSON.stringify(["100600", id, fileId, null, "asset"] )}`,
     `pm-vcs-tree 2\n${JSON.stringify(["40000", id, fileId, null, "dir"] )}`,
     `pm-vcs-tree 2\n${JSON.stringify(["100644", id, "bad", null, "asset"] )}`,
+    `pm-vcs-tree 2\n${JSON.stringify(["100644", id, null, copiedFrom, "asset"] )}`,
+    `pm-vcs-tree 2\n${JSON.stringify(["100644", id, fileId, fileId, "asset"] )}`,
   ]) assert.throws(() => decodeTree(Buffer.from(payload)), (error: unknown) => error instanceof ObjectStoreError);
 });
 

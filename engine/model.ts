@@ -184,7 +184,8 @@ export function encodeTree(entries: readonly TreeEntry[]): Buffer {
         throw new ObjectStoreError("invalid_tree_entry", `Directory "${entry.name}" cannot carry a file identity.`);
       }
     } else if ((entry.fileId !== undefined && !isFileId(entry.fileId))
-      || (entry.copiedFrom !== undefined && !isFileId(entry.copiedFrom))) {
+      || (entry.copiedFrom !== undefined && (!isFileId(entry.copiedFrom)
+        || entry.fileId === undefined || entry.copiedFrom === entry.fileId))) {
       throw new ObjectStoreError("invalid_tree_entry", `File "${entry.name}" carries invalid identity metadata.`);
     }
   }
@@ -241,7 +242,8 @@ export function decodeTree(payload: Buffer): TreeEntry[] {
         entries.push({ name, mode, id });
       } else {
         if ((fileId !== null && (typeof fileId !== "string" || !isFileId(fileId)))
-          || (copiedFrom !== null && (typeof copiedFrom !== "string" || !isFileId(copiedFrom)))) {
+          || (copiedFrom !== null && (typeof copiedFrom !== "string" || !isFileId(copiedFrom)
+            || fileId === null || copiedFrom === fileId))) {
           throw new ObjectStoreError("malformed_object", `File "${name}" has invalid identity metadata.`);
         }
         entries.push({ name, mode, id, ...(fileId === null ? {} : { fileId }),

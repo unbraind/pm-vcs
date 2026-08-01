@@ -98,6 +98,14 @@ test("encodeIndex and decodeIndex round-trip cached metadata in path order", () 
     () => encodeIndex([backslashEntry, backslashEntry]),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
+  assert.throws(
+    () => encodeIndex([{ ...backslashEntry, fileId: undefined, copiedFrom: "a".repeat(32) }]),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
+  assert.throws(
+    () => encodeIndex([{ ...backslashEntry, copiedFrom: backslashEntry.fileId }]),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
 });
 
 test("decodeIndex reads the legacy format and refuses malformed or future indexes", () => {
@@ -128,6 +136,13 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
     (error: unknown) => error instanceof ObjectStoreError
       && error.code === "unsupported_index_version"
       && /version 4/.test(error.message),
+  );
+  for (const invalidIdentity of [
+    ["100644", "1".repeat(64), "missing-current", null, "a".repeat(32), null],
+    ["100644", "1".repeat(64), "self-copy", "a".repeat(32), "a".repeat(32), null],
+  ]) assert.throws(
+    () => decodeIndex(`pm-vcs-index 3\n${JSON.stringify(invalidIdentity)}`),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
   for (const line of [
     "not-json",

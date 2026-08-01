@@ -150,6 +150,10 @@ export function encodeIndex(entries: readonly IndexEntry[]): string {
       if (!isCanonicalRepoPath(entry.path)) {
         throw new ObjectStoreError("corrupt_index", `Index path "${entry.path}" is not canonical.`);
       }
+      if (entry.copiedFrom !== undefined
+        && (entry.fileId === undefined || entry.copiedFrom === entry.fileId)) {
+        throw new ObjectStoreError("corrupt_index", `Index path "${entry.path}" has invalid copy provenance.`);
+      }
       return JSON.stringify([
         entry.mode,
         entry.id,
@@ -211,7 +215,8 @@ export function decodeIndex(contents: string): IndexEntry[] {
       if ((mode !== "100644" && mode !== "100755") || typeof id !== "string" || !isObjectId(id)
         || typeof path !== "string" || !isCanonicalRepoPath(path)
         || (!versionTwo && (encodedFileId !== null && (typeof encodedFileId !== "string" || !isFileId(encodedFileId))
-          || (encodedCopiedFrom !== null && (typeof encodedCopiedFrom !== "string" || !isFileId(encodedCopiedFrom)))))) {
+          || (encodedCopiedFrom !== null && (typeof encodedCopiedFrom !== "string" || !isFileId(encodedCopiedFrom)
+            || encodedFileId === null || encodedCopiedFrom === encodedFileId))))) {
         throw new ObjectStoreError("corrupt_index", `Index line "${line}" has an invalid mode, object id, or path.`);
       }
       if (encodedStat === null) {
