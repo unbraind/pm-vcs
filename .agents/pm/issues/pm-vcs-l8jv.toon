@@ -6,7 +6,7 @@ status: closed
 priority: 0
 tags[5]: "format:toon",pm-sdk,real-data,records,release-blocker
 created_at: "2026-08-01T03:59:00.345Z"
-updated_at: "2026-08-01T19:56:29.957Z"
+updated_at: "2026-08-01T20:02:45.790Z"
 closed_at: "2026-08-01T19:40:23.817Z"
 completed_at: "2026-08-01T19:40:23.817Z"
 claim_principal: codex
@@ -22,12 +22,13 @@ actual_result: "Installed-CLI native TOON acceptance passes; 367 real-filesystem
 affected_version: 2026.7.30
 fixed_version: 2026.7.30-next
 component: engine/records
-notes[5]{created_at,author,text}:
+notes[6]{created_at,author,text}:
   "2026-08-01T04:44:55.760Z",codex,Cubic correctly identified that the native TOON failure is described as a release blocker but was not machine-tagged as one. Priority and tags now match the release boundary; no publishing is permitted until its installed-CLI acceptance passes.
   "2026-08-01T06:38:22.439Z",codex,"CodeRabbit correctly separated this blocker from release:check. npm run accept:native-toon initializes a disposable real PM tracker, installs this checkout through the installed pm CLI, configures the documented TOON record path, creates a real Task, and runs pm vcs add. It currently fails at the expected JSON-only record decoder and always removes the temporary project."
   "2026-08-01T10:09:05.557Z",codex,"The independent acceptance harness now invokes the installed pm CLI JavaScript entrypoint through process.execPath on every platform, preserves stdout-only diagnostics, and exposes an init-only launcher smoke for Node 22 and 26 Windows CI. The full native TOON acceptance still fails closed at the expected JSON-only record decoder under pm CLI 2026.8.1."
   "2026-08-01T19:37:47.679Z",codex,Native PM TOON is now parsed and serialized through the public pm SDK; nested PM metadata is recursively canonicalized; timestamp fields merge by latest valid instant; JSON record paths remain compatible. Installed-CLI acceptance passes and the complete suite exercises real repositories without mocks.
   "2026-08-01T19:56:29.938Z",codex,"CodeRabbit exact-head review was fully addressed: native parser diagnostics are preserved; timestamp tie behavior and shipped rewrite state are documented consistently; command examples pass markdown lint; complete coverage remains 100/100/100."
+  "2026-08-01T20:02:45.771Z",codex,"CodeRabbit review summary exposed an outside-diff hostile-bundle recursion risk. Record decoding now refuses metadata beyond 32 recursive containers with ObjectStoreError rather than allowing a stack overflow; a direct malformed-object regression is included. Final local gate: 368 tests,100.00 percent lines,branches and functions."
 files[3]{path,scope,note}:
   engine/model.ts,project,record codec boundary
   README.md,project,documented TOON example

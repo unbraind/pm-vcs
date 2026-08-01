@@ -94,6 +94,9 @@ export interface RecordDocument {
   readonly [field: string]: RecordValue;
 }
 
+/** Maximum recursive containers accepted from an untrusted record payload. */
+const MAX_RECORD_DEPTH = 32;
+
 /**
  * Serializes one record value with object keys in canonical byte order.
  *
@@ -461,7 +464,10 @@ export function decodeRecord(payload: Buffer): RecordDocument {
   // tampered bundle put a nested object or a non-finite number into a document whose
   // type says neither can occur, and the first thing to notice would be the record
   // merge, arbitrarily later and with no way to attribute it.
-  const assertValue = (value: unknown, path: string): void => {
+  const assertValue = (value: unknown, path: string, depth = 0): void => {
+    if (depth > MAX_RECORD_DEPTH) {
+      throw new ObjectStoreError("malformed_object", `Record field ${path} exceeds the maximum nesting depth.`);
+    }
     if (value === null || typeof value === "string" || typeof value === "boolean") return;
     if (typeof value === "number") {
       if (!Number.isFinite(value)) {
@@ -470,14 +476,14 @@ export function decodeRecord(payload: Buffer): RecordDocument {
       return;
     }
     if (Array.isArray(value)) {
-      value.forEach((member, index) => assertValue(member, `${path}[${index}]`));
+      value.forEach((member, index) => assertValue(member, `${path}[${index}]`, depth + 1));
       return;
     }
     // JSON.parse cannot produce undefined, bigint, symbol or functions. After
     // the scalar and array cases above, the only remaining JSON value is an
     // object, so recurse without retaining an unreachable defensive branch.
     for (const [field, member] of Object.entries(value as Readonly<Record<string, unknown>>)) {
-      assertValue(member, `${path}.${field}`);
+      assertValue(member, `${path}.${field}`, depth + 1);
     }
   };
   for (const [field, value] of Object.entries(parsed)) assertValue(value, field);

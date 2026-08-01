@@ -253,6 +253,16 @@ test("decodeRecord rejects non-object payloads", () => {
   );
 });
 
+test("decodeRecord bounds recursive metadata from untrusted objects", () => {
+  const nested = `${'{"next":'.repeat(34)}null${"}".repeat(34)}`;
+  assert.throws(
+    () => decodeRecord(Buffer.from(`{"metadata":${nested}}`, "utf8")),
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "malformed_object"
+      && error.message.includes("exceeds the maximum nesting depth"),
+  );
+});
+
 test("writeTree/readTree and writeCommit/readCommit round-trip through the store", () => {
   const store = freshStore();
   const treeIdWritten = writeTree(store, [{ name: "file", mode: "100644", id }]);
