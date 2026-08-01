@@ -267,18 +267,20 @@ test("stage skips content work for a stable cached index entry", () => {
   const { root } = freshDir();
   const repo = Repository.init(root);
   writeFileSync(join(root, "stable.txt"), "stable\n");
-  const actualNow = Date.now;
-  Date.now = () => actualNow() + 3_000;
-  try {
-    assert.deepEqual(repo.stage(["stable.txt"]), ["stable.txt"]);
-    const cached = repo.readIndex()[0];
-    assert.ok(cached?.stat);
-    assert.deepEqual(repo.stage(["stable.txt"], () => {
-      throw new Error("content reader must not run for a stable cache hit");
-    }), []);
-  } finally {
-    Date.now = actualNow;
-  }
+  assert.deepEqual(repo.stage(["stable.txt"]), ["stable.txt"]);
+  const cached = repo.readIndex()[0];
+  assert.ok(cached?.stat);
+  repo.writeIndex([{ ...cached, stat: { ...cached.stat, observedAtNs: process.hrtime.bigint() - 3_000_000_000n } }]);
+  assert.deepEqual(repo.stage(["stable.txt"], () => {
+    throw new Error("content reader must not run for a stable cache hit");
+  }), []);
+
+  writeFileSync(join(root, "changing.txt"), "changing");
+  assert.deepEqual(repo.stage(["changing.txt"], () => ({
+    content: Buffer.from("changing"),
+    executable: false,
+  })), ["changing.txt"]);
+  assert.equal(repo.readIndex().find((entry) => entry.path === "changing.txt")?.stat, undefined);
 });
 
 test("status reports a clean tree after committing everything", () => {

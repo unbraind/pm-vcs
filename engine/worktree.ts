@@ -47,7 +47,7 @@ export interface IndexStat {
   readonly dev: bigint;
   /** Inode identity, so an atomic same-metadata replacement is still re-read. */
   readonly ino: bigint;
-  /** Wall-clock observation time used to identify a cache entry made inside a coarse timestamp tick. */
+  /** Monotonic observation time used to age the cache beyond a coarse timestamp tick. */
   readonly observedAtNs: bigint;
 }
 
@@ -94,6 +94,12 @@ export interface StatusReport {
  *   the root itself.
  */
 export function normalizeRepoPath(root: string, candidate: string): string {
+  if (candidate.includes("\\")) {
+    throw new ObjectStoreError(
+      "path_outside_repo",
+      `"${candidate}" contains a backslash, which is not portable in canonical slash-separated paths.`,
+    );
+  }
   const absolute = resolve(root, candidate);
   const rooted = relative(root, absolute);
   if (rooted.length === 0) {
@@ -118,21 +124,26 @@ export function normalizeRepoPath(root: string, candidate: string): string {
 export function encodeIndex(entries: readonly IndexEntry[]): string {
   const lines = [...entries]
     .sort((left, right) => compareByteOrder(left.path, right.path))
-    .map((entry) => JSON.stringify([
-      entry.mode,
-      entry.id,
-      entry.path,
-      entry.stat === undefined
-        ? null
-        : [
-            entry.stat.size.toString(),
-            entry.stat.mtimeNs.toString(),
-            entry.stat.ctimeNs.toString(),
-            entry.stat.dev.toString(),
-            entry.stat.ino.toString(),
-            entry.stat.observedAtNs.toString(),
-          ],
-    ]));
+    .map((entry) => {
+      if (!isCanonicalRepoPath(entry.path)) {
+        throw new ObjectStoreError("corrupt_index", `Index path "${entry.path}" is not canonical.`);
+      }
+      return JSON.stringify([
+        entry.mode,
+        entry.id,
+        entry.path,
+        entry.stat === undefined
+          ? null
+          : [
+              entry.stat.size.toString(),
+              entry.stat.mtimeNs.toString(),
+              entry.stat.ctimeNs.toString(),
+              entry.stat.dev.toString(),
+              entry.stat.ino.toString(),
+              entry.stat.observedAtNs.toString(),
+            ],
+      ]);
+    });
   return [INDEX_HEADER, ...lines].join("\n");
 }
 
@@ -243,6 +254,12 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
       }
       if (!entry.isFile() && !entry.isSymbolicLink()) continue;
       const path = relative(root, absolute).split(sep).join("/");
+      if (!isCanonicalRepoPath(path)) {
+        throw new ObjectStoreError(
+          "path_outside_repo",
+          `Working-tree path "${path}" cannot be represented as a canonical slash-separated path.`,
+        );
+      }
       if (!isIgnored(path, rules)) found.push(path);
     }
   };
@@ -264,19 +281,20 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
 export function readWorkingFile(
   root: string,
   path: string,
+  now: () => bigint = process.hrtime.bigint,
 ): { readonly content: Buffer; readonly executable: boolean; readonly stat?: IndexStat } {
   const absolute = join(root, ...path.split("/"));
-  const before = readWorkingStat(root, path);
+  const before = readWorkingStat(root, path, now);
   const content = before.symbolicLink
     ? Buffer.from(readlinkSync(absolute), "utf8")
     : readFileSync(absolute);
-  const after = readWorkingStat(root, path);
+  const after = readWorkingStat(root, path, now);
   // The owner-execute bit alone decides, so a file's mode does not change with
   // the umask of whichever agent happened to create it.
   return {
     content,
     executable: after.executable,
-    ...(sameFileIdentity(before.stat, after.stat) && isNonRacy(after.stat) ? { stat: after.stat } : {}),
+    ...(sameFileIdentity(before.stat, after.stat) ? { stat: after.stat } : {}),
   };
 }
 
@@ -284,6 +302,7 @@ export function readWorkingFile(
 export function readWorkingStat(
   root: string,
   path: string,
+  now: () => bigint = process.hrtime.bigint,
 ): { readonly stat: IndexStat; readonly executable: boolean; readonly symbolicLink: boolean } {
   const stats: BigIntStats = lstatSync(join(root, ...path.split("/")), { bigint: true, throwIfNoEntry: true });
   const symbolicLink = stats.isSymbolicLink();
@@ -294,7 +313,7 @@ export function readWorkingStat(
       ctimeNs: stats.ctimeNs,
       dev: stats.dev,
       ino: stats.ino,
-      observedAtNs: BigInt(Date.now()) * 1_000_000n,
+      observedAtNs: now(),
     },
     executable: !symbolicLink && (stats.mode & 0o100n) !== 0n,
     symbolicLink,
@@ -314,10 +333,6 @@ export function readWorkingStat(
  * @param right - Current working-tree metadata.
  * @returns True only when content hashing can safely be skipped.
  */
-function isNonRacy(stat: IndexStat): boolean {
-  return stat.observedAtNs - (stat.ctimeNs > stat.mtimeNs ? stat.ctimeNs : stat.mtimeNs) >= RACY_WINDOW_NS;
-}
-
 /** Whether two observations carry the same filesystem identity fields. */
 function sameFileIdentity(left: IndexStat, right: IndexStat): boolean {
   return left.size === right.size
@@ -328,7 +343,10 @@ function sameFileIdentity(left: IndexStat, right: IndexStat): boolean {
 }
 
 export function sameIndexStat(left: IndexStat | undefined, right: IndexStat): boolean {
-  return left !== undefined && isNonRacy(left) && isNonRacy(right) && sameFileIdentity(left, right);
+  return left !== undefined
+    && right.observedAtNs >= left.observedAtNs
+    && right.observedAtNs - left.observedAtNs >= RACY_WINDOW_NS
+    && sameFileIdentity(left, right);
 }
 
 /**

@@ -193,9 +193,10 @@ therefore `lstat` every indexed path but read and hash content only when that id
 changed. A legacy three-field index remains
 readable and is upgraded by the next stage; an unknown future version is refused loudly.
 
-Metadata is an optimisation, never an authority. An indexed or current observation inside
-the conservative two-second filesystem timestamp window is marked racy and cannot produce
-a cache hit. This covers the one- and two-second ticks used by common coarse filesystems and catches a
+Metadata is an optimisation, never an authority. An indexed observation must age for a
+conservative two seconds on the monotonic clock before it can produce a cache hit. This
+does not mix a step-adjustable wall clock with filesystem timestamps, covers the one- and
+two-second ticks used by common coarse filesystems, and catches a
 same-size rewrite in the same tick even when its mtime is restored; a later stage refreshes
 the observation after the window. Trusting size and mtime alone here would turn a performance
 feature into silent content loss.

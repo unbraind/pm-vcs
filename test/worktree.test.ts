@@ -59,6 +59,10 @@ test("normalizeRepoPath canonicalises paths and rejects escapes", () => {
     () => normalizeRepoPath(root, "../escape"),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "path_outside_repo",
   );
+  assert.throws(
+    () => normalizeRepoPath(root, "back\\slash.txt"),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "path_outside_repo",
+  );
 });
 
 test("encodeIndex and decodeIndex round-trip cached metadata in path order", () => {
@@ -77,6 +81,10 @@ test("encodeIndex and decodeIndex round-trip cached metadata in path order", () 
   assert.deepEqual(encoded.split("\n").slice(1).map((line) => JSON.parse(line)[2]), ["a.txt", "z.txt"]);
   assert.deepEqual(decodeIndex(encoded), [...entries].sort((l, r) => (l.path < r.path ? -1 : 1)));
   assert.deepEqual(decodeIndex(""), []);
+  assert.throws(
+    () => encodeIndex([{ path: "back\\slash", id: "1".repeat(64), mode: "100644" }]),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
 });
 
 test("decodeIndex reads the legacy format and refuses malformed or future indexes", () => {
@@ -126,6 +134,11 @@ test("listWorkingTree skips the control directory and prunable directories", () 
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "a.ts"), "x");
   assert.deepEqual(listWorkingTree(root, ".pmvcs", noRules), ["src/a.ts", "tracked.txt"]);
+  writeFileSync(join(root, "back\\slash"), "x");
+  assert.throws(
+    () => listWorkingTree(root, ".pmvcs", noRules),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "path_outside_repo",
+  );
 });
 
 test("readWorkingFile reads a regular file and reports its executable bit", () => {
@@ -142,28 +155,29 @@ test("readWorkingFile returns cache metadata once a file is outside the racy win
   dir = makeTempDir();
   const root = dir.root;
   writeFileSync(join(root, "stable"), "stable");
-  const actualNow = Date.now;
-  Date.now = () => actualNow() + 3_000;
-  try {
-    assert.ok(readWorkingFile(root, "stable").stat);
-  } finally {
-    Date.now = actualNow;
-  }
+  assert.ok(readWorkingFile(root, "stable").stat);
 });
 
-test("readWorkingFile uses the final observation after a slow stable read", () => {
+test("readWorkingFile records the final monotonic observation of a stable read", () => {
   dir = makeTempDir();
   const root = dir.root;
   writeFileSync(join(root, "slow-stable"), "stable");
-  const actualNow = Date.now;
-  const firstObservation = actualNow();
+  const observations = [10n, 20n];
+  assert.equal(readWorkingFile(root, "slow-stable", () => observations.shift()!).stat?.observedAtNs, 20n);
+});
+
+test("readWorkingFile omits metadata when the file changes during the read", () => {
+  dir = makeTempDir();
+  const root = dir.root;
+  const path = join(root, "changing");
+  writeFileSync(path, "before");
   let observations = 0;
-  Date.now = () => firstObservation + (observations++ === 0 ? 0 : 3_000);
-  try {
-    assert.ok(readWorkingFile(root, "slow-stable").stat);
-  } finally {
-    Date.now = actualNow;
-  }
+  const result = readWorkingFile(root, "changing", () => {
+    if (observations++ === 0) writeFileSync(path, "longer-after");
+    return BigInt(observations);
+  });
+  assert.equal(result.stat, undefined);
+  assert.deepEqual(result.content, Buffer.from("longer-after"));
 });
 
 test("readWorkingFile reads a symlink's target rather than following it", () => {
@@ -293,20 +307,14 @@ test("computeStatus does not read unchanged cached file content", () => {
       ctimeNs: file.ctimeNs,
       dev: file.dev,
       ino: file.ino,
-      observedAtNs: (file.ctimeNs > file.mtimeNs ? file.ctimeNs : file.mtimeNs) + 2_000_000_000n,
+      observedAtNs: process.hrtime.bigint() - 3_000_000_000n,
     },
   }];
 
-  const actualNow = Date.now;
-  Date.now = () => actualNow() + 3_000;
-  try {
-    const status = computeStatus(store, root, tree, index, ".pmvcs", noRules, undefined, () => {
-      throw new Error("content reader must not run for a cache hit");
-    });
-    assert.equal(status.clean, true);
-  } finally {
-    Date.now = actualNow;
-  }
+  const status = computeStatus(store, root, tree, index, ".pmvcs", noRules, undefined, () => {
+    throw new Error("content reader must not run for a cache hit");
+  });
+  assert.equal(status.clean, true);
 });
 
 test("sameIndexStat rejects current racy observations and detects ctime changes", () => {
@@ -316,11 +324,12 @@ test("sameIndexStat rejects current racy observations and detects ctime changes"
     ctimeNs: 20n,
     dev: 30n,
     ino: 40n,
-    observedAtNs: 2_000_000_020n,
+    observedAtNs: 10n,
   };
-  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 1_000_000_020n }), false);
-  assert.equal(sameIndexStat(stable, { ...stable, ctimeNs: 21n }), false);
-  assert.equal(sameIndexStat(stable, stable), true);
+  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 9n }), false);
+  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 1_000_000_010n }), false);
+  assert.equal(sameIndexStat(stable, { ...stable, ctimeNs: 21n, observedAtNs: 2_000_000_010n }), false);
+  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 2_000_000_010n }), true);
 });
 
 test("computeStatus detects a same-size edit even when its mtime is restored", () => {
@@ -337,7 +346,6 @@ test("computeStatus detects a same-size edit even when its mtime is restored", (
   const changed = statSync(path, { bigint: true });
   assert.equal(changed.size, original.size);
   assert.equal(changed.mtimeNs, original.mtimeNs);
-  const newestOriginal = original.ctimeNs > original.mtimeNs ? original.ctimeNs : original.mtimeNs;
   const index: IndexEntry[] = [{
     path: "racy.txt",
     id,
@@ -348,7 +356,7 @@ test("computeStatus detects a same-size edit even when its mtime is restored", (
       ctimeNs: original.ctimeNs,
       dev: original.dev,
       ino: original.ino,
-      observedAtNs: changed.ctimeNs === original.ctimeNs ? newestOriginal : newestOriginal + 2_000_000_000n,
+      observedAtNs: process.hrtime.bigint(),
     },
   }];
 
