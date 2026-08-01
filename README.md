@@ -117,7 +117,7 @@ $ pm vcs diff main feature
 | command | what it does |
 | --- | --- |
 | `pm vcs init` | Create a repository. `--record-path` declares which paths hold structured records; `--set-field` declares how their fields merge. |
-| `pm vcs status` | The three-way difference between HEAD, the index and the working tree. |
+| `pm vcs status` | The three-way difference between HEAD, the index and the working tree. Stable indexed paths are checked from stat metadata without re-reading content; racy timestamp-window entries are always hashed. |
 | `pm vcs add [paths…]` | Stage paths, or everything. A path that no longer exists stages as a deletion. |
 | `pm vcs commit --message` | Record the index. Refuses an empty commit unless `--allow-empty`. |
 | `pm vcs log [rev]` | First-parent history, newest first. |
@@ -223,7 +223,8 @@ engine/refs.ts       Branches, tags, HEAD (symbolic or detached), compare-and-sw
 engine/diff.ts       Myers O(ND) line diff, hunk grouping, unified rendering.
 engine/merge.ts      Commit-DAG reachability, minimal merge bases, diff3 content merge.
 engine/records.ts    Per-field record merge; append-only log union.
-engine/worktree.ts   Index, working-tree scan, tree materialization, status.
+engine/worktree.ts   Versioned index with racy-clean-safe stat caching, working-tree scan,
+                     tree materialization, and three-way status.
 engine/ignore.ts     An always-ignored set plus `.pmvcsignore`.
 engine/config.ts     Which paths hold records and how their fields merge — per repository,
                      so two agents cannot disagree about it.

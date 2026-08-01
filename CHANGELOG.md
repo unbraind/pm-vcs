@@ -1,9 +1,10 @@
 # Changelog
 
-## 2026.7.30 - 2026-07-31
+## 2026.7.30 - 2026-08-01
 
 ### Added
 
+- Stat cache skips stable paths and hashes metadata changes or racy timestamps ([pm-vcs-47zn](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-47zn.toon))
 - Change identities and history rewriting ([pm-vcs-bddk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-bddk.toon))
 - Bundle export and import so two repositories exchange history ([pm-vcs-o5e3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-o5e3.toon))
 - Operation log and undo ([pm-vcs-48sr](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-48sr.toon))

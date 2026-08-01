@@ -7,7 +7,7 @@ import { type ObjectId, ObjectStoreError } from "../engine/objects.ts";
 import { CONTROL_DIRECTORY, type MergeReport, REPOSITORY_FORMAT, Repository } from "../engine/repo.ts";
 import { type RepositoryConfig } from "../engine/config.ts";
 import { type Commit, type Signature, writeCommit } from "../engine/model.ts";
-import { buildTree } from "../engine/worktree.ts";
+import { buildTree, RACY_WINDOW_NS } from "../engine/worktree.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 let dir: { root: string; cleanup(): void } | null = null;
@@ -261,6 +261,33 @@ test("stage stages all, stages a deletion, and refuses an explicitly-named ignor
   // Now delete it and stage the deletion.
   removeFile(join(root, "b.txt"));
   assert.deepEqual(repo.stage(["b.txt"]), ["b.txt"]);
+});
+
+test("stage skips content work for a stable cached index entry", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  writeFileSync(join(root, "stable.txt"), "stable\n");
+  assert.deepEqual(repo.stage(["stable.txt"]), ["stable.txt"]);
+  const cached = repo.readIndex()[0];
+  assert.ok(cached?.stat);
+  const newest = cached.stat.ctimeNs > cached.stat.mtimeNs ? cached.stat.ctimeNs : cached.stat.mtimeNs;
+  repo.writeIndex([{ ...cached, stat: { ...cached.stat, observedAtNs: newest + RACY_WINDOW_NS } }]);
+  const actualNow = Date.now;
+  Date.now = () => actualNow() + Number((RACY_WINDOW_NS * 2n) / 1_000_000n) + 1_000;
+  try {
+    assert.deepEqual(repo.stage(["stable.txt"], () => {
+      throw new Error("content reader must not run for a stable cache hit");
+    }), []);
+  } finally {
+    Date.now = actualNow;
+  }
+
+  writeFileSync(join(root, "changing.txt"), "changing");
+  assert.deepEqual(repo.stage(["changing.txt"], () => ({
+    content: Buffer.from("changing"),
+    executable: false,
+  })), ["changing.txt"]);
+  assert.equal(repo.readIndex().find((entry) => entry.path === "changing.txt")?.stat, undefined);
 });
 
 test("status reports a clean tree after committing everything", () => {

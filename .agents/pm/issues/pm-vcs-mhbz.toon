@@ -1,0 +1,30 @@
+id: pm-vcs-mhbz
+title: Public git history embeds a personal author email and blocks release approval
+description: "A full reachable-history identity scan found that every current commit stores a personal email in author and often committer metadata. The repository is already public, so fixing the raw history requires a coordinated history rewrite and force update, not a mailmap-only cosmetic change. No token, private-key, local-path, or LAN-address patterns were found by the current scan."
+type: Issue
+status: open
+priority: 0
+tags[4]: do-not-publish,git-history,privacy,release-blocker
+created_at: "2026-08-01T04:14:51.644Z"
+updated_at: "2026-08-01T05:56:44.287Z"
+author: codex
+estimated_minutes: 180
+acceptance_criteria: "Choose a public noreply identity; rewrite all reachable branches and tags plus audit unreachable objects; independently scan the rewritten object database and working tree; coordinate force updates and invalidate stale clones; verify GitHub, npm provenance, changelog links, and PR refs; document the migration without publishing the removed personal value."
+severity: critical
+component: release/privacy
+customer_impact: Publishing releases before remediation would preserve personal data in every distributed clone and package provenance link.
+notes[7]{created_at,author,text}:
+  "2026-08-01T04:15:38.103Z",codex,"Immediate containment: replaced the tracked mailmap entries with name-only aliases targeting the GitHub noreply identity, and configured this clone to use that noreply address for new commits. Raw historical commit objects remain unchanged and keep this issue release-blocking."
+  "2026-08-01T04:25:46.765Z",codex,First review confirmed that the prior name-only mailmap syntax was invalid. Removed it instead of tracking historical private addresses. Added a TypeScript audit that scans author and committer metadata in all refs plus unreachable or dangling commit objects; it currently fails with two non-public addresses and keeps this item release-blocking.
+  "2026-08-01T04:44:56.149Z",codex,"Cubic second-round review strengthened the audit implementation: Git failures now require exact status zero, launch errors remain actionable, and a 256 MiB output ceiling avoids the default spawnSync ENOBUFS limit for large histories."
+  "2026-08-01T05:07:49.749Z",codex,"Final Cubic review replaced ref traversal and one-process-per-dangling-tip inspection with replacement-disabled cat-file enumeration of every physical commit object and one raw batch read. Real Git subprocess tests cover allowlisted reachable history, unreachable private ancestors behind replacement refs, malformed commit objects, and unusable repositories. audit:identities is now inside release:check, intentionally making release fail closed until the coordinated rewrite removes both historical addresses."
+  "2026-08-01T05:13:50.627Z",codex,"Enforcement result is now intentionally red only at the historical identity boundary: npm run audit:identities rejects two non-public addresses without printing them. All preceding code-quality gates pass, so release:check will remain fail-closed at this step until the coordinated rewrite tracked here is completed."
+  "2026-08-01T05:25:21.784Z",codex,"The raw-object audit now accepts a valid empty repository as zero identities. The allowlist intentionally does not add the two historical addresses: doing so would convert a privacy release blocker into an approval. They must be rewritten and pruned before release, as this item already requires."
+  "2026-08-01T05:56:44.269Z",codex,"CodeRabbit found annotated tagger identities were outside the first audit. The gate now inventories raw physical commit and annotated-tag objects, ignores replacement overlays, and checks exactly one header identity per required field. It still fails closed with two non-public historical addresses and never prints them."
+files[3]{path,scope,note}:
+  scripts/audit-git-identities.ts,project,fail-closed reachable and unreachable author and committer identity inventory
+  .github/approved-git-identities.txt,project,approved public commit metadata addresses
+  test/audit-git-identities.test.ts,project,reachable unreachable replacement malformed and Git-failure audit acceptance
+tests[1]{command,scope,timeout_seconds,note}:
+  "NPM_CONFIG_USERCONFIG=/dev/null npm run release:check",project,2400,must fail at audit identities until history rewrite then become the authoritative passing release gate
+body: ""

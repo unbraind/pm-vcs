@@ -186,7 +186,21 @@ phantom ref.
 
 ## 5. Index, working tree, status
 
-The index is a flat text file: one line per path with mode, object id and staging metadata.
+The index is a versioned flat text file: a `pm-vcs-index 2` header followed by one canonical
+JSON tuple per path with mode, object id and filesystem identity. Version 2 records size,
+mtime, ctime, device, inode and the time the observation was made. `status` and `add`
+therefore `lstat` every indexed path but read and hash content only when that identity
+changed. A legacy three-field index remains
+readable and is upgraded by the next stage; an unknown future version is refused loudly.
+
+Metadata is an optimisation, never an authority. An indexed observation must be at least
+two seconds newer than the file metadata it verified, and the current observation must be
+another two seconds newer than that cached observation, before a cache hit is possible.
+Both comparisons use wall-clock nanoseconds so separate processes and hosts can read the
+index, while the metadata-age condition covers common one- and two-second coarse ticks and catches a
+same-size rewrite in the same tick even when its mtime is restored; a later stage refreshes
+the observation after the window. Trusting size and mtime alone here would turn a performance
+feature into silent content loss.
 
 `status` reports the **three-way** difference — HEAD vs index (staged), index vs working tree
 (unstaged), and paths in neither (untracked) — because collapsing those into one list is what

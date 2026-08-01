@@ -55,6 +55,8 @@ import {
   materializeTree,
   normalizeRepoPath,
   readWorkingFile,
+  readWorkingStat,
+  sameIndexStat,
 } from "./worktree.ts";
 import { splitLines, unifiedDiff } from "./diff.ts";
 import { type IgnoreRules, isIgnored, readIgnoreRules } from "./ignore.ts";
@@ -241,9 +243,11 @@ export class Repository {
    * remove command whose only job is to say what `add` already knows.
    *
    * @param paths - Paths to stage, or an empty array for everything.
+   * @param read - Working-file reader; injectable so the cache bypass remains
+   *   directly testable without relying on elapsed-time benchmarks.
    * @returns The paths whose staged state changed.
    */
-  stage(paths: readonly string[]): string[] {
+  stage(paths: readonly string[], read: typeof readWorkingFile = readWorkingFile): string[] {
     const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
     const rules = this.ignoreRules();
     const targets = paths.length === 0
@@ -264,8 +268,13 @@ export class Repository {
       }
       let content: Buffer;
       let executable: boolean;
+      let stat: IndexEntry["stat"];
       try {
-        ({ content, executable } = readWorkingFile(this.root, path));
+        const observed = readWorkingStat(this.root, path);
+        const existing = index.get(path);
+        const observedMode = observed.executable ? "100755" : "100644";
+        if (existing && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
+        ({ content, executable, stat } = read(this.root, path));
       } catch {
         if (index.delete(path)) changed.push(path);
         continue;
@@ -273,9 +282,8 @@ export class Repository {
       const id = this.stageContent(path, content);
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
-      if (existing && existing.id === id && existing.mode === mode) continue;
-      index.set(path, { path, id, mode });
-      changed.push(path);
+      index.set(path, { path, id, mode, ...(stat === undefined ? {} : { stat }) });
+      if (!existing || existing.id !== id || existing.mode !== mode) changed.push(path);
     }
     this.writeIndex([...index.values()]);
     return changed.sort(compareByteOrder);
