@@ -68,6 +68,7 @@ export function collectGitIdentities(root: string): Set<string> {
       const match = /^([0-9a-f]+) commit$/.exec(line);
       return match ? [match[1]!] : [];
     });
+  if (objectIds.length === 0) return new Set();
   const batch = readCommitBatch(root, objectIds);
   const addresses = new Set<string>();
   let offset = 0;

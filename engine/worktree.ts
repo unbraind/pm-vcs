@@ -47,7 +47,7 @@ export interface IndexStat {
   readonly dev: bigint;
   /** Inode identity, so an atomic same-metadata replacement is still re-read. */
   readonly ino: bigint;
-  /** Monotonic observation time used to age the cache beyond a coarse timestamp tick. */
+  /** Wall-clock observation time used to age the cache beyond a coarse timestamp tick. */
   readonly observedAtNs: bigint;
 }
 
@@ -94,7 +94,8 @@ export interface StatusReport {
  *   the root itself.
  */
 export function normalizeRepoPath(root: string, candidate: string): string {
-  if (candidate.includes("\\")) {
+  const portableCandidate = candidate.split(sep).join("/");
+  if (portableCandidate.includes("\\")) {
     throw new ObjectStoreError(
       "path_outside_repo",
       `"${candidate}" contains a backslash, which is not portable in canonical slash-separated paths.`,
@@ -281,7 +282,7 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
 export function readWorkingFile(
   root: string,
   path: string,
-  now: () => bigint = process.hrtime.bigint,
+  now: () => bigint = () => BigInt(Date.now()) * 1_000_000n,
 ): { readonly content: Buffer; readonly executable: boolean; readonly stat?: IndexStat } {
   const absolute = join(root, ...path.split("/"));
   const before = readWorkingStat(root, path, now);
@@ -302,7 +303,7 @@ export function readWorkingFile(
 export function readWorkingStat(
   root: string,
   path: string,
-  now: () => bigint = process.hrtime.bigint,
+  now: () => bigint = () => BigInt(Date.now()) * 1_000_000n,
 ): { readonly stat: IndexStat; readonly executable: boolean; readonly symbolicLink: boolean } {
   const stats: BigIntStats = lstatSync(join(root, ...path.split("/")), { bigint: true, throwIfNoEntry: true });
   const symbolicLink = stats.isSymbolicLink();
@@ -344,6 +345,7 @@ function sameFileIdentity(left: IndexStat, right: IndexStat): boolean {
 
 export function sameIndexStat(left: IndexStat | undefined, right: IndexStat): boolean {
   return left !== undefined
+    && left.observedAtNs - (left.ctimeNs > left.mtimeNs ? left.ctimeNs : left.mtimeNs) >= RACY_WINDOW_NS
     && right.observedAtNs >= left.observedAtNs
     && right.observedAtNs - left.observedAtNs >= RACY_WINDOW_NS
     && sameFileIdentity(left, right);

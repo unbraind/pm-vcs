@@ -41,6 +41,14 @@ test("identity audit accepts an allowlisted reachable history", () => {
   assert.doesNotThrow(() => auditGitIdentities(root, allowlist));
 });
 
+test("identity audit accepts an initialized repository with no commits", () => {
+  dir = makeTempDir();
+  git(dir.root, ["init", "-q"]);
+  const allowlist = join(dir.root, "approved.txt");
+  writeFileSync(allowlist, "public@example.test\n");
+  assert.doesNotThrow(() => auditGitIdentities(dir!.root, allowlist));
+});
+
 test("identity audit finds unreachable ancestors and ignores replacement refs", () => {
   const { root, allowlist, first } = repository();
   git(root, ["config", "user.email", "private@example.test"]);

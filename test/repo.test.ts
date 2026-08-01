@@ -270,10 +270,17 @@ test("stage skips content work for a stable cached index entry", () => {
   assert.deepEqual(repo.stage(["stable.txt"]), ["stable.txt"]);
   const cached = repo.readIndex()[0];
   assert.ok(cached?.stat);
-  repo.writeIndex([{ ...cached, stat: { ...cached.stat, observedAtNs: process.hrtime.bigint() - 3_000_000_000n } }]);
-  assert.deepEqual(repo.stage(["stable.txt"], () => {
-    throw new Error("content reader must not run for a stable cache hit");
-  }), []);
+  const newest = cached.stat.ctimeNs > cached.stat.mtimeNs ? cached.stat.ctimeNs : cached.stat.mtimeNs;
+  repo.writeIndex([{ ...cached, stat: { ...cached.stat, observedAtNs: newest + 2_000_000_000n } }]);
+  const actualNow = Date.now;
+  Date.now = () => actualNow() + 5_000;
+  try {
+    assert.deepEqual(repo.stage(["stable.txt"], () => {
+      throw new Error("content reader must not run for a stable cache hit");
+    }), []);
+  } finally {
+    Date.now = actualNow;
+  }
 
   writeFileSync(join(root, "changing.txt"), "changing");
   assert.deepEqual(repo.stage(["changing.txt"], () => ({

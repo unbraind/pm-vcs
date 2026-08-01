@@ -151,14 +151,14 @@ test("readWorkingFile reads a regular file and reports its executable bit", () =
   assert.deepEqual(readWorkingFile(root, "plain").content, Buffer.from("plain"));
 });
 
-test("readWorkingFile returns cache metadata once a file is outside the racy window", () => {
+test("readWorkingFile returns cache metadata when identity is stable across the read", () => {
   dir = makeTempDir();
   const root = dir.root;
   writeFileSync(join(root, "stable"), "stable");
   assert.ok(readWorkingFile(root, "stable").stat);
 });
 
-test("readWorkingFile records the final monotonic observation of a stable read", () => {
+test("readWorkingFile records the final observation of a stable read", () => {
   dir = makeTempDir();
   const root = dir.root;
   writeFileSync(join(root, "slow-stable"), "stable");
@@ -307,14 +307,20 @@ test("computeStatus does not read unchanged cached file content", () => {
       ctimeNs: file.ctimeNs,
       dev: file.dev,
       ino: file.ino,
-      observedAtNs: process.hrtime.bigint() - 3_000_000_000n,
+      observedAtNs: (file.ctimeNs > file.mtimeNs ? file.ctimeNs : file.mtimeNs) + 2_000_000_000n,
     },
   }];
 
-  const status = computeStatus(store, root, tree, index, ".pmvcs", noRules, undefined, () => {
-    throw new Error("content reader must not run for a cache hit");
-  });
-  assert.equal(status.clean, true);
+  const actualNow = Date.now;
+  Date.now = () => actualNow() + 5_000;
+  try {
+    const status = computeStatus(store, root, tree, index, ".pmvcs", noRules, undefined, () => {
+      throw new Error("content reader must not run for a cache hit");
+    });
+    assert.equal(status.clean, true);
+  } finally {
+    Date.now = actualNow;
+  }
 });
 
 test("sameIndexStat rejects current racy observations and detects ctime changes", () => {
@@ -324,12 +330,16 @@ test("sameIndexStat rejects current racy observations and detects ctime changes"
     ctimeNs: 20n,
     dev: 30n,
     ino: 40n,
-    observedAtNs: 10n,
+    observedAtNs: 2_000_000_020n,
   };
-  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 9n }), false);
-  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 1_000_000_010n }), false);
-  assert.equal(sameIndexStat(stable, { ...stable, ctimeNs: 21n, observedAtNs: 2_000_000_010n }), false);
-  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 2_000_000_010n }), true);
+  assert.equal(sameIndexStat(
+    { ...stable, observedAtNs: 1_000_000_020n },
+    { ...stable, observedAtNs: 5_000_000_020n },
+  ), false);
+  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 2_000_000_019n }), false);
+  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 3_000_000_020n }), false);
+  assert.equal(sameIndexStat(stable, { ...stable, ctimeNs: 21n, observedAtNs: 4_000_000_020n }), false);
+  assert.equal(sameIndexStat(stable, { ...stable, observedAtNs: 4_000_000_020n }), true);
 });
 
 test("computeStatus detects a same-size edit even when its mtime is restored", () => {
@@ -356,7 +366,7 @@ test("computeStatus detects a same-size edit even when its mtime is restored", (
       ctimeNs: original.ctimeNs,
       dev: original.dev,
       ino: original.ino,
-      observedAtNs: process.hrtime.bigint(),
+      observedAtNs: BigInt(Date.now()) * 1_000_000n,
     },
   }];
 
