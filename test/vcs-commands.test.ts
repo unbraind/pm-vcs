@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
+import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import { VcsError } from "../git.ts";
@@ -10,12 +11,15 @@ import extension from "../index.ts";
 import {
   commaSeparated,
   findRepositoryRoot,
+  linkedFiles,
   openRepository,
   optionalString,
+  pmClient,
   positiveInteger,
   signatureFor,
   sourceWorkingRoot,
 } from "../vcs-commands.ts";
+import type { CommandHandlerContext } from "@unbrained/pm-cli/sdk/authoring";
 import { CONTROL_DIRECTORY, Repository } from "../engine/repo.ts";
 import { flattenTree } from "../engine/worktree.ts";
 import type { RepositoryConfig } from "../engine/config.ts";
@@ -65,17 +69,104 @@ const COMMANDS = [
   "vcs export", "vcs import", "vcs tag", "vcs verify",
   "vcs describe", "vcs rebase", "vcs squash", "vcs split",
   "vcs cherry-pick", "vcs revert", "vcs reset", "vcs restore", "vcs show",
+  "vcs trace", "vcs items", "vcs files", "vcs changes",
   "vcs git preflight", "vcs git preview", "vcs git items",
 ];
 
-test("activation registers all 27 commands with no sibling dropped", async () => {
+test("activation registers all 31 commands with no sibling dropped", async () => {
   const harness = await activate();
   // A registration rejected by the loader aborts at that command and silently
   // drops every later sibling, so asserting each one's contract is the invariant.
   for (const command of COMMANDS) {
     harness.assertCommandContract({ command });
   }
-  assert.equal(COMMANDS.length, 27);
+  assert.equal(COMMANDS.length, 31);
+});
+
+test("native commands validate PM associations and resolve linked file changes", async () => {
+  const harness = await activate();
+  const { root } = freshRepoDir();
+  const client = new PmClient({ pmRoot: root, cwd: root, noExtensions: true });
+  await client.init("test", { defaults: true, author: "test" });
+  const created = await client.create({ type: "Task", title: "Track arbitrary asset", author: "test" });
+  const item = created.item.id;
+  await client.files(item, { add: ["asset.bin"], author: "test" });
+  const emptyItem = (await client.create({ type: "Task", title: "No linked files", author: "test" })).item.id;
+  const missingItem = (await client.create({ type: "Task", title: "Future asset", author: "test" })).item.id;
+  await client.files(missingItem, { add: ["future.bin"], author: "test" });
+
+  await harness.runCommand({ command: "vcs init", pmRoot: root });
+  writeFileSync(join(root, "asset.bin"), "binary-ish\0content");
+  await harness.runCommand({ command: "vcs add", pmRoot: root });
+  const committed = await harness.runCommand({ command: "vcs commit", options: { message: "asset", item }, global: { author: "A <a@b>" }, pmRoot: root });
+  assert.equal(committed.errorMessage, undefined, String(committed.errorMessage));
+  assert.deepEqual((committed.result as { items: string[] }).items, [item]);
+  writeFileSync(join(root, "asset.bin"), "binary-ish\0content-v2");
+  await harness.runCommand({ command: "vcs add", pmRoot: root });
+  const edited = await harness.runCommand({ command: "vcs commit", options: { message: "asset edit" }, global: { author: "A <a@b>" }, pmRoot: root });
+
+  const files = await harness.runCommand({ command: "vcs files", args: [item], pmRoot: root });
+  const linked = (files.result as { files: Array<{ fileId: string; changes: unknown[] }> }).files[0];
+  assert.match(linked?.fileId ?? "", /^[0-9a-f]{32}$/);
+  assert.equal(linked?.changes.length, 2);
+  const changes = await harness.runCommand({ command: "vcs changes", args: [item], pmRoot: root });
+  assert.equal((changes.result as { changes: string[] }).changes.length, 2);
+  const emptyFiles = await harness.runCommand({ command: "vcs files", args: [emptyItem], pmRoot: root });
+  assert.deepEqual((emptyFiles.result as { files: unknown[] }).files, []);
+  const emptyChanges = await harness.runCommand({ command: "vcs changes", args: [emptyItem], pmRoot: root });
+  assert.deepEqual((emptyChanges.result as { changes: unknown[] }).changes, []);
+  const missingFiles = await harness.runCommand({ command: "vcs files", args: [missingItem], pmRoot: root });
+  assert.deepEqual((missingFiles.result as { files: unknown[] }).files, [{ path: "future.bin", fileId: null, changes: [] }]);
+  const traced = await harness.runCommand({ command: "vcs trace", args: [linked!.fileId], pmRoot: root });
+  assert.equal((traced.result as { changes: unknown[] }).changes.length, 2);
+  const allItems = await harness.runCommand({ command: "vcs items", pmRoot: root });
+  assert.deepEqual((allItems.result as { items: string[] }).items, [item]);
+  const rangeItems = await harness.runCommand({
+    command: "vcs items",
+    args: [`${(committed.result as { commit: string }).commit}..${(edited.result as { commit: string }).commit}`],
+    pmRoot: root,
+  });
+  assert.deepEqual((rangeItems.result as { items: string[] }).items, [item]);
+  assert.equal((rangeItems.result as { commits: string[] }).commits.length, 1);
+  const invalidRange = await harness.runCommand({ command: "vcs items", args: ["HEAD"], pmRoot: root });
+  assert.equal(invalidRange.handled, false);
+  assert.match(String(invalidRange.errorMessage), /invalid/);
+
+  const missing = await harness.runCommand({ command: "vcs trace", args: ["missing.bin"], pmRoot: root });
+  assert.equal(missing.handled, false);
+  assert.match(String(missing.errorMessage), /No identity is recorded/);
+
+  rmSync(join(root, "asset.bin"));
+  await harness.runCommand({ command: "vcs add", pmRoot: root });
+  await harness.runCommand({ command: "vcs commit", options: { message: "remove old occupant" }, global: { author: "A <a@b>" }, pmRoot: root });
+  writeFileSync(join(root, "asset.bin"), "unrelated replacement");
+  await harness.runCommand({ command: "vcs add", pmRoot: root });
+  await harness.runCommand({ command: "vcs commit", options: { message: "reuse path" }, global: { author: "A <a@b>" }, pmRoot: root });
+  const reusedFiles = await harness.runCommand({ command: "vcs files", args: [item], pmRoot: root });
+  const currentOccupant = (reusedFiles.result as { files: Array<{ fileId: string; changes: unknown[] }> }).files[0];
+  assert.notEqual(currentOccupant?.fileId, linked?.fileId);
+  assert.equal(currentOccupant?.changes.length, 1);
+  const reusedChanges = await harness.runCommand({ command: "vcs changes", args: [item], pmRoot: root });
+  assert.equal((reusedChanges.result as { changes: string[] }).changes.length, 2);
+});
+
+test("pmClient prefers the invocation's host-bound SDK client", () => {
+  const { root } = freshRepoDir();
+  const client = new PmClient({ pmRoot: root, cwd: root, noExtensions: true });
+  const context = {
+    command: "vcs files",
+    args: [],
+    options: {},
+    global: {},
+    pm_root: root,
+    sdk: { client } as CommandHandlerContext["sdk"],
+  };
+  assert.equal(pmClient(context), client);
+});
+
+test("linkedFiles normalizes omitted SDK linked projections", () => {
+  assert.deepEqual(linkedFiles({ item: {} }), []);
+  assert.deepEqual(linkedFiles({ item: {}, linked: { files: [], tests: [], docs: [] } }), []);
 });
 
 test("findRepositoryRoot walks up to a control directory and returns null past the root", () => {

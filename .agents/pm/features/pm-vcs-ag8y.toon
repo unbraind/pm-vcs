@@ -2,14 +2,36 @@ id: pm-vcs-ag8y
 title: Give arbitrary files stable identities and native PM-linked change attribution
 description: "Add stable FileId values to tree entries so moves preserve logical identity, copies mint new identities with provenance, and pm-vcs can resolve PM-linked text or binary files through native ChangeIds and commits without Git or a mutable attribution database."
 type: Feature
-status: open
+status: in_progress
 priority: 1
 tags: []
 created_at: "2026-08-01T19:32:33.077Z"
-updated_at: "2026-08-01T19:52:12.206Z"
+updated_at: "2026-08-01T21:54:45.569Z"
+assignee: codex
+claim_principal: codex
 author: "harness:codex"
 estimated_minutes: 1440
 acceptance_criteria: Move preserves FileId while copy mints a new FileId with an auditable source edge; pm vcs items files changes and trace answer PM attribution from immutable commits plus PM history; pm vcs commit --item validates the PM item and records an explicit association without editing the item; Two-agent branch merges retain attribution for different linked files and deleted files remain historically traceable; Sparse or incomplete history reports required missing fragments instead of an incomplete answer; Merge rejects and reports a FileId conflict when two distinct logical files claim the same identity and does not publish corrupted identity or PM attribution
 parent: pm-vcs-b7cb
 risk: high
+notes[5]{created_at,author,text}:
+  "2026-08-01T21:05:56.489Z",codex,"TDD tranche implemented: versioned tree/index identity metadata; random FileId assignment; move preservation; copy provenance; identity-conflict rejection; canonical commit item associations; native trace/files/changes/items commands through the public pm SDK; two-branch convergence and missing-history fail-closed acceptance tests; Epic Lore research published in LORE.md with explicit shipped/deferred boundaries. Focused typecheck and 43 implementation tests pass. Full coverage and release gates remain pending."
+  "2026-08-01T21:15:41.346Z",codex,"Full release evidence: typecheck and build passed; 376 tests passed; aggregate source coverage is 100.00% lines, 100.00% branches, 100.00% functions across 21 source files; npm production audit found zero vulnerabilities. release:check then failed closed at audit:identities because the existing public Git history contains two non-public addresses tracked by pm-vcs-mhbz. This is a publication blocker, not a code/test failure, and no release or publish is authorized."
+  "2026-08-01T21:23:37.531Z",codex,"Post-gate adversarial review hardened migration and merge semantics: legacy FileIds are deterministic across agents; inode/device identity preserves rename-plus-edit in one stage; identity-only migrations participate in three-way merge; legacy/versioned sides adopt known identity; conflicting copy provenance fails closed; PM linked-path resolution now searches newest revisions first even when object IDs sort differently. The expanded suite is 377 tests at 100/100/100 coverage."
+  "2026-08-01T21:37:06.628Z","harness:codex","Post-review invariant hardening: native tree/index encoders and decoders now reject copy provenance without a current file identity and reject self-referential provenance. Added focused regression coverage; the full suite remains 377/377 with 100.00% line, branch, and function coverage across all 21 source files. PR: https://github.com/unbraind/pm-vcs/pull/6"
+  "2026-08-01T21:54:45.569Z","harness:codex","CodeRabbit review remediation: identity/provenance disagreements now produce resolvable identity conflicts instead of aborting; divergent renames retain both paths with a deterministic fork and provenance; attribution uses topology rather than timestamps and caches immutable trees; vcs items removes N+1 SDK reads; omitted linked projections are safe; path reuse, partial history, independent additions, divergent renames, malformed item IDs, cleanup, and absent optional metadata have regressions. Full suite: 381/381; coverage: 100.00% lines/branches/functions across 21 sources. Filed pm-cli#861 for an indexed typed reverse linked-file lookup so narrow VCS attribution can avoid the remaining full workspace scan."
+files[13]{path,scope,note}:
+  ARCHITECTURE.md,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  engine/attribution.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  engine/model.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  engine/repo.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  engine/rewrite.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  engine/worktree.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  LORE.md,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  README.md,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  test/attribution.test.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  test/model.test.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  test/vcs-commands.test.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  test/worktree.test.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
+  vcs-commands.ts,project,"Stable FileId storage, PM attribution commands, acceptance tests, and public design documentation."
 body: ""

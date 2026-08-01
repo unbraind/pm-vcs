@@ -12,10 +12,12 @@
 // so `undo` never has to reconstruct one.
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import {
   type Commit,
+  type FileId,
   type FileMode,
   type RecordDocument,
   type Signature,
@@ -59,6 +61,17 @@ import {
   readWorkingStat,
   sameIndexStat,
 } from "./worktree.ts";
+
+/** Derive one migration-safe identity from a legacy index entry. */
+function migratedFileId(entry: Pick<IndexEntry, "path" | "id">): FileId {
+  return createHash("sha256")
+    .update("pm-vcs legacy file identity\0", "utf8")
+    .update(entry.path, "utf8")
+    .update("\0", "utf8")
+    .update(entry.id, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+}
 import { splitLines, unifiedDiff } from "./diff.ts";
 import { type IgnoreRules, isIgnored, readIgnoreRules } from "./ignore.ts";
 import { parseWorkingRecord, renderWorkingRecord } from "./record-format.ts";
@@ -119,6 +132,8 @@ export interface CommitOptions {
   readonly committer?: Signature;
   /** Allow a commit that changes nothing. Off by default so an empty commit is deliberate. */
   readonly allowEmpty?: boolean;
+  /** PM items explicitly associated with the commit. */
+  readonly items?: readonly string[];
 }
 
 /**
@@ -250,7 +265,8 @@ export class Repository {
    * @returns The paths whose staged state changed.
    */
   stage(paths: readonly string[], read: typeof readWorkingFile = readWorkingFile): string[] {
-    const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
+    const originalEntries = this.readIndex();
+    const index = new Map(originalEntries.map((entry) => [entry.path, entry]));
     const rules = this.ignoreRules();
     const targets = paths.length === 0
       ? [...new Set([...listWorkingTree(this.root, CONTROL_DIRECTORY, rules), ...index.keys()])]
@@ -275,7 +291,7 @@ export class Repository {
         const observed = readWorkingStat(this.root, path);
         const existing = index.get(path);
         const observedMode = observed.executable ? "100755" : "100644";
-        if (existing && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
+        if (existing?.fileId !== undefined && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
         ({ content, executable, stat } = read(this.root, path));
       } catch {
         if (index.delete(path)) changed.push(path);
@@ -284,8 +300,32 @@ export class Repository {
       const id = this.stageContent(path, content);
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
-      index.set(path, { path, id, mode, ...(stat === undefined ? {} : { stat }) });
-      if (!existing || existing.id !== id || existing.mode !== mode) changed.push(path);
+      let fileId = existing === undefined ? undefined : existing.fileId ?? migratedFileId(existing);
+      let copiedFrom = existing?.copiedFrom;
+      if (fileId === undefined) {
+        const identityMatches = stat === undefined ? [] : originalEntries.filter((entry) => entry.path !== path
+          && entry.stat?.dev === stat.dev && entry.stat.ino === stat.ino);
+        const contentMatches = originalEntries.filter((entry) => entry.path !== path && entry.id === id
+          && entry.mode === mode);
+        const matches = identityMatches.length === 1 ? identityMatches : contentMatches;
+        if (matches.length === 1) {
+          const source = matches[0];
+          const sourceFileId = source.fileId ?? migratedFileId(source);
+          if (!existsSync(join(this.root, ...source.path.split("/")))) {
+            fileId = sourceFileId;
+            copiedFrom = source.copiedFrom;
+            if (index.delete(source.path)) changed.push(source.path);
+          } else {
+            fileId = randomBytes(16).toString("hex");
+            copiedFrom = sourceFileId;
+          }
+        } else {
+          fileId = randomBytes(16).toString("hex");
+        }
+      }
+      index.set(path, { path, id, mode, fileId, ...(copiedFrom === undefined ? {} : { copiedFrom }),
+        ...(stat === undefined ? {} : { stat }) });
+      if (!existing || existing.id !== id || existing.mode !== mode || existing.fileId !== fileId) changed.push(path);
     }
     this.writeIndex([...index.values()]);
     return changed.sort(compareByteOrder);
@@ -391,7 +431,12 @@ export class Repository {
     const parent = head.target;
     const tree = buildTree(
       this.objects,
-      new Map(this.readIndex().map((entry) => [entry.path, { id: entry.id, mode: entry.mode as FileMode }])),
+      new Map(this.readIndex().map((entry) => [entry.path, {
+        id: entry.id,
+        mode: entry.mode as FileMode,
+        fileId: entry.fileId,
+        copiedFrom: entry.copiedFrom,
+      }])),
     );
     if (!options.allowEmpty && parent !== null && readCommit(this.objects, parent).tree === tree) {
       throw new ObjectStoreError(
@@ -405,6 +450,7 @@ export class Repository {
       author: options.author,
       committer: options.committer ?? options.author,
       message: options.message,
+      ...(options.items === undefined ? {} : { items: options.items }),
     };
     // A new commit's change id is the id it would have with no change line, so
     // the identity is a function of the content the commit describes rather than

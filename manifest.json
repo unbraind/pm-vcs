@@ -1,11 +1,11 @@
 {
   "name": "pm-vcs",
   "version": "2026.7.30",
-  "description": "A version control system written from scratch on the pm SDK: its own content-addressed object store, refs, Myers diff, three-way merge, operation log and bundles, with no shell-out to git. Structured records are a first-class object kind and merge per field, so many agents on many branches converge without a line merge anywhere in the pipeline. Commands: `pm vcs init/status/add/commit/log/diff/branch/switch/merge/tag/undo/oplog/export/import/verify` operate on pm-vcs repositories; `pm vcs git preflight/preview/items` is the git-interoperability surface.",
+  "description": "A general version control system written from scratch on the pm SDK for arbitrary files and structured records, with stable file and change identities, native PM attribution, its own object store, refs, merge, operation log and bundles, and no Git dependency in its engine.",
   "author": "@unbraind",
   "entry": "./dist/index.js",
   "priority": 50,
-  "pm_min_version": "2026.7.29",
+  "pm_min_version": "2026.8.1",
   "capabilities": [
     "commands",
     "schema"

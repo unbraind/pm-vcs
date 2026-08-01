@@ -1,13 +1,15 @@
 {
   "name": "pm-vcs",
   "version": "2026.7.30",
-  "description": "A version control system written from scratch on the pm SDK: its own content-addressed object store, refs, Myers diff, three-way merge, operation log and bundles, with no shell-out to git. Structured records are a first-class object kind and merge per field, so many agents on many branches converge without a line merge anywhere in the pipeline.",
+  "description": "A general version control system written from scratch on the pm SDK for arbitrary files and structured records, with stable file and change identities, native PM attribution, its own object store, refs, merge, operation log and bundles, and no Git dependency.",
   "type": "module",
   "main": "dist/index.js",
   "files": [
     "dist/",
     "manifest.json",
     "README.md",
+    "ARCHITECTURE.md",
+    "LORE.md",
     "CHANGELOG.md"
   ],
   "engines": {
@@ -62,7 +64,8 @@
       "test/edges.test.ts",
       "test/review-findings.test.ts",
       "test/rewrite-commands.test.ts",
-      "test/audit-git-identities.test.ts"
+      "test/audit-git-identities.test.ts",
+      "test/attribution.test.ts"
     ],
     "thresholds": {
       "lines": 100,
@@ -104,7 +107,7 @@
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "@unbrained/pm-cli": ">=2026.7.29"
+    "@unbrained/pm-cli": ">=2026.8.1"
   },
   "pm": {
     "aliases": [

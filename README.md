@@ -17,6 +17,8 @@ does not have: **the record**.
 **[ARCHITECTURE.md](ARCHITECTURE.md) is the design document** — every decision, why it was
 made, and an honest per-capability statement of what is shipped and what is still ahead. Read
 it before the command table if you want to know what this actually is.
+[LORE.md](LORE.md) is the first-party-source research mapping Epic Games' general, binary-first
+Lore VCS into pm-vcs. It is not about the kernel's email archive of the same name.
 
 ```bash
 npm install --save-dev pm-vcs     # or: bun add -d pm-vcs
@@ -60,6 +62,7 @@ is the thing worth preserving, the system that versions it should understand its
 | **Subversion** | file trees | lines | nothing structural; a cautionary tale about central state |
 | **Jujutsu** | file trees | lines | the operation log, and `undo` as a first-class verb |
 | **Fossil / Forgejo** | files + project metadata | lines / a database | the conviction that project metadata belongs *inside* the VCS |
+| **Epic Games Lore** | arbitrary binary files and repository-scale fragments | storage/view dependent | binary-first storage, stable identity, sparse instances and resumable publication |
 | **pm-vcs** | file trees **and records** | **fields**, then lines | — |
 
 Jujutsu's operation log is the best idea in modern version control for agents: every command
@@ -86,7 +89,9 @@ merges it cleanly.
 
 **A conflict is scoped to the thing that conflicted.** A genuine scalar disagreement on one
 field conflicts *on that field*, and every other field of that record still merges. A
-document does not become unreadable because one value disagreed.
+document does not become unreadable because one value disagreed. File-identity disagreements
+are reported the same way: independently added paths and divergent renames produce an
+`identity` conflict with a deterministic, structurally valid merged tree instead of aborting.
 
 **Merge bases are computed, not assumed.** Two branches that have already merged each other
 once have several minimal common ancestors. pm-vcs finds all of them and builds a virtual
@@ -119,7 +124,7 @@ $ pm vcs diff main feature
 | `pm vcs init` | Create a repository. `--record-path` declares which paths hold structured records; `--set-field` declares how their fields merge. |
 | `pm vcs status` | The three-way difference between HEAD, the index and the working tree. Stable indexed paths are checked from stat metadata without re-reading content; racy timestamp-window entries are always hashed. |
 | `pm vcs add [paths…]` | Stage paths, or everything. A path that no longer exists stages as a deletion. |
-| `pm vcs commit --message` | Record the index. Refuses an empty commit unless `--allow-empty`. |
+| `pm vcs commit --message` | Record the index. `--item id[,id...]` stores validated PM work associations. Refuses an empty commit unless `--allow-empty`. |
 | `pm vcs log [rev]` | First-parent history, newest first. |
 | `pm vcs diff [from] [to]` | Unified diff between two revisions' trees. |
 | `pm vcs branch [name]` | List, create (`--at`) or delete (`--delete`) branches. |
@@ -131,6 +136,10 @@ $ pm vcs diff main feature
 | `pm vcs export <file>` | Write refs and their history to a bundle. |
 | `pm vcs import <file>` | Import a bundle, verifying every object against its own id. |
 | `pm vcs verify` | Re-read every reachable object and check it against its id. |
+| `pm vcs trace <path-or-file-id>` | Trace one logical file across edits, moves, copies and deletion. |
+| `pm vcs files <item-id>` | Resolve a PM item's linked arbitrary files to stable identities and changes. |
+| `pm vcs changes <item-id>` | Report explicit and file-derived stable ChangeIds for a PM item. |
+| `pm vcs items [from..to]` | Report PM items explicitly associated with, or linked to files changed by, native revisions. |
 
 ### Git interoperability
 
@@ -224,6 +233,7 @@ engine/refs.ts       Branches, tags, HEAD (symbolic or detached), compare-and-sw
 engine/diff.ts       Myers O(ND) line diff, hunk grouping, unified rendering.
 engine/merge.ts      Commit-DAG reachability, minimal merge bases, diff3 content merge.
 engine/records.ts    Per-field record merge; append-only log union.
+engine/attribution.ts Stable file identities and PM item ↔ file/change history joins.
 engine/worktree.ts   Versioned index with racy-clean-safe stat caching, working-tree scan,
                      tree materialization, and three-way status.
 engine/ignore.ts     An always-ignored set plus `.pmvcsignore`.
@@ -253,8 +263,8 @@ engine/repo.ts       The porcelain.
 | kind | holds |
 | --- | --- |
 | `blob` | raw bytes |
-| `tree` | sorted `(mode, name, id)` entries |
-| `commit` | a tree, zero or more parents, author, committer, message |
+| `tree` | sorted entries with mode, object id, stable file identity and copy provenance |
+| `commit` | a tree, parents, author, committer, message, stable change id and PM item associations |
 | `record` | **a structured document as canonically ordered fields** |
 
 `record` is the one git does not have, and the reason this system exists.
@@ -316,7 +326,7 @@ Everything below is tracked as an epic in this repository's own tracker, under
 ## Requirements
 
 - Node.js ≥ 22.18 (`engines`), tested on 22 and 26
-- `@unbrained/pm-cli` ≥ 2026.7.29 (peer dependency)
+- `@unbrained/pm-cli` ≥ 2026.8.1 (peer dependency and host-bound SDK runtime)
 - Works under `npm`/`npx` and `bun`/`bunx`
 - No runtime dependencies beyond the Node standard library
 
