@@ -3,7 +3,7 @@ import { copyFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
-import { resolveFileId, traceFile } from "../engine/attribution.ts";
+import { orderCommitsNewestFirst, resolveFileId, traceFile } from "../engine/attribution.ts";
 import { readCommit, type Signature } from "../engine/model.ts";
 import { ObjectStoreError } from "../engine/objects.ts";
 import { Repository } from "../engine/repo.ts";
@@ -19,7 +19,7 @@ afterEach(() => {
   directory = null;
 });
 
-test("tree merging refuses conflicting and duplicated logical file identities", () => {
+test("tree merging reports conflicting identities and preserves a valid deterministic tree", () => {
   directory = makeTempDir();
   const repository = Repository.init(directory.root);
   const blob = repository.objects.write("blob", Buffer.from("same"));
@@ -30,21 +30,25 @@ test("tree merging refuses conflicting and duplicated logical file identities", 
     ["one", { id: blob, mode: "100644" as const, fileId: "b".repeat(32) }],
   ]));
   const context = { store: repository.objects, config: repository.config, committer: author };
-  assert.throws(() => mergeTrees(context, null, left, right),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "file_identity_conflict");
+  const sameBytesConflict = mergeTrees(context, null, left, right);
+  assert.deepEqual(sameBytesConflict.conflicts, [{ path: "one", reason: "identity" }]);
+  assert.equal(flattenTree(repository.objects, sameBytesConflict.tree).get("one")?.fileId, "a".repeat(32));
   const otherBlob = repository.objects.write("blob", Buffer.from("different"));
   const changedRight = buildTree(repository.objects, new Map([
     ["one", { id: otherBlob, mode: "100644" as const, fileId: "b".repeat(32) }],
   ]));
-  assert.throws(() => mergeTrees(context, null, left, changedRight),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "file_identity_conflict");
+  const changedConflict = mergeTrees(context, null, left, changedRight);
+  assert.ok(changedConflict.conflicts.some((conflict) => conflict.reason === "identity"));
 
   const duplicated = buildTree(repository.objects, new Map([
     ["one", { id: blob, mode: "100644" as const, fileId: "c".repeat(32) }],
     ["two", { id: blob, mode: "100644" as const, fileId: "c".repeat(32) }],
   ]));
-  assert.throws(() => mergeTrees(context, null, duplicated, duplicated),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "file_identity_conflict");
+  const duplicateConflict = mergeTrees(context, null, duplicated, duplicated);
+  assert.deepEqual(duplicateConflict.conflicts, [{ path: "two", reason: "identity" }]);
+  const duplicateFiles = flattenTree(repository.objects, duplicateConflict.tree);
+  assert.notEqual(duplicateFiles.get("one")?.fileId, duplicateFiles.get("two")?.fileId);
+  assert.equal(duplicateFiles.get("two")?.copiedFrom, "c".repeat(32));
 
   const legacy = buildTree(repository.objects, new Map([
     ["one", { id: blob, mode: "100644" as const }],
@@ -67,13 +71,14 @@ test("tree merging refuses conflicting and duplicated logical file identities", 
     ["one", { id: blob, mode: "100644" as const, fileId: "d".repeat(32) }],
   ])));
   assert.equal(flattenTree(repository.objects, adoptedProvenance.tree).get("one")?.copiedFrom, "a".repeat(32));
-  assert.throws(() => mergeTrees(context, null, provenanceLeft, provenanceRight),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "file_identity_conflict");
+  const provenanceConflict = mergeTrees(context, null, provenanceLeft, provenanceRight);
+  assert.deepEqual(provenanceConflict.conflicts, [{ path: "one", reason: "identity" }]);
+  assert.equal(flattenTree(repository.objects, provenanceConflict.tree).get("one")?.copiedFrom, "a".repeat(32));
   const changedProvenanceRight = buildTree(repository.objects, new Map([
     ["one", { id: otherBlob, mode: "100644" as const, fileId: "d".repeat(32), copiedFrom: "b".repeat(32) }],
   ]));
-  assert.throws(() => mergeTrees(context, legacy, provenanceLeft, changedProvenanceRight),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "file_identity_conflict");
+  const changedProvenanceConflict = mergeTrees(context, legacy, provenanceLeft, changedProvenanceRight);
+  assert.ok(changedProvenanceConflict.conflicts.some((conflict) => conflict.reason === "identity"));
 });
 
 test("stable file identities trace edits, moves, copies, deletion and PM associations", () => {
@@ -129,26 +134,32 @@ test("legacy index migration is deterministic across agents", () => {
   const identities: string[] = [];
   for (let agent = 0; agent < 2; agent += 1) {
     const sandbox = makeTempDir();
-    const repository = Repository.init(sandbox.root);
-    writeFileSync(join(sandbox.root, "legacy.bin"), "legacy");
-    const blob = repository.objects.write("blob", Buffer.from("legacy"));
-    repository.writeIndex([{ path: "legacy.bin", id: blob, mode: "100644" }]);
-    repository.stage(["legacy.bin"]);
-    identities.push(repository.readIndex()[0]!.fileId!);
-    sandbox.cleanup();
+    try {
+      const repository = Repository.init(sandbox.root);
+      writeFileSync(join(sandbox.root, "legacy.bin"), "legacy");
+      const blob = repository.objects.write("blob", Buffer.from("legacy"));
+      repository.writeIndex([{ path: "legacy.bin", id: blob, mode: "100644" }]);
+      repository.stage(["legacy.bin"]);
+      identities.push(repository.readIndex()[0]!.fileId!);
+    } finally {
+      sandbox.cleanup();
+    }
   }
   assert.match(identities[0] ?? "", /^[0-9a-f]{32}$/);
   assert.equal(identities[0], identities[1]);
 
   const moved = makeTempDir();
-  const repository = Repository.init(moved.root);
-  writeFileSync(join(moved.root, "legacy.bin"), "legacy");
-  const blob = repository.objects.write("blob", Buffer.from("legacy"));
-  repository.writeIndex([{ path: "legacy.bin", id: blob, mode: "100644" }]);
-  renameSync(join(moved.root, "legacy.bin"), join(moved.root, "moved.bin"));
-  repository.stage([]);
-  assert.equal(repository.readIndex()[0]?.fileId, identities[0]);
-  moved.cleanup();
+  try {
+    const repository = Repository.init(moved.root);
+    writeFileSync(join(moved.root, "legacy.bin"), "legacy");
+    const blob = repository.objects.write("blob", Buffer.from("legacy"));
+    repository.writeIndex([{ path: "legacy.bin", id: blob, mode: "100644" }]);
+    renameSync(join(moved.root, "legacy.bin"), join(moved.root, "moved.bin"));
+    repository.stage([]);
+    assert.equal(repository.readIndex()[0]?.fileId, identities[0]);
+  } finally {
+    moved.cleanup();
+  }
 });
 
 test("two branches retain distinct linked-file identities and PM associations through merge", () => {
@@ -196,4 +207,16 @@ test("attribution fails closed when required history is missing", () => {
       && error.code === "object_not_found"
       && error.message.includes(commit.tree),
   );
+});
+
+test("topological attribution order handles a history fragment whose parent is absent", () => {
+  directory = makeTempDir();
+  const repository = Repository.init(directory.root);
+  writeFileSync(join(directory.root, "one"), "one");
+  repository.stage([]);
+  repository.commit({ message: "one\n", author }, new Date(1));
+  writeFileSync(join(directory.root, "one"), "two");
+  repository.stage([]);
+  const child = repository.commit({ message: "two\n", author }, new Date(2));
+  assert.deepEqual(orderCommitsNewestFirst(repository.objects, [child]), [child]);
 });

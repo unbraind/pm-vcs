@@ -500,8 +500,8 @@ export function materializeTree(
       path,
       id: value.id,
       mode,
-      fileId: value.fileId,
-      copiedFrom: value.copiedFrom,
+      ...(value.fileId === undefined ? {} : { fileId: value.fileId }),
+      ...(value.copiedFrom === undefined ? {} : { copiedFrom: value.copiedFrom }),
     });
   }
   // Directories left empty by the removals above are pruned, so switching away

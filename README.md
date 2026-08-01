@@ -89,7 +89,9 @@ merges it cleanly.
 
 **A conflict is scoped to the thing that conflicted.** A genuine scalar disagreement on one
 field conflicts *on that field*, and every other field of that record still merges. A
-document does not become unreadable because one value disagreed.
+document does not become unreadable because one value disagreed. File-identity disagreements
+are reported the same way: independently added paths and divergent renames produce an
+`identity` conflict with a deterministic, structurally valid merged tree instead of aborting.
 
 **Merge bases are computed, not assumed.** Two branches that have already merged each other
 once have several minimal common ancestors. pm-vcs finds all of them and builds a virtual

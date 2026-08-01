@@ -270,7 +270,9 @@ test("materializeTree writes the tree, removes absent paths and prunes emptied d
     { name: "a.txt", mode: "100644", id: aId },
     { name: "dir", mode: "40000", id: writeTree(store, [{ name: "b.txt", mode: "100644", id: bId }]) },
   ]);
-  materializeTree(store, root, first, ".pmvcs", noRules);
+  const firstIndex = materializeTree(store, root, first, ".pmvcs", noRules);
+  assert.equal(Object.hasOwn(firstIndex[0]!, "fileId"), false);
+  assert.equal(Object.hasOwn(firstIndex[0]!, "copiedFrom"), false);
   assert.deepEqual(readFileSync(join(root, "a.txt"), "utf8"), "a");
   assert.deepEqual(readFileSync(join(root, "dir", "b.txt"), "utf8"), "b");
 

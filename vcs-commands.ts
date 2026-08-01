@@ -22,7 +22,7 @@ import {
   readBundle,
 } from "./engine/bundle.ts";
 import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
-import { resolveFileId, traceFile, type FileChangeTrace } from "./engine/attribution.ts";
+import { orderCommitsNewestFirst, resolveFileId, traceFile, type FileChangeTrace } from "./engine/attribution.ts";
 import { reachable } from "./engine/merge.ts";
 import { type Signature, compareByteOrder, decodeCommit, decodeTree, effectiveChangeId, readCommit } from "./engine/model.ts";
 import { ObjectStoreError, type ObjectId } from "./engine/objects.ts";
@@ -41,7 +41,7 @@ import type {
   CommandHandlerContext,
   ExtensionApi,
 } from "@unbrained/pm-cli/sdk/authoring";
-import { PmClient } from "@unbrained/pm-cli/sdk";
+import { PmClient, type GetResult, type ItemMetadata, type LinkedFile } from "@unbrained/pm-cli/sdk";
 
 /** Envelope every command returns, carrying an explicit verdict. */
 interface VcsEnvelope {
@@ -106,6 +106,11 @@ export function pmClient(context: CommandHandlerContext): PmClient {
     cwd: sourceWorkingRoot(context),
     noExtensions: true,
   });
+}
+
+/** Normalize an SDK projection that legitimately omits the linked-artifact group. */
+export function linkedFiles(result: GetResult): readonly LinkedFile[] {
+  return result.linked?.files ?? [];
 }
 
 /**
@@ -361,14 +366,13 @@ export function registerVcsCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext): VcsEnvelope & { fileId: string; changes: readonly FileChangeTrace[] } {
       const repository = openRepository(context);
       const selector = requiredArgument(context, 0, "path-or-file-id", "Pass a repository-relative path or FileId.");
-      const commits = repository.allReachable().sort((left, right) => (
-        readCommit(repository.objects, right).committer.timestamp - readCommit(repository.objects, left).committer.timestamp
-      ));
-      const fileId = resolveFileId(repository.objects, commits, selector);
+      const commitsNewestFirst = orderCommitsNewestFirst(repository.objects, repository.allReachable());
+      const treeCache = new Map<ObjectId | null, ReturnType<typeof flattenTree>>();
+      const fileId = resolveFileId(repository.objects, commitsNewestFirst, selector, treeCache);
       if (fileId === null) {
         throw new VcsError("unknown_file", `No identity is recorded for ${selector}.`, "Stage and commit the file with this pm-vcs version, or pass a known FileId.");
       }
-      return { ok: true, fileId, changes: traceFile(repository.objects, commits, fileId) };
+      return { ok: true, fileId, changes: traceFile(repository.objects, commitsNewestFirst, fileId, treeCache) };
     },
   });
 
@@ -393,25 +397,20 @@ export function registerVcsCommands(api: ExtensionApi): void {
         const excluded = reachable(repository.objects, repository.resolve(match[1] as string));
         commits = new Set([...history].filter((commit) => !excluded.has(commit)));
       }
-      const orderedHistory = [...history].sort((left, right) => (
-        readCommit(repository.objects, right).committer.timestamp - readCommit(repository.objects, left).committer.timestamp
-      ));
+      const historyNewestFirst = orderCommitsNewestFirst(repository.objects, [...history]);
       const items = new Set<string>();
       for (const commitId of commits) {
         for (const item of readCommit(repository.objects, commitId).items ?? []) items.add(item);
       }
       const client = pmClient(context);
-      const listed = await client.list({ status: "all", fields: "id", noTruncate: true, strictRead: true });
-      for (const listedItem of listed.items) {
-        // The explicit `fields: "id"` projection guarantees this field. The
-        // public ListResult union cannot currently preserve option correlation.
-        const id = listedItem.id as string;
-        const result = await client.get(id, { full: true });
-        for (const linked of result.linked!.files) {
-          const fileId = resolveFileId(repository.objects, orderedHistory, linked.path.replace(/^\.\//, ""));
+      const listed = await client.list({ status: "all", compact: false, full: true, noTruncate: true, strictRead: true });
+      const treeCache = new Map<ObjectId | null, ReturnType<typeof flattenTree>>();
+      for (const listedItem of listed.items as ItemMetadata[]) {
+        for (const linked of listedItem.files ?? []) {
+          const fileId = resolveFileId(repository.objects, historyNewestFirst, linked.path.replace(/^\.\//, ""), treeCache);
           if (fileId === null) continue;
-          if (traceFile(repository.objects, orderedHistory, fileId).some((trace) => commits.has(trace.commit))) {
-            items.add(id);
+          if (traceFile(repository.objects, historyNewestFirst, fileId, treeCache).some((trace) => commits.has(trace.commit))) {
+            items.add(listedItem.id);
           }
         }
       }
@@ -431,13 +430,12 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const item = requiredArgument(context, 0, "item-id", "Pass the PM item whose file history you need.");
       const result = await pmClient(context).get(item, { full: true });
-      const commits = repository.allReachable().sort((left, right) => (
-        readCommit(repository.objects, right).committer.timestamp - readCommit(repository.objects, left).committer.timestamp
-      ));
-      const files = result.linked!.files.map((linked) => {
+      const commitsNewestFirst = orderCommitsNewestFirst(repository.objects, repository.allReachable());
+      const treeCache = new Map<ObjectId | null, ReturnType<typeof flattenTree>>();
+      const files = linkedFiles(result).map((linked) => {
         const path = linked.path.replace(/^\.\//, "");
-        const fileId = resolveFileId(repository.objects, commits, path);
-        return { path, fileId, changes: fileId === null ? [] : traceFile(repository.objects, commits, fileId) };
+        const fileId = resolveFileId(repository.objects, commitsNewestFirst, path, treeCache);
+        return { path, fileId, changes: fileId === null ? [] : traceFile(repository.objects, commitsNewestFirst, fileId, treeCache) };
       });
       return { ok: true, item, files };
     },
@@ -451,15 +449,16 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const item = requiredArgument(context, 0, "item-id", "Pass the PM item whose changes you need.");
       const result = await pmClient(context).get(item, { full: true });
-      const commits = repository.allReachable().sort(compareByteOrder);
+      const commitsNewestFirst = orderCommitsNewestFirst(repository.objects, repository.allReachable());
       const changes = new Set<ObjectId>();
-      for (const commitId of commits) {
+      for (const commitId of commitsNewestFirst) {
         const commit = readCommit(repository.objects, commitId);
         if (commit.items?.includes(item) === true) changes.add(effectiveChangeId(commitId, commit));
       }
-      for (const linked of result.linked!.files) {
-        const fileId = resolveFileId(repository.objects, commits, linked.path.replace(/^\.\//, ""));
-        if (fileId !== null) for (const trace of traceFile(repository.objects, commits, fileId)) changes.add(trace.changeId);
+      const treeCache = new Map<ObjectId | null, ReturnType<typeof flattenTree>>();
+      for (const linked of linkedFiles(result)) {
+        const fileId = resolveFileId(repository.objects, commitsNewestFirst, linked.path.replace(/^\.\//, ""), treeCache);
+        if (fileId !== null) for (const trace of traceFile(repository.objects, commitsNewestFirst, fileId, treeCache)) changes.add(trace.changeId);
       }
       return { ok: true, item, changes: [...changes].sort(compareByteOrder) };
     },

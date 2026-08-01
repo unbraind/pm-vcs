@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { parseItemDocument, serializeItemDocument, type ItemDocument } from "@unbrained/pm-cli/sdk";
@@ -409,6 +409,42 @@ test("merge records a mode conflict and a delete/modify conflict", () => {
   const dmReport = repo2.merge("del", { message: "merge\n", author }, new Date(6));
   assert.equal(dmReport.clean, false);
   assert.ok(dmReport.conflicts.some((c) => c.reason === "content"));
+});
+
+test("merge reports independently added identities without aborting", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  repo.commit({ message: "empty base\n", author, allowEmpty: true }, new Date(0));
+  repo.createBranch("feature", "HEAD", new Date(1));
+  repo.switchTo("feature", new Date(2));
+  commitFile(repo, "same.txt", "feature", "feature add", new Date(3));
+  repo.switchTo("main", new Date(4));
+  commitFile(repo, "same.txt", "main", "main add", new Date(5));
+  const added = repo.merge("feature", { message: "merge additions\n", author }, new Date(6));
+  assert.equal(added.kind, "merged");
+  assert.ok(added.conflicts.some((conflict) => conflict.reason === "identity"));
+});
+
+test("merge reports divergent renames and preserves unique identities", () => {
+  const { root: renameRoot } = freshDir();
+  const renamed = Repository.init(renameRoot);
+  commitFile(renamed, "source.txt", "source", "base", new Date(0));
+  const originalId = renamed.readIndex()[0]?.fileId;
+  renamed.createBranch("feature", "HEAD", new Date(1));
+  renamed.switchTo("feature", new Date(2));
+  renameSync(join(renameRoot, "source.txt"), join(renameRoot, "feature.txt"));
+  renamed.stage([]);
+  renamed.commit({ message: "feature rename\n", author }, new Date(3));
+  renamed.switchTo("main", new Date(4));
+  renameSync(join(renameRoot, "source.txt"), join(renameRoot, "main.txt"));
+  renamed.stage([]);
+  renamed.commit({ message: "main rename\n", author }, new Date(5));
+  const divergent = renamed.merge("feature", { message: "merge renames\n", author }, new Date(6));
+  assert.equal(divergent.kind, "merged");
+  assert.ok(divergent.conflicts.some((conflict) => conflict.reason === "identity"));
+  const identities = renamed.readIndex().map((entry) => entry.fileId);
+  assert.equal(new Set(identities).size, identities.length);
+  assert.ok(renamed.readIndex().some((entry) => entry.copiedFrom === originalId));
 });
 
 test("two agents doing identical work converge on one commit, with nothing to merge", () => {

@@ -173,6 +173,8 @@ test("commit item associations are canonical, validated and decoded once", () =>
   assert.deepEqual(decodeCommit(encoded).items, ["task-a", "task-b"]);
   assert.throws(() => encodeCommit({ ...commit, items: [""] }),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_commit_item");
+  assert.throws(() => encodeCommit({ ...commit, items: ["task\nb"] }),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_commit_item");
   assert.throws(() => decodeCommit(Buffer.from(`tree ${id}\nitem duplicate\nitem duplicate\nauthor Ada <ada@example.invalid> 1 0\ncommitter Ada <ada@example.invalid> 1 0\n\nmessage`)),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object");
 });

@@ -22,6 +22,8 @@
 // bug, which is why the descendant replay below is the same code path every
 // operation routes through.
 
+import { createHash } from "node:crypto";
+
 import {
   type Commit,
   type FileId,
@@ -50,8 +52,8 @@ import { matchesGlob } from "./config.ts";
 /** One path that could not be merged automatically. */
 export interface MergeConflict {
   readonly path: string;
-  /** `content` for text, `record` for a structured document, `mode` for a permission clash. */
-  readonly reason: "content" | "record" | "mode";
+  /** Kind of disagreement requiring explicit user review. */
+  readonly reason: "content" | "record" | "mode" | "identity";
   /** For a record conflict, the fields that disagreed. */
   readonly fields?: readonly string[];
 }
@@ -208,6 +210,34 @@ export function mergeTrees(
   const merged: string[] = [];
   const conflicts: MergeConflict[] = [];
 
+  const reconcileIdentity = (
+    path: string,
+    ourEntry: { fileId?: FileId; copiedFrom?: FileId },
+    theirEntry: { fileId?: FileId; copiedFrom?: FileId },
+  ): { fileId?: FileId; copiedFrom?: FileId } => {
+    const fileIdsDiffer = ourEntry.fileId !== undefined && theirEntry.fileId !== undefined
+      && ourEntry.fileId !== theirEntry.fileId;
+    const provenanceDiffers = ourEntry.copiedFrom !== undefined && theirEntry.copiedFrom !== undefined
+      && ourEntry.copiedFrom !== theirEntry.copiedFrom;
+    if (fileIdsDiffer || provenanceDiffers) conflicts.push({ path, reason: "identity" });
+    if (fileIdsDiffer) {
+      const selected = compareByteOrder(ourEntry.fileId as FileId, theirEntry.fileId as FileId) <= 0
+        ? ourEntry : theirEntry;
+      return {
+        ...(selected.fileId === undefined ? {} : { fileId: selected.fileId }),
+        ...(selected.copiedFrom === undefined ? {} : { copiedFrom: selected.copiedFrom }),
+      };
+    }
+    const fileId = ourEntry.fileId ?? theirEntry.fileId;
+    const copiedFrom = provenanceDiffers
+      ? ([ourEntry.copiedFrom, theirEntry.copiedFrom] as FileId[]).sort(compareByteOrder)[0]
+      : ourEntry.copiedFrom ?? theirEntry.copiedFrom;
+    return {
+      ...(fileId === undefined ? {} : { fileId }),
+      ...(copiedFrom === undefined ? {} : { copiedFrom }),
+    };
+  };
+
   for (const path of [...new Set([...base.keys(), ...ours.keys(), ...theirs.keys()])].sort(compareByteOrder)) {
     const baseEntry = base.get(path);
     const ourEntry = ours.get(path);
@@ -230,18 +260,9 @@ export function mergeTrees(
       continue;
     }
     if (ourEntry?.id === theirEntry?.id && ourEntry?.mode === theirEntry?.mode) {
-      if (ourEntry?.fileId !== undefined && theirEntry?.fileId !== undefined
-        && ourEntry.fileId !== theirEntry.fileId) {
-        throw new ObjectStoreError("file_identity_conflict", `Both sides bind ${path} to the same bytes with different file identities.`);
-      }
-      if (ourEntry?.copiedFrom !== undefined && theirEntry?.copiedFrom !== undefined
-        && ourEntry.copiedFrom !== theirEntry.copiedFrom) {
-        throw new ObjectStoreError("file_identity_conflict", `Both sides bind ${path} with different copy provenance.`);
-      }
       if (ourEntry) files.set(path, {
         ...ourEntry,
-        fileId: ourEntry.fileId ?? theirEntry?.fileId,
-        copiedFrom: ourEntry.copiedFrom ?? theirEntry?.copiedFrom,
+        ...reconcileIdentity(path, ourEntry, theirEntry ?? {}),
       });
       continue;
     }
@@ -257,20 +278,11 @@ export function mergeTrees(
       files.set(path, ourEntry);
       continue;
     }
-    if (ourEntry.fileId !== undefined && theirEntry.fileId !== undefined
-      && ourEntry.fileId !== theirEntry.fileId) {
-      throw new ObjectStoreError("file_identity_conflict", `Both sides changed ${path} as different logical files.`);
-    }
-    if (ourEntry.copiedFrom !== undefined && theirEntry.copiedFrom !== undefined
-      && ourEntry.copiedFrom !== theirEntry.copiedFrom) {
-      throw new ObjectStoreError("file_identity_conflict", `Both sides changed ${path} with different copy provenance.`);
-    }
     const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels);
     files.set(path, {
       id: resolution.id,
       mode: ourEntry.mode,
-      fileId: ourEntry.fileId ?? theirEntry.fileId,
-      copiedFrom: ourEntry.copiedFrom ?? theirEntry.copiedFrom,
+      ...reconcileIdentity(path, ourEntry, theirEntry),
     });
     if (resolution.conflict) conflicts.push(resolution.conflict);
     else merged.push(path);
@@ -280,7 +292,13 @@ export function mergeTrees(
     if (entry.fileId === undefined) continue;
     const previous = identities.get(entry.fileId);
     if (previous !== undefined && previous !== path) {
-      throw new ObjectStoreError("file_identity_conflict", `Paths ${previous} and ${path} claim file identity ${entry.fileId}.`);
+      conflicts.push({ path, reason: "identity" });
+      const replacement = createHash("sha256")
+        .update("pm-vcs-merge-identity\0").update(entry.fileId).update("\0").update(path)
+        .digest("hex").slice(0, 32) as FileId;
+      files.set(path, { ...entry, fileId: replacement, copiedFrom: entry.fileId });
+      identities.set(replacement, path);
+      continue;
     }
     identities.set(entry.fileId, path);
   }

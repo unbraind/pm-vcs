@@ -260,7 +260,10 @@ Object identity answers “are these bytes identical?” A `FileId` answers “i
 logical file?” pm-vcs stores a cryptographically random 128-bit identity in tree entries.
 Edits and unambiguous moves preserve it; copies mint a new identity and retain `copiedFrom`;
 deletion keeps the identity discoverable in history. Merge refuses different identities at
-one path and duplicate claims of one identity across paths. Legacy migration derives identity
+one path and duplicate claims of one identity across paths **as resolvable identity conflicts**,
+not process-aborting errors. Same-path additions choose the lower identity deterministically;
+divergent renames retain both paths, deterministically fork one identity, and record the
+original as copy provenance so the merged tree remains valid and auditable. Legacy migration derives identity
 from the old path and object ID, so agents upgrading the same checkout independently converge;
 filesystem identity preserves a move even when its bytes change before staging.
 

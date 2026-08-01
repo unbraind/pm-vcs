@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
@@ -11,6 +11,7 @@ import extension from "../index.ts";
 import {
   commaSeparated,
   findRepositoryRoot,
+  linkedFiles,
   openRepository,
   optionalString,
   pmClient,
@@ -134,6 +135,19 @@ test("native commands validate PM associations and resolve linked file changes",
   const missing = await harness.runCommand({ command: "vcs trace", args: ["missing.bin"], pmRoot: root });
   assert.equal(missing.handled, false);
   assert.match(String(missing.errorMessage), /No identity is recorded/);
+
+  rmSync(join(root, "asset.bin"));
+  await harness.runCommand({ command: "vcs add", pmRoot: root });
+  await harness.runCommand({ command: "vcs commit", options: { message: "remove old occupant" }, global: { author: "A <a@b>" }, pmRoot: root });
+  writeFileSync(join(root, "asset.bin"), "unrelated replacement");
+  await harness.runCommand({ command: "vcs add", pmRoot: root });
+  await harness.runCommand({ command: "vcs commit", options: { message: "reuse path" }, global: { author: "A <a@b>" }, pmRoot: root });
+  const reusedFiles = await harness.runCommand({ command: "vcs files", args: [item], pmRoot: root });
+  const currentOccupant = (reusedFiles.result as { files: Array<{ fileId: string; changes: unknown[] }> }).files[0];
+  assert.notEqual(currentOccupant?.fileId, linked?.fileId);
+  assert.equal(currentOccupant?.changes.length, 1);
+  const reusedChanges = await harness.runCommand({ command: "vcs changes", args: [item], pmRoot: root });
+  assert.equal((reusedChanges.result as { changes: string[] }).changes.length, 2);
 });
 
 test("pmClient prefers the invocation's host-bound SDK client", () => {
@@ -148,6 +162,11 @@ test("pmClient prefers the invocation's host-bound SDK client", () => {
     sdk: { client } as CommandHandlerContext["sdk"],
   };
   assert.equal(pmClient(context), client);
+});
+
+test("linkedFiles normalizes omitted SDK linked projections", () => {
+  assert.deepEqual(linkedFiles({ item: {} }), []);
+  assert.deepEqual(linkedFiles({ item: {}, linked: { files: [], tests: [], docs: [] } }), []);
 });
 
 test("findRepositoryRoot walks up to a control directory and returns null past the root", () => {
