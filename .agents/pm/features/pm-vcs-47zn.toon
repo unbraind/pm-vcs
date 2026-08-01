@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-07-31T07:35:09.591Z"
-updated_at: "2026-08-01T04:44:55.427Z"
+updated_at: "2026-08-01T04:52:16.849Z"
 closed_at: "2026-08-01T04:02:50.391Z"
 completed_at: "2026-08-01T04:02:50.391Z"
 author: "harness:claude-code"
@@ -17,11 +17,12 @@ expected_result: Stable indexed paths avoid content reads while metadata changes
 actual_result: Installed-CLI acceptance skipped every stable content read across 16 MiB and detected a same-size edit with restored mtime; 352 tests retain complete coverage.
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-b7cb,parent,"2026-07-31T07:35:11.720Z","harness:claude-code","cli:update:dep",detected
-notes[4]{created_at,author,text}:
+notes[5]{created_at,author,text}:
   "2026-08-01T04:02:03.256Z",codex,"TDD exposed a real same-timestamp false-clean failure in existing merge tests. The final design records size, mtime, ctime, device, inode, and observation time; it never trusts entries observed inside the one-second filesystem timestamp window. Focused tests pass 71/71 and the full coverage gate passes at 100/100/100. Installed pm 2026.7.31 acceptance used 64 indexed files totaling 16 MiB: strace observed zero content opens on clean cached status, and a same-size edit with restored mtime was reported modified. The exact temporary workspace was deleted afterward. The same run discovered the separate native TOON record failure now tracked as pm-vcs-l8jv."
   "2026-08-01T04:11:17.666Z",codex,"The first strict coverage run failed closed at 99.90 percent lines and 99.42 percent branches, naming the untested v2 decoder refusals and cache-state arms. Added direct corrupt-index, legacy blank-line, stable-read, and repository cached-stage tests without changing the thresholds. Final coverage gate: 352 tests, 352 passed, 100.00 percent lines, 100.00 percent branches, 100.00 percent functions across all 19 source files."
   "2026-08-01T04:25:45.870Z",codex,"CodeRabbit review identified two correctness gaps: v2 decoding rejected signed pre-epoch timestamps that the encoder can write, and the restored-mtime regression fixture stopped at the racy guard before exercising ctime comparison. Signed timestamp decoding, unsigned field rejection, and a non-racy ctime fixture now cover both paths."
   "2026-08-01T04:44:55.410Z",codex,"Cubic exact-head review tightened the cache boundary again: canonical index paths are now validated before filesystem access, both cached and current observations must be non-racy, the window covers common two-second filesystem ticks, materialization does not cache unverified concurrent bytes, and the repository-level stage test injects a failing reader to prove the bypass."
+  "2026-08-01T04:52:16.831Z",codex,"The earlier Cubic head also found that a slow unchanged read beginning inside the window could finish after it yet fail to cache. Split stable identity comparison from cache trust: readWorkingFile now verifies before/after identity but bases cache eligibility on the final observation, while index reuse still requires both cached and current observations to be non-racy."
 files[5]{path,scope,note}:
   engine/repo.ts,project,staging cache integration
   engine/worktree.ts,project,index format stat cache and status bypass

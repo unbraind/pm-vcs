@@ -151,6 +151,21 @@ test("readWorkingFile returns cache metadata once a file is outside the racy win
   }
 });
 
+test("readWorkingFile uses the final observation after a slow stable read", () => {
+  dir = makeTempDir();
+  const root = dir.root;
+  writeFileSync(join(root, "slow-stable"), "stable");
+  const actualNow = Date.now;
+  const firstObservation = actualNow();
+  let observations = 0;
+  Date.now = () => firstObservation + (observations++ === 0 ? 0 : 3_000);
+  try {
+    assert.ok(readWorkingFile(root, "slow-stable").stat);
+  } finally {
+    Date.now = actualNow;
+  }
+});
+
 test("readWorkingFile reads a symlink's target rather than following it", () => {
   dir = makeTempDir();
   const root = dir.root;
