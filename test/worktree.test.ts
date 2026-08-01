@@ -66,7 +66,7 @@ test("encodeIndex and decodeIndex round-trip cached metadata in path order", () 
       path: "z.txt",
       id: "1".repeat(64),
       mode: "100644",
-      stat: { size: 3n, mtimeNs: 4n, ctimeNs: 5n, dev: 6n, ino: 7n, observedAtNs: 1_000_000_005n },
+      stat: { size: 3n, mtimeNs: -4n, ctimeNs: -5n, dev: 6n, ino: 7n, observedAtNs: 1_000_000_005n },
     },
     { path: "a.txt", id: "2".repeat(64), mode: "100755" },
   ];
@@ -99,6 +99,7 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
     JSON.stringify(["100644"]),
     JSON.stringify(["100600", "1".repeat(64), "a.txt", null]),
     JSON.stringify(["100644", "1".repeat(64), "a.txt", ["1", "2"]]),
+    JSON.stringify(["100644", "1".repeat(64), "a.txt", ["-1", "2", "3", "4", "5", "6"]]),
   ]) {
     assert.throws(
       () => decodeIndex(`pm-vcs-index 2\n${line}`),
@@ -299,7 +300,8 @@ test("computeStatus detects a same-size edit even when its mtime is restored", (
       ctimeNs: original.ctimeNs,
       dev: original.dev,
       ino: original.ino,
-      observedAtNs: original.ctimeNs,
+      observedAtNs: (original.ctimeNs > original.mtimeNs ? original.ctimeNs : original.mtimeNs)
+        + 1_000_000_000n,
     },
   }];
 

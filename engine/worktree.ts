@@ -170,8 +170,10 @@ export function decodeIndex(contents: string): IndexEntry[] {
         entries.push({ mode, id, path });
         continue;
       }
+      const statPatterns = [/^\d+$/, /^-?\d+$/, /^-?\d+$/, /^\d+$/, /^\d+$/, /^\d+$/] as const;
       if (!Array.isArray(encodedStat) || encodedStat.length !== 6
-        || !encodedStat.every((field) => typeof field === "string" && /^\d+$/.test(field))) {
+        || !encodedStat.every((field, position) => typeof field === "string"
+          && statPatterns[position]?.test(field) === true)) {
         throw new ObjectStoreError("corrupt_index", `Index line "${line}" has invalid cached file metadata.`);
       }
       entries.push({

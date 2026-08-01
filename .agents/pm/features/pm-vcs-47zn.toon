@@ -1,21 +1,26 @@
 id: pm-vcs-47zn
-title: Stat cache in the index so status re-hashes only what changed
+title: Stat cache skips stable paths and hashes metadata changes or racy timestamps
 description: "Raised in review: status calls readWorkingFile and hashes every indexed file on every invocation, so its cost grows with total tracked bytes rather than with the number of changed files, and stage with no arguments walks the same set. Record size and mtime in the index and re-hash only when either differs. Belongs with Phase 6 rather than with the object-format work already tracked there, because the index format changes and the fallback path when a stat is inconclusive has to be exactly right: treating a file as unchanged because its mtime matches is how a version control system loses a change that landed inside one filesystem timestamp tick."
 type: Feature
 status: closed
 priority: 2
 tags: []
 created_at: "2026-07-31T07:35:09.591Z"
-updated_at: "2026-08-01T04:11:17.667Z"
+updated_at: "2026-08-01T04:29:47.211Z"
 closed_at: "2026-08-01T04:02:50.391Z"
 completed_at: "2026-08-01T04:02:50.391Z"
 author: "harness:claude-code"
+estimated_minutes: 240
 acceptance_criteria: status on a large repository does not read file content for paths whose size and mtime are unchanged; a change made within one mtime granularity tick is still detected; the index format change is forward and backward compatible or refuses loudly
+resolution: Implemented a versioned six-field filesystem identity cache with conservative racy-timestamp fallback and backward-compatible legacy reads.
+expected_result: Stable indexed paths avoid content reads while metadata changes and timestamp races remain content-verified.
+actual_result: Installed-CLI acceptance skipped every stable content read across 16 MiB and detected a same-size edit with restored mtime; 352 tests retain complete coverage.
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-b7cb,parent,"2026-07-31T07:35:11.720Z","harness:claude-code","cli:update:dep",detected
-notes[2]{created_at,author,text}:
+notes[3]{created_at,author,text}:
   "2026-08-01T04:02:03.256Z",codex,"TDD exposed a real same-timestamp false-clean failure in existing merge tests. The final design records size, mtime, ctime, device, inode, and observation time; it never trusts entries observed inside the one-second filesystem timestamp window. Focused tests pass 71/71 and the full coverage gate passes at 100/100/100. Installed pm 2026.7.31 acceptance used 64 indexed files totaling 16 MiB: strace observed zero content opens on clean cached status, and a same-size edit with restored mtime was reported modified. The exact temporary workspace was deleted afterward. The same run discovered the separate native TOON record failure now tracked as pm-vcs-l8jv."
   "2026-08-01T04:11:17.666Z",codex,"The first strict coverage run failed closed at 99.90 percent lines and 99.42 percent branches, naming the untested v2 decoder refusals and cache-state arms. Added direct corrupt-index, legacy blank-line, stable-read, and repository cached-stage tests without changing the thresholds. Final coverage gate: 352 tests, 352 passed, 100.00 percent lines, 100.00 percent branches, 100.00 percent functions across all 19 source files."
+  "2026-08-01T04:25:45.870Z",codex,"CodeRabbit review identified two correctness gaps: v2 decoding rejected signed pre-epoch timestamps that the encoder can write, and the restored-mtime regression fixture stopped at the racy guard before exercising ctime comparison. Signed timestamp decoding, unsigned field rejection, and a non-racy ctime fixture now cover both paths."
 files[5]{path,scope,note}:
   engine/repo.ts,project,staging cache integration
   engine/worktree.ts,project,index format stat cache and status bypass

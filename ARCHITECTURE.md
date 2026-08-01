@@ -188,8 +188,9 @@ phantom ref.
 
 The index is a versioned flat text file: a `pm-vcs-index 2` header followed by one canonical
 JSON tuple per path with mode, object id and filesystem identity. Version 2 records size,
-mtime, ctime, device and inode. `status` and `add` therefore `lstat` every indexed path but
-read and hash content only when that identity changed. A legacy three-field index remains
+mtime, ctime, device, inode and the time the observation was made. `status` and `add`
+therefore `lstat` every indexed path but read and hash content only when that identity
+changed. A legacy three-field index remains
 readable and is upgraded by the next stage; an unknown future version is refused loudly.
 
 Metadata is an optimisation, never an authority. An entry observed inside the filesystem's
