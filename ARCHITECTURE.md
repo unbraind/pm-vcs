@@ -78,7 +78,7 @@ it.**
    engine/repo.ts      the transaction boundary: refs + oplog + worktree
   ─────────────────────────────────────────────────────────────
    engine/worktree.ts  index, status, tree materialization
-   engine/rewrite.ts   change identities and history rewriting        [Phase 2]
+   engine/rewrite.ts   change identities and history rewriting
    engine/merge.ts     merge bases, diff3 content merge
    engine/records.ts   per-field record merge
    engine/diff.ts      Myers diff, unified hunks
@@ -157,7 +157,7 @@ would still let a tampered bundle fail later and without attribution during reco
   `parent` (repeated, first-parent first), `author`, `committer`. The timezone offset is stored
   beside the absolute timestamp rather than folded into it, so a commit renders in the zone it
   was made in without that zone ever affecting ordering or the id.
-- **Records** are re-serialized with recursively sorted object keys and normalized scalars, so two agents whose
+- **Records** are re-serialized with recursively sorted object keys and normalised scalars, so two agents whose
   editors disagree about key order or indentation produce **one** object id. A file whose
   formatting moved does not register as changed. This is not cosmetic: it is what keeps a
   reformat from presenting as a conflict. Native PM `.toon` documents are parsed and rendered
@@ -238,7 +238,7 @@ human's attention. Only genuine disagreement produces markers.
 | `scalar` (default) | One side changed it, that side wins. Both changed it differently, it conflicts — *alone*. |
 | `set` | Both sides' members survive, duplicates collapse, order normalizes. |
 | `sequence` | Append-only. Both sides' additions survive in deterministic order. |
-| `timestamp` | Both sides must provide valid timestamps; the chronologically latest value wins. |
+| `timestamp` | Both sides must provide valid timestamps; the chronologically latest value wins, with UTF-8 byte order breaking equal-instant ties deterministically. |
 
 A conflict is scoped to the thing that conflicted. A scalar disagreement on `status` conflicts
 on `status`; `priority`, `tags` and `history` still merge. A document does not become

@@ -6,10 +6,10 @@ status: open
 priority: 1
 tags: []
 created_at: "2026-08-01T19:32:33.077Z"
-updated_at: "2026-08-01T19:37:46.239Z"
+updated_at: "2026-08-01T19:52:12.206Z"
 author: "harness:codex"
 estimated_minutes: 1440
-acceptance_criteria: Move preserves FileId while copy mints a new FileId with an auditable source edge; pm vcs items files changes and trace answer PM attribution from immutable commits plus PM history; pm vcs commit --item validates the PM item and records an explicit association without editing the item; Two-agent branch merges retain attribution for different linked files and deleted files remain historically traceable; Sparse or incomplete history reports required missing fragments instead of an incomplete answer
+acceptance_criteria: Move preserves FileId while copy mints a new FileId with an auditable source edge; pm vcs items files changes and trace answer PM attribution from immutable commits plus PM history; pm vcs commit --item validates the PM item and records an explicit association without editing the item; Two-agent branch merges retain attribution for different linked files and deleted files remain historically traceable; Sparse or incomplete history reports required missing fragments instead of an incomplete answer; Merge rejects and reports a FileId conflict when two distinct logical files claim the same identity and does not publish corrupted identity or PM attribution
 parent: pm-vcs-b7cb
 risk: high
 body: ""

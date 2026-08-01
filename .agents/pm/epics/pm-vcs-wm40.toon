@@ -6,9 +6,9 @@ status: open
 priority: 2
 tags: []
 created_at: "2026-07-31T06:28:24.061Z"
-updated_at: "2026-08-01T19:36:36.650Z"
+updated_at: "2026-08-01T19:52:11.846Z"
 author: "harness:claude-code"
-acceptance_criteria: pm vcs clone produces a repository whose object closure and refs are identical to the source; fetch transfers only objects the receiver lacks; push refuses a non-fast-forward without an explicit override and never leaves a ref pointing at an object that was not transferred; remote-tracking refs live under refs/remotes and are never confused with local branches
+acceptance_criteria: pm vcs clone produces a repository whose object closure and refs are identical to the source; fetch transfers only objects the receiver lacks; push refuses a non-fast-forward without an explicit override and never leaves a ref pointing at an object that was not transferred; remote-tracking refs live under refs/remotes and are never confused with local branches; Repository and branch identities remain stable across rename archive and restore operations; An interrupted missing-object upload resumes by transferring only absent verified objects; The receiver rejects publication until the uploaded object closure is complete and hash-valid; Peers negotiate supported capabilities and repository format versions before transferring data and reject incompatible peers without changing refs; Bundles and fully local repositories remain usable without a configured or reachable remote; The remote ref advances only through one final compare-and-swap and a lost race leaves both local history and the winner remote tip intact while reporting retryable publication failure
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-tr2a,parent,"2026-07-31T06:28:26.638Z","harness:claude-code","cli:update:dep",detected
 notes[1]{created_at,author,text}:
