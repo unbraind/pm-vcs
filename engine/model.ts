@@ -94,7 +94,7 @@ export interface RecordDocument {
   readonly [field: string]: RecordValue;
 }
 
-/** Maximum recursive containers accepted from an untrusted record payload. */
+/** Maximum nested value containers, excluding the root record object. */
 const MAX_RECORD_DEPTH = 32;
 
 /**
@@ -465,15 +465,19 @@ export function decodeRecord(payload: Buffer): RecordDocument {
   // type says neither can occur, and the first thing to notice would be the record
   // merge, arbitrarily later and with no way to attribute it.
   const assertValue = (value: unknown, path: string, depth = 0): void => {
-    if (depth > MAX_RECORD_DEPTH) {
-      throw new ObjectStoreError("malformed_object", `Record field ${path} exceeds the maximum nesting depth.`);
-    }
     if (value === null || typeof value === "string" || typeof value === "boolean") return;
     if (typeof value === "number") {
       if (!Number.isFinite(value)) {
         throw new ObjectStoreError("malformed_object", `Record field ${path} holds a non-finite number.`);
       }
       return;
+    }
+    // `depth` is the number of value containers outside this value. The root
+    // record object is not counted, so a container at depth 31 is the 32nd and
+    // remains valid, while another container at depth 32 is rejected. Scalar
+    // leaves at depth 32 are valid because they add no container of their own.
+    if (depth >= MAX_RECORD_DEPTH) {
+      throw new ObjectStoreError("malformed_object", `Record field ${path} exceeds the maximum nesting depth.`);
     }
     if (Array.isArray(value)) {
       value.forEach((member, index) => assertValue(member, `${path}[${index}]`, depth + 1));

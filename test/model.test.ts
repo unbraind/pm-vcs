@@ -254,9 +254,11 @@ test("decodeRecord rejects non-object payloads", () => {
 });
 
 test("decodeRecord bounds recursive metadata from untrusted objects", () => {
-  const nested = `${'{"next":'.repeat(34)}null${"}".repeat(34)}`;
+  const maximum = `${'{"next":'.repeat(32)}null${"}".repeat(32)}`;
+  const excessive = `${'{"next":'.repeat(33)}null${"}".repeat(33)}`;
+  assert.doesNotThrow(() => decodeRecord(Buffer.from(`{"metadata":${maximum}}`, "utf8")));
   assert.throws(
-    () => decodeRecord(Buffer.from(`{"metadata":${nested}}`, "utf8")),
+    () => decodeRecord(Buffer.from(`{"metadata":${excessive}}`, "utf8")),
     (error: unknown) => error instanceof ObjectStoreError
       && error.code === "malformed_object"
       && error.message.includes("exceeds the maximum nesting depth"),
