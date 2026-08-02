@@ -2,25 +2,37 @@ id: pm-vcs-v4z8
 title: Refresh verified stat cache after materialization without trusting concurrent bytes
 description: "Cubic review exposed a tension in the initial materialization cache: recording a post-write stat can pair the expected object id with bytes concurrently replaced by another process, while omitting metadata makes status re-read restored or switched files until a later stage. Design a safe cache warm-up that verifies content and updates metadata only after the timestamp window, without turning a read-only status into a racy index overwrite."
 type: Issue
-status: open
+status: closed
 priority: 2
 tags[4]: concurrency,performance,review-followup,stat-cache
 created_at: "2026-08-01T04:50:06.115Z"
-updated_at: "2026-08-01T05:56:43.755Z"
+updated_at: "2026-08-02T01:12:03.400Z"
+closed_at: "2026-08-02T01:07:06.178Z"
+completed_at: "2026-08-02T01:07:06.178Z"
+claim_principal: "harness:codex#bc0aaeb05b20f232948dc535"
 author: codex
 estimated_minutes: 240
 acceptance_criteria: "After restore or switch, an aged unchanged file reaches metadata-only status without explicit add; a concurrent write at every materialization and refresh boundary is detected; index updates use compare-and-swap or locking so status cannot overwrite a concurrent stage; installed-CLI strace acceptance proves content reads stop; full coverage remains 100/100/100"
 parent: pm-vcs-tr2a
 severity: medium
+resolution: Aged status verification warms the index atomically without overwriting concurrent staging.
 expected_result: Materialized files safely warm the stat cache and later status calls avoid content reads.
-actual_result: Correctness-first materialization currently omits stat metadata because an unverified post-write stat can hide a concurrent edit.
+actual_result: 384 tests pass at 100/100/100; installed CLI stops opening the unchanged 4 MiB file after cache aging.
 component: engine/worktree
-notes[2]{created_at,author,text}:
+notes[4]{created_at,author,text}:
   "2026-08-01T05:25:22.200Z",codex,"Cubic reiterated the post-materialization performance gap on the latest head. It remains intentionally open: the current PR removes unsafe metadata to prevent a concurrent false-clean; this item owns the correctness-safe verified warm-up with index CAS or locking."
   "2026-08-01T05:56:43.716Z",codex,"Cubic again proposed warming cache metadata after materialization. This remains intentionally deferred: attaching an expected object id to a post-write stat without verifying the bytes can hide a concurrent replacement. The accepted PR keeps correctness first; this item requires a verified refresh plus index compare-and-swap or locking before enabling metadata-only status after switch, merge, or undo."
-files[2]{path,scope,note}:
-  engine/worktree.ts,project,materialization and cache identity boundary
+  "2026-08-02T01:07:04.821Z","harness:codex","Implemented correctness-safe cache warm-up: status offers only aged metadata after content and mode match, then compare-and-swaps the exact index snapshot under an exclusive atomic writer lock. A simulated concurrent stage remains authoritative. Installed pm CLI acceptance switches a real 4 MiB file, observes the warming read with strace, then proves the aged cached status no longer opens the file. Full suite: 384 tests; 100.00 percent lines, branches, and functions across 21 sources."
+  "2026-08-02T01:12:03.380Z","harness:codex","Authoritative release gate on 2026-08-02: typecheck and build passed; 384/384 tests passed with exactly 100.00 percent line, branch, and function coverage across 21 source files; installed-CLI strace acceptance passed; production audit found zero vulnerabilities. The gate then failed closed only at the pre-existing repository-history identity audit, which still reports two non-public addresses under pm-vcs-mhbz. Pack and changelog checks pass independently; no publication is authorized."
+files[5]{path,scope,note}:
   engine/repo.ts,project,status and index update ownership
-tests[1]{command,scope,timeout_seconds,note}:
+  engine/worktree.ts,project,materialization and cache identity boundary
+  scripts/accept-stat-cache.ts,project,installed CLI strace acceptance
+  test/repo.test.ts,project,cache warm and concurrent stage regressions
+  test/worktree.test.ts,project,verification age and mutation regressions
+tests[3]{command,scope,timeout_seconds,note}:
+  "npm run accept:stat-cache",project,240,installed CLI strace proves content reads stop
+  npm run coverage,project,2400,384 tests and exact 100 percent coverage
   "NPM_CONFIG_USERCONFIG=/dev/null npm run release:check",project,2400,authoritative coverage and release gate
+close_reason: Verified cache refresh and compare-and-swap shipped in this branch with installed-CLI strace evidence and exact 100 percent coverage.
 body: ""

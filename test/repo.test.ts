@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { parseItemDocument, serializeItemDocument, type ItemDocument } from "@unbrained/pm-cli/sdk";
@@ -8,7 +8,7 @@ import { type ObjectId, ObjectStoreError } from "../engine/objects.ts";
 import { CONTROL_DIRECTORY, type MergeReport, REPOSITORY_FORMAT, Repository } from "../engine/repo.ts";
 import { type RepositoryConfig } from "../engine/config.ts";
 import { type Commit, type Signature, writeCommit } from "../engine/model.ts";
-import { buildTree, RACY_WINDOW_NS } from "../engine/worktree.ts";
+import { buildTree, readWorkingFile, RACY_WINDOW_NS } from "../engine/worktree.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 let dir: { root: string; cleanup(): void } | null = null;
@@ -128,10 +128,13 @@ test("a clean switch materialises the target tree and removes the absent file", 
   const base = repo.commit({ message: "empty base\n", author, allowEmpty: true }, now);
   repo.createBranch("feature", base, new Date(1));
   commitFile(repo, "only-on-main.txt", "x", "main only", new Date(2));
+  mkdirSync(join(root, "untracked"));
+  writeFileSync(join(root, "untracked", "keep.txt"), "not staged");
 
   repo.switchTo("feature", new Date(3));
   // On feature, the only-on-main file is gone (the target tree lacks it).
   assert.throws(() => readFileSync(join(root, "only-on-main.txt"), "utf8"));
+  assert.equal(readFileSync(join(root, "untracked", "keep.txt"), "utf8"), "not staged");
   // And creating a feature-only file then switching back removes it.
   commitFile(repo, "only-on-feature.txt", "y", "feature only", new Date(4));
   repo.switchTo("main", new Date(5));
@@ -289,6 +292,120 @@ test("stage skips content work for a stable cached index entry", () => {
     executable: false,
   })), ["changing.txt"]);
   assert.equal(repo.readIndex().find((entry) => entry.path === "changing.txt")?.stat, undefined);
+});
+
+test("status safely warms a materialized cache and never overwrites a concurrent stage", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  writeFileSync(join(root, "large.bin"), "base");
+  writeFileSync(join(root, "stable.txt"), "stable");
+  repo.stage([]);
+  const base = repo.commit({ message: "base\n", author }, new Date(0));
+  repo.createBranch("base", base, new Date(1));
+  commitFile(repo, "large.bin", "main", "main", new Date(2));
+  repo.switchTo("base", new Date(3));
+  assert.equal(repo.readIndex().find((entry) => entry.path === "large.bin")?.stat, undefined);
+
+  const file = statSync(join(root, "large.bin"), { bigint: true });
+  const newest = file.ctimeNs > file.mtimeNs ? file.ctimeNs : file.mtimeNs;
+  const stableFile = statSync(join(root, "stable.txt"), { bigint: true });
+  const stableNewest = stableFile.ctimeNs > stableFile.mtimeNs ? stableFile.ctimeNs : stableFile.mtimeNs;
+  const stableObservedAt = stableNewest + RACY_WINDOW_NS;
+  repo.writeIndex(repo.readIndex().map((entry) => entry.path === "stable.txt"
+    ? { ...entry, stat: {
+        size: stableFile.size,
+        mtimeNs: stableFile.mtimeNs,
+        ctimeNs: stableFile.ctimeNs,
+        dev: stableFile.dev,
+        ino: stableFile.ino,
+        observedAtNs: stableObservedAt,
+      } }
+    : entry));
+  const verifiedAt = (newest > stableObservedAt ? newest : stableObservedAt) + RACY_WINDOW_NS;
+  let reads = 0;
+  const actualNow = Date.now;
+  Date.now = () => Number(verifiedAt / 1_000_000n) + 1;
+  try {
+    assert.equal(repo.status((workingRoot, path) => {
+      reads += 1;
+      return readWorkingFile(workingRoot, path, () => verifiedAt);
+    }).clean, true);
+  } finally {
+    Date.now = actualNow;
+  }
+  assert.equal(reads, 1);
+  assert.equal(repo.readIndex().find((entry) => entry.path === "large.bin")?.stat?.observedAtNs, verifiedAt);
+
+  Date.now = () => Number((verifiedAt + RACY_WINDOW_NS) / 1_000_000n) + 1;
+  try {
+    assert.equal(repo.status(() => {
+      throw new Error("content reader must not run after a verified cache refresh");
+    }).clean, true);
+  } finally {
+    Date.now = actualNow;
+  }
+
+  repo.switchTo("main", new Date(4));
+  repo.switchTo("base", new Date(5));
+  const beforeRace = repo.readIndex().find((entry) => entry.path === "large.bin");
+  assert.ok(beforeRace);
+  assert.equal(beforeRace.stat, undefined);
+  let raced = false;
+  repo.status((workingRoot, path) => {
+    const observed = readWorkingFile(workingRoot, path, () => verifiedAt + RACY_WINDOW_NS * 2n);
+    if (!raced) {
+      raced = true;
+      writeFileSync(join(root, "large.bin"), "concurrent stage");
+      repo.stage(["large.bin"]);
+    }
+    return observed;
+  });
+  const afterRace = repo.readIndex().find((entry) => entry.path === "large.bin");
+  assert.ok(afterRace);
+  assert.notEqual(afterRace.id, beforeRace.id);
+  assert.equal(readFileSync(join(root, "large.bin"), "utf8"), "concurrent stage");
+});
+
+test("index replacement respects the shared exclusive lock", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const lockPath = join(root, CONTROL_DIRECTORY, "index.lock");
+  writeFileSync(lockPath, "held");
+  assert.throws(
+    () => repo.writeIndex([]),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "index_locked",
+  );
+  rmSync(lockPath);
+  repo.writeIndex([]);
+
+  writeFileSync(join(root, "cacheable.txt"), "cacheable");
+  repo.stage(["cacheable.txt"]);
+  const entry = repo.readIndex()[0];
+  assert.ok(entry);
+  repo.writeIndex([{ ...entry, stat: undefined }]);
+  const file = statSync(join(root, "cacheable.txt"), { bigint: true });
+  const newest = file.ctimeNs > file.mtimeNs ? file.ctimeNs : file.mtimeNs;
+  writeFileSync(lockPath, "concurrent writer");
+  assert.doesNotThrow(() => repo.status((workingRoot, path) => readWorkingFile(
+    workingRoot,
+    path,
+    () => newest + RACY_WINDOW_NS,
+  )));
+  rmSync(lockPath);
+  assert.equal(repo.readIndex()[0]?.stat, undefined);
+
+  const indexPath = join(root, CONTROL_DIRECTORY, "index");
+  rmSync(indexPath);
+  mkdirSync(indexPath);
+  assert.throws(() => repo.writeIndex([]));
+  assert.deepEqual(readdirSync(join(root, CONTROL_DIRECTORY)).filter((name) => name.endsWith(".tmp")), []);
+
+  rmSync(join(root, CONTROL_DIRECTORY), { recursive: true });
+  writeFileSync(join(root, CONTROL_DIRECTORY), "not a directory");
+  assert.throws(
+    () => repo.writeIndex([]),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOTDIR",
+  );
 });
 
 test("status reports a clean tree after committing everything", () => {
@@ -757,6 +874,13 @@ test("readIndex returns [] for a missing index and throws on a corrupt one", () 
   assert.throws(
     () => repo.readIndex(),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
+
+  rmSync(join(root, CONTROL_DIRECTORY, "index"));
+  mkdirSync(join(root, CONTROL_DIRECTORY, "index"));
+  assert.throws(
+    () => repo.readIndex(),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "EISDIR",
   );
 });
 

@@ -270,7 +270,7 @@ test("materializeTree writes the tree, removes absent paths and prunes emptied d
     { name: "a.txt", mode: "100644", id: aId },
     { name: "dir", mode: "40000", id: writeTree(store, [{ name: "b.txt", mode: "100644", id: bId }]) },
   ]);
-  const firstIndex = materializeTree(store, root, first, ".pmvcs", noRules);
+  const firstIndex = materializeTree(store, root, first, ".pmvcs", noRules, new Set());
   assert.equal(Object.hasOwn(firstIndex[0]!, "fileId"), false);
   assert.equal(Object.hasOwn(firstIndex[0]!, "copiedFrom"), false);
   assert.deepEqual(readFileSync(join(root, "a.txt"), "utf8"), "a");
@@ -278,7 +278,7 @@ test("materializeTree writes the tree, removes absent paths and prunes emptied d
 
   // Switch to a tree that carries only a.txt: b.txt and the emptied dir vanish.
   const second = writeTree(store, [{ name: "a.txt", mode: "100644", id: aId }]);
-  materializeTree(store, root, second, ".pmvcs", noRules);
+  materializeTree(store, root, second, ".pmvcs", noRules, new Set(firstIndex.map((entry) => entry.path)));
   assert.deepEqual(readFileSync(join(root, "a.txt"), "utf8"), "a");
   assert.throws(() => readFileSync(join(root, "dir", "b.txt"), "utf8"));
   // The directory b.txt lived in is pruned, not left as a skeleton.
@@ -291,7 +291,7 @@ test("materializeTree never writes to an ignored path even when the tree names o
   // materialise it, so switching onto it leaves that path absent.
   const ignored = store.write("blob", Buffer.from("ignored"));
   const tree = writeTree(store, [{ name: "node_modules", mode: "40000", id: writeTree(store, [{ name: "x.js", mode: "100644", id: ignored }]) }]);
-  const entries = materializeTree(store, root, tree, ".pmvcs", noRules);
+  const entries = materializeTree(store, root, tree, ".pmvcs", noRules, new Set());
   // Nothing was written under the ignored directory.
   assert.equal(entries.length, 0);
   assert.throws(() => readFileSync(join(root, "node_modules", "x.js"), "utf8"));
@@ -380,6 +380,74 @@ test("computeStatus does not read unchanged cached file content", () => {
   }
 });
 
+test("computeStatus offers only aged, byte-verified metadata for cache refresh", () => {
+  const { store, root } = fresh();
+  const path = join(root, "materialized.bin");
+  writeFileSync(path, "verified");
+  const id = store.write("blob", Buffer.from("verified"));
+  const tree = writeTree(store, [{ name: "materialized.bin", mode: "100644", id }]);
+  const index: IndexEntry[] = [{ path: "materialized.bin", id, mode: "100644" }];
+  const file = statSync(path, { bigint: true });
+  const newest = file.ctimeNs > file.mtimeNs ? file.ctimeNs : file.mtimeNs;
+  const refreshed: Array<{ path: string; stat: NonNullable<IndexEntry["stat"]> }> = [];
+
+  const status = computeStatus(
+    store,
+    root,
+    tree,
+    index,
+    ".pmvcs",
+    noRules,
+    undefined,
+    (workingRoot, workingPath) => readWorkingFile(
+      workingRoot,
+      workingPath,
+      () => newest + RACY_WINDOW_NS,
+    ),
+    (workingPath, stat) => refreshed.push({ path: workingPath, stat }),
+  );
+  assert.equal(status.clean, true);
+  assert.deepEqual(refreshed, [{
+    path: "materialized.bin",
+    stat: {
+      size: file.size,
+      mtimeNs: file.mtimeNs,
+      ctimeNs: file.ctimeNs,
+      dev: file.dev,
+      ino: file.ino,
+      observedAtNs: newest + RACY_WINDOW_NS,
+    },
+  }]);
+
+  refreshed.length = 0;
+  computeStatus(
+    store,
+    root,
+    tree,
+    index,
+    ".pmvcs",
+    noRules,
+    undefined,
+    (workingRoot, workingPath) => readWorkingFile(workingRoot, workingPath, () => newest + RACY_WINDOW_NS - 1n),
+    (workingPath, stat) => refreshed.push({ path: workingPath, stat }),
+  );
+  assert.equal(refreshed.length, 0);
+
+  writeFileSync(path, "replaced");
+  computeStatus(
+    store,
+    root,
+    tree,
+    index,
+    ".pmvcs",
+    noRules,
+    undefined,
+    (workingRoot, workingPath) => readWorkingFile(workingRoot, workingPath, () => newest + RACY_WINDOW_NS * 2n),
+    (workingPath, stat) => refreshed.push({ path: workingPath, stat }),
+  );
+  assert.equal(refreshed.length, 0);
+});
+
 test("sameIndexStat rejects current racy observations and detects ctime changes", () => {
   const stable = {
     size: 6n,
@@ -446,7 +514,7 @@ test("materializeTree preserves a prunable directory rather than pruning it", ()
   // treat it as emptying the root.
   mkdirSync(join(root, "node_modules"), { recursive: true });
   writeFileSync(join(root, "node_modules", "pkg.js"), "x");
-  materializeTree(store, root, tree, ".pmvcs", noRules);
+  materializeTree(store, root, tree, ".pmvcs", noRules, new Set());
   // The prunable directory and its file survive the materialisation.
   assert.equal(readFileSync(join(root, "node_modules", "pkg.js"), "utf8"), "x");
   assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "a");

@@ -11,7 +11,18 @@
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 
@@ -229,17 +240,60 @@ export class Repository {
     return join(this.controlDirectory, "index");
   }
 
+  /** Reads the exact index bytes and their decoded entries as one snapshot. */
+  private readIndexSnapshot(): { readonly contents: string; readonly entries: IndexEntry[] } {
+    try {
+      const contents = readFileSync(this.indexPath, "utf8");
+      return { contents, entries: decodeIndex(contents) };
+    } catch (error) {
+      if (error instanceof ObjectStoreError) throw error;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { contents: "", entries: [] };
+      throw error;
+    }
+  }
+
   /**
    * Reads the index.
    *
    * @returns The staged entries.
    */
   readIndex(): IndexEntry[] {
+    return this.readIndexSnapshot().entries;
+  }
+
+  /**
+   * Replaces the index atomically while holding its shared writer lock.
+   *
+   * @param entries - Complete next index state.
+   * @param expectedContents - Exact bytes the caller planned from, or null for
+   *   an unconditional writer that already owns the latest staged state.
+   * @returns False only when a compare-and-swap observed a newer index.
+   */
+  private replaceIndex(entries: readonly IndexEntry[], expectedContents: string | null): boolean {
+    const lockPath = `${this.indexPath}.lock`;
+    let descriptor: number;
     try {
-      return decodeIndex(readFileSync(this.indexPath, "utf8"));
+      descriptor = openSync(lockPath, "wx");
     } catch (error) {
-      if (error instanceof ObjectStoreError) throw error;
-      return [];
+      if (expectedContents !== null && (error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      throw new ObjectStoreError(
+        "index_locked",
+        `The index is locked by another process (${lockPath}); retry after that pm-vcs command completes.`,
+      );
+    }
+    let temporary: string | null = null;
+    try {
+      if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
+      temporary = `${this.indexPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+      writeFileSync(temporary, encodeIndex(entries), { flag: "wx" });
+      renameSync(temporary, this.indexPath);
+      temporary = null;
+      return true;
+    } finally {
+      if (temporary !== null) rmSync(temporary, { force: true });
+      closeSync(descriptor);
+      rmSync(lockPath, { force: true });
     }
   }
 
@@ -249,7 +303,7 @@ export class Repository {
    * @param entries - The staged entries to record.
    */
   writeIndex(entries: readonly IndexEntry[]): void {
-    writeFileSync(this.indexPath, encodeIndex(entries));
+    this.replaceIndex(entries, null);
   }
 
   /**
@@ -367,14 +421,17 @@ export class Repository {
   /**
    * Compares HEAD, the index and the working tree.
    *
+   * @param read - Working-file reader; injectable for race and cache tests.
    * @returns What is staged, what is not, and what is untracked.
    */
-  status(): StatusReport {
-    return computeStatus(
+  status(read: typeof readWorkingFile = readWorkingFile): StatusReport {
+    const snapshot = this.readIndexSnapshot();
+    const refreshed = new Map<string, IndexEntry["stat"]>();
+    const report = computeStatus(
       this.objects,
       this.root,
       this.headTree(),
-      this.readIndex(),
+      snapshot.entries,
       CONTROL_DIRECTORY,
       this.ignoreRules(),
       (path, content) => (
@@ -382,7 +439,16 @@ export class Repository {
           ? hashObject("record", encodeRecord(parseWorkingRecord(path, content)))
           : hashObject("blob", content)
       ),
+      read,
+      (path, stat) => refreshed.set(path, stat),
     );
+    if (refreshed.size > 0) {
+      this.replaceIndex(snapshot.entries.map((entry) => {
+        const stat = refreshed.get(entry.path);
+        return stat === undefined ? entry : { ...entry, stat };
+      }), snapshot.contents);
+    }
+    return report;
   }
 
   /**
@@ -398,12 +464,14 @@ export class Repository {
 
   /** Materializes a tree with record-aware working-tree serialization. */
   private materialize(tree: ObjectId | null): void {
+    const removablePaths = new Set(this.readIndex().map((entry) => entry.path));
     this.writeIndex(materializeTree(
       this.objects,
       this.root,
       tree,
       CONTROL_DIRECTORY,
       this.ignoreRules(),
+      removablePaths,
       (path, object) => this.workingContent(path, object),
     ));
   }

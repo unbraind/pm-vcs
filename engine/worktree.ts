@@ -378,9 +378,14 @@ function sameFileIdentity(left: IndexStat, right: IndexStat): boolean {
  */
 export function sameIndexStat(left: IndexStat | undefined, right: IndexStat): boolean {
   return left !== undefined
-    && left.observedAtNs - (left.ctimeNs > left.mtimeNs ? left.ctimeNs : left.mtimeNs) >= RACY_WINDOW_NS
+    && isCacheableStat(left)
     && right.observedAtNs - left.observedAtNs >= RACY_WINDOW_NS
     && sameFileIdentity(left, right);
+}
+
+/** Whether an observation is older than the filesystem timestamp race window. */
+function isCacheableStat(stat: IndexStat): boolean {
+  return stat.observedAtNs - (stat.ctimeNs > stat.mtimeNs ? stat.ctimeNs : stat.mtimeNs) >= RACY_WINDOW_NS;
 }
 
 /**
@@ -465,6 +470,8 @@ export function buildTree(
  * @param rules - Ignore rules. A tree entry matching one is skipped rather than
  *   written, so a commit that recorded an ignored path before the rules existed
  *   still cannot overwrite it.
+ * @param removablePaths - Paths owned by the current index. Untracked paths are
+ *   never removed merely because the target tree does not carry them.
  * @param render - Converts a stored object to its path-specific working-tree bytes.
  * @returns The index entries describing what was written.
  */
@@ -474,13 +481,16 @@ export function materializeTree(
   treeIdentifier: ObjectId | null,
   controlDirectory: string,
   rules: IgnoreRules,
+  removablePaths: ReadonlySet<string>,
   render: (path: string, object: StoredObject) => Buffer = (_path, object) => object.payload,
 ): IndexEntry[] {
   const target = new Map(
     [...flattenTree(store, treeIdentifier)].filter(([path]) => !isIgnored(path, rules)),
   );
   for (const existing of listWorkingTree(root, controlDirectory, rules)) {
-    if (!target.has(existing)) rmSync(join(root, ...existing.split("/")), { force: true });
+    if (!target.has(existing) && removablePaths.has(existing)) {
+      rmSync(join(root, ...existing.split("/")), { force: true });
+    }
   }
   const entries: IndexEntry[] = [];
   for (const [path, value] of target) {
@@ -553,6 +563,9 @@ function pruneEmptyDirectories(root: string, directory: string, controlDirectory
  *   repository would store it under. Defaults to hashing it as a blob; a
  *   repository with record paths supplies one that canonicalises those, so a
  *   reformatted record does not read as modified.
+ * @param read - Reads bytes plus a before-and-after filesystem observation.
+ * @param onVerified - Receives aged metadata only after the bytes and mode have
+ *   matched the index, so a caller may safely cache the observation.
  * @returns What is staged, what is not, and what is untracked.
  */
 export function computeStatus(
@@ -564,6 +577,7 @@ export function computeStatus(
   rules: IgnoreRules,
   identify: (path: string, content: Buffer) => ObjectId = (_path, content) => hashObject("blob", content),
   read: typeof readWorkingFile = readWorkingFile,
+  onVerified?: (path: string, stat: IndexStat) => void,
 ): StatusReport {
   const committed = flattenTree(store, headTree);
   const staged = new Map(index.map((entry) => [entry.path, entry]));
@@ -589,9 +603,11 @@ export function computeStatus(
     const observed = readWorkingStat(root, entry.path);
     const expectedMode = observed.executable ? "100755" : "100644";
     if (expectedMode === entry.mode && sameIndexStat(entry.stat, observed.stat)) continue;
-    const { content, executable } = read(root, entry.path);
+    const { content, executable, stat } = read(root, entry.path);
     if ((executable ? "100755" : "100644") !== entry.mode || identify(entry.path, content) !== entry.id) {
       unstagedChanges.push({ path: entry.path, kind: "modified" });
+    } else if (stat !== undefined && isCacheableStat(stat)) {
+      onVerified?.(entry.path, stat);
     }
   }
 

@@ -1,9 +1,10 @@
 # Changelog
 
-## 2026.7.30 - 2026-08-01
+## 2026.7.30 - 2026-08-02
 
 ### Added
 
+- Give arbitrary files stable identities and native PM-linked change attribution ([pm-vcs-ag8y](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ag8y.toon))
 - Stat cache skips stable paths and hashes metadata changes or racy timestamps ([pm-vcs-47zn](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-47zn.toon))
 - Change identities and history rewriting ([pm-vcs-bddk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-bddk.toon))
 - Bundle export and import so two repositories exchange history ([pm-vcs-o5e3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-o5e3.toon))
@@ -24,6 +25,8 @@
 
 ### Fixed
 
+- Switch removes untracked paths absent from the target tree ([pm-vcs-c5pg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-c5pg.toon))
+- Refresh verified stat cache after materialization without trusting concurrent bytes ([pm-vcs-v4z8](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-v4z8.toon))
 - Documented TOON record paths fail staging because the record codec accepts JSON only ([pm-vcs-l8jv](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-l8jv.toon))
 - Close PR 3 transactional rewrite data-integrity findings ([pm-vcs-ntht](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ntht.toon))
 - A mode-only change produces an empty diff, so an executable bit can move invisibly ([pm-vcs-pxgl](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-pxgl.toon))
