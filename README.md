@@ -135,6 +135,10 @@ $ pm vcs diff main feature
 | `pm vcs oplog` | Every operation, with the refs it moved and where from. |
 | `pm vcs export <file>` | Write refs and their history to a bundle. |
 | `pm vcs import <file>` | Import a bundle, verifying every object against its own id. |
+| `pm vcs remote [name] [url]` | List remotes, add one, or remove one (`--remove`). |
+| `pm vcs clone <url> [dir]` | Create a repository from another one, adopting its record configuration. |
+| `pm vcs fetch [remote]` | Bring a remote's branches onto `refs/remotes/<remote>/`. Touches no local branch. |
+| `pm vcs push [remote]` | Send branches (`--branch`). Refuses a non-fast-forward unless `--force`. |
 | `pm vcs verify` | Re-read every reachable object and check it against its id. |
 | `pm vcs trace <path-or-file-id>` | Trace one logical file across edits, moves, copies and deletion. |
 | `pm vcs files <item-id>` | Resolve a PM item's linked arbitrary files to stable identities and changes. |
@@ -291,8 +295,41 @@ nothing while reporting success is how a commit ends up missing a file.
 
 ## Distribution
 
-There is no network protocol *yet* — remotes, `clone`, `fetch` and `push` are Phase 3. Until
-then a bundle is one text file, which is a transport every agent already has:
+```console
+$ pm vcs clone /srv/project work            # adopts the source's record configuration
+$ pm vcs remote upstream ../other-checkout
+$ pm vcs fetch upstream                     # lands on refs/remotes/upstream/*
+$ pm vcs push --branch feature
+```
+
+Three properties hold, and each exists because the alternative loses an agent's work:
+
+- **A fetch cannot move a local branch.** It writes only under `refs/remotes/`. Importing a
+  bundle wholesale would move the receiver's `main` onto the sender's, because a bundle names
+  refs as the *sender* knows them — so the receiving agent's commits would become reachable
+  from nothing, with nothing in the output saying so.
+- **A push cannot discard a commit the remote has.** The receiving side requires its current
+  tip to be an ancestor of what is being pushed, and `--force` is the only way past it.
+- **That check is atomic.** Every ref lands as a compare-and-swap against the value the
+  pusher observed, so a push decided against a stale advertisement fails instead of landing
+  on top of whatever arrived in between.
+
+Only missing objects move. The fetching side offers every commit it holds — its branches, its
+tags, and the tracking refs of every remote — the receiving side keeps the ones it recognises,
+and everything reachable from that agreed set is excluded from the transfer and declared as a
+prerequisite instead.
+
+`clone` adopts the source's record configuration before it writes a single object. A clone
+that started from the defaults would store the same paths as blobs rather than records and
+merge them line by line: two repositories sharing commit ids while disagreeing about what
+those commits mean, each internally consistent and therefore undetectable.
+
+The transport is an interface. The implementation that ships reaches a repository through the
+filesystem, which is the case that occurs today — several agents, several working trees, one
+host. A served implementation lands with the forge in Phase 5, when there is a repository
+service for it to speak to.
+
+Bundles remain, for the times a file is the transport you have:
 
 ```console
 $ pm vcs export /tmp/work.bundle --ref refs/heads/feature
@@ -301,9 +338,7 @@ $ pm vcs import /tmp/work.bundle          # in another repository
 
 Import reproduces **identical commit ids**, verifies every object against its own hash before
 storing it, and fails whole — naming the missing ids — when a bundle depends on history the
-receiver does not have. A file that can be copied, attached or piped is the transport an
-agent already has, and it works the same between two directories on one host, between a job
-and its runner, and across a review.
+receiver does not have.
 
 ---
 
@@ -316,7 +351,7 @@ Everything below is tracked as an epic in this repository's own tracker, under
 | phase | what it adds | epic |
 | --- | --- | --- |
 | **2** | Change identities that survive rewriting, plus `describe`, `rebase`, `squash`, `split`, `cherry-pick`, `revert`, `reset`, `restore`, and automatic descendant rebase | [`pm-vcs-ijj7`](.agents/pm/epics/pm-vcs-ijj7.toon) |
-| **3** | Named remotes, remote-tracking refs, and `clone`/`fetch`/`push` over a transport with reachability-based negotiation | [`pm-vcs-wm40`](.agents/pm/epics/pm-vcs-wm40.toon) |
+| **3** ✅ | Named remotes, remote-tracking refs, and `clone`/`fetch`/`push` over a transport with reachability-based negotiation | [`pm-vcs-wm40`](.agents/pm/epics/pm-vcs-wm40.toon) |
 | **4** | pm-vcs versioning its own source, with a CI gate proving the tracked history matches the source tree byte for byte | [`pm-vcs-390t`](.agents/pm/epics/pm-vcs-390t.toon) |
 | **5** | The forge: a patch series as an object kind, review state as records, and a served repository | [`pm-vcs-5h6j`](.agents/pm/epics/pm-vcs-5h6j.toon) |
 | **6** | Scale: packed storage, a reachability index, shallow and partial history, and garbage collection bounded by the operation log | [`pm-vcs-b7cb`](.agents/pm/epics/pm-vcs-b7cb.toon) |

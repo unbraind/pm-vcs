@@ -1,0 +1,13 @@
+id: pm-vcs-yaks
+title: Port the parser-backed docstring gate into pm-vcs
+description: "pm-changelog enforces full docstring coverage with a gate that parses each file into a syntax tree, rejects a docstring that only restates its identifier, and walks its roots rather than reading a frozen file list. pm-vcs has none, so its docstring coverage is a convention rather than a gate. Porting it needs one extension: pm-vcs keeps six source files at the repository root alongside engine/ and scripts/, and the gate currently accepts only directories as roots, so a root-level file would go unscanned - which is the frozen-list failure the gate exists to prevent, arriving by a different door."
+type: Chore
+status: open
+priority: 1
+tags[2]: "area:vcs",quality
+created_at: "2026-08-02T21:36:36.043Z"
+updated_at: "2026-08-02T21:36:36.043Z"
+author: "harness:claude-code"
+acceptance_criteria: "npm run docstring fails on an undocumented export anywhere under the repository's source roots including the root-level files; the gate refuses to pass when a configured root is missing or yields no files; the roots cannot silently stop covering a source file added later; release:check runs it"
+parent: pm-vcs-tr2a
+body: ""

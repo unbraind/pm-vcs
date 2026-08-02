@@ -57,6 +57,7 @@ import {
 } from "./config.ts";
 import { BRANCH_PREFIX, type HeadState, RefStore, TAG_PREFIX, assertRefName } from "./refs.ts";
 import { OperationLog, type Operation, type RefTransition } from "./oplog.ts";
+import { RemoteStore } from "./remotes.ts";
 import {
   type IndexEntry,
   type StatusReport,
@@ -164,6 +165,15 @@ export class Repository {
   readonly operations: OperationLog;
 
   /**
+   * The other repositories this one knows how to exchange history with.
+   *
+   * Kept out of {@link Repository.config} deliberately: config shapes what the
+   * history means and has to match in every clone, whereas the remote list is one
+   * clone's local knowledge and differs between agents sharing a project.
+   */
+  readonly remotes: RemoteStore;
+
+  /**
    * Which paths hold records, and how their fields merge.
    *
    * Read from the repository rather than taken per call, so every merge in one
@@ -182,6 +192,7 @@ export class Repository {
     this.objects = new ObjectStore(join(this.controlDirectory, "objects"));
     this.refs = new RefStore(this.controlDirectory);
     this.operations = new OperationLog(join(this.controlDirectory, "oplog.jsonl"));
+    this.remotes = new RemoteStore(join(this.controlDirectory, "remotes.json"));
     this.config = config ?? readConfig(join(this.controlDirectory, "config.json"));
   }
 

@@ -1,0 +1,16 @@
+id: pm-vcs-jj9r
+title: Clone builds a working tree from a remote and inherits its record configuration
+description: "A clone that starts from the default configuration is worse than no clone: the source repository declares which paths hold structured records and how their fields merge, and a clone missing those declarations stores the same files as blobs and merges them line by line. The two repositories then disagree about what their shared history means. The transport therefore advertises the source configuration and clone adopts it before it writes a single object."
+type: Feature
+status: closed
+priority: 1
+tags[2]: "area:vcs",distribution
+created_at: "2026-08-02T20:08:32.375Z"
+updated_at: "2026-08-02T21:34:12.991Z"
+closed_at: "2026-08-02T21:34:12.981Z"
+completed_at: "2026-08-02T21:34:12.981Z"
+author: "harness:claude-code"
+acceptance_criteria: "Clone creates a repository, registers origin, fetches every branch onto tracking refs, creates the local branch the source HEAD names, and materializes the working tree; the clone's config.json equals the source's; cloning into an existing repository is refused; a source whose HEAD is unborn clones to an empty working tree without failing; a transport URL scheme the build cannot serve is refused by name rather than being treated as a directory"
+parent: pm-vcs-wm40
+close_reason: "Shipped in the distribution tranche: remotes, transport interface, fetch/push/clone with reachability negotiation, 100/100/100 coverage."
+body: ""

@@ -4,6 +4,10 @@
 
 ### Added
 
+- Clone builds a working tree from a remote and inherits its record configuration ([pm-vcs-jj9r](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-jj9r.toon))
+- Push refuses a non-fast-forward and lands every ref under compare-and-swap ([pm-vcs-64x4](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-64x4.toon))
+- Fetch with object negotiation computed from reachability ([pm-vcs-hi5k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-hi5k.toon))
+- Named remotes and remote-tracking refs ([pm-vcs-h8x2](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-h8x2.toon))
 - Give arbitrary files stable identities and native PM-linked change attribution ([pm-vcs-ag8y](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ag8y.toon))
 - Stat cache skips stable paths and hashes metadata changes or racy timestamps ([pm-vcs-47zn](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-47zn.toon))
 - Change identities and history rewriting ([pm-vcs-bddk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-bddk.toon))
@@ -35,6 +39,8 @@
 
 ### Other
 
+- Phase 3: distribution over a real transport ([pm-vcs-wm40](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-wm40.toon))
+- The transport is an interface with a filesystem implementation, not a network protocol yet ([pm-vcs-6qva](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/decisions/pm-vcs-6qva.toon))
 - Research Epic Lore and map its general-VCS design into pm-vcs ([pm-vcs-rmqh](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-rmqh.toon))
 - Implement show operation ([pm-vcs-z400](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-z400.toon))
 - Implement restore operation ([pm-vcs-zdrk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-zdrk.toon))

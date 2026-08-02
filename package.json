@@ -67,7 +67,10 @@
       "test/review-findings.test.ts",
       "test/rewrite-commands.test.ts",
       "test/audit-git-identities.test.ts",
-      "test/attribution.test.ts"
+      "test/attribution.test.ts",
+      "test/remotes.test.ts",
+      "test/sync.test.ts",
+      "test/sync-commands.test.ts"
     ],
     "thresholds": {
       "lines": 100,

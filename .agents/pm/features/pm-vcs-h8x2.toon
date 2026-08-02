@@ -1,0 +1,16 @@
+id: pm-vcs-h8x2
+title: Named remotes and remote-tracking refs
+description: "A repository can name other repositories and remember where each one's branches were the last time they were observed. Remotes live in their own file rather than in config.json: config.json holds settings that shape history itself (which paths are records, how their fields merge) and must therefore be identical in every clone, whereas the set of remotes is local to one clone and differs between agents. Remote-tracking refs live under refs/remotes/<remote>/<branch> so a fetch can never publish a remote's branch into the local branch namespace."
+type: Feature
+status: closed
+priority: 1
+tags[2]: "area:vcs",distribution
+created_at: "2026-08-02T20:06:00.038Z"
+updated_at: "2026-08-02T21:34:11.703Z"
+closed_at: "2026-08-02T21:34:11.681Z"
+completed_at: "2026-08-02T21:34:11.681Z"
+author: "harness:claude-code"
+acceptance_criteria: "pm vcs remote adds, lists and removes named remotes; remote names are validated as safe single path segments before they become part of a ref name; tracking refs read back under refs/remotes/<remote>/<branch>; the remote list survives a reopen; adding a duplicate name is refused rather than silently overwriting"
+parent: pm-vcs-wm40
+close_reason: "Shipped in the distribution tranche: remotes, transport interface, fetch/push/clone with reachability negotiation, 100/100/100 coverage."
+body: ""
