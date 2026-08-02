@@ -470,9 +470,9 @@ export function buildTree(
  * @param rules - Ignore rules. A tree entry matching one is skipped rather than
  *   written, so a commit that recorded an ignored path before the rules existed
  *   still cannot overwrite it.
+ * @param render - Converts a stored object to its path-specific working-tree bytes.
  * @param removablePaths - Paths owned by the current index. Untracked paths are
  *   never removed merely because the target tree does not carry them.
- * @param render - Converts a stored object to its path-specific working-tree bytes.
  * @returns The index entries describing what was written.
  */
 export function materializeTree(
@@ -481,8 +481,8 @@ export function materializeTree(
   treeIdentifier: ObjectId | null,
   controlDirectory: string,
   rules: IgnoreRules,
-  removablePaths: ReadonlySet<string>,
   render: (path: string, object: StoredObject) => Buffer = (_path, object) => object.payload,
+  removablePaths: ReadonlySet<string> = new Set(),
 ): IndexEntry[] {
   const target = new Map(
     [...flattenTree(store, treeIdentifier)].filter(([path]) => !isIgnored(path, rules)),

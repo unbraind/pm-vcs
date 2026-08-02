@@ -235,6 +235,7 @@ test("materialising a tree over an ignored path leaves the ignored file alone", 
     tree,
     CONTROL_DIRECTORY,
     { patterns: ["keep/**"], negations: [] },
+    undefined,
     new Set(repo.readIndex().map((entry) => entry.path)),
   );
   assert.equal(readFileSync(join(root, "keep", "mine.txt"), "utf8"), "untouched\n");

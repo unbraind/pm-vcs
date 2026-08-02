@@ -17,10 +17,12 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { RACY_WINDOW_NS } from "../engine/worktree.ts";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const executable = join(packageRoot, "node_modules", "@unbrained", "pm-cli", "dist", "cli.js");
 const project = mkdtempSync(join(tmpdir(), "pm-vcs-stat-cache-"));
+const statCacheRaceMarginMs = Number(RACY_WINDOW_NS / 1_000_000n) + 100;
 
 /** Runs one installed PM command or preserves its actionable diagnostic. */
 function runPm(arguments_: readonly string[]): void {
@@ -77,12 +79,12 @@ try {
     runPm(["vcs", "commit", "--message", "main"]);
     runPm(["vcs", "switch", "base"]);
 
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_100);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, statCacheRaceMarginMs);
     const warming = traceStatus("warming");
     if (!warming.includes("large.bin")) {
       throw new Error("the warming status did not open large.bin, so the acceptance did not exercise byte verification");
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_100);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, statCacheRaceMarginMs);
     const cached = traceStatus("cached");
     if (cached.includes("large.bin")) {
       const matching = cached.split("\n").filter((line) => line.includes("large.bin")).join("\n");

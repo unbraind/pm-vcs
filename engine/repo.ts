@@ -471,8 +471,8 @@ export class Repository {
       tree,
       CONTROL_DIRECTORY,
       this.ignoreRules(),
-      removablePaths,
       (path, object) => this.workingContent(path, object),
+      removablePaths,
     ));
   }
 

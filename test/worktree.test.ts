@@ -270,7 +270,7 @@ test("materializeTree writes the tree, removes absent paths and prunes emptied d
     { name: "a.txt", mode: "100644", id: aId },
     { name: "dir", mode: "40000", id: writeTree(store, [{ name: "b.txt", mode: "100644", id: bId }]) },
   ]);
-  const firstIndex = materializeTree(store, root, first, ".pmvcs", noRules, new Set());
+  const firstIndex = materializeTree(store, root, first, ".pmvcs", noRules);
   assert.equal(Object.hasOwn(firstIndex[0]!, "fileId"), false);
   assert.equal(Object.hasOwn(firstIndex[0]!, "copiedFrom"), false);
   assert.deepEqual(readFileSync(join(root, "a.txt"), "utf8"), "a");
@@ -278,7 +278,15 @@ test("materializeTree writes the tree, removes absent paths and prunes emptied d
 
   // Switch to a tree that carries only a.txt: b.txt and the emptied dir vanish.
   const second = writeTree(store, [{ name: "a.txt", mode: "100644", id: aId }]);
-  materializeTree(store, root, second, ".pmvcs", noRules, new Set(firstIndex.map((entry) => entry.path)));
+  materializeTree(
+    store,
+    root,
+    second,
+    ".pmvcs",
+    noRules,
+    undefined,
+    new Set(firstIndex.map((entry) => entry.path)),
+  );
   assert.deepEqual(readFileSync(join(root, "a.txt"), "utf8"), "a");
   assert.throws(() => readFileSync(join(root, "dir", "b.txt"), "utf8"));
   // The directory b.txt lived in is pruned, not left as a skeleton.
@@ -291,10 +299,20 @@ test("materializeTree never writes to an ignored path even when the tree names o
   // materialise it, so switching onto it leaves that path absent.
   const ignored = store.write("blob", Buffer.from("ignored"));
   const tree = writeTree(store, [{ name: "node_modules", mode: "40000", id: writeTree(store, [{ name: "x.js", mode: "100644", id: ignored }]) }]);
-  const entries = materializeTree(store, root, tree, ".pmvcs", noRules, new Set());
+  writeFileSync(join(root, "previously-tracked.txt"), "remove me");
+  const entries = materializeTree(
+    store,
+    root,
+    tree,
+    ".pmvcs",
+    noRules,
+    undefined,
+    new Set(["previously-tracked.txt"]),
+  );
   // Nothing was written under the ignored directory.
   assert.equal(entries.length, 0);
   assert.throws(() => readFileSync(join(root, "node_modules", "x.js"), "utf8"));
+  assert.throws(() => readFileSync(join(root, "previously-tracked.txt"), "utf8"));
 });
 
 test("computeStatus reports staged, unstaged, untracked and clean", () => {
@@ -514,7 +532,7 @@ test("materializeTree preserves a prunable directory rather than pruning it", ()
   // treat it as emptying the root.
   mkdirSync(join(root, "node_modules"), { recursive: true });
   writeFileSync(join(root, "node_modules", "pkg.js"), "x");
-  materializeTree(store, root, tree, ".pmvcs", noRules, new Set());
+  materializeTree(store, root, tree, ".pmvcs", noRules);
   // The prunable directory and its file survive the materialisation.
   assert.equal(readFileSync(join(root, "node_modules", "pkg.js"), "utf8"), "x");
   assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "a");
