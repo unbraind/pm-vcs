@@ -205,9 +205,11 @@ two seconds newer than the file metadata it verified, and the current observatio
 another two seconds newer than that cached observation, before a cache hit is possible.
 Both comparisons use wall-clock nanoseconds so separate processes and hosts can read the
 index, while the metadata-age condition covers common one- and two-second coarse ticks and catches a
-same-size rewrite in the same tick even when its mtime is restored; a later stage refreshes
-the observation after the window. Trusting size and mtime alone here would turn a performance
-feature into silent content loss.
+same-size rewrite in the same tick even when its mtime is restored. After materialization,
+an aged `status` read verifies the bytes and offers the resulting observation to the index.
+That refresh compare-and-swaps the exact index snapshot under the shared index lock, so it
+cannot overwrite a concurrent `add`; later status calls become metadata-only. Trusting size
+and mtime alone here would turn a performance feature into silent content loss.
 
 `status` reports the **three-way** difference — HEAD vs index (staged), index vs working tree
 (unstaged), and paths in neither (untracked) — because collapsing those into one list is what
@@ -216,7 +218,9 @@ makes a partially staged file impossible to reason about.
 Materializing a tree into the working tree is checked before it is performed: a `switch` that
 would overwrite an uncommitted edit refuses **before writing anything**. A half-applied switch
 leaves an agent holding a tree that matches no commit, with no way to describe what it has,
-and no way to get back.
+and no way to get back. Removal is restricted to paths owned by the current index. An
+untracked path absent from the target remains untouched, while an untracked path the target
+would overwrite is still refused before mutation.
 
 Ignore rules are read on each use rather than cached, because `.pmvcsignore` is itself a
 tracked file that a switch can change underneath the running command.

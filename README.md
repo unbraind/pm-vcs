@@ -235,7 +235,7 @@ engine/merge.ts      Commit-DAG reachability, minimal merge bases, diff3 content
 engine/records.ts    Per-field record merge; append-only log union.
 engine/attribution.ts Stable file identities and PM item ↔ file/change history joins.
 engine/worktree.ts   Versioned index with racy-clean-safe stat caching, working-tree scan,
-                     tree materialization, and three-way status.
+                     untracked-safe tree materialization, and three-way status.
 engine/ignore.ts     An always-ignored set plus `.pmvcsignore`.
 engine/config.ts     Which paths hold records and how their fields merge — per repository,
                      so two agents cannot disagree about it.
@@ -251,7 +251,7 @@ engine/repo.ts       The porcelain.
   format          repository format version
   HEAD            "ref: refs/heads/main", or a raw object id when detached
   config.json     record paths and field strategies
-  index           the staging area
+  index           the staging area; updated atomically under index.lock
   refs/heads/*    branch tips
   refs/tags/*
   objects/ab/cd…  zlib-deflated, content-addressed by SHA-256

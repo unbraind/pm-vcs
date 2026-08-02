@@ -52,6 +52,9 @@ jobs:
       - name: Test with coverage gate
         run: npm run coverage
 
+      - name: Prove materialized files become metadata-only
+        run: npm run accept:stat-cache
+
       - name: Production dependency audit
         run: npm run audit:prod
 

@@ -1,0 +1,35 @@
+id: pm-vcs-c5pg
+title: Switch removes untracked paths absent from the target tree
+description: "Installed-CLI stat-cache acceptance exposed that materializeTree deletes every non-ignored working-tree path absent from the target, while switch preflight protects only untracked paths the target would overwrite. A project-local extension registration vanished after switching a repository that had not staged it. This is recoverable in the disposable acceptance but would permanently delete real untracked work."
+type: Issue
+status: closed
+priority: 0
+tags[5]: data-loss,materialization,multi-agent,switch,untracked
+created_at: "2026-08-02T01:01:59.238Z"
+updated_at: "2026-08-02T01:22:31.900Z"
+closed_at: "2026-08-02T01:07:06.602Z"
+completed_at: "2026-08-02T01:07:06.602Z"
+claim_principal: "harness:codex#bc0aaeb05b20f232948dc535"
+author: "harness:codex"
+acceptance_criteria: "Switch, merge, undo and reset remove tracked paths absent from the target but preserve every untracked path; an untracked path colliding with a target still refuses before mutation; real repository tests cover nested files and installed project configuration; full coverage remains 100/100/100"
+parent: pm-vcs-tr2a
+risk: critical
+severity: critical
+resolution: Tracked ownership is explicit at the materialization boundary; untracked files are preserved.
+expected_result: Materialization removes only paths owned by the current index and never deletes untracked data.
+actual_result: Nested untracked files and project-local extension registration survive switch; collision refusal remains covered.
+component: engine/repo
+notes[3]{created_at,author,text}:
+  "2026-08-02T01:07:05.827Z","harness:codex","The installed-CLI reproducer initially lost the project-local pm-vcs extension after switch. Materialization now receives the current index path set and deletes only paths owned by that index; nested untracked files survive, tracked branch-only files still disappear, and target collisions remain preflight refusals. The installed extension stays active after the real switch and the full 384-test 100/100/100 gate passes."
+  "2026-08-02T01:12:03.758Z","harness:codex",The installed-CLI acceptance now also proves project-local untracked extension registration survives branch materialization. The authoritative suite remains 384/384 with exact 100 percent coverage; publication remains separately blocked by pm-vcs-mhbz.
+  "2026-08-02T01:22:31.883Z","harness:codex",CodeRabbit review strengthened the ignore/materialization test so it simultaneously proves an index-owned absent path is removed while an ignored target is not written. This avoids a vacuous empty-ownership setup.
+files[4]{path,scope,note}:
+  engine/repo.ts,project,supply current tracked ownership during materialization
+  engine/worktree.ts,project,restrict removal to index-owned paths
+  scripts/accept-stat-cache.ts,project,real installed extension remains usable after switch
+  test/repo.test.ts,project,preserve nested untracked content across switch
+tests[2]{command,scope,timeout_seconds,note}:
+  "npm run accept:stat-cache",project,240,installed project extension survives untracked switch
+  npm run coverage,project,2400,all materialization paths covered at exact 100 percent
+close_reason: Materialization now removes only index-owned paths and preserves untracked project data across every shared materialization path.
+body: ""
