@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, test } from "node:test";
 
@@ -8,10 +8,10 @@ import type { RepositoryConfig } from "../engine/config.ts";
 import { type Signature } from "../engine/model.ts";
 import { type ObjectId, ObjectStoreError } from "../engine/objects.ts";
 import { BRANCH_PREFIX, TAG_PREFIX } from "../engine/refs.ts";
-import { trackingRef } from "../engine/remotes.ts";
+import { REMOTE_PREFIX, trackingRef } from "../engine/remotes.ts";
 import { Repository } from "../engine/repo.ts";
 import { cloneFrom, fetchFrom, pushTo } from "../engine/sync.ts";
-import { FileTransport, openTransport } from "../engine/transport.ts";
+import { FileTransport, type Transport, openTransport, resolveRemoteLocation } from "../engine/transport.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const handles: Array<{ root: string; cleanup(): void }> = [];
@@ -431,4 +431,144 @@ test("push refuses a ref whose history the bundle did not carry", () => {
       return true;
     },
   );
+});
+
+test("a Windows drive letter is a path, not a scheme this build cannot serve", () => {
+  // `C:\repo` matches the shape of a URL closely enough that a one-character
+  // scheme rule would refuse it as a remote over "c". The path itself need not
+  // exist on this platform: resolution is what is under test, not reachability.
+  const transport = openTransport("C:\\repo", tempRoot());
+  assert.ok(transport instanceof FileTransport);
+  assert.equal(transport.url, "C:\\repo");
+  assert.equal(resolveRemoteLocation("C:\\repo", "/tmp"), resolve("/tmp", "C:\\repo"));
+});
+
+test("a file URL that names no local path is refused as a remote, not as a crash", () => {
+  // Node rejects both of these from `fileURLToPath`, and an unwrapped TypeError
+  // reads as a bug in this build rather than as a remote it cannot reach.
+  for (const url of ["file://server/repo", "file:///a%2Fb"]) {
+    assert.throws(() => openTransport(url, "/tmp"), (error: ObjectStoreError) => {
+      assert.equal(error.code, "unsupported_transport");
+      assert.match(error.message, /names no local path/);
+      return true;
+    }, url);
+  }
+});
+
+test("a push may only move branches and tags", () => {
+  const source = freshRepo();
+  const tip = commitFile(source, "a.txt", "one");
+  const transport = new FileTransport(source.root, source.root);
+  // The receiver's own view of what a third party published is not a push target:
+  // moving it would rewrite this repository's record of another remote's state and
+  // be logged as an ordinary push.
+  for (const ref of [trackingRef("other", "main"), "refs/notes/commits"]) {
+    assert.throws(
+      () => transport.push(Buffer.from('pmvcs-bundle-1\n{"refs":{},"prerequisites":[],"objects":[]}\n'), [
+        { ref, expected: null, next: tip },
+      ], false, now),
+      (error: ObjectStoreError) => {
+        assert.equal(error.code, "unpushable_ref");
+        assert.match(error.message, /branches and tags/);
+        return true;
+      },
+      ref,
+    );
+  }
+  assert.equal(source.refs.read(trackingRef("other", "main")), null);
+});
+
+test("a branch named twice in one push is pushed once", () => {
+  const source = freshRepo();
+  commitFile(source, "a.txt", "one");
+  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const tip = commitFile(clone, "b.txt", "two");
+  // Left undeduplicated this reaches the remote as two updates for one ref and is
+  // refused there as a ref transaction fault, long after the bundle was built.
+  const report = pushTo(clone, "origin", ["main", "main"], false, now);
+  assert.deepEqual(report.updated.map((update) => update.ref), [`${BRANCH_PREFIX}main`]);
+  assert.equal(source.refs.read(`${BRANCH_PREFIX}main`), tip);
+});
+
+test("a clone whose fetch fails leaves nothing behind for the retry to trip over", () => {
+  const source = freshRepo();
+  commitFile(source, "a.txt", "one");
+  const reachable = new FileTransport(source.root, source.root);
+  const failing: Transport = {
+    url: reachable.url,
+    advertise: () => reachable.advertise(),
+    fetch: () => {
+      throw new ObjectStoreError("unreachable_remote", "the source went away mid-clone");
+    },
+    push: reachable.push.bind(reachable),
+  };
+
+  const destination = join(tempRoot(), "clone");
+  assert.throws(() => cloneFrom(source.root, destination, now, "origin", process.cwd(), failing));
+  // Not merely "no repository": the directory this call created is gone, so the
+  // retry is an ordinary clone rather than a clone into an existing directory.
+  assert.equal(existsSync(destination), false);
+
+  const report = cloneFrom(source.root, destination, now);
+  assert.equal(report.branch, "main");
+});
+
+test("a failed clone into a directory that already existed removes only what it created", () => {
+  const source = freshRepo();
+  commitFile(source, "a.txt", "one");
+  const reachable = new FileTransport(source.root, source.root);
+  const failing: Transport = {
+    url: reachable.url,
+    advertise: () => reachable.advertise(),
+    fetch: () => {
+      throw new ObjectStoreError("unreachable_remote", "the source went away mid-clone");
+    },
+    push: reachable.push.bind(reachable),
+  };
+
+  // A destination the agent had already put files in. Cleaning up must not take
+  // the agent's own work with it.
+  const destination = join(tempRoot(), "workspace");
+  mkdirSync(destination, { recursive: true });
+  writeFileSync(join(destination, "notes.txt"), "mine");
+
+  assert.throws(() => cloneFrom(source.root, destination, now, "origin", process.cwd(), failing));
+  assert.equal(readFileSync(join(destination, "notes.txt"), "utf8"), "mine");
+  assert.equal(existsSync(join(destination, ".pmvcs")), false);
+
+  const report = cloneFrom(source.root, destination, now);
+  assert.equal(report.branch, "main");
+  assert.equal(readFileSync(join(destination, "notes.txt"), "utf8"), "mine");
+});
+
+test("a clone records where it came from, not the relative path it was given", () => {
+  const base = tempRoot();
+  const source = Repository.init(join(base, "source"), "main");
+  const tip = commitFile(source, "a.txt", "one");
+
+  // Recorded as typed, `../source` would later resolve against the clone's own
+  // root — naming a sibling of the clone rather than the repository it came from.
+  const destination = join(base, "nested", "clone");
+  const report = cloneFrom("../source", destination, now, "origin", join(base, "nested"));
+  assert.equal(report.branch, "main");
+
+  const clone = Repository.open(destination);
+  assert.equal(clone.remotes.require("origin").url, join(base, "source"));
+  commitFile(source, "b.txt", "two");
+  const fetched = fetchFrom(clone, "origin", now);
+  assert.equal(fetched.upToDate, false);
+  assert.notEqual(clone.refs.read(trackingRef("origin", "main")), tip);
+});
+
+test("removing a remote keeps the tracking refs that remember where it was", () => {
+  const source = freshRepo();
+  const tip = commitFile(source, "a.txt", "one");
+  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  assert.equal(clone.refs.read(trackingRef("origin", "main")), tip);
+
+  clone.remotes.remove("origin");
+  // The remote is gone; what it had published is not. Dropping these would discard
+  // the only record of commits fetched from a remote that is now unreachable.
+  assert.equal(clone.refs.read(trackingRef("origin", "main")), tip);
+  assert.deepEqual(clone.refs.list(REMOTE_PREFIX).map((entry) => entry.name), [trackingRef("origin", "main")]);
 });

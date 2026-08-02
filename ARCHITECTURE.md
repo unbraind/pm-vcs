@@ -335,7 +335,7 @@ Four properties, each of them the reason the obvious implementation is wrong:
 `clone` adopts the source's configuration before writing an object, because a clone that
 started from the defaults would store records as blobs and merge them by line — two
 repositories sharing commit ids while disagreeing about what those commits contain, each
-internally consistent and so detectable by nothing.
+internally consistent and therefore undetectable.
 
 **Deferred to Phase 5.** A network transport. Committing to a wire format now would fix a
 serialization before the forge has said what a served repository exposes, and the two would

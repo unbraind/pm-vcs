@@ -7,7 +7,7 @@
 // the same thing as its source — are properties of the algorithm, and writing them
 // against a transport keeps them true for whatever transport arrives later.
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 
 import { assertClosurePresent, exportBundle, importBundleObjects } from "./bundle.ts";
 import type { ObjectId } from "./objects.ts";
@@ -16,7 +16,7 @@ import type { RefTransition } from "./oplog.ts";
 import { BRANCH_PREFIX, TAG_PREFIX } from "./refs.ts";
 import { REMOTE_PREFIX, trackingRef } from "./remotes.ts";
 import { DEFAULT_BRANCH, Repository } from "./repo.ts";
-import { type PushUpdate, type Transport, openTransport } from "./transport.ts";
+import { FileTransport, type PushUpdate, type Transport, openTransport, resolveRemoteLocation } from "./transport.ts";
 
 /** What a fetch did. */
 export interface FetchReport {
@@ -200,7 +200,12 @@ export function pushTo(
   const remote = repository.remotes.require(remoteName);
   const wire = transport ?? openTransport(remote.url, repository.root);
 
-  let names = [...branches];
+  // Deduplicated here rather than left to the remote. A repeated name produces two
+  // updates for one ref, and the receiving transaction rejects that as
+  // `duplicate_ref_update` — a failure that names a ref transaction after a bundle
+  // has already been built and transferred, rather than the repeated argument that
+  // caused it.
+  let names = [...new Set(branches)];
   if (names.length === 0) {
     const head = repository.refs.readHead();
     if (head.kind !== "branch") {
@@ -267,10 +272,17 @@ export function pushTo(
  * ids while disagreeing about what those commits contain — a divergence no later
  * command could detect, because both would be internally consistent.
  *
+ * A relative `url` is resolved once, against `base`, and the *resolved* location is
+ * what the new repository records as the remote. Recording it as typed would leave
+ * the clone holding a path relative to its own root: cloning `../source` into
+ * `work/clone` would record a remote that the clone's own later fetch resolves to
+ * `work/source` — a directory that has nothing to do with where it came from.
+ *
  * @param url - Where to clone from.
  * @param root - Absolute path for the new working tree.
  * @param now - Timestamp for the operation log entries.
  * @param remoteName - Name to register the source under.
+ * @param base - Directory a relative `url` is resolved against.
  * @param transport - Transport to use. Defaults to one opened from `url`.
  * @returns The new repository's location, the branch checked out, and the fetch.
  * @throws ObjectStoreError When `root` already holds a repository, or the source
@@ -281,17 +293,30 @@ export function cloneFrom(
   root: string,
   now: Date,
   remoteName = "origin",
+  base: string = process.cwd(),
   transport?: Transport,
 ): CloneReport {
-  const wire = transport ?? openTransport(url, process.cwd());
+  const location = resolveRemoteLocation(url, base);
+  const wire = transport ?? new FileTransport(url, location);
   const advertisement = wire.advertise();
   const branch = advertisement.head === null || !advertisement.head.startsWith(BRANCH_PREFIX)
     ? null
     : advertisement.head.slice(BRANCH_PREFIX.length);
+  // Anything created from here on is this function's to undo. A destination left
+  // holding an initialised repository with a remote and no history fails a retry
+  // with `already_initialised`, which names the retry as the problem and leaves the
+  // agent to delete the directory by hand before it can try again.
+  const preexisting = existsSync(root);
   mkdirSync(root, { recursive: true });
   const repository = Repository.init(root, branch ?? DEFAULT_BRANCH, advertisement.config);
-  repository.remotes.add(remoteName, url);
-  const fetched = fetchFrom(repository, remoteName, now, wire);
+  let fetched: FetchReport;
+  try {
+    repository.remotes.add(remoteName, location);
+    fetched = fetchFrom(repository, remoteName, now, wire);
+  } catch (error) {
+    rmSync(preexisting ? repository.controlDirectory : root, { recursive: true, force: true });
+    throw error;
+  }
 
   if (branch === null) return { root, url, branch: null, fetched };
   const tracked = repository.refs.read(trackingRef(remoteName, branch));

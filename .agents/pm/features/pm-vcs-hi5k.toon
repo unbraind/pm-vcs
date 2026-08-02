@@ -1,16 +1,16 @@
 id: pm-vcs-hi5k
 title: Fetch with object negotiation computed from reachability
-description: "Fetch must not send the whole object store. The client offers the commits it already has as candidates, the remote keeps only the ones it actually holds, and the bundle it builds excludes everything reachable from that agreed set and declares it as a prerequisite instead. The refs a fetch learns land on tracking refs only. Publishing the remote's own ref names, which is what a plain bundle import does, would move the local branch of the same name onto the remote's tip and silently discard whatever the local agent had committed there."
+description: "Fetch must not send the whole object store. The client offers the commits it already has as candidates, the remote keeps only the ones it actually holds, and the bundle it builds excludes everything reachable from that agreed set and declares it as a prerequisite instead. The branches a fetch learns land on tracking refs; tags keep their own names, because a tag identifies a point in history rather than one repository's opinion about a line of work. Publishing the remote's own branch names, which is what a plain bundle import does, would move the local branch of the same name onto the remote's tip and silently discard whatever the local agent had committed there."
 type: Feature
 status: closed
 priority: 1
 tags[2]: "area:vcs",distribution
 created_at: "2026-08-02T20:07:46.626Z"
-updated_at: "2026-08-02T21:34:12.166Z"
+updated_at: "2026-08-02T23:03:28.317Z"
 closed_at: "2026-08-02T21:34:12.155Z"
 completed_at: "2026-08-02T21:34:12.155Z"
 author: "harness:claude-code"
-acceptance_criteria: A fetch into a repository that already shares history transfers strictly fewer objects than a fetch into an empty one; a fetch never writes any ref outside refs/remotes/; a fetch into a repository whose local branch has diverged leaves that local branch untouched; candidate haves the remote does not hold are dropped rather than failing the fetch; fetch records the tracking refs it moved in the operation log
+acceptance_criteria: "A fetch into a repository that already shares history transfers strictly fewer objects than a fetch into an empty one; a fetch never writes a branch outside refs/remotes/ and never moves a local branch; a fetch publishes a remote tag under refs/tags only when the local repository does not already use that name, and reports the ones it declined; a fetch into a repository whose local branch has diverged leaves that local branch untouched; candidate haves the remote does not hold are dropped rather than failing the fetch; fetch records the tracking refs it moved in the operation log"
 parent: pm-vcs-wm40
 close_reason: "Shipped in the distribution tranche: remotes, transport interface, fetch/push/clone with reachability negotiation, 100/100/100 coverage."
 body: ""

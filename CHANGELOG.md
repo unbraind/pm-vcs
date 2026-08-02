@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.7.30 - 2026-08-02
+## 2026.7.30 - 2026-08-03
 
 ### Added
 
@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- Harden the distribution surface against the review findings: one base for clone, atomic remotes, and a bounded push namespace ([pm-vcs-6220](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-6220.toon))
 - Switch removes untracked paths absent from the target tree ([pm-vcs-c5pg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-c5pg.toon))
 - Refresh verified stat cache after materialization without trusting concurrent bytes ([pm-vcs-v4z8](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-v4z8.toon))
 - Documented TOON record paths fail staging because the record codec accepts JSON only ([pm-vcs-l8jv](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-l8jv.toon))

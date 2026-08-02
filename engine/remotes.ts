@@ -9,7 +9,8 @@
 // the two together would make every `remote add` look like a change to how the
 // repository merges.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
 import { ObjectStoreError } from "./objects.ts";
 import { compareByteOrder } from "./model.ts";
@@ -205,15 +206,29 @@ export class RemoteStore {
   }
 
   /**
-   * Replaces the whole remote map on disk.
+   * Replaces the whole remote map on disk, atomically.
+   *
+   * Written to a temporary file and renamed over the destination, the way every
+   * other durable file in this engine is written. A direct write truncates first,
+   * so a crash mid-write leaves a file that no longer parses — and since every
+   * `fetch`, `push` and `remote` reads this map, all three then fail with
+   * `bad_remotes` until an agent repairs it by hand.
    *
    * @param remotes - The remotes to store.
+   * @throws Error When the file cannot be written or renamed into place.
    */
   private write(remotes: readonly Remote[]): void {
     const map: Record<string, string> = {};
     for (const remote of [...remotes].sort((left, right) => compareByteOrder(left.name, right.name))) {
       map[remote.name] = remote.url;
     }
-    writeFileSync(this.path, `${JSON.stringify(map, null, 2)}\n`);
+    const temporary = `${this.path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    try {
+      writeFileSync(temporary, `${JSON.stringify(map, null, 2)}\n`, { flag: "wx" });
+      renameSync(temporary, this.path);
+    } catch (error) {
+      rmSync(temporary, { force: true });
+      throw error;
+    }
   }
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -140,4 +140,21 @@ test("remote names that would corrupt the tracking namespace are refused", () =>
 test("a tracking ref is the remote name under the remotes prefix", () => {
   assert.equal(trackingRef("origin", "main"), `${REMOTE_PREFIX}origin/main`);
   assert.equal(trackingRef("origin", "feature/x"), `${REMOTE_PREFIX}origin/feature/x`);
+});
+
+test("a write that cannot be published leaves no temporary file behind", () => {
+  dir = makeTempDir();
+  // The control directory removed underneath the store: `list` reads this as "no
+  // remotes yet", so the failure lands in `write`, between creating the temporary
+  // file and renaming it into place.
+  const store = new RemoteStore(join(dir.root, "gone", "remotes.json"));
+  assert.deepEqual(store.list(), []);
+
+  assert.throws(() => store.add("origin", "/srv/one"), (error: NodeJS.ErrnoException) => {
+    assert.equal(error.code, "ENOENT");
+    return true;
+  });
+  // A temporary left behind would accumulate one file per failed write, in the
+  // directory `list` reads — and `remotes.json.<pid>.<hex>.tmp` is not a remote.
+  assert.deepEqual(readdirSync(dir.root), []);
 });

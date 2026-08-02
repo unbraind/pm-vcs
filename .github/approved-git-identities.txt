@@ -1,2 +1,17 @@
 # Public addresses approved for author and committer metadata.
+#
+# Every address here is already published in this repository's public history.
+# The audit exists to catch a *new* identity arriving — a private address
+# configured on a contributor's machine and committed by accident — not to
+# re-litigate the addresses that are already on GitHub.
+#
+# The list was seeded with one address and never reconciled against the object
+# database, so `npm run audit:identities` failed for every commit this package
+# has ever had, and with it `release:check` and `prepublishOnly`.
+#
+# The maintainer's own commit address, on this repository's earliest history.
+stefan@preu.at
+# The maintainer's GitHub noreply address, used since.
 1153461+unbraind@users.noreply.github.com
+# GitHub's committer for merges made through the web UI.
+noreply@github.com

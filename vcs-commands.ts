@@ -747,12 +747,17 @@ export function registerVcsCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext): VcsEnvelope & { clone: CloneReport } {
       const url = requiredArgument(context, 0, "url", "Pass the path or file: URL of the repository to clone.");
       const requested = context.args[1]?.trim();
+      // One base for both sides of the command. Resolving the destination against
+      // the working root while the source resolved against `process.cwd()` would
+      // read `../source` and write `./clone` from two different directories
+      // whenever the two differ, which is exactly when `--path` was passed.
+      const workingRoot = sourceWorkingRoot(context);
       const destination = requested === undefined || requested === ""
-        ? resolve(sourceWorkingRoot(context), basename(url.replace(/\/+$/, "")))
-        : resolve(sourceWorkingRoot(context), requested);
+        ? resolve(workingRoot, basename(url.replace(/\/+$/, "")))
+        : resolve(workingRoot, requested);
       return {
         ok: true,
-        clone: cloneFrom(url, destination, new Date(), optionalString(context.options, "remote") ?? "origin"),
+        clone: cloneFrom(url, destination, new Date(), optionalString(context.options, "remote") ?? "origin", workingRoot),
       };
     },
   });

@@ -203,3 +203,29 @@ test("fetch defaults to origin and reports an unconfigured remote", async () => 
   const blankPush = await harness.runCommand({ command: "vcs push", args: ["  "], pmRoot: root });
   assert.match(String(blankPush.errorMessage), /No remote named origin/);
 });
+
+test("remote refuses an invalid name at the command surface", async () => {
+  const harness = await activate();
+  const root = await seededRepo(harness);
+  // A remote name becomes part of a ref name, so the engine's validation has to
+  // reach the agent rather than surfacing later as a malformed ref.
+  for (const name of ["a/b", "up stream", "up^stream"]) {
+    const failed = await harness.runCommand({ command: "vcs remote", args: [name, "/srv/one"], pmRoot: root });
+    assert.equal(failed.handled, false, name);
+    assert.match(String(failed.errorMessage), /is invalid/, name);
+  }
+  assert.deepEqual((await harness.runCommand({ command: "vcs remote", pmRoot: root })).result, { ok: true, remotes: [] });
+});
+
+test("remote refuses a duplicate name at the command surface rather than repointing it", async () => {
+  const harness = await activate();
+  const root = await seededRepo(harness);
+  await harness.runCommand({ command: "vcs remote", args: ["origin", "/srv/one"], pmRoot: root });
+
+  const failed = await harness.runCommand({ command: "vcs remote", args: ["origin", "/srv/two"], pmRoot: root });
+  assert.equal(failed.handled, false);
+  assert.match(String(failed.errorMessage), /already configured/);
+  // Silently repointing would send the next push somewhere else while the command
+  // that changed it reported nothing.
+  assert.equal(Repository.open(root).remotes.require("origin").url, "/srv/one");
+});

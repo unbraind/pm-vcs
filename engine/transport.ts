@@ -170,6 +170,21 @@ export class FileTransport implements Transport {
     const repository = this.open();
     const { added } = importBundleObjects(repository.objects, bundle);
     for (const update of updates) {
+      // A push is defined over branches and tags. The ref name is otherwise only
+      // checked for well-formedness, so without this a sender could move the
+      // receiver's `refs/remotes/other/main` — rewriting what this repository
+      // believes a third party published — and the receiver would log it as an
+      // ordinary push. The check belongs here rather than in the caller for the
+      // same reason the fast-forward check does: a sender-side check is one a
+      // sender can skip, and `Transport` is a published interface that a
+      // privilege-crossing implementation would inherit.
+      if (!update.ref.startsWith(BRANCH_PREFIX) && !update.ref.startsWith(TAG_PREFIX)) {
+        throw new ObjectStoreError(
+          "unpushable_ref",
+          `A push may only move branches and tags, and ${update.ref} is neither. `
+          + `Push a ${BRANCH_PREFIX} or ${TAG_PREFIX} name instead.`,
+        );
+      }
       assertClosurePresent(repository.objects, update.ref, update.next);
       const current = repository.refs.read(update.ref);
       if (current === null || current === update.next) continue;
@@ -203,7 +218,7 @@ export class FileTransport implements Transport {
 }
 
 /**
- * Opens a transport for a configured remote URL.
+ * Resolves a configured remote location to an absolute filesystem path.
  *
  * A URL naming a scheme this build cannot serve is refused by name. Falling
  * through to the filesystem instead would resolve `https://example.com/repo` as a
@@ -211,24 +226,51 @@ export class FileTransport implements Transport {
  * remote is empty" rather than "this build cannot speak that protocol", and sends
  * the agent looking in the wrong place entirely.
  *
+ * Callers that persist a remote store the resolved value rather than the one the
+ * agent typed. A relative location means different directories depending on where
+ * it is read from, so the repository that recorded it and the repository that
+ * later fetches from it would disagree about where the remote is.
+ *
  * @param url - The remote's configured location: a path, or a `file:` URL.
  * @param base - Directory a relative path is resolved against.
- * @returns A transport for it.
- * @throws ObjectStoreError When the URL names an unsupported scheme.
+ * @returns An absolute path to the remote repository's root.
+ * @throws ObjectStoreError When the URL names an unsupported scheme, or is a
+ *   `file:` URL that names no local path.
  */
-export function openTransport(url: string, base: string): Transport {
+export function resolveRemoteLocation(url: string, base: string): string {
   // Two or more characters before the colon, so a Windows drive letter is a path
   // and not a scheme called "c".
   const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]+):/.exec(url);
-  if (scheme !== null) {
-    if (scheme[1].toLowerCase() !== "file") {
-      throw new ObjectStoreError(
-        "unsupported_transport",
-        `This build cannot reach a remote over "${scheme[1]}". `
-        + "Supported locations are filesystem paths and file: URLs.",
-      );
-    }
-    return new FileTransport(url, fileURLToPath(url));
+  if (scheme === null) return isAbsolute(url) ? url : resolve(base, url);
+  if (scheme[1].toLowerCase() !== "file") {
+    throw new ObjectStoreError(
+      "unsupported_transport",
+      `This build cannot reach a remote over "${scheme[1]}". `
+      + "Supported locations are filesystem paths and file: URLs.",
+    );
   }
-  return new FileTransport(url, isAbsolute(url) ? url : resolve(base, url));
+  try {
+    return fileURLToPath(url);
+  } catch {
+    // `file://host/repo` and `file:///a%2Fb` parse as URLs but name no local path.
+    // Node reports that as a raw TypeError, which reads as a crash rather than as
+    // a remote this build cannot reach.
+    throw new ObjectStoreError(
+      "unsupported_transport",
+      `${url} is a file: URL that names no local path. `
+      + "Use a host-less URL over an unescaped path, for example file:///srv/project.",
+    );
+  }
+}
+
+/**
+ * Opens a transport for a configured remote URL.
+ *
+ * @param url - The remote's configured location: a path, or a `file:` URL.
+ * @param base - Directory a relative path is resolved against.
+ * @returns A transport for it.
+ * @throws ObjectStoreError When the URL cannot be resolved to a local repository.
+ */
+export function openTransport(url: string, base: string): Transport {
+  return new FileTransport(url, resolveRemoteLocation(url, base));
 }

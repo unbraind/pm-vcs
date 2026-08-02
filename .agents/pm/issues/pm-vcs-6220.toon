@@ -1,0 +1,16 @@
+id: pm-vcs-6220
+title: "Harden the distribution surface against the review findings: one base for clone, atomic remotes, and a bounded push namespace"
+description: "The first review of the distribution tranche found six defects the tests did not reach. A clone resolved its source against the process working directory while resolving its destination against the command's working root, so the two disagreed exactly when a path was passed; it then recorded the location as typed, leaving the clone holding a remote relative to its own root. A failed fetch mid-clone left an initialised repository behind, so the retry met already_initialised rather than the original error. The remotes map was written by truncating the destination, so a crash mid-write left a file that no longer parses and took every fetch, push and remote command down with it. A repeated branch name reached the remote as two updates for one ref and failed there as a ref transaction fault. A push accepted any well-formed ref name, so a sender could move the receiver's record of what a third party published. A file URL naming no local path surfaced as a raw TypeError."
+type: Issue
+status: closed
+priority: 1
+tags[3]: "area:vcs",distribution,review
+created_at: "2026-08-02T23:06:22.571Z"
+updated_at: "2026-08-02T23:35:01.190Z"
+closed_at: "2026-08-02T23:35:01.175Z"
+completed_at: "2026-08-02T23:35:01.175Z"
+author: "harness:claude-code"
+acceptance_criteria: "A clone resolves its source and its destination against the same base and records the resolved location, so the clone's own later fetch reaches the repository it came from; a clone whose fetch fails removes what it created and leaves a pre-existing destination's files intact; the remotes map is written to a temporary file and renamed, and a failed write leaves no temporary behind; a branch named twice in one push is pushed once; a push refuses any ref that is neither a branch nor a tag; a file URL that names no local path is refused as an unreachable remote rather than raising a TypeError; coverage stays at 100 percent on lines, branches and functions"
+parent: pm-vcs-wm40
+close_reason: "Fixed in the review-hardening tranche: clone resolves source and destination against one base and records the resolved location, a failed clone cleans up what it created, remotes.json is written atomically, repeated push branches deduplicate, a push is bounded to branches and tags, and an unusable file URL is refused as an unreachable remote. 11 new tests, coverage held at 100/100/100."
+body: ""

@@ -113,10 +113,10 @@ unreachable, not absent.
 
 ```console
 pm vcs init --record-path '.agents/pm/**/*.toon' --set-field 'tags:set,notes:sequence,updated_at:timestamp'
-$ pm vcs add
-$ pm vcs commit --message "Close the deployment item"
-$ pm vcs log --limit 10
-$ pm vcs diff main feature
+pm vcs add
+pm vcs commit --message "Close the deployment item"
+pm vcs log --limit 10
+pm vcs diff main feature
 ```
 
 | command | what it does |
@@ -296,10 +296,10 @@ nothing while reporting success is how a commit ends up missing a file.
 ## Distribution
 
 ```console
-$ pm vcs clone /srv/project work            # adopts the source's record configuration
-$ pm vcs remote upstream ../other-checkout
-$ pm vcs fetch upstream                     # lands on refs/remotes/upstream/*
-$ pm vcs push --branch feature
+pm vcs clone /srv/project work              # adopts the source's record configuration
+pm vcs remote upstream ../other-checkout
+pm vcs fetch upstream                       # lands on refs/remotes/upstream/*
+pm vcs push --branch feature
 ```
 
 Three properties hold, and each exists because the alternative loses an agent's work:
@@ -332,8 +332,8 @@ service for it to speak to.
 Bundles remain, for the times a file is the transport you have:
 
 ```console
-$ pm vcs export /tmp/work.bundle --ref refs/heads/feature
-$ pm vcs import /tmp/work.bundle          # in another repository
+pm vcs export /tmp/work.bundle --ref refs/heads/feature
+pm vcs import /tmp/work.bundle            # in another repository
 ```
 
 Import reproduces **identical commit ids**, verifies every object against its own hash before
