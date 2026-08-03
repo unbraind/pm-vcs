@@ -6,11 +6,13 @@ status: closed
 priority: 1
 tags[3]: "area:vcs",distribution,review
 created_at: "2026-08-02T23:06:22.571Z"
-updated_at: "2026-08-03T02:41:45.713Z"
+updated_at: "2026-08-03T03:15:28.299Z"
 closed_at: "2026-08-02T23:35:01.175Z"
 completed_at: "2026-08-02T23:35:01.175Z"
 author: "harness:claude-code"
-acceptance_criteria: "A clone resolves its source and its destination against the same base and records the resolved location, so the clone's own later fetch reaches the repository it came from; a clone whose fetch fails removes what it created and leaves a pre-existing destination's files intact; the remotes map is written to a temporary file and renamed into place, and a write that fails leaves no temporary behind in the destination directory; a branch named twice in one push is pushed once; a push refuses any ref that is neither a branch nor a tag; a file URL that names no local path is refused as an unreachable remote rather than raising a TypeError; coverage stays at 100 percent on lines, branches and functions"
+acceptance_criteria: "A clone resolves its source and its destination against the same base and records the resolved location, so the clone's own later fetch reaches the repository it came from; a clone whose fetch fails removes what it created and leaves a pre-existing destination's files intact; the remotes map is published by writing a temporary file in the destination directory and renaming it into place, never by truncating the destination; a write that fails before the temporary is created leaves that directory clean, verified by making it read-only; a branch named twice in one push is pushed once; a push refuses any ref that is neither a branch nor a tag; a file URL that names no local path is refused as an unreachable remote rather than raising a TypeError; coverage stays at 100 percent on lines, branches and functions"
 parent: pm-vcs-wm40
+notes[1]{created_at,author,text}:
+  "2026-08-03T03:15:28.299Z","harness:claude-code","Scope of the cleanup guarantee, after review. write() can fail in two places. Before the temporary exists, which is what the read-only-directory test reaches and what the criterion claims. After it exists but before the rename publishes it, for example ENOSPC part-way through writeFileSync, which the catch handles with rmSync but which cannot be injected portably; renameSync itself cannot be made to fail through the public API, because add and remove both call list first and that only succeeds when the destination is absent or a readable file, and a rename onto either succeeds on POSIX. The catch is therefore defensive for a case no test pins, and the record does not claim otherwise."
 close_reason: "Fixed in the review-hardening tranche: clone resolves source and destination against one base and records the resolved location, a failed clone cleans up what it created, remotes.json is written atomically, repeated push branches deduplicate, a push is bounded to branches and tags, and an unusable file URL is refused as an unreachable remote. 11 new tests, coverage held at 100/100/100."
 body: ""
