@@ -52,6 +52,19 @@ jobs:
       - name: Test with coverage gate
         run: npm run coverage
 
+      # The gate prints percentages but not which branch was missed, and a
+      # coverage result that reproduces only on a runner is otherwise undebuggable
+      # from a local checkout. Keeping the lcov turns "99.49% on model.ts" into a
+      # specific BRDA line.
+      - name: Keep the coverage report when the gate fails
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-lcov-node-${{ matrix.node-version }}
+          path: coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Prove materialized files become metadata-only
         run: npm run accept:stat-cache
 
