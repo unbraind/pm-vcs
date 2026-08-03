@@ -161,6 +161,12 @@ test("resolve accepts a remote-tracking shorthand, and a local branch outranks i
   assert.equal(repo.resolve("origin/main"), second);
   // The tracking ref is still reachable by its full name.
   assert.equal(repo.resolve("refs/remotes/origin/main"), first);
+
+  // A local *tag* outranks it for the same reason — the tracking namespace is
+  // searched last, after both local namespaces, not merely after branches.
+  repo.refs.compareAndSwap("refs/tags/origin/release", null, second);
+  repo.refs.compareAndSwap("refs/remotes/origin/release", null, first);
+  assert.equal(repo.resolve("origin/release"), second);
 });
 
 test("resolve accepts HEAD, a branch, a tag and a commit id, and rejects the unknown", () => {

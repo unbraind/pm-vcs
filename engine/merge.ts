@@ -88,7 +88,7 @@ export interface Divergence {
 }
 
 /**
- * Counts how far two commits have diverged.
+ * Counts how far one commit has diverged from a reachable set.
  *
  * Both numbers are needed to classify the relationship, and neither alone is
  * enough: zero ahead is a fast-forward, zero behind is something to push, and
@@ -97,13 +97,18 @@ export interface Divergence {
  * three from one pair of walks, and unrelated histories fall out of it as "every
  * commit on both sides" instead of as an error.
  *
+ * The left side arrives already walked, rather than as a commit this would walk
+ * itself. Comparing one branch against several tracking refs is the normal case,
+ * and taking a commit here would re-walk that branch's whole ancestry once per
+ * ref — turning one walk into as many as the repository has remote branches.
+ * Making the caller hold the set puts that walk where it can be hoisted.
+ *
  * @param store - Object store holding the commits.
- * @param left - The commit the counts are stated from, usually a local branch.
- * @param right - The commit they are stated against, usually its tracking ref.
- * @returns The two counts.
+ * @param fromLeft - Everything reachable from the left side, from {@link reachable}.
+ * @param right - The commit the counts are stated against, usually a tracking ref.
+ * @returns The two counts, stated from the left side.
  */
-export function divergence(store: ObjectStore, left: ObjectId, right: ObjectId): Divergence {
-  const fromLeft = reachable(store, left);
+export function divergence(store: ObjectStore, fromLeft: ReadonlySet<ObjectId>, right: ObjectId): Divergence {
   const fromRight = reachable(store, right);
   return {
     ahead: [...fromLeft].filter((id) => !fromRight.has(id)).length,

@@ -71,13 +71,13 @@ test("divergence separates the three relationships a push has to tell apart", ()
   const theirs = commit(store, [base], "theirs");
 
   // Identical: nothing to send, nothing to take.
-  assert.deepEqual(divergence(store, base, base), { ahead: 0, behind: 0 });
+  assert.deepEqual(divergence(store, reachable(store, base), base), { ahead: 0, behind: 0 });
   // Strictly ahead is a fast-forward for the other side; strictly behind is one
   // for this side. The counts have to be asymmetric or the two read alike.
-  assert.deepEqual(divergence(store, ours, base), { ahead: 1, behind: 0 });
-  assert.deepEqual(divergence(store, base, ours), { ahead: 0, behind: 1 });
+  assert.deepEqual(divergence(store, reachable(store, ours), base), { ahead: 1, behind: 0 });
+  assert.deepEqual(divergence(store, reachable(store, base), ours), { ahead: 0, behind: 1 });
   // Both non-zero is the case a push refuses, and the only one needing a merge.
-  assert.deepEqual(divergence(store, ours, theirs), { ahead: 1, behind: 1 });
+  assert.deepEqual(divergence(store, reachable(store, ours), theirs), { ahead: 1, behind: 1 });
 });
 
 test("divergence counts every commit on both sides of unrelated histories", () => {
@@ -87,7 +87,7 @@ test("divergence counts every commit on both sides of unrelated histories", () =
   const theirRoot = commit(store, [], "their-root");
   // Sharing no ancestor is not an error here: the answer is that all of each
   // side is missing from the other, which is exactly what the counts say.
-  assert.deepEqual(divergence(store, ourTip, theirRoot), { ahead: 2, behind: 1 });
+  assert.deepEqual(divergence(store, reachable(store, ourTip), theirRoot), { ahead: 2, behind: 1 });
 });
 
 test("divergence counts commits once when branches remerge", () => {
@@ -100,8 +100,8 @@ test("divergence counts commits once when branches remerge", () => {
   // ahead of itself and nothing is behind. Walking every parent rather than a
   // first-parent line is what keeps `behind` at 0 here instead of counting
   // `theirs` as a commit the merge has not seen.
-  assert.deepEqual(divergence(store, merged, theirs), { ahead: 2, behind: 0 });
-  assert.deepEqual(divergence(store, theirs, merged), { ahead: 0, behind: 2 });
+  assert.deepEqual(divergence(store, reachable(store, merged), theirs), { ahead: 2, behind: 0 });
+  assert.deepEqual(divergence(store, reachable(store, theirs), merged), { ahead: 0, behind: 2 });
 });
 
 test("mergeBases finds the single base of a simple fork", () => {

@@ -6,15 +6,16 @@ status: closed
 priority: 1
 tags[3]: agent-ux,"area:vcs",distribution
 created_at: "2026-08-03T13:19:22.203Z"
-updated_at: "2026-08-03T13:33:14.134Z"
+updated_at: "2026-08-03T13:52:03.267Z"
 closed_at: "2026-08-03T13:33:14.118Z"
 completed_at: "2026-08-03T13:33:14.118Z"
 claim_principal: "harness:claude-code"
 author: "harness:claude-code"
-acceptance_criteria: "Revision resolution accepts a remote-tracking shorthand such as origin/main, tried after the local branch and tag namespaces so a local branch of the same name keeps precedence; the unknown-revision diagnostic names the remote-tracking namespace among the things it searched; branch can list remote-tracking branches, reporting each as remote/branch with its target; each listed remote-tracking branch carries how many commits HEAD is ahead of it and behind it, so divergence is known before a push is attempted rather than from its refusal; ahead and behind are reported for an unborn HEAD without failing; the push remediation text names a spelling that resolves; 100 percent line, branch and function coverage holds"
+acceptance_criteria: "Revision resolution accepts a remote-tracking shorthand such as origin/main, tried after both local namespaces so a local branch or tag of the same name keeps precedence; the unknown-revision diagnostic names the remote-tracking namespace among the things it searched; branch can list remote-tracking branches, reporting each as remote/branch with its target; each listed remote-tracking branch carries how many commits HEAD is ahead of it and behind it, so divergence is known before a push is attempted rather than from its refusal; an unborn HEAD omits both counts rather than reporting zero, so a caller branching on behind greater than zero cannot read nothing-to-compare as already-up-to-date; HEAD reachability is walked once for the whole listing rather than once per tracking ref; the push remediation text names a spelling that resolves; 100 percent line, branch and function coverage holds"
 parent: pm-vcs-tr2a
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-08-03T13:32:41.110Z","harness:claude-code","Verified against the installed CLI, not only the harness. A clone and its origin were driven apart by one commit each, then: (1) 'pm vcs branch --remotes' listed origin/feature and origin/main with ahead 1 / behind 1 on main, so the divergence was visible before any push; (2) 'pm vcs push' refused, naming '<remote>/main' and pointing at 'pm vcs branch --remotes'; (3) 'pm vcs merge origin/main' resolved the shorthand and merged cleanly; (4) the push then landed; (5) a further fetch reported ahead 0 / behind 0. Before this change step 1 listed only the local branch, step 3 reported 'is not a known commit, branch or tag', and only the fully spelled refs/remotes/origin/main worked."
+  "2026-08-03T13:52:03.266Z","harness:claude-code","Acceptance criterion corrected after review. It previously read that ahead and behind are reported for an unborn HEAD without failing, which contradicts what shipped and what the README states: an unborn HEAD omits both counts, because nothing-to-compare and already-up-to-date are different answers and a caller branching on behind greater than zero must not read the first as the second. The criterion now states the omission, and a criterion for walking HEAD reachability once per listing rather than once per tracking ref was added alongside the fix for it. The history events recording the original wording are left untouched."
 tests[2]{command,path,scope}:
   npm run coverage,scripts/coverage-gate.ts,project
   npm test,test,project

@@ -305,8 +305,9 @@ pm vcs push --branch feature
 ```
 
 A fetched branch is reachable two ways: by its full `refs/remotes/upstream/main`, and by the
-`upstream/main` shorthand any command taking a revision accepts. A local branch of the same
-name always wins that shorthand, so adding it cannot retarget a name a repository already uses.
+`upstream/main` shorthand any command taking a revision accepts. A local branch **or tag** of
+the same name always wins that shorthand — the remote-tracking namespace is searched last — so
+adding it cannot retarget a name a repository already uses.
 
 `branch --remotes` reports each tracking branch with how many commits HEAD is `ahead` of it and
 `behind` it. Both numbers are needed to act: `behind 0` is a push that will be accepted, `ahead 0`

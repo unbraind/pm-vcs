@@ -273,10 +273,14 @@ export interface RemoteBranchListing {
  * @returns One entry per remote-tracking ref, in ref-name order.
  */
 function remoteListing(repository: Repository, head: ObjectId | null): RemoteBranchListing[] {
+  // Walked once, not once per ref: HEAD's ancestry is the same set for every
+  // comparison, and re-deriving it inside the loop would cost one full walk of
+  // local history per remote branch.
+  const fromHead = head === null ? null : reachable(repository.objects, head);
   return repository.refs.list(REMOTE_PREFIX).map((ref) => ({
     name: ref.name.slice(REMOTE_PREFIX.length),
     target: ref.target,
-    ...(head === null ? {} : divergence(repository.objects, head, ref.target)),
+    ...(fromHead === null ? {} : divergence(repository.objects, fromHead, ref.target)),
   }));
 }
 
