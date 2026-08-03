@@ -315,12 +315,14 @@ written against the interface and never against a path.
 
 Four properties, each of them the reason the obvious implementation is wrong:
 
-- **Fetch writes only under `refs/remotes/<<remote>>/`.** A bundle names refs as the sender
-  knows them, so importing one wholesale moves the receiver's `main` onto the sender's tip.
-  Fetch therefore takes `importBundleObjects` — the object half of an import — and publishes
-  the tracking refs itself. A tag the receiver already uses at another value is reported, not
-  moved: a tag names one immutable point, and re-pointing it changes what every existing
-  reference to it resolves to.
+- **Fetch writes branches only under `refs/remotes/<<remote>>/`, and never a local branch.**
+  A bundle names refs as the sender knows them, so importing one wholesale moves the receiver's
+  `main` onto the sender's tip. Fetch therefore takes `importBundleObjects` — the object half of
+  an import — and publishes the refs itself. Tags are the deliberate exception and keep their own
+  names under `refs/tags`, because a tag identifies a point in history rather than one
+  repository's opinion about a line of work. A tag the receiver already uses at another value is
+  reported in `conflictingTags` and not moved: a tag names one immutable point, and re-pointing
+  it changes what every existing reference to it resolves to.
 - **Negotiation is filtered by the receiver, not trusted from the sender.** The fetching side
   offers its branches, tags and every remote's tracking refs as candidate `haves`. The serving
   side keeps only the ones it actually holds — a candidate it has never seen would otherwise be

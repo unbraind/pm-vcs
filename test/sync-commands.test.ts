@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { after, test } from "node:test";
 
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -228,4 +228,26 @@ test("remote refuses a duplicate name at the command surface rather than repoint
   // Silently repointing would send the next push somewhere else while the command
   // that changed it reported nothing.
   assert.equal(Repository.open(root).remotes.require("origin").url, "/srv/one");
+});
+
+test("remote stores the resolved location and refuses a scheme this build cannot serve", async () => {
+  const harness = await activate();
+  const root = await seededRepo(harness);
+
+  // Relative to the working root the agent is in. Stored as typed, `fetch` would
+  // later resolve it against the repository root instead.
+  const added = await harness.runCommand({
+    command: "vcs remote", args: ["origin", "../sibling"], pmRoot: root,
+  });
+  assert.equal(added.errorMessage, undefined, String(added.errorMessage));
+  assert.equal((added.result as { added: Remote }).added.url, resolve(root, "../sibling"));
+
+  // An unsupported scheme is refused here rather than at the first fetch, which
+  // would name the fetch as the problem.
+  const refused = await harness.runCommand({
+    command: "vcs remote", args: ["web", "https://example.com/repo"], pmRoot: root,
+  });
+  assert.equal(refused.handled, false);
+  assert.match(String(refused.errorMessage), /cannot reach a remote over "https"/);
+  assert.equal(Repository.open(root).remotes.read("web"), null);
 });

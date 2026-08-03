@@ -38,6 +38,7 @@ import {
 import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./engine/refs.ts";
 import type { Remote } from "./engine/remotes.ts";
 import { type CloneReport, type FetchReport, type PushReport, cloneFrom, fetchFrom, pushTo } from "./engine/sync.ts";
+import { resolveRemoteLocation } from "./engine/transport.ts";
 import { type StatusReport, flattenTree } from "./engine/worktree.ts";
 import type {
   CommandHandlerContext,
@@ -694,7 +695,13 @@ export function registerVcsCommands(api: ExtensionApi): void {
           "Pass a filesystem path or file: URL as the second argument, or add --remove to delete the remote.",
         );
       }
-      return { ok: true, added: repository.remotes.add(name, url) };
+      // Resolved before it is stored, for the same reason `clone` resolves: the
+      // value persists, and a relative one names a different directory depending
+      // on where it is read from. `fetch` would later resolve it against the
+      // repository root while the agent typed it against the working root. This
+      // is also where an unsupported scheme is refused -- otherwise `https://…`
+      // is accepted here and fails at the first fetch, naming the fetch.
+      return { ok: true, added: repository.remotes.add(name, resolveRemoteLocation(url, sourceWorkingRoot(context))) };
     },
   });
 

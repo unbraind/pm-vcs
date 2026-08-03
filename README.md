@@ -304,10 +304,13 @@ pm vcs push --branch feature
 
 Three properties hold, and each exists because the alternative loses an agent's work:
 
-- **A fetch cannot move a local branch.** It writes only under `refs/remotes/`. Importing a
-  bundle wholesale would move the receiver's `main` onto the sender's, because a bundle names
-  refs as the *sender* knows them — so the receiving agent's commits would become reachable
-  from nothing, with nothing in the output saying so.
+- **A fetch cannot move a local branch.** Branches it learns land under `refs/remotes/`.
+  Importing a bundle wholesale would move the receiver's `main` onto the sender's, because a
+  bundle names refs as the *sender* knows them — so the receiving agent's commits would become
+  reachable from nothing, with nothing in the output saying so. Tags are the exception and keep
+  their own names under `refs/tags`, since a tag identifies a point in history rather than one
+  repository's view of a branch; one the receiver already uses at a different value is reported
+  in `conflictingTags` rather than moved.
 - **A push cannot discard a commit the remote has.** The receiving side requires its current
   tip to be an ancestor of what is being pushed, and `--force` is the only way past it.
 - **That check is atomic.** Every ref lands as a compare-and-swap against the value the

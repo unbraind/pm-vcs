@@ -6,11 +6,11 @@ status: closed
 priority: 1
 tags[2]: "area:vcs",distribution
 created_at: "2026-08-02T20:07:46.626Z"
-updated_at: "2026-08-02T23:03:28.317Z"
+updated_at: "2026-08-03T02:41:45.147Z"
 closed_at: "2026-08-02T21:34:12.155Z"
 completed_at: "2026-08-02T21:34:12.155Z"
 author: "harness:claude-code"
-acceptance_criteria: "A fetch into a repository that already shares history transfers strictly fewer objects than a fetch into an empty one; a fetch never writes a branch outside refs/remotes/ and never moves a local branch; a fetch publishes a remote tag under refs/tags only when the local repository does not already use that name, and reports the ones it declined; a fetch into a repository whose local branch has diverged leaves that local branch untouched; candidate haves the remote does not hold are dropped rather than failing the fetch; fetch records the tracking refs it moved in the operation log"
+acceptance_criteria: "A fetch into a repository that already shares history transfers strictly fewer objects than a fetch into an empty one; a fetch never writes a branch outside refs/remotes/ and never moves a local branch; a fetch publishes a remote tag under refs/tags only when the local repository does not already use that name, and returns the declined names in the report's conflictingTags field; a fetch into a repository whose local branch has diverged leaves that local branch untouched; candidate haves the remote does not hold are dropped rather than failing the fetch; fetch records the tracking refs it moved in the operation log"
 parent: pm-vcs-wm40
 close_reason: "Shipped in the distribution tranche: remotes, transport interface, fetch/push/clone with reachability negotiation, 100/100/100 coverage."
 body: ""
