@@ -6,12 +6,13 @@ status: closed
 priority: 1
 tags[3]: "area:ci",determinism,release
 created_at: "2026-08-03T00:36:21.288Z"
-updated_at: "2026-08-03T07:09:28.879Z"
+updated_at: "2026-08-03T07:39:40.297Z"
 closed_at: "2026-08-03T00:36:30.070Z"
 completed_at: "2026-08-03T00:36:30.070Z"
 author: "harness:claude-code"
 acceptance_criteria: "pm-changelog is upgraded to a version that derives release dates in UTC, and generating under TZ=UTC and TZ=Europe/Vienna at the same instant produces byte-identical output; the changelog no longer needs a TZ override to pass check; decodeTree refuses a tree entry line that parses to a non-array, covered by an explicit test for both an object and a scalar; three consecutive coverage runs report 100 percent lines, branches and functions with no variation; release:check exits zero end to end"
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-08-03T07:09:28.879Z","harness:claude-code","Reopened scope on verification: the UTC upgrade this item delivered fixed timezone drift but not clock dependence. With no release tag in a gated repo, pm-changelog falls back to the current date, so the committed heading was 2026.7.30 - 2026-08-03 - the version's number and the day it happened to be generated. changelog:check therefore passed only on its generation day and would have failed on main the next morning. Every released package in the fleet pairs the version with its own CalVer date (2026.7.29 - 2026-07-29), so the heading was also inconsistent with the convention. Fixed by pinning --date 2026-07-30 across changelog, changelog:full and changelog:check and correcting the committed heading. The gate is now independent of when it runs, which is what this item claimed."
+  "2026-08-03T07:39:40.297Z","harness:claude-code","Release-time caveat for whoever lifts the gate on this package. The --date 2026-07-30 pin now in changelog, changelog:full and changelog:check is an unconditional override, not a fallback: pm-changelog has no fallback-shaped flag today. It is correct while this package is release-gated and therefore untagged, because without a tag the only alternative is the current date and the committed heading then expires nightly. The moment a real release tag exists that pin will win over the tag's own date and the heading will be wrong in a new way. Removing the three pins is therefore part of lifting the release gate, not an optional cleanup. Filed upstream on pm-changelog as issue 120, asking for a --date-fallback that defers to a tag when one exists, or a --date-from-version that derives the fallback from the CalVer version so no pin is needed at all."
 close_reason: "pm-changelog upgraded to 2026.8.2 and byte-identical output verified across TZ=UTC and TZ=Europe/Vienna at one instant; decodeTree's non-array arm covered for both an object and a scalar entry; three consecutive coverage runs reported 100/100/100 with no variation; release:check exits zero."
 body: ""
