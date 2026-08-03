@@ -4,7 +4,7 @@ import { afterEach, test } from "node:test";
 
 import { type ObjectId, ObjectStore } from "../engine/objects.ts";
 import { type Commit, type Signature, writeCommit } from "../engine/model.ts";
-import { isAncestor, mergeBases, mergeContent, reachable } from "../engine/merge.ts";
+import { divergence, isAncestor, mergeBases, mergeContent, reachable } from "../engine/merge.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 let dir: { root: string; cleanup(): void } | null = null;
@@ -62,6 +62,46 @@ test("isAncestor treats a commit as its own ancestor", () => {
   assert.equal(isAncestor(store, tip, root), false);
   // A commit reaches itself.
   assert.equal(isAncestor(store, root, root), true);
+});
+
+test("divergence separates the three relationships a push has to tell apart", () => {
+  const store = freshStore();
+  const base = commit(store, [], "base");
+  const ours = commit(store, [base], "ours");
+  const theirs = commit(store, [base], "theirs");
+
+  // Identical: nothing to send, nothing to take.
+  assert.deepEqual(divergence(store, reachable(store, base), base), { ahead: 0, behind: 0 });
+  // Strictly ahead is a fast-forward for the other side; strictly behind is one
+  // for this side. The counts have to be asymmetric or the two read alike.
+  assert.deepEqual(divergence(store, reachable(store, ours), base), { ahead: 1, behind: 0 });
+  assert.deepEqual(divergence(store, reachable(store, base), ours), { ahead: 0, behind: 1 });
+  // Both non-zero is the case a push refuses, and the only one needing a merge.
+  assert.deepEqual(divergence(store, reachable(store, ours), theirs), { ahead: 1, behind: 1 });
+});
+
+test("divergence counts every commit on both sides of unrelated histories", () => {
+  const store = freshStore();
+  const ourRoot = commit(store, [], "our-root");
+  const ourTip = commit(store, [ourRoot], "our-tip");
+  const theirRoot = commit(store, [], "their-root");
+  // Sharing no ancestor is not an error here: the answer is that all of each
+  // side is missing from the other, which is exactly what the counts say.
+  assert.deepEqual(divergence(store, reachable(store, ourTip), theirRoot), { ahead: 2, behind: 1 });
+});
+
+test("divergence counts commits once when branches remerge", () => {
+  const store = freshStore();
+  const base = commit(store, [], "base");
+  const ours = commit(store, [base], "ours");
+  const theirs = commit(store, [base], "theirs");
+  const merged = commit(store, [ours, theirs], "merged");
+  // `merged` reaches `theirs` through its *second* parent, so `theirs` is not
+  // ahead of itself and nothing is behind. Walking every parent rather than a
+  // first-parent line is what keeps `behind` at 0 here instead of counting
+  // `theirs` as a commit the merge has not seen.
+  assert.deepEqual(divergence(store, reachable(store, merged), theirs), { ahead: 2, behind: 0 });
+  assert.deepEqual(divergence(store, reachable(store, theirs), merged), { ahead: 0, behind: 2 });
 });
 
 test("mergeBases finds the single base of a simple fork", () => {

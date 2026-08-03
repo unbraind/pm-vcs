@@ -199,7 +199,7 @@ test("export --since resolves each boundary revision and records it as a prerequ
   // history whose parents are missing.
   const bogus = await run("vcs export", [join(root, "x.bundle")], { since: "no-such-revision" });
   assert.equal(bogus.handled, false);
-  assert.match(String(bogus.errorMessage), /not a known commit, branch or tag/);
+  assert.match(String(bogus.errorMessage), /not a known commit, branch, tag or remote-tracking branch/);
 
   const file = join(root, "incremental.bundle");
   const ok = await run("vcs export", [file], { since: first });

@@ -79,6 +79,43 @@ export function isAncestor(store: ObjectStore, candidate: ObjectId, descendant: 
   return reachable(store, descendant).has(candidate);
 }
 
+/** How far two commits have moved apart, counted in commits. */
+export interface Divergence {
+  /** Commits reachable from the left side and not from the right. */
+  readonly ahead: number;
+  /** Commits reachable from the right side and not from the left. */
+  readonly behind: number;
+}
+
+/**
+ * Counts how far one commit has diverged from a reachable set.
+ *
+ * Both numbers are needed to classify the relationship, and neither alone is
+ * enough: zero ahead is a fast-forward, zero behind is something to push, and
+ * two non-zero counts are a divergence that has to be merged before either.
+ * Counting the symmetric difference rather than testing ancestry answers all
+ * three from one pair of walks, and unrelated histories fall out of it as "every
+ * commit on both sides" instead of as an error.
+ *
+ * The left side arrives already walked, rather than as a commit this would walk
+ * itself. Comparing one branch against several tracking refs is the normal case,
+ * and taking a commit here would re-walk that branch's whole ancestry once per
+ * ref — turning one walk into as many as the repository has remote branches.
+ * Making the caller hold the set puts that walk where it can be hoisted.
+ *
+ * @param store - Object store holding the commits.
+ * @param fromLeft - Everything reachable from the left side, from {@link reachable}.
+ * @param right - The commit the counts are stated against, usually a tracking ref.
+ * @returns The two counts, stated from the left side.
+ */
+export function divergence(store: ObjectStore, fromLeft: ReadonlySet<ObjectId>, right: ObjectId): Divergence {
+  const fromRight = reachable(store, right);
+  return {
+    ahead: [...fromLeft].filter((id) => !fromRight.has(id)).length,
+    behind: [...fromRight].filter((id) => !fromLeft.has(id)).length,
+  };
+}
+
 /**
  * Finds the best common ancestors of two commits.
  *

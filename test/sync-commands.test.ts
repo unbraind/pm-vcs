@@ -6,6 +6,7 @@ import { after, test } from "node:test";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension from "../index.ts";
+import type { BranchListing, RemoteBranchListing } from "../vcs-commands.ts";
 import type { Remote } from "../engine/remotes.ts";
 import { trackingRef } from "../engine/remotes.ts";
 import { BRANCH_PREFIX } from "../engine/refs.ts";
@@ -257,4 +258,80 @@ test("remote stores the resolved location and refuses a scheme this build cannot
   assert.equal(refused.handled, false);
   assert.match(String(refused.errorMessage), /cannot reach a remote over "https"/);
   assert.equal(Repository.open(root).remotes.read("web"), null);
+});
+
+test("branch --remotes lists what the fetch recorded, with divergence from HEAD", async () => {
+  const harness = await activate();
+  const source = await seededRepo(harness);
+  // A second branch on the source, so the clone has a remote branch it does not
+  // hold locally — the case with no other way to discover it.
+  await harness.runCommand({ command: "vcs branch", args: ["feature"], pmRoot: source });
+
+  const cloned = await harness.runCommand({ command: "vcs clone", args: [source], pmRoot: freshRoot() });
+  const clone = (cloned.result as { clone: CloneReport }).clone.root;
+
+  // Without the flag the output is unchanged: local branches only.
+  const local = await harness.runCommand({ command: "vcs branch", pmRoot: clone });
+  assert.deepEqual((local.result as { remoteBranches?: unknown }).remoteBranches, undefined);
+  assert.deepEqual((local.result as { branches: BranchListing[] }).branches.map((entry) => entry.name), ["main"]);
+
+  const listed = await harness.runCommand({ command: "vcs branch", options: { remotes: true }, pmRoot: clone });
+  assert.equal(listed.errorMessage, undefined, String(listed.errorMessage));
+  const remotes = (listed.result as { remoteBranches: RemoteBranchListing[] }).remoteBranches;
+  // Both branches the source published, named as `resolve` accepts them.
+  assert.deepEqual(remotes.map((entry) => entry.name), ["origin/feature", "origin/main"]);
+  // Freshly cloned, so HEAD sits exactly on both.
+  assert.deepEqual(remotes.map((entry) => [entry.ahead, entry.behind]), [[0, 0], [0, 0]]);
+
+  // Commit locally: now ahead of the remote, and a push would be accepted.
+  writeFileSync(join(clone, "local.txt"), "mine");
+  await harness.runCommand({ command: "vcs add", pmRoot: clone });
+  await harness.runCommand({
+    command: "vcs commit", options: { message: "local" }, global: { author: "C <c@d>" }, pmRoot: clone,
+  });
+  // Commit on the source too, then fetch: now diverged, and a push is doomed.
+  writeFileSync(join(source, "theirs.txt"), "yours");
+  await harness.runCommand({ command: "vcs add", pmRoot: source });
+  await harness.runCommand({
+    command: "vcs commit", options: { message: "theirs" }, global: { author: "D <d@e>" }, pmRoot: source,
+  });
+  await harness.runCommand({ command: "vcs fetch", pmRoot: clone });
+
+  const diverged = await harness.runCommand({ command: "vcs branch", options: { remotes: true }, pmRoot: clone });
+  const main = (diverged.result as { remoteBranches: RemoteBranchListing[] }).remoteBranches
+    .find((entry) => entry.name === "origin/main");
+  assert.deepEqual([main?.ahead, main?.behind], [1, 1]);
+
+  // The counts predicted the refusal rather than the refusal revealing them.
+  const refused = await harness.runCommand({ command: "vcs push", pmRoot: clone });
+  assert.equal(refused.handled, false);
+  assert.match(String(refused.errorMessage), /<remote>\/main/);
+
+  // And the remediation the refusal names is one this surface can carry out.
+  const merged = await harness.runCommand({
+    command: "vcs merge", args: ["origin/main"], options: { message: "merge origin" },
+    global: { author: "C <c@d>" }, pmRoot: clone,
+  });
+  assert.equal(merged.errorMessage, undefined, String(merged.errorMessage));
+  const pushed = await harness.runCommand({ command: "vcs push", pmRoot: clone });
+  assert.equal(pushed.errorMessage, undefined, String(pushed.errorMessage));
+  assert.equal((pushed.result as { push: PushReport }).push.upToDate, false);
+});
+
+test("branch --remotes omits divergence for an unborn HEAD instead of reporting zero", async () => {
+  const harness = await activate();
+  const source = await seededRepo(harness);
+  const root = freshRoot();
+  await harness.runCommand({ command: "vcs init", pmRoot: root });
+  await harness.runCommand({ command: "vcs remote", args: ["origin", source], pmRoot: root });
+  await harness.runCommand({ command: "vcs fetch", pmRoot: root });
+
+  const listed = await harness.runCommand({ command: "vcs branch", options: { remotes: true }, pmRoot: root });
+  assert.equal(listed.errorMessage, undefined, String(listed.errorMessage));
+  const [entry] = (listed.result as { remoteBranches: RemoteBranchListing[] }).remoteBranches;
+  assert.equal(entry?.name, "origin/main");
+  // Absent, not zero: a caller branching on `behind > 0` must not read "nothing
+  // to compare against" as "already up to date" and skip a merge it needs.
+  assert.equal("ahead" in (entry as object), false);
+  assert.equal("behind" in (entry as object), false);
 });

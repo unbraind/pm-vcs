@@ -189,11 +189,21 @@ export class FileTransport implements Transport {
       const current = repository.refs.read(update.ref);
       if (current === null || current === update.next) continue;
       if (!force && !isAncestor(repository.objects, current, update.next)) {
+        // Name a spelling the caller can actually act on. A fetch writes a branch
+        // to `refs/remotes/<remote>/<branch>`, which `resolve` accepts as the
+        // `<remote>/<branch>` shorthand; a tag keeps its own name and has no
+        // tracking ref, so the same sentence would send a tag pusher after a ref
+        // that will never exist.
+        const recovery = update.ref.startsWith(BRANCH_PREFIX)
+          ? "Fetch first, then merge or rebase onto the tracking branch it writes — "
+            + `<remote>/${update.ref.slice(BRANCH_PREFIX.length)}, which "pm vcs branch --remotes" lists — `
+            + "or push with --force to discard them deliberately."
+          : "Fetch first to see what it points at now, then move the tag deliberately, "
+            + "or push with --force to discard them deliberately.";
         throw new ObjectStoreError(
           "non_fast_forward",
           `Pushing ${update.next.slice(0, 12)} to ${update.ref} would discard commits ${this.url} already has, `
-          + `because its current ${current.slice(0, 12)} is not an ancestor of it. `
-          + "Fetch and merge or rebase first, or push with --force to discard them deliberately.",
+          + `because its current ${current.slice(0, 12)} is not an ancestor of it. ${recovery}`,
         );
       }
     }

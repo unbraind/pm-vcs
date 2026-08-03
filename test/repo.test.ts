@@ -142,6 +142,33 @@ test("a clean switch materialises the target tree and removes the absent file", 
   assert.equal(readFileSync(join(root, "only-on-main.txt"), "utf8"), "x");
 });
 
+test("resolve accepts a remote-tracking shorthand, and a local branch outranks it", () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const first = commitFile(repo, "a.txt", "a", "first", new Date(0));
+  const second = commitFile(repo, "a.txt", "b", "second", new Date(1));
+
+  // What a fetch writes: the remote's `main`, under the tracking namespace.
+  repo.refs.compareAndSwap("refs/remotes/origin/main", null, first);
+  assert.equal(repo.resolve("origin/main"), first);
+  assert.equal(repo.resolve("refs/remotes/origin/main"), first);
+
+  // A local branch literally named `origin/main` is legal, and it has to win:
+  // the shorthand is being added to repositories that may already contain one,
+  // and changing what an existing name resolves to would silently retarget
+  // whatever already refers to it.
+  repo.createBranch("origin/main", second, new Date(2));
+  assert.equal(repo.resolve("origin/main"), second);
+  // The tracking ref is still reachable by its full name.
+  assert.equal(repo.resolve("refs/remotes/origin/main"), first);
+
+  // A local *tag* outranks it for the same reason — the tracking namespace is
+  // searched last, after both local namespaces, not merely after branches.
+  repo.refs.compareAndSwap("refs/tags/origin/release", null, second);
+  repo.refs.compareAndSwap("refs/remotes/origin/release", null, first);
+  assert.equal(repo.resolve("origin/release"), second);
+});
+
 test("resolve accepts HEAD, a branch, a tag and a commit id, and rejects the unknown", () => {
   const { root } = freshDir();
   const repo = Repository.init(root);
@@ -156,10 +183,14 @@ test("resolve accepts HEAD, a branch, a tag and a commit id, and rejects the unk
   assert.equal(repo.resolve("v1"), tip);
   assert.equal(repo.resolve(tip), tip);
 
-  // An unknown revision is refused.
+  // An unknown revision is refused, and the diagnostic names every namespace
+  // that was searched — a caller told only "commit, branch or tag" has no reason
+  // to try the remote-tracking shorthand that would have worked.
   assert.throws(
     () => repo.resolve("nope"),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "unknown_revision",
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "unknown_revision"
+      && /remote-tracking branch/.test(error.message),
   );
   // A name with an invalid ref character exercises the per-candidate catch and
   // still resolves to unknown_revision.
