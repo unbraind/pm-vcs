@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { after, test } from "node:test";
 
@@ -234,18 +234,25 @@ test("remote stores the resolved location and refuses a scheme this build cannot
   const harness = await activate();
   const root = await seededRepo(harness);
 
-  // Relative to the working root the agent is in. Stored as typed, `fetch` would
-  // later resolve it against the repository root instead.
+  // Run from a subdirectory, so the command's working root and the repository
+  // root are different directories. With the same root for both, an implementation
+  // that resolved against `repository.root` would pass this unchanged — and that
+  // is the regression the resolution exists to prevent.
+  const workingRoot = join(root, "nested");
+  mkdirSync(workingRoot, { recursive: true });
+
   const added = await harness.runCommand({
-    command: "vcs remote", args: ["origin", "../sibling"], pmRoot: root,
+    command: "vcs remote", args: ["origin", "../sibling"], pmRoot: workingRoot,
   });
   assert.equal(added.errorMessage, undefined, String(added.errorMessage));
-  assert.equal((added.result as { added: Remote }).added.url, resolve(root, "../sibling"));
+  // `root/sibling`, not the repository root's `../sibling` one level higher.
+  assert.equal((added.result as { added: Remote }).added.url, resolve(workingRoot, "../sibling"));
+  assert.notEqual(resolve(workingRoot, "../sibling"), resolve(root, "../sibling"));
 
   // An unsupported scheme is refused here rather than at the first fetch, which
   // would name the fetch as the problem.
   const refused = await harness.runCommand({
-    command: "vcs remote", args: ["web", "https://example.com/repo"], pmRoot: root,
+    command: "vcs remote", args: ["web", "https://example.com/repo"], pmRoot: workingRoot,
   });
   assert.equal(refused.handled, false);
   assert.match(String(refused.errorMessage), /cannot reach a remote over "https"/);
