@@ -33,7 +33,7 @@
     "changelog:check": "pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --release-version-from-package --date 2026-07-30 --since-previous-tag --until-release-tag --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --check",
     "release:check": "npm run typecheck && npm run build && npm run coverage && npm run accept:stat-cache && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run changelog:check",
     "prepublishOnly": "npm run release:check",
-    "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary",
+    "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary",
     "prepare": "node scripts/prepare-merge-driver.mjs",
     "merge:install": "pm merge install",
     "coverage": "npm run build && npm run build:test && node scripts/coverage-gate.ts"
