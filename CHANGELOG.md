@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- The 100 percent branch gate rested on an incidental execution, so an unrelated change failed CI on Node 26 only ([pm-vcs-8e8k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8e8k.toon))
 - A fetched branch can be neither named nor listed, so the push refusal's own remediation cannot be followed ([pm-vcs-dh19](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-dh19.toon))
 - Make the release gate deterministic: a clock-dependent changelog date and a branch V8 reported inconsistently ([pm-vcs-ehvf](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ehvf.toon))
 - Harden the distribution surface against the review findings: one base for clone, atomic remotes, and a bounded push namespace ([pm-vcs-6220](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-6220.toon))

@@ -101,6 +101,30 @@ test("versioned trees preserve file identity and reject malformed identity metad
   ]) assert.throws(() => decodeTree(Buffer.from(payload)), (error: unknown) => error instanceof ObjectStoreError);
 });
 
+test("decodeTree skips blank lines rather than reading them as entries", () => {
+  // `encodeTree` joins entries with a newline and emits no trailing one, and it
+  // only writes the versioned form at all when an entry carries identity
+  // metadata — so nothing this encoder produces ever contains a blank line. The
+  // skip exists to tolerate a payload written by something else, which means no
+  // round-trip test can reach it and it was covered only by whichever unrelated
+  // test happened to hand `decodeTree` bytes with one. A gate resting on an
+  // incidental execution fails on a change that has nothing to do with it, which
+  // is what happened here. These assertions pin the arm deliberately.
+  assert.deepEqual(decodeTree(Buffer.from("pm-vcs-tree 2\n", "utf8")), []);
+
+  const entries: TreeEntry[] = [
+    { name: "alpha.txt", mode: "100644", id },
+    { name: "zeta.txt", mode: "100644", id },
+  ];
+  const padded = Buffer.from(
+    `pm-vcs-tree 2\n${entries.map((entry) => JSON.stringify(
+      [entry.mode, entry.id, null, null, entry.name],
+    )).join("\n\n")}\n`,
+    "utf8",
+  );
+  assert.deepEqual(decodeTree(padded), entries);
+});
+
 test("encodeTree rejects every disallowed entry name", () => {
   const at = (name: string): TreeEntry => ({ name, mode: "100644", id });
   // Empty name.

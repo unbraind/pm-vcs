@@ -1,0 +1,16 @@
+id: pm-vcs-8e8k
+title: "The 100 percent branch gate rested on an incidental execution, so an unrelated change failed CI on Node 26 only"
+description: "decodeTree tolerates a blank line inside a versioned tree payload. Nothing this package encodes ever produces one: encodeTree joins entries with a newline, emits no trailing newline, and writes the versioned form only when an entry carries identity metadata, so an empty tree is not even versioned. The arm therefore cannot be reached by any round trip and was covered only by whichever unrelated test happened to hand decodeTree bytes containing a blank line. That made the branch gate depend on incidental execution rather than on an assertion, and a change touching merge, repo, transport and the command surface — none of them model.ts — dropped branch coverage to 99.95 percent and failed the Node 26 matrix leg while Node 22 passed. Same class as the earlier V8-dependent branch that pm-vcs-ehvf fixed: the gate must depend on the code, not on what some other test incidentally executed."
+type: Issue
+status: closed
+priority: 2
+tags[3]: "area:vcs",ci,coverage
+created_at: "2026-08-03T13:47:47.223Z"
+updated_at: "2026-08-03T13:47:52.773Z"
+closed_at: "2026-08-03T13:47:52.763Z"
+completed_at: "2026-08-03T13:47:52.763Z"
+author: "harness:claude-code"
+acceptance_criteria: "A test asserts the blank-line skip directly, both for a header-only payload and for a blank line between two entries; branch coverage for model.ts no longer depends on any other test file; the full gate reports 100 percent on lines, branches and functions on both matrix legs"
+parent: pm-vcs-tr2a
+close_reason: Pinned with direct assertions on a header-only payload and a blank line between two entries. Coverage back to 100/100/100 locally; CI to confirm on both matrix legs.
+body: ""
