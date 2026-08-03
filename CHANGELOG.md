@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- Make the release gate deterministic: a clock-dependent changelog date and a branch V8 reported inconsistently ([pm-vcs-ehvf](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ehvf.toon))
 - Harden the distribution surface against the review findings: one base for clone, atomic remotes, and a bounded push namespace ([pm-vcs-6220](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-6220.toon))
 - Switch removes untracked paths absent from the target tree ([pm-vcs-c5pg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-c5pg.toon))
 - Refresh verified stat cache after materialization without trusting concurrent bytes ([pm-vcs-v4z8](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-v4z8.toon))
