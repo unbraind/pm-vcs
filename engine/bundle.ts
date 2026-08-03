@@ -86,6 +86,18 @@ function closure(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId
 }
 
 /**
+ * What {@link importBundleObjects} stored, before any ref is published.
+ */
+export interface ObjectImportReport {
+  /** The bundle's validated header. */
+  readonly header: BundleContents;
+  /** Objects newly written to the store. */
+  readonly added: readonly ObjectId[];
+  /** Objects the store already had. */
+  readonly skipped: readonly ObjectId[];
+}
+
+/**
  * Refuses an advertised ref whose history is not fully present.
  *
  * A bundle arrives from outside and its header is a claim, not a fact. It can name
@@ -103,7 +115,7 @@ function closure(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId
  * @param target - Commit the ref would be published at.
  * @throws ObjectStoreError When any object in the closure is absent.
  */
-function assertClosurePresent(store: ObjectStore, name: string, target: ObjectId): void {
+export function assertClosurePresent(store: ObjectStore, name: string, target: ObjectId): void {
   const seen = new Set<ObjectId>();
   const pending: ObjectId[] = [target];
   while (pending.length > 0) {
@@ -254,20 +266,26 @@ export function parseBundle(bytes: Buffer): { header: BundleContents; lines: Bun
 }
 
 /**
- * Imports a bundle into a repository.
+ * Stores a bundle's objects without publishing any of the refs it advertises.
+ *
+ * Fetch needs exactly this half. A bundle names the refs as the *sender* knows
+ * them, so importing one wholesale into a repository that already has a branch of
+ * the same name moves that branch onto the sender's tip — discarding whatever the
+ * receiving agent committed there, which is the single loss this package exists to
+ * prevent. A fetch therefore takes the objects here and publishes them under
+ * `refs/remotes/` itself.
  *
  * Prerequisites are checked before anything is written, so a bundle that depends
  * on history the receiver does not have fails whole rather than leaving commits
  * whose parents are missing.
  *
  * @param store - Destination object store.
- * @param refs - Destination ref store.
  * @param bytes - The bundle's contents.
- * @returns What was added, what was already present, and the refs advertised.
+ * @returns The validated header, and which objects were written versus already held.
  * @throws ObjectStoreError When a prerequisite commit is absent, or the bundle is
  *   malformed.
  */
-export function importBundle(store: ObjectStore, refs: RefStore, bytes: Buffer): ImportReport {
+export function importBundleObjects(store: ObjectStore, bytes: Buffer): ObjectImportReport {
   const { header, lines } = parseBundle(bytes);
   const carried = new Set(lines.map((line) => line.id));
   const missing = (header.prerequisites ?? []).filter((id) => !carried.has(id) && !store.has(id));
@@ -288,6 +306,21 @@ export function importBundle(store: ObjectStore, refs: RefStore, bytes: Buffer):
     store.write(line.type, line.payload);
     added.push(line.id);
   }
+  return { header, added, skipped };
+}
+
+/**
+ * Imports a bundle into a repository, publishing the refs it advertises.
+ *
+ * @param store - Destination object store.
+ * @param refs - Destination ref store.
+ * @param bytes - The bundle's contents.
+ * @returns What was added, what was already present, and the refs advertised.
+ * @throws ObjectStoreError When a prerequisite commit is absent, the bundle is
+ *   malformed, or an advertised ref's history is incomplete.
+ */
+export function importBundle(store: ObjectStore, refs: RefStore, bytes: Buffer): ImportReport {
+  const { header, added, skipped } = importBundleObjects(store, bytes);
   for (const [name, target] of Object.entries(header.refs)) assertClosurePresent(store, name, target);
   // One transaction, not a loop of independent swaps: a bundle advertising three
   // refs must not be able to publish two and fail on the third, which would leave

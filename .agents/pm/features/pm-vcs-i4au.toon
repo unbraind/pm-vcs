@@ -1,0 +1,13 @@
+id: pm-vcs-i4au
+title: "Resumable object transfer and peer capability negotiation, for the phase that has a wire"
+description: "Two acceptance criteria carried on the Phase 3 epic describe a network protocol and were deferred with the rest of it. An interrupted transfer that resumes by sending only the objects the receiver still lacks and verifies, and peers agreeing on supported capabilities and repository format versions before any data moves, are both properties of a wire. The filesystem transport that Phase 3 ships has neither an interruption to resume from nor a peer to disagree with: a bundle is handed over in one call, and both sides read the same object store format from the same disk. Committing to either now would fix a serialization before the served phase has said what a repository exposes, which is the reason the transport is an interface rather than a protocol. Recorded here so the criteria live with the phase that can satisfy them rather than being quietly dropped from the one that cannot."
+type: Feature
+status: open
+priority: 2
+tags[3]: "area:vcs",distribution,phase-5
+created_at: "2026-08-03T02:37:06.738Z"
+updated_at: "2026-08-03T02:37:06.738Z"
+author: "harness:claude-code"
+acceptance_criteria: "An interrupted object upload resumes by transferring only the objects the receiver lacks, each verified on arrival; a receiver rejects publication until the uploaded closure is complete and hash-valid; peers exchange supported capabilities and repository format versions before transferring data and refuse an incompatible peer without changing any ref; a lost publication race leaves both local history and the winner's remote tip intact and reports a retryable failure"
+parent: pm-vcs-tr2a
+body: ""

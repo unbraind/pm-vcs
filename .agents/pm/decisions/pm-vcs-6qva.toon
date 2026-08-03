@@ -1,0 +1,16 @@
+id: pm-vcs-6qva
+title: "The transport is an interface with a filesystem implementation, not a network protocol yet"
+description: "Phase 3 defines fetch, push and clone against a Transport interface and ships one implementation that reaches a repository through the filesystem. That is the whole of what the distribution logic needs to be correct: negotiation, fast-forward checking and compare-and-swap ref updates are properties of the algorithm, not of the wire. Committing to a network protocol now would fix a serialization format before the forge phase has said what a served repository exposes, and the two would then have to agree retroactively. The interface is the commitment; a served implementation lands with the forge."
+type: Decision
+status: closed
+priority: 2
+tags[2]: "area:vcs",distribution
+created_at: "2026-08-02T20:08:32.931Z"
+updated_at: "2026-08-02T21:34:13.394Z"
+closed_at: "2026-08-02T21:34:13.383Z"
+completed_at: "2026-08-02T21:34:13.383Z"
+author: "harness:claude-code"
+acceptance_criteria: "fetch, push and clone are written against the Transport interface and never touch a filesystem path directly; adding a second implementation requires no change to the sync algorithms; the decision records why a network transport is deferred rather than leaving it as an unexplained gap"
+parent: pm-vcs-wm40
+close_reason: "Shipped in the distribution tranche: remotes, transport interface, fetch/push/clone with reachability negotiation, 100/100/100 coverage."
+body: ""

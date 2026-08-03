@@ -85,7 +85,9 @@ it.**
    engine/records.ts   per-field record merge
    engine/diff.ts      Myers diff, unified hunks
    engine/bundle.ts    offline history exchange
-   engine/remote.ts    remotes, negotiation, transport                [Phase 3]
+   engine/remotes.ts   named remotes and tracking-ref naming
+   engine/transport.ts the remote boundary: advertise, fetch, push
+   engine/sync.ts      fetch, push, clone over any transport
   ─────────────────────────────────────────────────────────────
    engine/model.ts     canonical encoders: tree, commit, record
    engine/refs.ts      refs, HEAD, compare-and-swap
@@ -304,11 +306,42 @@ truncated final line from a crash must not make the whole history of operations 
 prerequisites, so a receiver lacking them fails loudly instead of importing a history with
 holes.
 
-**Phase 3: remotes and a transport.** Named remotes, remote-tracking refs under
-`refs/remotes/<<remote>>/`, and `clone`/`fetch`/`push` with negotiation computed from
-reachability so only missing objects move. Non-fast-forward pushes are refused by default —
-and because the receiving side updates refs by compare-and-swap, a push that races another
-push fails rather than discarding it.
+**Shipped: remotes and a transport.** `engine/remotes.ts` stores named remotes in
+`remotes.json`, deliberately *not* in `config.json`: config shapes what the history means and
+must match in every clone, whereas the remote list is one clone's local knowledge and differs
+between agents on the same project. `engine/transport.ts` defines the boundary — `advertise`,
+`fetch`, `push` — and ships a filesystem implementation. `engine/sync.ts` holds the algorithms,
+written against the interface and never against a path.
+
+Four properties, each of them the reason the obvious implementation is wrong:
+
+- **Fetch writes branches only under `refs/remotes/<<remote>>/`, and never a local branch.**
+  A bundle names refs as the sender knows them, so importing one wholesale moves the receiver's
+  `main` onto the sender's tip. Fetch therefore takes `importBundleObjects` — the object half of
+  an import — and publishes the refs itself. Tags are the deliberate exception and keep their own
+  names under `refs/tags`, because a tag identifies a point in history rather than one
+  repository's opinion about a line of work. A tag the receiver already uses at another value is
+  reported in `conflictingTags` and not moved: a tag names one immutable point, and re-pointing
+  it changes what every existing reference to it resolves to.
+- **Negotiation is filtered by the receiver, not trusted from the sender.** The fetching side
+  offers its branches, tags and every remote's tracking refs as candidate `haves`. The serving
+  side keeps only the ones it actually holds — a candidate it has never seen would otherwise be
+  used as an exclusion boundary it cannot walk, failing the whole fetch with a missing-object
+  error naming an object the caller does have.
+- **The fast-forward refusal lives on the receiving side.** The repository being written to is
+  the one with something to lose, and a check the sender performs is a check a sender can skip.
+- **Compare-and-swap is what makes that check sound.** The refusal is computed against the tip
+  the pusher observed; without the swap, a ref that moved in between would be overwritten by a
+  verdict that no longer applies to it.
+
+`clone` adopts the source's configuration before writing an object, because a clone that
+started from the defaults would store records as blobs and merge them by line — two
+repositories sharing commit ids while disagreeing about what those commits contain, each
+internally consistent and therefore undetectable.
+
+**Deferred to Phase 5.** A network transport. Committing to a wire format now would fix a
+serialization before the forge has said what a served repository exposes, and the two would
+have to agree retroactively. The interface is the commitment; the implementation follows it.
 
 ---
 
@@ -378,7 +411,7 @@ on every commit.
 | automatic descendant rebase | `jj` | **shipped** |
 | stable file IDs across edit/move/copy/delete | Epic Games Lore | **shipped** |
 | PM item ↔ native file/change attribution | pm SDK | **shipped** |
-| remotes, clone, fetch, push | git transport | **Phase 3** |
+| remotes, clone, fetch, push | git transport | **shipped** |
 | self-hosted source, CI-gated | — | **Phase 4** |
 | patch series as an object | kernel lore / `git format-patch` | **Phase 5** |
 | review + issues as native records | Forgejo, but in-repository | **Phase 5** |

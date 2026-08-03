@@ -20,20 +20,20 @@ jobs:
       RELEASE_TIMEZONE: Europe/Vienna
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
           registry-url: "https://registry.npmjs.org"
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2.2.0
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Install dependencies
         run: npm ci
@@ -87,6 +87,10 @@ jobs:
           echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "npm_version=$npm_version" >> "$GITHUB_OUTPUT"
+          # The heading date is derived from the version the tag already encodes,
+          # not from the clock, so a release can never publish a version whose
+          # changelog heading names a different day than the version itself.
+          printf 'release_iso_date=%04d-%02d-%02d\n' "$((10#$year))" "$((10#$month))" "$((10#$day))" >> "$GITHUB_OUTPUT"
 
       - name: Update release version
         if: steps.decide.outputs.should_release == 'true'
@@ -102,9 +106,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary
-          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --check
-          npx pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm > RELEASE_NOTES.md
+          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --date ${{ steps.decide.outputs.release_iso_date }} --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary
+          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --date ${{ steps.decide.outputs.release_iso_date }} --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --check
+          npx pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date ${{ steps.decide.outputs.release_iso_date }} --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm > RELEASE_NOTES.md
 
       - name: Run release checks
         if: steps.decide.outputs.should_release == 'true'

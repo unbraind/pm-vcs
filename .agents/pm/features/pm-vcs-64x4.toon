@@ -1,0 +1,16 @@
+id: pm-vcs-64x4
+title: Push refuses a non-fast-forward and lands every ref under compare-and-swap
+description: "A push writes to a repository other agents are also writing to, so both hazards are real: overwriting history the remote has and the pusher has not seen, and racing another pusher between the check and the write. The first is refused by requiring the remote's current tip to be an ancestor of the pushed commit — and that check is answered by the receiver, not the sender, because the receiver is the side that holds the tip and the side with something to lose. A sender that has never seen the remote's tip cannot evaluate the ancestry at all, and a sender-side check is one a sender can skip. The second is closed by making every ref update a compare-and-swap against the value the pusher observed."
+type: Feature
+status: closed
+priority: 1
+tags[2]: "area:vcs",distribution
+created_at: "2026-08-02T20:07:47.046Z"
+updated_at: "2026-08-02T23:04:41.501Z"
+closed_at: "2026-08-02T21:34:12.567Z"
+completed_at: "2026-08-02T21:34:12.567Z"
+author: "harness:claude-code"
+acceptance_criteria: "A push whose remote tip is not an ancestor of the pushed commit is refused by the receiving repository with a message naming the ref; force overrides the refusal; a remote tip the pusher does not hold is excluded from the exclusion boundary rather than sent as one, and the receiver still refuses the move on its own copy; a push may only move branches and tags, and any other ref namespace is refused; a concurrent update between observation and write fails the push rather than clobbering; the pushed refs are recorded in the receiving repository's operation log so a force push stays reversible; a push transfers only objects the remote lacks"
+parent: pm-vcs-wm40
+close_reason: "Shipped in the distribution tranche: remotes, transport interface, fetch/push/clone with reachability negotiation, 100/100/100 coverage."
+body: ""

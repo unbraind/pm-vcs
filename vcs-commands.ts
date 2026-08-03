@@ -12,7 +12,7 @@
 //     whatever it says, so any command that is meant to gate something throws.
 
 import { existsSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { VcsError } from "./git.ts";
 import {
@@ -36,6 +36,9 @@ import {
   Repository,
 } from "./engine/repo.ts";
 import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./engine/refs.ts";
+import type { Remote } from "./engine/remotes.ts";
+import { type CloneReport, type FetchReport, type PushReport, cloneFrom, fetchFrom, pushTo } from "./engine/sync.ts";
+import { resolveRemoteLocation } from "./engine/transport.ts";
 import { type StatusReport, flattenTree } from "./engine/worktree.ts";
 import type {
   CommandHandlerContext,
@@ -664,6 +667,105 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const file = resolve(requiredArgument(context, 0, "file", "Pass the path of the bundle to import."));
       return { ok: true, import: importBundle(repository.objects, repository.refs, readBundle(file)) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs remote",
+    description:
+      "List the repositories this one exchanges history with, add one, or remove one. A remote is local knowledge, not part of the history, so adding one changes nothing another clone will ever see.",
+    arguments: [
+      { name: "name", description: "Remote to add or remove; omit to list", required: false },
+      { name: "url", description: "Where it lives: a filesystem path or a file: URL", required: false },
+    ],
+    flags: [{ long: "--remove", description: "Remove the named remote instead of adding one", value_type: "boolean" }],
+    run(context: CommandHandlerContext): VcsEnvelope & { remotes?: readonly Remote[]; added?: Remote; removed?: string } {
+      const repository = openRepository(context);
+      const name = context.args[0]?.trim();
+      if (name === undefined || name === "") return { ok: true, remotes: repository.remotes.list() };
+      if (context.options?.remove === true) {
+        repository.remotes.remove(name);
+        return { ok: true, removed: name };
+      }
+      const url = context.args[1]?.trim();
+      if (url === undefined || url === "") {
+        throw new VcsError(
+          "missing_remote_url",
+          `Adding the remote ${name} needs a location.`,
+          "Pass a filesystem path or file: URL as the second argument, or add --remove to delete the remote.",
+        );
+      }
+      // Resolved before it is stored, for the same reason `clone` resolves: the
+      // value persists, and a relative one names a different directory depending
+      // on where it is read from. `fetch` would later resolve it against the
+      // repository root while the agent typed it against the working root. This
+      // is also where an unsupported scheme is refused -- otherwise `https://…`
+      // is accepted here and fails at the first fetch, naming the fetch.
+      return { ok: true, added: repository.remotes.add(name, resolveRemoteLocation(url, sourceWorkingRoot(context))) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs fetch",
+    description:
+      "Bring a remote's branches onto tracking refs under refs/remotes/, transferring only the objects this repository is missing. No local branch is touched, so a fetch can never discard work that has not been pushed.",
+    arguments: [{ name: "remote", description: "Remote to fetch from (default origin)", required: false }],
+    run(context: CommandHandlerContext): VcsEnvelope & { fetch: FetchReport } {
+      const repository = openRepository(context);
+      const remote = context.args[0]?.trim();
+      return { ok: true, fetch: fetchFrom(repository, remote === undefined || remote === "" ? "origin" : remote, new Date()) };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs push",
+    description:
+      "Send local branches to a remote. A move that is not a fast-forward is refused, because it would discard commits the remote has and this repository has not seen; every ref lands as a compare-and-swap so a concurrent pusher cannot be overwritten.",
+    arguments: [{ name: "remote", description: "Remote to push to (default origin)", required: false }],
+    flags: [
+      { long: "--branch", value_name: "names", description: "Comma-separated branches to push (default the branch HEAD is on)", value_type: "string" },
+      { long: "--force", description: "Allow a push that discards commits the remote has", value_type: "boolean" },
+    ],
+    run(context: CommandHandlerContext): VcsEnvelope & { push: PushReport } {
+      const repository = openRepository(context);
+      const remote = context.args[0]?.trim();
+      return {
+        ok: true,
+        push: pushTo(
+          repository,
+          remote === undefined || remote === "" ? "origin" : remote,
+          commaSeparated(context.options, "branch"),
+          context.options?.force === true,
+          new Date(),
+        ),
+      };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs clone",
+    description:
+      "Create a repository from another one: adopt its record configuration, fetch every branch onto tracking refs, and check out the branch its HEAD names. The configuration is adopted first, so the clone stores and merges the same paths the same way rather than treating records as plain text.",
+    arguments: [
+      { name: "url", description: "Where to clone from: a filesystem path or a file: URL", required: true },
+      { name: "directory", description: "Where to put the clone (default a directory named after the source)", required: false },
+    ],
+    flags: [{ long: "--remote", value_name: "name", description: "Name to register the source under (default origin)", value_type: "string" }],
+    run(context: CommandHandlerContext): VcsEnvelope & { clone: CloneReport } {
+      const url = requiredArgument(context, 0, "url", "Pass the path or file: URL of the repository to clone.");
+      const requested = context.args[1]?.trim();
+      // One base for both sides of the command. Resolving the destination against
+      // the working root while the source resolved against `process.cwd()` would
+      // read `../source` and write `./clone` from two different directories
+      // whenever the two differ, which is exactly when `--path` was passed.
+      const workingRoot = sourceWorkingRoot(context);
+      const destination = requested === undefined || requested === ""
+        ? resolve(workingRoot, basename(url.replace(/\/+$/, "")))
+        : resolve(workingRoot, requested);
+      return {
+        ok: true,
+        clone: cloneFrom(url, destination, new Date(), optionalString(context.options, "remote") ?? "origin", workingRoot),
+      };
     },
   });
 

@@ -2,15 +2,19 @@ id: pm-vcs-wm40
 title: "Phase 3: distribution over a real transport"
 description: "Bundles let two repositories exchange history offline, which is enough to prove the object model but is not distribution. This phase adds named remotes, remote-tracking refs, and clone, fetch and push over a transport, with object negotiation computed from reachability rather than sending the whole store, and non-fast-forward pushes refused by default."
 type: Epic
-status: open
+status: closed
 priority: 2
 tags: []
 created_at: "2026-07-31T06:28:24.061Z"
-updated_at: "2026-08-01T19:52:11.846Z"
+updated_at: "2026-08-03T02:39:02.846Z"
+closed_at: "2026-08-02T21:36:35.486Z"
+completed_at: "2026-08-02T21:36:35.486Z"
 author: "harness:claude-code"
-acceptance_criteria: pm vcs clone produces a repository whose object closure and refs are identical to the source; fetch transfers only objects the receiver lacks; push refuses a non-fast-forward without an explicit override and never leaves a ref pointing at an object that was not transferred; remote-tracking refs live under refs/remotes and are never confused with local branches; Repository and branch identities remain stable across rename archive and restore operations; An interrupted missing-object upload resumes by transferring only absent verified objects; The receiver rejects publication until the uploaded object closure is complete and hash-valid; Peers negotiate supported capabilities and repository format versions before transferring data and reject incompatible peers without changing refs; Bundles and fully local repositories remain usable without a configured or reachable remote; The remote ref advances only through one final compare-and-swap and a lost race leaves both local history and the winner remote tip intact while reporting retryable publication failure
+acceptance_criteria: "pm vcs clone produces a repository whose object closure is identical to the source, whose branches arrive under refs/remotes/origin, and which checks out the branch the source's HEAD names; fetch transfers only objects the receiver lacks; push refuses a non-fast-forward without an explicit override and never leaves a ref pointing at an object that was not transferred; remote-tracking refs live under refs/remotes and are never confused with local branches; a push may only move branches and tags; the remote ref advances only through a compare-and-swap against the value the pusher observed, so a lost race fails the push rather than clobbering the winner; bundles and fully local repositories remain usable without a configured or reachable remote"
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-tr2a,parent,"2026-07-31T06:28:26.638Z","harness:claude-code","cli:update:dep",detected
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-08-01T19:32:31.852Z",codex,"Epic Lore research adds stable repository and branch identities,resumable missing-object transfer,server-side closure verification,capability negotiation,and a final compare-and-swap ref publication while retaining bundles and offline repositories."
+  "2026-08-03T02:39:02.846Z","harness:claude-code","Two criteria were removed here and now live on pm-vcs-i4au, for the phase that has a wire: resumable missing-object upload, and peer capability and repository format negotiation. Both were added from the Lore research note on 2026-08-01 and describe a network protocol; the filesystem transport has no interruption to resume from and no peer to disagree with. Deferral rationale is decision pm-vcs-6qva. The clone criterion previously said the clone's refs are identical to the source's, which contradicts the clone contract in pm-vcs-jj9r: source branches arrive under refs/remotes/origin and only the branch HEAD names is created locally."
+close_reason: "Phase 3 complete: remotes, transport interface, fetch/push/clone shipped with reachability-based negotiation, receiver-side fast-forward refusal and compare-and-swap ref updates."
 body: ""

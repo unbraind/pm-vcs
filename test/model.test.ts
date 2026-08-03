@@ -87,6 +87,11 @@ test("versioned trees preserve file identity and reject malformed identity metad
   for (const payload of [
     "pm-vcs-tree 9\n",
     "pm-vcs-tree 2\nnot-json",
+    // Valid JSON that is not an array at all. Distinct from the wrong-length case
+    // below: that one reaches `value.length`, this one must be refused before it,
+    // and only the object form proves the array check is doing the work.
+    `pm-vcs-tree 2\n${JSON.stringify({ mode: "100644", id })}`,
+    "pm-vcs-tree 2\n7",
     `pm-vcs-tree 2\n${JSON.stringify(["100644"] )}`,
     `pm-vcs-tree 2\n${JSON.stringify(["100600", id, fileId, null, "asset"] )}`,
     `pm-vcs-tree 2\n${JSON.stringify(["40000", id, fileId, null, "dir"] )}`,
