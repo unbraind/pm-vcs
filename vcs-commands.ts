@@ -23,7 +23,7 @@ import {
 } from "./engine/bundle.ts";
 import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
 import { orderCommitsNewestFirst, resolveFileId, traceFile, type FileChangeTrace } from "./engine/attribution.ts";
-import { reachable } from "./engine/merge.ts";
+import { divergence, reachable } from "./engine/merge.ts";
 import { type Signature, compareByteOrder, decodeCommit, decodeTree, effectiveChangeId, readCommit } from "./engine/model.ts";
 import { ObjectStoreError, type ObjectId } from "./engine/objects.ts";
 import { type Operation } from "./engine/oplog.ts";
@@ -36,7 +36,7 @@ import {
   Repository,
 } from "./engine/repo.ts";
 import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./engine/refs.ts";
-import type { Remote } from "./engine/remotes.ts";
+import { REMOTE_PREFIX, type Remote } from "./engine/remotes.ts";
 import { type CloneReport, type FetchReport, type PushReport, cloneFrom, fetchFrom, pushTo } from "./engine/sync.ts";
 import { resolveRemoteLocation } from "./engine/transport.ts";
 import { type StatusReport, flattenTree } from "./engine/worktree.ts";
@@ -222,7 +222,7 @@ function requiredArgument(
 }
 
 /** Shape a ref list is reported in. */
-interface BranchListing {
+export interface BranchListing {
   readonly name: string;
   readonly target: ObjectId;
   readonly current: boolean;
@@ -241,6 +241,42 @@ function listing(refs: readonly RefEntry[], prefix: string, currentRef: string |
     name: ref.name.slice(prefix.length),
     target: ref.target,
     current: ref.name === currentRef,
+  }));
+}
+
+/** One remote-tracking branch, and how far HEAD has moved from it. */
+export interface RemoteBranchListing {
+  /** The `<remote>/<branch>` shorthand, which is also what `resolve` accepts. */
+  readonly name: string;
+  /** What the remote's branch pointed at when it was last fetched. */
+  readonly target: ObjectId;
+  /** Commits HEAD has that the tracking ref does not; omitted for an unborn HEAD. */
+  readonly ahead?: number;
+  /** Commits the tracking ref has that HEAD does not; omitted for an unborn HEAD. */
+  readonly behind?: number;
+}
+
+/**
+ * Renders remote-tracking refs, each measured against HEAD.
+ *
+ * The counts are what turns a fetch into a decision. Without them a caller
+ * learns it has to merge only by pushing and being refused, which costs a
+ * round trip to a remote to discover something both sides already knew.
+ *
+ * An unborn HEAD has no commit to count from, so the two counts are left off
+ * rather than reported as zero: "nothing to compare" and "identical" are
+ * different answers, and a caller branching on `behind > 0` must not read the
+ * first as the second.
+ *
+ * @param repository - Repository holding the objects the counts walk.
+ * @param head - What HEAD resolves to, or null when it is unborn.
+ * @returns One entry per remote-tracking ref, in ref-name order.
+ */
+function remoteListing(repository: Repository, head: ObjectId | null): RemoteBranchListing[] {
+  return repository.refs.list(REMOTE_PREFIX).map((ref) => ({
+    name: ref.name.slice(REMOTE_PREFIX.length),
+    target: ref.target,
+    ...(head === null ? {} : divergence(repository.objects, head, ref.target)),
   }));
 }
 
@@ -528,13 +564,26 @@ export function registerVcsCommands(api: ExtensionApi): void {
 
   api.registerCommand({
     name: "vcs branch",
-    description: "List branches, or create one at a revision, or delete one.",
+    description:
+      "List branches, or create one at a revision, or delete one. Listing with --remotes adds the branches the last fetch recorded for every remote, each with how far HEAD is ahead of and behind it, so a push that would be refused is visible before it is attempted.",
     arguments: [{ name: "name", description: "Branch to create or delete; omit to list", required: false }],
     flags: [
       { long: "--at", value_name: "revision", description: "Where a created branch should point (default HEAD)", value_type: "string" },
       { long: "--delete", description: "Delete the named branch instead of creating it", value_type: "boolean" },
+      {
+        long: "--remotes",
+        description: "Also list remote-tracking branches, with how far HEAD is ahead of and behind each",
+        value_type: "boolean",
+      },
     ],
-    run(context: CommandHandlerContext): VcsEnvelope & { branches?: BranchListing[]; created?: ObjectId; deleted?: string } {
+    run(
+      context: CommandHandlerContext,
+    ): VcsEnvelope & {
+      branches?: BranchListing[];
+      remoteBranches?: RemoteBranchListing[];
+      created?: ObjectId;
+      deleted?: string;
+    } {
       const repository = openRepository(context);
       const name = context.args[0]?.trim();
       const head = repository.refs.readHead();
@@ -546,6 +595,9 @@ export function registerVcsCommands(api: ExtensionApi): void {
             BRANCH_PREFIX,
             head.kind === "branch" ? head.ref : null,
           ),
+          ...(context.options?.remotes === true
+            ? { remoteBranches: remoteListing(repository, repository.refs.resolveHead()) }
+            : {}),
         };
       }
       const now = new Date();

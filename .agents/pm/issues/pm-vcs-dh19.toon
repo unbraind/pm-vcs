@@ -1,0 +1,22 @@
+id: pm-vcs-dh19
+title: "A fetched branch can be neither named nor listed, so the push refusal's own remediation cannot be followed"
+description: "Distribution shipped fetch writing remote-tracking refs under refs/remotes/, and push refusing a non-fast-forward with the remediation 'Fetch and merge or rebase first'. Neither half of that instruction can be carried out from the command surface. Revision resolution tries the name as given, then refs/heads/ and refs/tags/, and never refs/remotes/, so the conventional shorthand origin/main reports 'is not a known commit, branch or tag' and only the fully spelled refs/remotes/origin/main resolves. Nothing prints that spelling: branch lists the local namespace only, and fetch reports refs solely when they change, so a clone that fetched a branch it has not since moved has no command that reveals the branch exists. An agent that follows the diagnostic verbatim fails, and an agent that does not already know the ref layout cannot recover. Confirmed by driving the installed CLI through clone, commit, fetch, merge, push against real repositories. The same walk shows the third missing fact: whether a merge is needed at all is only ever learned by attempting a push and being refused, because no command compares a local branch with its tracking ref."
+type: Issue
+status: closed
+priority: 1
+tags[3]: agent-ux,"area:vcs",distribution
+created_at: "2026-08-03T13:19:22.203Z"
+updated_at: "2026-08-03T13:33:14.134Z"
+closed_at: "2026-08-03T13:33:14.118Z"
+completed_at: "2026-08-03T13:33:14.118Z"
+claim_principal: "harness:claude-code"
+author: "harness:claude-code"
+acceptance_criteria: "Revision resolution accepts a remote-tracking shorthand such as origin/main, tried after the local branch and tag namespaces so a local branch of the same name keeps precedence; the unknown-revision diagnostic names the remote-tracking namespace among the things it searched; branch can list remote-tracking branches, reporting each as remote/branch with its target; each listed remote-tracking branch carries how many commits HEAD is ahead of it and behind it, so divergence is known before a push is attempted rather than from its refusal; ahead and behind are reported for an unborn HEAD without failing; the push remediation text names a spelling that resolves; 100 percent line, branch and function coverage holds"
+parent: pm-vcs-tr2a
+notes[1]{created_at,author,text}:
+  "2026-08-03T13:32:41.110Z","harness:claude-code","Verified against the installed CLI, not only the harness. A clone and its origin were driven apart by one commit each, then: (1) 'pm vcs branch --remotes' listed origin/feature and origin/main with ahead 1 / behind 1 on main, so the divergence was visible before any push; (2) 'pm vcs push' refused, naming '<remote>/main' and pointing at 'pm vcs branch --remotes'; (3) 'pm vcs merge origin/main' resolved the shorthand and merged cleanly; (4) the push then landed; (5) a further fetch reported ahead 0 / behind 0. Before this change step 1 listed only the local branch, step 3 reported 'is not a known commit, branch or tag', and only the fully spelled refs/remotes/origin/main worked."
+tests[2]{command,path,scope}:
+  npm run coverage,scripts/coverage-gate.ts,project
+  npm test,test,project
+close_reason: "Remote-tracking shorthand resolves, branch --remotes lists fetched branches with ahead/behind, and the push refusal names a spelling that works. Verified through the installed CLI end to end; coverage held at 100/100/100."
+body: ""

@@ -287,6 +287,42 @@ test("a push that would discard commits the remote has is refused", () => {
   assert.notEqual(clone.refs.read(trackingRef("origin", "main")), localTip);
 });
 
+test("the refusal points a branch at its tracking ref and a tag somewhere a tag can go", () => {
+  const source = freshRepo();
+  const base = commitFile(source, "a.txt", "one");
+  const onMain = commitFile(source, "b.txt", "two");
+  source.createBranch("side", base, now);
+  source.switchTo("side", now);
+  const onSide = commitFile(source, "c.txt", "three");
+  source.refs.compareAndSwap(`${TAG_PREFIX}v1`, null, onMain);
+
+  const transport = new FileTransport(source.root, source.root);
+  const emptyBundle = Buffer.from('pmvcs-bundle-1\n{"refs":{},"prerequisites":[],"objects":[]}\n');
+  const refuse = (ref: string, next: ObjectId, expected: ObjectId): ObjectStoreError => {
+    let thrown: ObjectStoreError | null = null;
+    try {
+      transport.push(emptyBundle, [{ ref, expected, next }], false, now);
+    } catch (error) {
+      thrown = error as ObjectStoreError;
+    }
+    assert.equal(thrown?.code, "non_fast_forward", ref);
+    return thrown as ObjectStoreError;
+  };
+
+  // A branch is told the one name a fetch will actually write, in the shorthand
+  // `resolve` accepts. Naming only "fetch and merge" leaves the caller to guess a
+  // ref layout, which is how the remediation became unfollowable.
+  const branch = refuse(`${BRANCH_PREFIX}side`, onMain, onSide);
+  assert.match(branch.message, /<remote>\/side/);
+  assert.match(branch.message, /branch --remotes/);
+
+  // A tag keeps its own name on the receiving side and gets no tracking ref, so
+  // the same sentence would send a tag pusher after a ref no fetch ever writes.
+  const tag = refuse(`${TAG_PREFIX}v1`, onSide, onMain);
+  assert.doesNotMatch(tag.message, /<remote>\//);
+  assert.match(tag.message, /move the tag deliberately/);
+});
+
 test("force overrides the refusal and the remote can still undo it", () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");

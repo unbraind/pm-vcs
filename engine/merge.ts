@@ -79,6 +79,38 @@ export function isAncestor(store: ObjectStore, candidate: ObjectId, descendant: 
   return reachable(store, descendant).has(candidate);
 }
 
+/** How far two commits have moved apart, counted in commits. */
+export interface Divergence {
+  /** Commits reachable from the left side and not from the right. */
+  readonly ahead: number;
+  /** Commits reachable from the right side and not from the left. */
+  readonly behind: number;
+}
+
+/**
+ * Counts how far two commits have diverged.
+ *
+ * Both numbers are needed to classify the relationship, and neither alone is
+ * enough: zero ahead is a fast-forward, zero behind is something to push, and
+ * two non-zero counts are a divergence that has to be merged before either.
+ * Counting the symmetric difference rather than testing ancestry answers all
+ * three from one pair of walks, and unrelated histories fall out of it as "every
+ * commit on both sides" instead of as an error.
+ *
+ * @param store - Object store holding the commits.
+ * @param left - The commit the counts are stated from, usually a local branch.
+ * @param right - The commit they are stated against, usually its tracking ref.
+ * @returns The two counts.
+ */
+export function divergence(store: ObjectStore, left: ObjectId, right: ObjectId): Divergence {
+  const fromLeft = reachable(store, left);
+  const fromRight = reachable(store, right);
+  return {
+    ahead: [...fromLeft].filter((id) => !fromRight.has(id)).length,
+    behind: [...fromRight].filter((id) => !fromLeft.has(id)).length,
+  };
+}
+
 /**
  * Finds the best common ancestors of two commits.
  *

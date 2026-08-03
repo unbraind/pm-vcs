@@ -57,7 +57,7 @@ import {
 } from "./config.ts";
 import { BRANCH_PREFIX, type HeadState, RefStore, TAG_PREFIX, assertRefName } from "./refs.ts";
 import { OperationLog, type Operation, type RefTransition } from "./oplog.ts";
-import { RemoteStore } from "./remotes.ts";
+import { REMOTE_PREFIX, RemoteStore } from "./remotes.ts";
 import {
   type IndexEntry,
   type StatusReport,
@@ -573,7 +573,14 @@ export class Repository {
    * Resolves a revision name to a commit.
    *
    * Accepts a full object id, a branch or tag name with or without its `refs/`
-   * prefix, and `HEAD`.
+   * prefix, a remote-tracking shorthand such as `origin/main`, and `HEAD`.
+   *
+   * The remote-tracking namespace is searched last, so a local branch always
+   * wins a shorthand both could answer. That ordering is what makes the
+   * shorthand safe to add to an existing repository: a branch literally named
+   * `origin/main` keeps resolving to itself, and only a name no local branch or
+   * tag claims can reach a tracking ref. A remote's name cannot contain a slash
+   * (see {@link assertRemoteName}), so `<remote>/<branch>` never splits two ways.
    *
    * @param revision - The name to resolve.
    * @returns The commit id.
@@ -586,7 +593,13 @@ export class Repository {
       return head;
     }
     if (isObjectId(revision) && this.objects.has(revision)) return revision;
-    for (const candidate of [revision, `${BRANCH_PREFIX}${revision}`, `${TAG_PREFIX}${revision}`]) {
+    const candidates = [
+      revision,
+      `${BRANCH_PREFIX}${revision}`,
+      `${TAG_PREFIX}${revision}`,
+      `${REMOTE_PREFIX}${revision}`,
+    ];
+    for (const candidate of candidates) {
       let target: ObjectId | null;
       try {
         target = this.refs.read(candidate);
@@ -595,7 +608,10 @@ export class Repository {
       }
       if (target !== null) return target;
     }
-    throw new ObjectStoreError("unknown_revision", `"${revision}" is not a known commit, branch or tag.`);
+    throw new ObjectStoreError(
+      "unknown_revision",
+      `"${revision}" is not a known commit, branch, tag or remote-tracking branch.`,
+    );
   }
 
   /**

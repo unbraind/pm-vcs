@@ -127,7 +127,7 @@ pm vcs diff main feature
 | `pm vcs commit --message` | Record the index. `--item id[,id...]` stores validated PM work associations. Refuses an empty commit unless `--allow-empty`. |
 | `pm vcs log [rev]` | First-parent history, newest first. |
 | `pm vcs diff [from] [to]` | Unified diff between two revisions' trees. |
-| `pm vcs branch [name]` | List, create (`--at`) or delete (`--delete`) branches. |
+| `pm vcs branch [name]` | List, create (`--at`) or delete (`--delete`) branches. `--remotes` adds each remote-tracking branch with its `ahead`/`behind` counts against HEAD. |
 | `pm vcs switch <rev>` | Move HEAD and update the working tree. Refuses rather than overwrite uncommitted work. |
 | `pm vcs merge <rev>` | Three-way merge. `--fail-on-conflict` to gate CI. |
 | `pm vcs tag [name]` | List or create tags. |
@@ -299,8 +299,20 @@ nothing while reporting success is how a commit ends up missing a file.
 pm vcs clone /srv/project work              # adopts the source's record configuration
 pm vcs remote upstream ../other-checkout
 pm vcs fetch upstream                       # lands on refs/remotes/upstream/*
+pm vcs branch --remotes                     # what it fetched, and how far HEAD has moved
+pm vcs merge upstream/main                  # the shorthand resolves
 pm vcs push --branch feature
 ```
+
+A fetched branch is reachable two ways: by its full `refs/remotes/upstream/main`, and by the
+`upstream/main` shorthand any command taking a revision accepts. A local branch of the same
+name always wins that shorthand, so adding it cannot retarget a name a repository already uses.
+
+`branch --remotes` reports each tracking branch with how many commits HEAD is `ahead` of it and
+`behind` it. Both numbers are needed to act: `behind 0` is a push that will be accepted, `ahead 0`
+is a fast-forward, and two non-zero counts are a divergence to merge first. An agent that skips
+this learns the same fact from a push refusal instead — one round trip to a remote to discover
+something both sides already knew. An unborn HEAD omits both counts rather than reporting zero.
 
 Three properties hold, and each exists because the alternative loses an agent's work:
 
