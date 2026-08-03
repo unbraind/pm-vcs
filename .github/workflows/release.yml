@@ -102,9 +102,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary
-          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --check
-          npx pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm > RELEASE_NOTES.md
+          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary
+          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --check
+          npx pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm > RELEASE_NOTES.md
 
       - name: Run release checks
         if: steps.decide.outputs.should_release == 'true'
