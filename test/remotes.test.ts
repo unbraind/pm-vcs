@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -142,19 +142,34 @@ test("a tracking ref is the remote name under the remotes prefix", () => {
   assert.equal(trackingRef("origin", "feature/x"), `${REMOTE_PREFIX}origin/feature/x`);
 });
 
-test("a write that cannot be published leaves no temporary file behind", () => {
+// The temporary file is created beside the destination, so the assertion has to
+// watch that directory rather than an ancestor of it: a store pointed at a path
+// under a directory that does not exist fails before creating anything, and the
+// absent directory -- not the cleanup -- is what makes it look clean.
+//
+// Root bypasses the permission bits this relies on, and Windows does not
+// implement them, so the case is unobservable there rather than untrue.
+const permissionsApply = process.platform !== "win32" && process.getuid?.() !== 0;
+
+test("a write that cannot be published leaves no temporary file behind", { skip: !permissionsApply }, () => {
   dir = makeTempDir();
-  // The control directory removed underneath the store: `list` reads this as "no
-  // remotes yet", so the failure lands in `write`, between creating the temporary
-  // file and renaming it into place.
-  const store = new RemoteStore(join(dir.root, "gone", "remotes.json"));
+  const store = new RemoteStore(join(dir.root, "remotes.json"));
   assert.deepEqual(store.list(), []);
 
-  assert.throws(() => store.add("origin", "/srv/one"), (error: NodeJS.ErrnoException) => {
-    assert.equal(error.code, "ENOENT");
-    return true;
-  });
-  // A temporary left behind would accumulate one file per failed write, in the
-  // directory `list` reads — and `remotes.json.<pid>.<hex>.tmp` is not a remote.
-  assert.deepEqual(readdirSync(dir.root), []);
+  // Readable and traversable, not writable: `list` still reads "no remotes yet",
+  // and the failure lands inside `write`.
+  chmodSync(dir.root, 0o500);
+  try {
+    assert.throws(() => store.add("origin", "/srv/one"), (error: NodeJS.ErrnoException) => {
+      assert.equal(error.code, "EACCES");
+      return true;
+    });
+    // This is the directory `remotes.json.<pid>.<hex>.tmp` would land in. A write
+    // that got far enough to create one and then failed would leave it here, and
+    // every later `list` would read a directory holding a file that is not a
+    // remote map.
+    assert.deepEqual(readdirSync(dir.root), []);
+  } finally {
+    chmodSync(dir.root, 0o700);
+  }
 });
