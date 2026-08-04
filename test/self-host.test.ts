@@ -130,10 +130,10 @@ test("loadConfig rejects every malformed shape, not merely a missing file", () =
     ["array-body", "[]"],
     ["missing-bundle", '{"ref":"refs/heads/x","exclude":[]}'],
     ["empty-bundle", '{"bundle":"","ref":"refs/heads/x","exclude":[]}'],
-    ["missing-ref", '{"bundle":"b","exclude":[]}'],
-    ["empty-ref", '{"bundle":"b","ref":"","exclude":[]}'],
-    ["exclude-not-array", '{"bundle":"b","ref":"refs/heads/x","exclude":"nope"}'],
-    ["exclude-entry-not-string", '{"bundle":"b","ref":"refs/heads/x","exclude":[1]}'],
+    ["missing-ref", '{"bundle":"selfhost.bundle","exclude":[]}'],
+    ["empty-ref", '{"bundle":"selfhost.bundle","ref":"","exclude":[]}'],
+    ["exclude-not-array", '{"bundle":"selfhost.bundle","ref":"refs/heads/x","exclude":"nope"}'],
+    ["exclude-entry-not-string", '{"bundle":"selfhost.bundle","ref":"refs/heads/x","exclude":[1]}'],
     ["malformed-json", "{not json"],
     // `bundle` is resolved with join(root, ...) before writing, so a path that
     // escapes the repository would let a pull request choose where a
@@ -143,7 +143,13 @@ test("loadConfig rejects every malformed shape, not merely a missing file", () =
     ["bundle-parent-escape", '{"bundle":"../outside.bundle","ref":"refs/heads/x","exclude":[]}'],
     ["bundle-nested-escape", '{"bundle":"a/../../outside.bundle","ref":"refs/heads/x","exclude":[]}'],
     ["bundle-backslash-escape", '{"bundle":"a\\\\..\\\\..\\\\outside","ref":"refs/heads/x","exclude":[]}'],
-    ["exclude-parent-escape", '{"bundle":"b","ref":"refs/heads/x","exclude":["../elsewhere"]}'],
+    ["exclude-parent-escape", '{"bundle":"selfhost.bundle","ref":"refs/heads/x","exclude":["../elsewhere"]}'],
+    // Artifact identity comes from the code, not the data file. These are all
+    // lexically relative, non-link, in-repository paths that earlier rounds of
+    // guarding accepted: a tracked file, and a not-yet-existing git hook.
+    ["bundle-readme", '{"bundle":"README.md","ref":"refs/heads/x","exclude":[]}'],
+    ["bundle-git-hook", '{"bundle":".git/hooks/pre-commit","ref":"refs/heads/x","exclude":[]}'],
+    ["bundle-plausible-alias", '{"bundle":"self-host.bundle","ref":"refs/heads/x","exclude":[]}'],
   ];
   for (const [name, body] of cases) {
     const path = join(dir, `${name}.json`);

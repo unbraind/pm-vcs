@@ -40,6 +40,25 @@ import { buildTree, flattenTree, readWorkingFile } from "../engine/worktree.ts";
 export const SELF_HOST_CONFIG = "self-host.json";
 
 /**
+ * The one path this gate will ever write, fixed in code rather than configured.
+ *
+ * `self-host.json` ships with the source, so a pull request can set anything in
+ * it, and `--write` turns the `bundle` field into a write target. Successive
+ * rounds of guarding that field — reject absolute paths and `..`, reject
+ * symbolic links, require the path be git-tracked — each closed one route and
+ * left the next open, because they all answered "may this path be written?" when
+ * the question is "**is this path the bundle?**". Tracking proves a path belongs
+ * to the repository; it does not make it the artifact. `README.md` is tracked,
+ * and a not-yet-existing `.git/hooks/pre-commit` satisfied the bootstrap case.
+ *
+ * Artifact identity therefore comes from the code. The config may still name the
+ * bundle, because a self-describing data file is worth having, but it is checked
+ * against this constant rather than trusted — so the field is documentation, not
+ * authority.
+ */
+export const SELF_HOST_BUNDLE = "selfhost.bundle";
+
+/**
  * Normalises a caught value into a string, covering the case where a
  * non-Error value is thrown. Centralised so each catch site has one branch
  * instead of its own ternary, and so the non-Error branch is exercised by a
@@ -69,7 +88,13 @@ const SELF_HOST_AUTHOR: Signature = {
  * There is no scattered `if (path === "...")` literal anywhere else.
  */
 export interface SelfHostConfig {
-  /** Repository-relative path of the tracked bundle file. */
+  /**
+   * The tracked bundle file. Must equal {@link SELF_HOST_BUNDLE}.
+   *
+   * Recorded here so the data file describes itself, but the constant is what
+   * the gate writes — this field is checked against it, never trusted in place
+   * of it.
+   */
   readonly bundle: string;
   /** Full ref name the bundle advertises (its tip names the source snapshot). */
   readonly ref: string;
@@ -139,13 +164,15 @@ export function loadConfig(path: string): SelfHostConfig {
   if (!Array.isArray(record.exclude) || record.exclude.some((entry) => typeof entry !== "string")) {
     throw new Error("self-host: configuration `exclude` must be a list of strings.");
   }
-  // `bundle` is documented as repository-relative, and `--write` resolves it with
-  // `join(root, config.bundle)` before writing. Without this check an absolute
-  // path or a `..` segment would place the bundle outside the repository — and
-  // since this file arrives with the source, a pull request could add one and
-  // have a maintainer's own `self-host:write` write wherever it pointed. Checked
-  // as a shape, so the rule holds without needing to know the root.
-  assertRepositoryRelative(record.bundle, "bundle");
+  // The bundle path is NOT taken from the configuration — see SELF_HOST_BUNDLE.
+  // The field must agree with the constant, which keeps the data file honest
+  // about what it describes while giving it no say in where bytes land.
+  if (record.bundle !== SELF_HOST_BUNDLE) {
+    throw new Error(
+      `self-host: configuration bundle "${record.bundle}" must be "${SELF_HOST_BUNDLE}". `
+        + `The bundle path is fixed in code; the configuration only records it.`,
+    );
+  }
   for (const entry of record.exclude as readonly string[]) assertRepositoryRelative(entry, "exclude entry");
   return { bundle: record.bundle, ref: record.ref, exclude: record.exclude as readonly string[] };
 }
