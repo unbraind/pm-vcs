@@ -150,6 +150,11 @@ test("loadConfig rejects every malformed shape, not merely a missing file", () =
     ["bundle-readme", '{"bundle":"README.md","ref":"refs/heads/x","exclude":[]}'],
     ["bundle-git-hook", '{"bundle":".git/hooks/pre-commit","ref":"refs/heads/x","exclude":[]}'],
     ["bundle-plausible-alias", '{"bundle":"self-host.bundle","ref":"refs/heads/x","exclude":[]}'],
+    // A bundle cannot contain itself: with an empty exclude set, --write folds
+    // the current bundle into the source tree and then overwrites it, so the
+    // emitted bundle records the previous bytes and the next check fails.
+    ["exclude-omits-the-bundle", '{"bundle":"selfhost.bundle","ref":"refs/heads/x","exclude":[]}'],
+    ["exclude-omits-bundle-but-has-others", '{"bundle":"selfhost.bundle","ref":"refs/heads/x","exclude":["dist/"]}'],
   ];
   for (const [name, body] of cases) {
     const path = join(dir, `${name}.json`);

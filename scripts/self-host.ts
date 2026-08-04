@@ -174,6 +174,18 @@ export function loadConfig(path: string): SelfHostConfig {
     );
   }
   for (const entry of record.exclude as readonly string[]) assertRepositoryRelative(entry, "exclude entry");
+  // The bundle cannot contain itself, and the interface docs have always said so
+  // — but nothing enforced it. With `"exclude": []`, `--write` folds the CURRENT
+  // bundle into the source tree and then overwrites it, so the bundle it emits
+  // records the previous bundle's bytes as source and the next `accept:self-host`
+  // fails on a repository nobody touched. A documented invariant that the code
+  // does not check is exactly the defect this PR opened with.
+  if (!(record.exclude as readonly string[]).includes(SELF_HOST_BUNDLE)) {
+    throw new Error(
+      `self-host: configuration \`exclude\` must list "${SELF_HOST_BUNDLE}". `
+        + `A bundle cannot contain itself, and omitting it makes every regeneration self-stale.`,
+    );
+  }
   return { bundle: record.bundle, ref: record.ref, exclude: record.exclude as readonly string[] };
 }
 
