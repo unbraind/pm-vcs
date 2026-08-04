@@ -946,3 +946,30 @@ test("resolveBundleTarget refuses a symlinked bundle and a symlinked ancestor", 
   // A directory that does not exist is named as such rather than as an escape.
   assert.throws(() => resolveBundleTarget(root, "absent/selfhost.bundle"), /does not exist/);
 });
+
+// Staying inside the repository is not enough: `.git/config` and `.env` are
+// lexically relative, not links, and comfortably inside the tree. The invariant
+// that rules them out is what the bundle IS — tracked source.
+test("resolveBundleTarget refuses to overwrite an existing untracked file", () => {
+  const repo = mkdtempSync(join(tmpdir(), "pm-vcs-untracked-"));
+  temps.push(repo);
+  runGit(repo, ["init", "-q", "-b", "main"]);
+  runGit(repo, ["config", "user.email", "harness@example.invalid"]);
+  runGit(repo, ["config", "user.name", "pm-vcs harness"]);
+  writeFileSync(join(repo, "selfhost.bundle"), "tracked bundle");
+  runGit(repo, ["add", "selfhost.bundle"]);
+  runGit(repo, ["commit", "-q", "-m", "track the bundle"]);
+
+  // The tracked bundle is a legitimate target.
+  assert.equal(resolveBundleTarget(repo, "selfhost.bundle"), join(repo, "selfhost.bundle"));
+
+  // A path that does not exist yet is the bootstrap case, also legitimate.
+  assert.equal(resolveBundleTarget(repo, "new.bundle"), join(repo, "new.bundle"));
+
+  // Git's own configuration exists, is untracked, and is inside the repository.
+  assert.throws(() => resolveBundleTarget(repo, ".git/config"), /not tracked by git/);
+
+  // So is an ignored local secret.
+  writeFileSync(join(repo, ".env"), "SECRET=1");
+  assert.throws(() => resolveBundleTarget(repo, ".env"), /not tracked by git/);
+});

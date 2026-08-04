@@ -191,6 +191,24 @@ export function resolveBundleTarget(root: string, bundle: string): string {
         + `the bundle must be a regular file inside the repository.`,
     );
   }
+  // Staying inside the repository is not enough. Every check above still permits
+  // `"bundle": ".git/config"` or `"bundle": ".env"` — lexically relative, not a
+  // link, comfortably inside the tree — and `--write` would overwrite the
+  // maintainer's git configuration, or an ignored local secret, with bundle
+  // bytes. The config arrives with the source, so that is a write primitive a
+  // pull request could aim.
+  //
+  // The real invariant is what the bundle *is*: tracked source. So it must
+  // already be tracked, or not exist yet (the bootstrap case, where this run
+  // creates it). An existing untracked file is never a legitimate target, which
+  // is exactly what `.git/config` and `.env` are.
+  const exists = lstatSync(target, { throwIfNoEntry: false }) !== undefined;
+  if (exists && !listTrackedFiles(root).includes(bundle)) {
+    throw new Error(
+      `self-host: ${bundle} exists but is not tracked by git. Refusing to overwrite it — `
+        + `the bundle must be a tracked file, so this would clobber something else.`,
+    );
+  }
   return target;
 }
 
