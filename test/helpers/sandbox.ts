@@ -11,7 +11,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -39,9 +39,6 @@ export interface Sandbox {
   cleanup(): void;
 }
 
-/** The shared discard directory, resolved once per process on first use. */
-let discardDir: string | undefined;
-
 /**
  * Environment that stops a spawned Node process writing V8 coverage into the
  * parent test run's report.
@@ -53,30 +50,28 @@ let discardDir: string | undefined;
  * failed with "source file(s) never loaded" — on a suite that had just reported
  * 100%. That is the long-standing nondeterminism in this package's coverage.
  *
- * Points the children at a throwaway directory rather than `/dev/null`: Node
- * treats the value as a *directory*, so on Windows `/dev/null` would create a
- * `dev\null` folder next to the child's cwd and write coverage into it — the
- * opposite of discarding it — and this package has Windows CI.
+ * Disables collection in the child rather than redirecting it. Node treats a
+ * non-empty value as a *directory*, so `/dev/null` creates a `dev\null` folder
+ * on Windows and writes into it — the opposite of discarding, on a package with
+ * Windows CI — and any real directory accumulates one coverage JSON per child
+ * exit. An empty value collects nothing at all, which is the only form with no
+ * output to place, bound, or clean up.
  *
  * @returns Environment overrides to merge into a child process's `env`.
  */
 export function discardChildCoverage(): Record<string, string> {
-  if (discardDir === undefined) {
-    // A FIXED name, deliberately, so the whole suite shares exactly one
-    // directory no matter how many processes call this.
-    //
-    // A fresh directory per call leaked ~2,000 directories and ~650 MB of
-    // discarded V8 coverage in one local sweep, because `run()` is called for
-    // every `git` and `pm` invocation. Making it per-process cut that to five —
-    // the Node test runner forks a process per test file, and an `exit` handler
-    // does not reliably run in those children, so each one still stranded its
-    // own directory. A fixed path bounds the worst case at one directory that is
-    // reused forever, which is the only version with no leak to reason about.
-    // Nothing ever reads it, so sharing is free.
-    discardDir = join(tmpdir(), "pm-vcs-discard-coverage");
-    mkdirSync(discardDir, { recursive: true });
-  }
-  return { NODE_V8_COVERAGE: discardDir };
+  // An empty value disables collection in the child outright, so nothing is
+  // written anywhere and there is nothing to clean up.
+  //
+  // Redirecting to a directory was the wrong shape, in two escalating ways. A
+  // fresh `mkdtemp` per call left 1,980 directories and 658 MB after one sweep,
+  // because `run()` is called for every `git` and `pm` invocation. Collapsing
+  // that to a single shared directory bounded the directory *count* at one but
+  // not the disk: Node still writes a coverage JSON per instrumented child exit,
+  // so one run still accumulated 236 files and 232 MB in it. Redirection was
+  // always going to leak, because the children were still being asked to
+  // produce output nobody wanted.
+  return { NODE_V8_COVERAGE: "" };
 }
 
 /**
