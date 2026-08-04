@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add scripts/self-host.ts to coverageGate.sources and bring it to 100/100/100 ([pm-vcs-4t67](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-4t67.toon))
 - Clone builds a working tree from a remote and inherits its record configuration ([pm-vcs-jj9r](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-jj9r.toon))
 - Push refuses a non-fast-forward and lands every ref under compare-and-swap ([pm-vcs-64x4](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-64x4.toon))
 - Fetch with object negotiation computed from reachability ([pm-vcs-hi5k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-hi5k.toon))
@@ -25,10 +26,12 @@
 
 ### Changed
 
+- Regenerate selfhost.bundle for the updated source ([pm-vcs-3nxa](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-3nxa.toon))
 - Phase 2: change identities and history rewriting ([pm-vcs-ijj7](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-ijj7.toon))
 
 ### Fixed
 
+- Fix NODE_V8_COVERAGE lcov corruption in test helpers ([pm-vcs-lapg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-lapg.toon))
 - The 100 percent branch gate rested on an incidental execution, so an unrelated change failed CI on Node 26 only ([pm-vcs-8e8k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8e8k.toon))
 - A fetched branch can be neither named nor listed, so the push refusal's own remediation cannot be followed ([pm-vcs-dh19](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-dh19.toon))
 - Make the release gate deterministic: a clock-dependent changelog date and a branch V8 reported inconsistently ([pm-vcs-ehvf](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ehvf.toon))
@@ -43,6 +46,12 @@
 
 ### Other
 
+- Phase 4: pm-vcs versions its own source ([pm-vcs-390t](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-390t.toon))
+- Address the PR \#10 bot review: fixture-only main, shared git runner, no external chmod ([pm-vcs-stp3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-stp3.toon))
+- Self-host tests + CI + changelog wiring ([pm-vcs-hbmy](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-hbmy.toon))
+- Self-host exclusion-set config + committed bundle ([pm-vcs-f0yw](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-f0yw.toon))
+- Self-host write/regenerate script ([pm-vcs-sd7h](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-sd7h.toon))
+- Self-host verify-only gate script ([pm-vcs-r7h2](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-r7h2.toon))
 - Phase 3: distribution over a real transport ([pm-vcs-wm40](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-wm40.toon))
 - The transport is an interface with a filesystem implementation, not a network protocol yet ([pm-vcs-6qva](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/decisions/pm-vcs-6qva.toon))
 - Research Epic Lore and map its general-VCS design into pm-vcs ([pm-vcs-rmqh](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-rmqh.toon))

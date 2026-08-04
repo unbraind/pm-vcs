@@ -2,11 +2,13 @@ id: pm-vcs-hbmy
 title: Self-host tests + CI + changelog wiring
 description: ""
 type: Task
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-08-04T05:47:29.098Z"
-updated_at: "2026-08-04T13:31:21.425Z"
+updated_at: "2026-08-04T21:53:32.923Z"
+closed_at: "2026-08-04T21:53:32.913Z"
+completed_at: "2026-08-04T21:53:32.913Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-390t,parent,"2026-08-04T05:47:34.133Z",pi-agent,"cli:update:dep",detected
@@ -14,4 +16,5 @@ files[3]{path,scope,note}:
   test/self-host.test.ts,project,real gate tests
   .github/workflows/ci.yml,project,"accept:self-host CI step"
   package.json,project,"self-host scripts and the release:check integration"
+close_reason: "Delivered in PR 10: test/self-host.test.ts covers the module against fixture repositories, CI runs accept:self-host, and the changelog wiring is in package.json."
 body: ""
