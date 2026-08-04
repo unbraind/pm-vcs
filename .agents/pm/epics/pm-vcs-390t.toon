@@ -2,11 +2,13 @@ id: pm-vcs-390t
 title: "Phase 4: pm-vcs versions its own source"
 description: "The package must track its own source code in pm-vcs alongside git, so the claim that pm-vcs is a working version control system is demonstrated by the repository itself rather than asserted in a README. The self-hosted history ships as a bundle in the repository and a CI gate proves the bundle's tip tree is exactly the source tree, so source cannot change without the pm-vcs history following it."
 type: Epic
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-07-31T06:28:24.621Z"
-updated_at: "2026-08-04T12:58:48.910Z"
+updated_at: "2026-08-04T21:54:01.825Z"
+closed_at: "2026-08-04T21:54:01.807Z"
+completed_at: "2026-08-04T21:54:01.807Z"
 author: "harness:claude-code"
 acceptance_criteria: A tracked bundle holds pm-vcs history of pm-vcs's own source; a CI gate fails when the bundle's tip tree differs from the git-tracked source in any byte; the gate re-verifies every object against its own id; the check is deterministic and cannot pass by regenerating the bundle from a dirty tree
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
@@ -19,4 +21,5 @@ notes[5]{created_at,author,text}:
   "2026-08-04T12:58:48.910Z","harness:claude-code","Nine review rounds on PR 10. Four consecutive Majors in the write path, each a genuine escalation of the previous fix rather than a repeat: bundle self-containment (a header-vs-payload comparison did not close it, because removing an object from both leaves them consistent and wrong together — fixed by importing into an isolated object store and walking full ancestry, plus asserting blob presence because flattenTree never reads blob content); then lexical path traversal; then symbolic links, which bypass any lexical rule because git tracks links and writeFileSync follows them; then an arbitrary repository-INTERNAL target, where bundle .git/config passed every guard and would have overwritten the maintainer's git configuration with bundle bytes on self-host:write. The last was fixed structurally rather than by blacklisting names: the target must already be tracked by git or not exist at all, because what the bundle IS is tracked source, and an existing untracked file is never a legitimate target. Also fixed in these rounds: a history-loss path where a bundle not advertising the ref silently restarted history and the verifier could not detect it because it compares tip trees only; two verification inputs read from the dirty working tree the gate advertised it ignored; ls-files output being trimmed so a path with leading whitespace was compared against the wrong file; and a 658 MB per-run temp leak introduced by the fix for the coverage flakiness. The durable lesson is that these fixes were reactive rather than derived from a threat model of what a pull request can make --write do, since self-host.json arrives with the source."
 tests[1]{command,scope}:
   "npm run accept:self-host",project
+close_reason: "Phase 4 is delivered and merged in PR 10. pm-vcs now versions its own source in a bundle it wrote itself, and CI refuses a bundle whose tip tree is not byte-identical to the committed source. Every verification input is read from an extraction of HEAD rather than the working tree, so a dirty checkout cannot decide what the gate compares."
 body: ""

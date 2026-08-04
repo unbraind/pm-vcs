@@ -2,15 +2,18 @@ id: pm-vcs-f0yw
 title: Self-host exclusion-set config + committed bundle
 description: ""
 type: Task
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-08-04T05:47:28.730Z"
-updated_at: "2026-08-04T06:46:49.841Z"
+updated_at: "2026-08-04T21:53:32.567Z"
+closed_at: "2026-08-04T21:53:32.556Z"
+completed_at: "2026-08-04T21:53:32.556Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-390t,parent,"2026-08-04T05:47:33.667Z",pi-agent,"cli:update:dep",detected
 files[2]{path,scope,note}:
   self-host.json,project,exclusion-set data + bundle path + ref
   selfhost.bundle,project,committed self-host history bundle
+close_reason: "Delivered in PR 10: self-host.json declares the bundle path, ref and exclusion set, loadConfig rejects every malformed shape, and the committed selfhost.bundle is the attested artifact."
 body: ""
