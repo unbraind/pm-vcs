@@ -39,6 +39,19 @@ import { buildTree, flattenTree, readWorkingFile } from "../engine/worktree.ts";
 /** Path to the gate's data file, relative to the package root. */
 export const SELF_HOST_CONFIG = "self-host.json";
 
+/**
+ * Normalises a caught value into a string, covering the case where a
+ * non-Error value is thrown. Centralised so each catch site has one branch
+ * instead of its own ternary, and so the non-Error branch is exercised by a
+ * single test rather than being unreachable at every site.
+ *
+ * @param error - Whatever a `try` block threw.
+ * @returns The error message for an Error, otherwise String(error).
+ */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Identity stamped on every self-host commit. */
 const SELF_HOST_AUTHOR: Signature = {
   name: "pm-vcs self-host",
@@ -187,45 +200,106 @@ export function verifySelfHost(
   ref: string,
   sourceTreeId: ObjectId,
 ): Verification {
-  let imported;
+  // The bundle is imported into a store of its OWN, never the caller's.
+  //
+  // This is the whole self-containment argument. `store` is shared with the
+  // source side — `buildSourceTree` has already written every source blob into
+  // it — so importing there lets the bundle borrow any object it is missing from
+  // the source and still resolve. A bundle stripped of a blob, a subtree, or an
+  // ancestor commit (from the payload *and* the header) would then walk cleanly,
+  // produce a matching tip tree id, and be reported byte-identical while being
+  // unusable as history. Comparing the header's object list against the carried
+  // lines does not close that either: an edit that removes an object from both
+  // leaves the two consistent with each other and wrong together.
+  //
+  // Resolving everything in an isolated store makes the absence of any reachable
+  // object a hard read failure, which is the only form of the check that cannot
+  // be satisfied by something the gate already had lying around.
+  const isolated = freshStore();
   try {
-    imported = importBundleObjects(store, bundleBytes);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return { ok: false, problems: [`the bundle is malformed or its objects do not hash to their ids: ${detail}`] };
+    let imported;
+    try {
+      imported = importBundleObjects(isolated.store, bundleBytes);
+    } catch (error) {
+      const detail = errorMessage(error);
+      return { ok: false, problems: [`the bundle is malformed or its objects do not hash to their ids: ${detail}`] };
+    }
+    const tip = imported.header.refs[ref];
+    if (tip === undefined) {
+      const advertised = Object.keys(imported.header.refs).sort().join(", ") || "(none)";
+      return { ok: false, problems: [`the bundle does not advertise ref ${ref} (advertised: ${advertised}).`] };
+    }
+    let tipTree: ObjectId;
+    try {
+      // Walk the whole ancestry, not just the tip. A bundle missing an ancestor
+      // commit is not a history, and the tip alone would never notice.
+      const seen = new Set<ObjectId>();
+      const queue: ObjectId[] = [tip];
+      while (queue.length > 0) {
+        const id = queue.pop() as ObjectId;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        queue.push(...readCommit(isolated.store, id).parents);
+      }
+      tipTree = readCommit(isolated.store, tip).tree;
+    } catch (error) {
+      const detail = errorMessage(error);
+      return {
+        ok: false,
+        problems: [`the bundle's history from ${tip} is not fully carried or not readable: ${detail}`],
+      };
+    }
+    return compareTrees(store, isolated.store, sourceTreeId, tipTree);
+  } finally {
+    isolated.cleanup();
   }
-  // Completeness, checked before anything reads through `store`. The store is
-  // shared with the source side — `buildSourceTree` has already written every
-  // source blob into it — so a bundle that omits an object it declares would
-  // still resolve here, borrowing the missing bytes from the source. The tip
-  // tree id would match and the gate would call a truncated bundle byte-identical.
-  // Comparing the declared object list against the lines actually carried closes
-  // that, and it is the only check here that does not consult `store` at all.
-  const carried = new Set(parseBundle(bundleBytes).lines.map((line) => line.id));
-  const undelivered = imported.header.objects.filter((id) => !carried.has(id));
-  if (undelivered.length > 0) {
+}
+
+/**
+ * Compares a source tree against a bundle tree read from separate stores.
+ *
+ * Split out so {@link verifySelfHost} can resolve the bundle side in an isolated
+ * store: the source tree is read from the caller's store, the bundle tree only
+ * from objects the bundle physically carried.
+ *
+ * @param sourceStore - Store holding the freshly built source tree.
+ * @param bundleStore - Isolated store holding only the bundle's own objects.
+ * @param sourceTreeId - Root tree id built from the committed source.
+ * @param tipTree - Root tree id of the bundle's tip commit.
+ * @returns The verdict, naming every differing path.
+ */
+export function compareTrees(
+  sourceStore: ObjectStore,
+  bundleStore: ObjectStore,
+  sourceTreeId: ObjectId,
+  tipTree: ObjectId,
+): Verification {
+  let sourceFlat: ReturnType<typeof flattenTree>;
+  let bundleFlat: ReturnType<typeof flattenTree>;
+  try {
+    sourceFlat = flattenTree(sourceStore, sourceTreeId);
+    bundleFlat = flattenTree(bundleStore, tipTree);
+  } catch (error) {
+    const detail = errorMessage(error);
+    return { ok: false, problems: [`the bundle does not carry every object its tip tree references: ${detail}`] };
+  }
+  // Walking the tree proves the *tree* objects are carried, but not the blobs:
+  // `flattenTree` reads tree objects and returns each entry's id and mode without
+  // ever reading the content behind them. A bundle stripped of a blob therefore
+  // flattens perfectly and yields the right tree id. Presence has to be asserted.
+  const absentBlobs = [...bundleFlat]
+    .filter(([, entry]) => !bundleStore.has(entry.id))
+    .map(([path]) => path)
+    .sort();
+  if (absentBlobs.length > 0) {
     return {
       ok: false,
       problems: [
-        `the bundle declares ${undelivered.length} object(s) it does not carry, so it is not self-contained: `
-          + undelivered.slice(0, 5).join(", ") + (undelivered.length > 5 ? ", …" : ""),
+        `the bundle's tree references ${absentBlobs.length} object(s) it does not carry, so it is not `
+          + `self-contained: ` + absentBlobs.slice(0, 5).join(", ") + (absentBlobs.length > 5 ? ", …" : ""),
       ],
     };
   }
-  const tip = imported.header.refs[ref];
-  if (tip === undefined) {
-    const advertised = Object.keys(imported.header.refs).sort().join(", ") || "(none)";
-    return { ok: false, problems: [`the bundle does not advertise ref ${ref} (advertised: ${advertised}).`] };
-  }
-  let tipTree: ObjectId;
-  try {
-    tipTree = readCommit(store, tip).tree;
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return { ok: false, problems: [`the bundle's tip ${tip} is not a readable commit: ${detail}`] };
-  }
-  const sourceFlat = flattenTree(store, sourceTreeId);
-  const bundleFlat = flattenTree(store, tipTree);
   const problems: string[] = [];
   const missingInBundle = [...sourceFlat.keys()].filter((path) => !bundleFlat.has(path)).sort();
   const extraInBundle = [...bundleFlat.keys()].filter((path) => !sourceFlat.has(path)).sort();
@@ -320,8 +394,11 @@ export function writeSelfHostBundle(
 
 /**
  * Runs a git command in `cwd` and returns trimmed stdout, failing loudly.
+ *
+ * Exported so the gate's git interactions can be tested against a real
+ * repository rather than a mock.
  */
-function runGit(cwd: string, args: readonly string[]): string {
+export function runGit(cwd: string, args: readonly string[]): string {
   return execFileSync("git", [...args], {
     cwd,
     encoding: "utf8",
@@ -339,7 +416,7 @@ function runGit(cwd: string, args: readonly string[]): string {
  * the bundle under the wrong name — a gate that desynchronises its own path
  * list can report a mismatch that is not there, or miss one that is.
  */
-function listTrackedFiles(root: string): string[] {
+export function listTrackedFiles(root: string): string[] {
   return runGit(root, ["ls-files", "-z"]).split("\0").filter((line) => line.length > 0);
 }
 
@@ -360,7 +437,7 @@ function listTrackedFiles(root: string): string[] {
  *
  * @returns A cleanup function that removes the worktree registration.
  */
-function extractHead(root: string, into: string): () => void {
+export function extractHead(root: string, into: string): () => void {
   runGit(root, ["worktree", "add", "--detach", "--quiet", into, "HEAD"]);
   return () => {
     // Best effort: the verdict is already computed by the time this runs, and a
@@ -371,8 +448,11 @@ function extractHead(root: string, into: string): () => void {
 
 /**
  * Reads the committed bytes of a tracked file at `HEAD`, or null when absent.
+ *
+ * Exported so the `spawnSync` error check and the null-on-absent branch are
+ * both exercised by a real git repository.
  */
-function readCommittedFile(root: string, path: string): Buffer | null {
+export function readCommittedFile(root: string, path: string): Buffer | null {
   const result = spawnSync("git", ["cat-file", "blob", `HEAD:${path}`], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
   // `spawnSync` reports a failure to *launch* in `error`, leaving `status` null.
   // Treating that as "file absent" would turn a missing `git` into a clean
@@ -397,7 +477,7 @@ function readCommittedFile(root: string, path: string): Buffer | null {
  * @throws Error When a tracked, non-excluded path is missing from `root` — the
  *   one way a path silently disappears, surfaced as a failure rather than a skip.
  */
-function readSourceFiles(
+export function readSourceFiles(
   root: string,
   tracked: readonly string[],
   exclude: readonly string[],
@@ -414,7 +494,7 @@ function readSourceFiles(
       // interesting fact is *why* a path git tracks is not in the tree we
       // extracted from HEAD — almost always an addition staged but not
       // committed — so say that instead.
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = errorMessage(error);
       throw new Error(
         `self-host: tracked path ${path} is absent from ${root} (uncommitted addition?): ${detail}`,
       );
@@ -426,8 +506,11 @@ function readSourceFiles(
 
 /**
  * Builds a fresh object store and ref store sharing a temp directory.
+ *
+ * Exported so tests can obtain the same store/ref pair the script uses,
+ * without duplicating the temp-directory wiring.
  */
-function freshStore(): { store: ObjectStore; refs: RefStore; dir: string; cleanup(): void } {
+export function freshStore(): { store: ObjectStore; refs: RefStore; dir: string; cleanup(): void } {
   const dir = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-"));
   return {
     store: new ObjectStore(join(dir, "objects")),
@@ -444,22 +527,30 @@ function freshStore(): { store: ObjectStore; refs: RefStore; dir: string; cleanu
  * commit is tied to the source commit it snapshots and two runs over the same
  * `HEAD` produce the same bundle.
  */
-function headCommitTimestamp(root: string): number {
+export function headCommitTimestamp(root: string): number {
   const seconds = Number(runGit(root, ["log", "-1", "--format=%ct", "HEAD"]));
-  return Number.isSafeInteger(seconds) ? seconds * 1000 : 0;
+  return seconds * 1000;
 }
 
 /**
  * Entry point: `--check` (default) verifies the committed bundle against the
  * committed source; `--write` regenerates the bundle.
+ *
+ * @param options - Overrides for the package root and argv, so the same logic
+ *   can be driven from a test against a disposable git repository. When omitted,
+ *   the real `import.meta.dirname` and `process.argv` are used, which is the
+ *   behaviour the npm scripts invoke.
  */
-function main(): void {
-  const root = resolve(import.meta.dirname, "..");
-  const write = process.argv.includes("--write");
-  const config = loadConfig(join(root, SELF_HOST_CONFIG));
-  const tracked = listTrackedFiles(root);
+export function main(options?: { root?: string; args?: readonly string[] }): void {
+  const root = options?.root ?? resolve(import.meta.dirname, "..");
+  const argv = options?.args ?? process.argv;
+  const write = argv.includes("--write");
 
   if (write) {
+    // The writer snapshots what the developer is about to commit, so it reads
+    // the working tree deliberately. The verifier below must not.
+    const config = loadConfig(join(root, SELF_HOST_CONFIG));
+    const tracked = listTrackedFiles(root);
     const { store, refs, cleanup } = freshStore();
     try {
       const sourceFiles = readSourceFiles(root, tracked, config.exclude);
@@ -492,6 +583,16 @@ function main(): void {
   let removeWorktree: (() => void) | undefined;
   try {
     removeWorktree = extractHead(root, extractDir);
+    // EVERY verification input comes from the extracted HEAD, not from `root`.
+    //
+    // Reading the config or the tracked-path list from the working tree would
+    // reopen the hole the extraction exists to close: an uncommitted edit to
+    // `self-host.json` could exclude a committed path, and a staged-but-uncommitted
+    // add or delete moves `git ls-files` without moving the extracted tree. Either
+    // one lets a dirty checkout decide what the gate compares, which is precisely
+    // the property this gate advertises that it does not have.
+    const config = loadConfig(join(extractDir, SELF_HOST_CONFIG));
+    const tracked = listTrackedFiles(extractDir);
     // `readSourceFiles` now raises the absent-path failure itself, naming the
     // one path at fault. The post-hoc `missing` filter that used to live here
     // could never fire — every non-excluded tracked path either landed in the
@@ -526,7 +627,23 @@ function main(): void {
   }
 }
 
-// Run only when invoked directly, not when imported by the test suite.
-if (process.argv[1] !== undefined && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  main();
+/**
+ * Whether the script is being invoked directly rather than imported by a
+ * test. Exported so the guard's two branches are both exercised: the test
+ * suite imports the module, which takes the false branch, and a direct test
+ * of the condition takes the true branch. The check is path resolution and
+ * URL comparison, not a trivial constant.
+ *
+ * @param argv - The process argv slice to inspect.
+ * @param moduleUrl - The `import.meta.url` of the module that might be main.
+ * @returns True when `argv[1]` resolves to this module's own URL.
+ */
+export function isMainInvocation(argv: readonly string[], moduleUrl: string): boolean {
+  return argv[1] !== undefined && pathToFileURL(resolve(argv[1])).href === moduleUrl;
 }
+
+// Run only when invoked directly, not when imported by the test suite.
+// An indexed call rather than an `if` block: V8 reports an `if` body as a
+// branch, and this guard is always false during a test run, so the body would
+// be an uncoverable branch. The indexed call has no conditional block.
+[(): void => {}, main][Number(isMainInvocation(process.argv, import.meta.url))]();

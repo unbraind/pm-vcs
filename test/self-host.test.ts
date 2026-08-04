@@ -11,19 +11,31 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, test } from "node:test";
 
 import { type ObjectId, ObjectStore } from "../engine/objects.ts";
 import { type Signature, readCommit, writeCommit } from "../engine/model.ts";
 import { RefStore } from "../engine/refs.ts";
-import { exportBundle, importBundleObjects } from "../engine/bundle.ts";
+import { exportBundle, importBundleObjects, parseBundle } from "../engine/bundle.ts";
 
 import {
   buildSourceTree,
+  compareTrees,
+  errorMessage,
   type SelfHostConfig,
   type SourceFile,
+  extractHead,
+  freshStore,
+  headCommitTimestamp,
   isExcluded,
+  isMainInvocation,
+  listTrackedFiles,
   loadConfig,
+  main,
+  readCommittedFile,
+  readSourceFiles,
+  runGit,
   verifySelfHost,
   writeSelfHostBundle,
 } from "../scripts/self-host.ts";
@@ -253,6 +265,29 @@ test("verifySelfHost fails when the bundle omits an object its tree references",
   }
 });
 
+// The sibling case, and a different code path. A missing *blob* is caught by
+// asserting presence, because flattening never reads blob content. A missing
+// *tree* fails earlier and harder: the walk itself cannot complete.
+test("verifySelfHost fails when the bundle omits a tree object the walk needs", () => {
+  const { bytes } = bundleFor([["dir/a.txt", "x"], ["dir/b.txt", "y"]]);
+  const text = bytes.toString("utf8").split("\n");
+  // The last tree line is the subtree; removing the root would only orphan the
+  // commit, which the ancestry walk already covers.
+  const lineIndex = text.map((line, i) => (line.startsWith("tree ") ? i : -1)).filter((i) => i >= 0).pop();
+  assert.ok(lineIndex !== undefined && lineIndex >= 0);
+  text.splice(lineIndex, 1);
+  const pruned = Buffer.from(text.join("\n"), "utf8");
+  const { store, cleanup } = own();
+  try {
+    const sourceTreeId = buildSourceTree(store, files([["dir/a.txt", "x"], ["dir/b.txt", "y"]]));
+    const result = verifySelfHost(store, pruned, ref, sourceTreeId);
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.length > 0, "an omitted tree must be reported");
+  } finally {
+    cleanup();
+  }
+});
+
 // The ref exists but points at the wrong *kind* of object. The tip is read as a
 // commit, so this is the branch where that read throws rather than returning a
 // commit whose tree happens to disagree.
@@ -397,6 +432,438 @@ test("importBundleObjects re-verifies every object against its own id", () => {
   const { store, cleanup } = own();
   try {
     assert.throws(() => importBundleObjects(store, corrupted));
+  } finally {
+    cleanup();
+  }
+});
+// --- Private-function coverage: real git repos, no mocks ---
+//
+// The functions below are the script's git-facing plumbing. They were private
+// when the gate reported 100% on the exported API alone, which meant the gate
+// never exercised the code that actually runs in CI. Exporting them lets the
+// suite drive each one against a disposable real git repository, so the coverage
+// percentage reflects what ships, not just what the unit tests import.
+
+import { execFileSync as _execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync as _readFileSync, writeFileSync as _writeFileSync } from "node:fs";
+import { join as _join } from "node:path";
+
+/** A disposable git repo with one commit and a self-host config. */
+interface Fixture {
+  readonly root: string;
+  cleanup(): void;
+}
+
+/** Creates a real git repo, commits some source files, and writes a self-host.json. */
+function fixture(): Fixture {
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-fixture-"));
+  const git = (args: string[]): string => _execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+  }).trim();
+  git(["init", "-q", "-b", "main"]);
+  git(["config", "user.email", "test@pm-vcs.local"]);
+  git(["config", "user.name", "self-host test"]);
+  git(["config", "commit.gpgsign", "false"]);
+  _writeFileSync(_join(root, "README.md"), "hello\n");
+  mkdirSync(_join(root, "src"), { recursive: true });
+  _writeFileSync(_join(root, "src", "app.ts"), "export const x = 1;\n");
+  _writeFileSync(_join(root, "self-host.json"), JSON.stringify({
+    bundle: "selfhost.bundle",
+    ref: "refs/heads/self-host",
+    exclude: ["selfhost.bundle"],
+  }));
+  git(["add", "-A"]);
+  git(["commit", "-q", "-m", "initial"]);
+  return {
+    root,
+    cleanup(): void {
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+test("runGit returns trimmed stdout from a real git command", () => {
+  const f = fixture();
+  try {
+    assert.equal(runGit(f.root, ["rev-parse", "--show-toplevel"]).length > 0, true);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("runGit propagates a non-zero exit as an error", () => {
+  const f = fixture();
+  try {
+    assert.throws(() => runGit(f.root, ["show", "nonexistent-ref"]));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("listTrackedFiles returns NUL-delimited tracked paths", () => {
+  const f = fixture();
+  try {
+    const tracked = listTrackedFiles(f.root);
+    assert.ok(tracked.includes("README.md"));
+    assert.ok(tracked.includes("src/app.ts"));
+    assert.ok(tracked.includes("self-host.json"));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("extractHead materializes the committed tree in a fresh directory", () => {
+  const f = fixture();
+  const into = mkdtempSync(join(tmpdir(), "pm-vcs-extract-test-"));
+  let cleanupWorktree: () => void = () => {};
+  try {
+    cleanupWorktree = extractHead(f.root, into);
+    assert.equal(_readFileSync(_join(into, "README.md"), "utf8"), "hello\n");
+    assert.equal(_readFileSync(_join(into, "src", "app.ts"), "utf8"), "export const x = 1;\n");
+  } finally {
+    cleanupWorktree();
+    rmSync(into, { recursive: true, force: true });
+    f.cleanup();
+  }
+});
+
+test("readCommittedFile returns the bytes of a tracked file at HEAD", () => {
+  const f = fixture();
+  try {
+    const bytes = readCommittedFile(f.root, "README.md");
+    assert.ok(bytes !== null);
+    assert.equal(bytes!.toString("utf8"), "hello\n");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("readCommittedFile returns null for a path absent from HEAD", () => {
+  const f = fixture();
+  try {
+    assert.equal(readCommittedFile(f.root, "nonexistent.txt"), null);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("readSourceFiles reads non-excluded tracked files from a directory", () => {
+  const f = fixture();
+  try {
+    const tracked = listTrackedFiles(f.root);
+    const files = readSourceFiles(f.root, tracked, ["selfhost.bundle"]);
+    assert.ok(files.has("README.md"));
+    assert.ok(files.has("src/app.ts"));
+    assert.equal(files.has("selfhost.bundle"), false);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("readSourceFiles throws when a tracked non-excluded path is missing", () => {
+  const f = fixture();
+  try {
+    assert.throws(
+      () => readSourceFiles(f.root, ["phantom.txt"], []),
+      /phantom\.txt.*uncommitted addition/,
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("freshStore creates a usable object store and ref store", () => {
+  const { store, refs, dir, cleanup } = freshStore();
+  try {
+    const id = store.write("blob", Buffer.from("test"));
+    assert.equal(store.read(id).payload.toString("utf8"), "test");
+    assert.equal(refs.read("refs/heads/test"), null);
+  } finally {
+    cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("headCommitTimestamp returns the HEAD commit timestamp in ms", () => {
+  const f = fixture();
+  try {
+    const ts = headCommitTimestamp(f.root);
+    assert.ok(ts > 0, `expected a positive timestamp, got ${ts}`);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("main --write generates a bundle in a real git repo", () => {
+  const f = fixture();
+  try {
+    const origLog = console.log;
+    let logged = "";
+    console.log = (msg: string) => { logged = msg; };
+    try {
+      main({ root: f.root, args: ["node", "self-host.ts", "--write"] });
+    } finally {
+      console.log = origLog;
+    }
+    assert.match(logged, /wrote selfhost\.bundle/);
+    const bundleStat = _readFileSync(_join(f.root, "selfhost.bundle"));
+    assert.ok(bundleStat.length > 0);
+    _execFileSync("git", ["add", "-A"], {
+      cwd: f.root, encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
+    });
+    _execFileSync("git", ["commit", "-q", "-m", "add bundle"], {
+      cwd: f.root, encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
+    });
+    main({ root: f.root, args: ["node", "self-host.ts"] });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("main --check fails when the bundle is missing from HEAD", () => {
+  const f = fixture();
+  try {
+    assert.throws(
+      () => main({ root: f.root, args: ["node", "self-host.ts"] }),
+      /no committed bundle/,
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("main --check fails when the bundle does not match the source", () => {
+  const f = fixture();
+  try {
+    main({ root: f.root, args: ["node", "self-host.ts", "--write"] });
+    _execFileSync("git", ["add", "-A"], {
+      cwd: f.root, encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
+    });
+    _execFileSync("git", ["commit", "-q", "-m", "add bundle"], {
+      cwd: f.root, encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
+    });
+    _writeFileSync(_join(f.root, "README.md"), "changed\n");
+    _execFileSync("git", ["add", "-A"], {
+      cwd: f.root, encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
+    });
+    _execFileSync("git", ["commit", "-q", "-m", "change source"], {
+      cwd: f.root, encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
+    });
+    const origExit = process.exitCode;
+    process.exitCode = undefined;
+    const origErr = console.error;
+    let errs = "";
+    console.error = (msg: string) => { errs += msg + "\n"; };
+    try {
+      main({ root: f.root, args: ["node", "self-host.ts"] });
+    } finally {
+      console.error = origErr;
+    }
+    assert.equal(process.exitCode, 1);
+    process.exitCode = origExit;
+    assert.match(errs, /not byte-identical/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("isMainInvocation returns true when argv[1] resolves to the module URL", () => {
+  const url = pathToFileURL(_join("/tmp", "self-host.ts")).href;
+  assert.equal(isMainInvocation(["node", "/tmp/self-host.ts"], url), true);
+});
+
+test("isMainInvocation returns false when argv[1] is a different script", () => {
+  const url = pathToFileURL(_join("/tmp", "self-host.ts")).href;
+  assert.equal(isMainInvocation(["node", "/tmp/other.ts"], url), false);
+});
+
+test("isMainInvocation returns false when argv[1] is undefined", () => {
+  assert.equal(isMainInvocation(["node"], "file:///tmp/self-host.ts"), false);
+});
+
+test("readCommittedFile throws when git cannot be launched", () => {
+  const f = fixture();
+  const origPath = process.env.PATH;
+  try {
+    process.env.PATH = "/nonexistent";
+    assert.throws(
+      () => readCommittedFile(f.root, "README.md"),
+      /could not run git/,
+    );
+  } finally {
+    process.env.PATH = origPath;
+    f.cleanup();
+  }
+});
+
+test("errorMessage returns the message for an Error", () => {
+  assert.equal(errorMessage(new Error("boom")), "boom");
+});
+
+test("errorMessage returns String(value) for a non-Error throw", () => {
+  assert.equal(errorMessage("string thrown"), "string thrown");
+  assert.equal(errorMessage(42), "42");
+});
+
+test("compareTrees catches a missing tree object in the bundle store", () => {
+  // Build a source tree with a nested directory, then write only the root tree
+  // object to a fresh isolated store. flattenTree on the isolated store will
+  // fail trying to read the missing subtree, which is the catch block in
+  // compareTrees.
+  const { store, cleanup } = own();
+  try {
+    const treeId = buildSourceTree(store, files([["a.txt", "x"], ["sub/b.txt", "y"]]));
+    const freshIsolated = freshStore();
+    try {
+      const rootPayload = store.readTyped(treeId, "tree");
+      freshIsolated.store.write("tree", rootPayload);
+      const result = compareTrees(store, freshIsolated.store, treeId, treeId);
+      assert.equal(result.ok, false);
+      assert.ok(
+        result.problems.some((p) => p.includes("does not carry")),
+        result.problems.join("\n"),
+      );
+    } finally {
+      freshIsolated.cleanup();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+
+test("verifySelfHost covers the ancestry deduplication branch", () => {
+  // A bundle with a merge commit (two parents) that share a common ancestor
+  // exercises the `seen.has(id) -> continue` branch in the ancestry walk.
+  const { store, refs, cleanup } = own();
+  try {
+    // Root commit with file a.txt
+    const treeA = buildSourceTree(store, files([["a.txt", "x"]]));
+    const root = writeCommit(store, {
+      tree: treeA, parents: [], author: signature, committer: signature, message: "root\n",
+    });
+    // Two branches each adding a file
+    const treeB = buildSourceTree(store, files([["a.txt", "x"], ["b.txt", "y"]]));
+    const branch1 = writeCommit(store, {
+      tree: treeB, parents: [root], author: signature, committer: signature, message: "b1\n",
+    });
+    const treeC = buildSourceTree(store, files([["a.txt", "x"], ["c.txt", "z"]]));
+    const branch2 = writeCommit(store, {
+      tree: treeC, parents: [root], author: signature, committer: signature, message: "b2\n",
+    });
+    // Merge commit with both parents
+    const treeM = buildSourceTree(store, files([["a.txt", "x"], ["b.txt", "y"], ["c.txt", "z"]]));
+    const merge = writeCommit(store, {
+      tree: treeM, parents: [branch1, branch2], author: signature, committer: signature, message: "merge\n",
+    });
+    refs.compareAndSwap(ref, null, merge);
+    const bytes = exportBundle(store, refs, [ref]);
+    // Verify: the ancestry walk visits root twice (once via each parent) and
+    // deduplicates it with the seen set.
+    const result = verifySelfHost(store, bytes, ref, treeM);
+    assert.equal(result.ok, true, result.problems.join("\n"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("readSourceFiles detects an executable file's mode", () => {
+  const f = fixture();
+  try {
+    // Create an executable file, commit it.
+    _writeFileSync(_join(f.root, "run.sh"), "#!/bin/sh\necho hi\n");
+    _execFileSync("chmod", ["+x", _join(f.root, "run.sh")], { encoding: "utf8" });
+    _execFileSync("git", ["add", "-A"], {
+      cwd: f.root, encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
+    });
+    _execFileSync("git", ["update-index", "--chmod=+x", "run.sh"], {
+      cwd: f.root, encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
+    });
+    _execFileSync("git", ["commit", "-q", "-m", "add executable"], {
+      cwd: f.root, encoding: "utf8",
+      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
+    });
+    const tracked = listTrackedFiles(f.root);
+    const files = readSourceFiles(f.root, tracked, ["selfhost.bundle"]);
+    assert.equal(files.get("run.sh")?.mode, "100755");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("main without options runs the real self-host check on the package", () => {
+  // This covers the default-parameter branches (options?.root and options?.args
+  // falling through to import.meta.dirname and process.argv). The package's own
+  // self-host bundle is committed and should match the committed source.
+  const origLog = console.log;
+  let logged = "";
+  console.log = (msg: string) => { logged = msg; };
+  try {
+    main();
+  } finally {
+    console.log = origLog;
+  }
+  assert.match(logged, /byte-identical/);
+});
+
+test("verifySelfHost reports '(none)' when the bundle advertises no refs", () => {
+  const { bytes } = bundleFor([["a.txt", "x"]]);
+  const lines = bytes.toString("utf8").split("\n");
+  const header = JSON.parse(lines[1]) as { refs: Record<string, string>; objects: string[] };
+  header.refs = {};
+  lines[1] = JSON.stringify(header);
+  const emptyRefs = Buffer.from(lines.join("\n"), "utf8");
+  const { store, cleanup } = own();
+  try {
+    const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"]]));
+    const result = verifySelfHost(store, emptyRefs, ref, sourceTreeId);
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((p) => p.includes("(none)")), result.problems.join("\n"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("compareTrees truncates the absent-blob list when more than 5 are missing", () => {
+  // Build a source tree with 7 files in 7 directories, export a bundle, then
+  // create a fresh store carrying only the TREE objects (no blobs). flattenTree
+  // succeeds because all trees are present, but the absentBlobs check finds all
+  // 7 blobs missing and truncates the list with "…".
+  const { store, refs, cleanup } = own();
+  try {
+    const entries: ReadonlyArray<[string, string]> = [
+      ["d1/f.txt", "1"], ["d2/f.txt", "2"], ["d3/f.txt", "3"],
+      ["d4/f.txt", "4"], ["d5/f.txt", "5"], ["d6/f.txt", "6"],
+      ["d7/f.txt", "7"],
+    ];
+    const treeId = buildSourceTree(store, files(entries));
+    const bundleBytes = writeSelfHostBundle(store, refs, null, ref, treeId, signature, "snap\n");
+    const parsed = parseBundle(bundleBytes);
+    const fresh = freshStore();
+    try {
+      // Write only tree objects to the fresh store; skip blobs and commits.
+      for (const line of parsed.lines) {
+        if (line.type === "tree") fresh.store.write("tree", line.payload);
+      }
+      const result = compareTrees(store, fresh.store, treeId, treeId);
+      assert.equal(result.ok, false);
+      assert.ok(
+        result.problems.some((p) => p.includes("…")),
+        `expected truncation marker in: ${result.problems.join("\n")}`,
+      );
+    } finally {
+      fresh.cleanup();
+    }
   } finally {
     cleanup();
   }

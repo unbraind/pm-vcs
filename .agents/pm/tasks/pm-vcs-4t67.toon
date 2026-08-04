@@ -1,0 +1,11 @@
+id: pm-vcs-4t67
+title: Add scripts/self-host.ts to coverageGate.sources and bring it to 100/100/100
+description: "Add scripts/self-host.ts explicitly to coverageGate.sources in package.json (scripts/ is in DEFAULT_SKIP_DIRS so a directory walk of . skips it). Export the script's private functions and main for testability, write real tests against disposable git repos, and reach a genuine 100/100/100. Gate now reports 25 source files."
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-08-04T11:15:48.615Z"
+updated_at: "2026-08-04T11:15:48.615Z"
+author: "harness:pi"
+body: ""

@@ -43,7 +43,8 @@
   },
   "coverageGate": {
     "sources": [
-      "."
+      ".",
+      "scripts/self-host.ts"
     ],
     "tests": [
       "test/preflight.test.ts",
