@@ -55,7 +55,18 @@ function run(file: string, args: readonly string[], cwd: string): string {
     // A stuck `pm` or `git` should fail one test rather than stall the whole CI
     // job with no output.
     timeout: 120_000,
-    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+    // `NODE_V8_COVERAGE` is set by the Node test runner when collecting
+    // coverage. Node re-injects it into child processes even when deleted from
+    // `env`, so override it to `/dev/null` — a non-directory — so spawned `pm`
+    // and `git` processes cannot write V8 coverage files that would corrupt the
+    // parent's report. Without this the lcov reporter intermittently produces
+    // an empty file when the suite spawns enough child Node processes.
+    env: {
+      ...process.env,
+      GIT_PAGER: "cat",
+      GIT_TERMINAL_PROMPT: "0",
+      NODE_V8_COVERAGE: "/dev/null",
+    },
   }).trim();
 }
 

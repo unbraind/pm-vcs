@@ -97,6 +97,10 @@ test("a fresh clone has no drivers and fails loudly, then passes after merge ins
   execFileSync(join(packageRoot, "node_modules", ".bin", "pm"), ["merge", "install"], {
     cwd: clone.root,
     encoding: "utf8",
+    // Override NODE_V8_COVERAGE to /dev/null so the spawned `pm` process does
+    // not corrupt the test runner's coverage data (same reason as
+    // test/helpers/sandbox.ts).
+    env: { ...process.env, NODE_V8_COVERAGE: "/dev/null" },
   });
   const cured = await runPreflight({ repoRoot: clone.root, pmRoot: clone.pmRoot });
   assert.ok(
