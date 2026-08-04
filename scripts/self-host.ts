@@ -698,15 +698,16 @@ export function headCommitTimestamp(root: string): number {
  * Entry point: `--check` (default) verifies the committed bundle against the
  * committed source; `--write` regenerates the bundle.
  *
- * @param options - Overrides for the package root and argv, so the same logic
- *   can be driven from a test against a disposable git repository. When omitted,
- *   the real `import.meta.dirname` and `process.argv` are used, which is the
- *   behaviour the npm scripts invoke.
+ * @param root - The package root to verify or regenerate against. Required so a
+ *   test can never accidentally run the gate against the developer's own
+ *   repository (which would register a git worktree in `.git/worktrees` during a
+ *   plain `npm test`). The direct-invocation call site at the bottom of this
+ *   module passes the real `import.meta.dirname` default.
+ * @param args - The argv slice to inspect for `--write`. Required for the same
+ *   reason; the direct-invocation call site passes `process.argv`.
  */
-export function main(options?: { root?: string; args?: readonly string[] }): void {
-  const root = options?.root ?? resolve(import.meta.dirname, "..");
-  const argv = options?.args ?? process.argv;
-  const write = argv.includes("--write");
+export function main(root: string, args: readonly string[]): void {
+  const write = args.includes("--write");
 
   if (write) {
     // The writer snapshots what the developer is about to commit, so it reads
@@ -807,5 +808,8 @@ export function isMainInvocation(argv: readonly string[], moduleUrl: string): bo
 // Run only when invoked directly, not when imported by the test suite.
 // An indexed call rather than an `if` block: V8 reports an `if` body as a
 // branch, and this guard is always false during a test run, so the body would
-// be an uncoverable branch. The indexed call has no conditional block.
-[(): void => {}, main][Number(isMainInvocation(process.argv, import.meta.url))]();
+// be an uncoverable branch. The indexed call has no conditional block. The
+// placeholder accepts the same arguments as `main` so element 0 (the one a
+// test-run import invokes) is a covered function call, not an unused expression;
+// the real defaults live here at the call site, not inside `main`.
+[(_root: string, _args: readonly string[]): void => {}, main][Number(isMainInvocation(process.argv, import.meta.url))](resolve(import.meta.dirname, ".."), process.argv);

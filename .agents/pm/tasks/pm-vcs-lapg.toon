@@ -2,10 +2,10 @@ id: pm-vcs-lapg
 title: Fix NODE_V8_COVERAGE lcov corruption in test helpers
 description: "Override NODE_V8_COVERAGE to /dev/null in test/helpers/sandbox.ts and test/preflight.test.ts so spawned pm processes do not corrupt the test runner's V8 coverage data, which intermittently produced an empty lcov.info file."
 type: Task
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-04T11:15:42.966Z"
-updated_at: "2026-08-04T11:15:42.966Z"
+updated_at: "2026-08-04T20:28:40.724Z"
 author: "harness:pi"
 body: ""

@@ -8,7 +8,8 @@
 // inputs. Nothing is mocked: the engine that ships is the engine under test.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -508,20 +509,18 @@ test("importBundleObjects re-verifies every object against its own id", () => {
 // suite drive each one against a disposable real git repository, so the coverage
 // percentage reflects what ships, not just what the unit tests import.
 
-import { execFileSync as _execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync as _readFileSync, writeFileSync as _writeFileSync } from "node:fs";
-import { join as _join } from "node:path";
-
 /** A disposable git repo with one commit and a self-host config. */
 interface Fixture {
   readonly root: string;
+  /** Runs git in the fixture repo with the pinned env overrides. */
+  git(args: string[]): string;
   cleanup(): void;
 }
 
 /** Creates a real git repo, commits some source files, and writes a self-host.json. */
 function fixture(): Fixture {
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-fixture-"));
-  const git = (args: string[]): string => _execFileSync("git", args, {
+  const git = (args: string[]): string => execFileSync("git", args, {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
@@ -530,10 +529,10 @@ function fixture(): Fixture {
   git(["config", "user.email", "test@pm-vcs.local"]);
   git(["config", "user.name", "self-host test"]);
   git(["config", "commit.gpgsign", "false"]);
-  _writeFileSync(_join(root, "README.md"), "hello\n");
-  mkdirSync(_join(root, "src"), { recursive: true });
-  _writeFileSync(_join(root, "src", "app.ts"), "export const x = 1;\n");
-  _writeFileSync(_join(root, "self-host.json"), JSON.stringify({
+  writeFileSync(join(root, "README.md"), "hello\n");
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src", "app.ts"), "export const x = 1;\n");
+  writeFileSync(join(root, "self-host.json"), JSON.stringify({
     bundle: "selfhost.bundle",
     ref: "refs/heads/self-host",
     exclude: ["selfhost.bundle"],
@@ -542,6 +541,7 @@ function fixture(): Fixture {
   git(["commit", "-q", "-m", "initial"]);
   return {
     root,
+    git,
     cleanup(): void {
       rmSync(root, { recursive: true, force: true });
     },
@@ -584,8 +584,8 @@ test("extractHead materializes the committed tree in a fresh directory", () => {
   let cleanupWorktree: () => void = () => {};
   try {
     cleanupWorktree = extractHead(f.root, into);
-    assert.equal(_readFileSync(_join(into, "README.md"), "utf8"), "hello\n");
-    assert.equal(_readFileSync(_join(into, "src", "app.ts"), "utf8"), "export const x = 1;\n");
+    assert.equal(readFileSync(join(into, "README.md"), "utf8"), "hello\n");
+    assert.equal(readFileSync(join(into, "src", "app.ts"), "utf8"), "export const x = 1;\n");
   } finally {
     cleanupWorktree();
     rmSync(into, { recursive: true, force: true });
@@ -667,22 +667,16 @@ test("main --write generates a bundle in a real git repo", () => {
     let logged = "";
     console.log = (msg: string) => { logged = msg; };
     try {
-      main({ root: f.root, args: ["node", "self-host.ts", "--write"] });
+      main(f.root, ["node", "self-host.ts", "--write"]);
     } finally {
       console.log = origLog;
     }
     assert.match(logged, /wrote selfhost\.bundle/);
-    const bundleStat = _readFileSync(_join(f.root, "selfhost.bundle"));
+    const bundleStat = readFileSync(join(f.root, "selfhost.bundle"));
     assert.ok(bundleStat.length > 0);
-    _execFileSync("git", ["add", "-A"], {
-      cwd: f.root, encoding: "utf8",
-      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
-    });
-    _execFileSync("git", ["commit", "-q", "-m", "add bundle"], {
-      cwd: f.root, encoding: "utf8",
-      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
-    });
-    main({ root: f.root, args: ["node", "self-host.ts"] });
+    f.git(["add", "-A"]);
+    f.git(["commit", "-q", "-m", "add bundle"]);
+    main(f.root, ["node", "self-host.ts"]);
   } finally {
     f.cleanup();
   }
@@ -692,7 +686,7 @@ test("main --check fails when the bundle is missing from HEAD", () => {
   const f = fixture();
   try {
     assert.throws(
-      () => main({ root: f.root, args: ["node", "self-host.ts"] }),
+      () => main(f.root, ["node", "self-host.ts"]),
       /no committed bundle/,
     );
   } finally {
@@ -703,31 +697,19 @@ test("main --check fails when the bundle is missing from HEAD", () => {
 test("main --check fails when the bundle does not match the source", () => {
   const f = fixture();
   try {
-    main({ root: f.root, args: ["node", "self-host.ts", "--write"] });
-    _execFileSync("git", ["add", "-A"], {
-      cwd: f.root, encoding: "utf8",
-      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
-    });
-    _execFileSync("git", ["commit", "-q", "-m", "add bundle"], {
-      cwd: f.root, encoding: "utf8",
-      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
-    });
-    _writeFileSync(_join(f.root, "README.md"), "changed\n");
-    _execFileSync("git", ["add", "-A"], {
-      cwd: f.root, encoding: "utf8",
-      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
-    });
-    _execFileSync("git", ["commit", "-q", "-m", "change source"], {
-      cwd: f.root, encoding: "utf8",
-      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
-    });
+    main(f.root, ["node", "self-host.ts", "--write"]);
+    f.git(["add", "-A"]);
+    f.git(["commit", "-q", "-m", "add bundle"]);
+    writeFileSync(join(f.root, "README.md"), "changed\n");
+    f.git(["add", "-A"]);
+    f.git(["commit", "-q", "-m", "change source"]);
     const origExit = process.exitCode;
     process.exitCode = undefined;
     const origErr = console.error;
     let errs = "";
     console.error = (msg: string) => { errs += msg + "\n"; };
     try {
-      main({ root: f.root, args: ["node", "self-host.ts"] });
+      main(f.root, ["node", "self-host.ts"]);
     } finally {
       console.error = origErr;
     }
@@ -740,12 +722,12 @@ test("main --check fails when the bundle does not match the source", () => {
 });
 
 test("isMainInvocation returns true when argv[1] resolves to the module URL", () => {
-  const url = pathToFileURL(_join("/tmp", "self-host.ts")).href;
+  const url = pathToFileURL(join("/tmp", "self-host.ts")).href;
   assert.equal(isMainInvocation(["node", "/tmp/self-host.ts"], url), true);
 });
 
 test("isMainInvocation returns false when argv[1] is a different script", () => {
-  const url = pathToFileURL(_join("/tmp", "self-host.ts")).href;
+  const url = pathToFileURL(join("/tmp", "self-host.ts")).href;
   assert.equal(isMainInvocation(["node", "/tmp/other.ts"], url), false);
 });
 
@@ -842,42 +824,23 @@ test("verifySelfHost covers the ancestry deduplication branch", () => {
 test("readSourceFiles detects an executable file's mode", () => {
   const f = fixture();
   try {
-    // Create an executable file, commit it.
-    _writeFileSync(_join(f.root, "run.sh"), "#!/bin/sh\necho hi\n");
-    _execFileSync("chmod", ["+x", _join(f.root, "run.sh")], { encoding: "utf8" });
-    _execFileSync("git", ["add", "-A"], {
-      cwd: f.root, encoding: "utf8",
-      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
-    });
-    _execFileSync("git", ["update-index", "--chmod=+x", "run.sh"], {
-      cwd: f.root, encoding: "utf8",
-      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
-    });
-    _execFileSync("git", ["commit", "-q", "-m", "add executable"], {
-      cwd: f.root, encoding: "utf8",
-      env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat" },
-    });
+    // Create an executable file, commit it. The mode is derived from git
+    // (`update-index --chmod=+x`), not from the filesystem, so no `chmod` spawn
+    // is needed — the gate depends only on `git`. `git checkout HEAD -- run.sh`
+    // lets git restore the executable bit onto the working tree, which is what
+    // `extractHead` does for the real gate (the worktree checkout writes the
+    // tree's mode onto the filesystem, and `readSourceFiles` reads that).
+    writeFileSync(join(f.root, "run.sh"), "#!/bin/sh\necho hi\n");
+    f.git(["add", "-A"]);
+    f.git(["update-index", "--chmod=+x", "run.sh"]);
+    f.git(["commit", "-q", "-m", "add executable"]);
+    f.git(["checkout", "HEAD", "--", "run.sh"]);
     const tracked = listTrackedFiles(f.root);
     const files = readSourceFiles(f.root, tracked, ["selfhost.bundle"]);
     assert.equal(files.get("run.sh")?.mode, "100755");
   } finally {
     f.cleanup();
   }
-});
-
-test("main without options runs the real self-host check on the package", () => {
-  // This covers the default-parameter branches (options?.root and options?.args
-  // falling through to import.meta.dirname and process.argv). The package's own
-  // self-host bundle is committed and should match the committed source.
-  const origLog = console.log;
-  let logged = "";
-  console.log = (msg: string) => { logged = msg; };
-  try {
-    main();
-  } finally {
-    console.log = origLog;
-  }
-  assert.match(logged, /byte-identical/);
 });
 
 test("verifySelfHost reports '(none)' when the bundle advertises no refs", () => {
