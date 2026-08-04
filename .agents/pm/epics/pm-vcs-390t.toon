@@ -2,13 +2,18 @@ id: pm-vcs-390t
 title: "Phase 4: pm-vcs versions its own source"
 description: "The package must track its own source code in pm-vcs alongside git, so the claim that pm-vcs is a working version control system is demonstrated by the repository itself rather than asserted in a README. The self-hosted history ships as a bundle in the repository and a CI gate proves the bundle's tip tree is exactly the source tree, so source cannot change without the pm-vcs history following it."
 type: Epic
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-07-31T06:28:24.621Z"
-updated_at: "2026-07-31T06:28:27.188Z"
+updated_at: "2026-08-04T06:46:50.532Z"
 author: "harness:claude-code"
 acceptance_criteria: A tracked bundle holds pm-vcs history of pm-vcs's own source; a CI gate fails when the bundle's tip tree differs from the git-tracked source in any byte; the gate re-verifies every object against its own id; the check is deterministic and cannot pass by regenerating the bundle from a dirty tree
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-tr2a,parent,"2026-07-31T06:28:27.158Z","harness:claude-code","cli:update:dep",detected
+notes[2]{created_at,author,text}:
+  "2026-08-04T05:48:33.087Z",pi-agent,"Design: a committed text bundle (selfhost.bundle) holds pm-vcs history of the git-tracked source. accept:self-host is verify-only: it reads the committed bundle and the committed source both from HEAD (git cat-file / git archive), so a dirty working tree cannot affect the verdict and regenerating the bundle without committing it changes nothing. self-host:write is the only path that writes the bundle. The exclusion set is data in self-host.json; the gate builds its source tree from git ls-files minus exclusions, so a tracked file in neither the bundle nor the exclusion set fails closed. Trees use the legacy (FileId-free) v1 encoding via engine buildTree so the bundle is deterministic — tree ids depend only on content+mode. parseBundle re-hashes every object against its own id (point 3); importBundleObjects stores them. Byte-exactness = root tree id equality, which covers content and mode."
+  "2026-08-04T06:46:50.532Z",pi-agent,"Implemented scripts/self-host.ts with --write/--check separation, self-host.json data file, selfhost.bundle committed artifact, test/self-host.test.ts (15 real tests), wired accept:self-host into package.json release:check and CI, documented in ARCHITECTURE.md section 10. Verified coverage 100/100/100 with the locked pm-cli 2026.8.1 (a stale local node_modules at 2026.8.3 had silently changed the test harness and dropped the pmClient fallback branch from coverage; npm ci restored the locked version)."
+tests[1]{command,scope}:
+  "npm run accept:self-host",project
 body: ""

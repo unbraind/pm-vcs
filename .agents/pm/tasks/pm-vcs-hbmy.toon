@@ -1,0 +1,16 @@
+id: pm-vcs-hbmy
+title: Self-host tests + CI + changelog wiring
+description: ""
+type: Task
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-08-04T05:47:29.098Z"
+updated_at: "2026-08-04T06:46:50.206Z"
+author: pi-agent
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-390t,parent,"2026-08-04T05:47:34.133Z",pi-agent,"cli:update:dep",detected
+files[2]{path,scope,note}:
+  test/self-host.test.ts,project,real gate tests
+  .github/workflows/ci.yml,project,"accept:self-host CI step"
+body: ""

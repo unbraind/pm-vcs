@@ -1,0 +1,7 @@
+{
+  "bundle": "selfhost.bundle",
+  "ref": "refs/heads/self-host",
+  "exclude": [
+    "selfhost.bundle"
+  ]
+}
