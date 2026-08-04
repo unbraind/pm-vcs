@@ -40,6 +40,28 @@ export interface Sandbox {
 }
 
 /**
+ * Environment that stops a spawned Node process writing V8 coverage into the
+ * parent test run's report.
+ *
+ * The Node test runner sets `NODE_V8_COVERAGE` and **re-injects it into child
+ * processes even when it is deleted from `env`**, so this suite's real `pm` and
+ * `git` children were dropping coverage files into the parent's directory. The
+ * lcov reporter then intermittently produced an empty file and the coverage gate
+ * failed with "source file(s) never loaded" — on a suite that had just reported
+ * 100%. That is the long-standing nondeterminism in this package's coverage.
+ *
+ * Points the children at a throwaway directory rather than `/dev/null`: Node
+ * treats the value as a *directory*, so on Windows `/dev/null` would create a
+ * `dev\null` folder next to the child's cwd and write coverage into it — the
+ * opposite of discarding it — and this package has Windows CI.
+ *
+ * @returns Environment overrides to merge into a child process's `env`.
+ */
+export function discardChildCoverage(): Record<string, string> {
+  return { NODE_V8_COVERAGE: mkdtempSync(join(tmpdir(), "pm-vcs-discard-coverage-")) };
+}
+
+/**
  * Runs a command, returning trimmed stdout and surfacing failures loudly.
  *
  * @param file - Executable to run.
@@ -55,18 +77,7 @@ function run(file: string, args: readonly string[], cwd: string): string {
     // A stuck `pm` or `git` should fail one test rather than stall the whole CI
     // job with no output.
     timeout: 120_000,
-    // `NODE_V8_COVERAGE` is set by the Node test runner when collecting
-    // coverage. Node re-injects it into child processes even when deleted from
-    // `env`, so override it to `/dev/null` — a non-directory — so spawned `pm`
-    // and `git` processes cannot write V8 coverage files that would corrupt the
-    // parent's report. Without this the lcov reporter intermittently produces
-    // an empty file when the suite spawns enough child Node processes.
-    env: {
-      ...process.env,
-      GIT_PAGER: "cat",
-      GIT_TERMINAL_PROMPT: "0",
-      NODE_V8_COVERAGE: "/dev/null",
-    },
+    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0", ...discardChildCoverage() },
   }).trim();
 }
 

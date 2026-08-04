@@ -380,6 +380,49 @@ test("writeSelfHostBundle appends a commit when the source tree changes", () => 
   }
 });
 
+// Silently continuing here would destroy history: the new commit would be
+// parentless, `exportBundle` walks only from the new tip, and every prior
+// snapshot would vanish. The verify gate compares tip trees, so it would call
+// the truncated result byte-identical and nothing downstream would notice.
+test("writeSelfHostBundle refuses to restart history when the bundle lacks the ref", () => {
+  const other = "refs/heads/some-other-ref";
+  const { store: writeStore, refs: writeRefs, cleanup: writeCleanup } = own();
+  const foreignTree = buildSourceTree(writeStore, files([["a.txt", "x"]]));
+  const foreign = writeSelfHostBundle(writeStore, writeRefs, null, other, foreignTree, signature, "other\n");
+  writeCleanup();
+
+  const { store, refs, cleanup } = own();
+  try {
+    const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"]]));
+    assert.throws(
+      () => writeSelfHostBundle(store, refs, foreign, ref, sourceTreeId, signature, "snapshot\n"),
+      /does not advertise|Refusing to restart history/,
+    );
+
+    // And the degenerate case: a bundle that advertises nothing at all. The
+    // message has to say "(none)" rather than name an empty list, because
+    // "advertised: " with nothing after it reads like a truncated error.
+    const lines = foreign.toString("utf8").split("\n");
+    const header = JSON.parse(lines[1]) as { refs: Record<string, string> };
+    header.refs = {};
+    lines[1] = JSON.stringify(header);
+    assert.throws(
+      () => writeSelfHostBundle(
+        store,
+        refs,
+        Buffer.from(lines.join("\n"), "utf8"),
+        ref,
+        sourceTreeId,
+        signature,
+        "snapshot\n",
+      ),
+      /\(none\)/,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test("writeSelfHostBundle appends against a fresh scratch ref store", () => {
   // Mirrors the real script: the existing bundle's objects are imported into the
   // store, but its ref is never published into the scratch ref store. The append

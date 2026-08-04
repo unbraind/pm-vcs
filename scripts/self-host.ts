@@ -116,7 +116,16 @@ export function loadConfig(path: string): SelfHostConfig {
   } catch {
     throw new Error(`self-host: could not read configuration at ${path}.`);
   }
-  const value = JSON.parse(raw) as unknown;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch (error) {
+    // Every other failure here is a `self-host:` message. A raw SyntaxError would
+    // be the odd one out, and in the verify path the config comes from the
+    // extracted worktree, so the message would name a temp directory and never
+    // mention the configuration at all.
+    throw new Error(`self-host: configuration at ${path} is not valid JSON: ${errorMessage(error)}`);
+  }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("self-host: configuration is not a JSON object.");
   }
@@ -367,10 +376,20 @@ export function writeSelfHostBundle(
   if (existingBundle !== null) {
     const imported = importBundleObjects(store, existingBundle);
     const tip = imported.header.refs[ref];
-    if (tip !== undefined) {
-      parent = tip;
-      existingTipTree = readCommit(store, tip).tree;
+    if (tip === undefined) {
+      // Silently continuing here destroys history. `parent` would stay null, the
+      // new commit would be parentless, and `exportBundle` only walks from the
+      // new tip — so every prior snapshot would vanish from the regenerated
+      // bundle. The verify gate compares tip trees only, so it would call the
+      // truncated result byte-identical and nothing downstream would notice.
+      const advertised = Object.keys(imported.header.refs).sort().join(", ") || "(none)";
+      throw new Error(
+        `self-host: the existing bundle does not advertise ${ref} (advertised: ${advertised}). `
+          + `Refusing to restart history — delete the bundle deliberately if that is what you intend.`,
+      );
     }
+    parent = tip;
+    existingTipTree = readCommit(store, tip).tree;
   }
   if (existingBundle !== null && existingTipTree !== null && existingTipTree === sourceTreeId) {
     return existingBundle;
@@ -417,7 +436,18 @@ export function runGit(cwd: string, args: readonly string[]): string {
  * list can report a mismatch that is not there, or miss one that is.
  */
 export function listTrackedFiles(root: string): string[] {
-  return runGit(root, ["ls-files", "-z"]).split("\0").filter((line) => line.length > 0);
+  // Deliberately NOT `runGit`, which trims. `trim()` strips spaces and tabs from
+  // the ends of the whole payload but leaves the trailing NUL, so a tracked path
+  // like " leading.ts" comes back as "leading.ts" and is then compared against a
+  // file that does not exist. Same class of bug as splitting on "\n": the
+  // delimiter is NUL precisely so no byte of a path needs interpreting.
+  const raw = execFileSync("git", ["ls-files", "-z"], {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+  });
+  return raw.split("\0").filter((line) => line.length > 0);
 }
 
 /**

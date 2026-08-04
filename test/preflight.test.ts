@@ -11,7 +11,7 @@ import {
   runPreflight,
   spawnDriver,
 } from "../preflight.ts";
-import { type Sandbox, createSandbox, packageRoot } from "./helpers/sandbox.ts";
+import { type Sandbox, createSandbox, discardChildCoverage, packageRoot } from "./helpers/sandbox.ts";
 
 const sandboxes: Sandbox[] = [];
 
@@ -97,10 +97,9 @@ test("a fresh clone has no drivers and fails loudly, then passes after merge ins
   execFileSync(join(packageRoot, "node_modules", ".bin", "pm"), ["merge", "install"], {
     cwd: clone.root,
     encoding: "utf8",
-    // Override NODE_V8_COVERAGE to /dev/null so the spawned `pm` process does
-    // not corrupt the test runner's coverage data (same reason as
-    // test/helpers/sandbox.ts).
-    env: { ...process.env, NODE_V8_COVERAGE: "/dev/null" },
+    // Same reason as test/helpers/sandbox.ts: the runner re-injects
+    // NODE_V8_COVERAGE into children, which then corrupt the parent's report.
+    env: { ...process.env, ...discardChildCoverage() },
   });
   const cured = await runPreflight({ repoRoot: clone.root, pmRoot: clone.pmRoot });
   assert.ok(
