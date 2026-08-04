@@ -11,7 +11,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -39,6 +39,9 @@ export interface Sandbox {
   cleanup(): void;
 }
 
+/** The shared discard directory, resolved once per process on first use. */
+let discardDir: string | undefined;
+
 /**
  * Environment that stops a spawned Node process writing V8 coverage into the
  * parent test run's report.
@@ -58,7 +61,22 @@ export interface Sandbox {
  * @returns Environment overrides to merge into a child process's `env`.
  */
 export function discardChildCoverage(): Record<string, string> {
-  return { NODE_V8_COVERAGE: mkdtempSync(join(tmpdir(), "pm-vcs-discard-coverage-")) };
+  if (discardDir === undefined) {
+    // A FIXED name, deliberately, so the whole suite shares exactly one
+    // directory no matter how many processes call this.
+    //
+    // A fresh directory per call leaked ~2,000 directories and ~650 MB of
+    // discarded V8 coverage in one local sweep, because `run()` is called for
+    // every `git` and `pm` invocation. Making it per-process cut that to five —
+    // the Node test runner forks a process per test file, and an `exit` handler
+    // does not reliably run in those children, so each one still stranded its
+    // own directory. A fixed path bounds the worst case at one directory that is
+    // reused forever, which is the only version with no leak to reason about.
+    // Nothing ever reads it, so sharing is free.
+    discardDir = join(tmpdir(), "pm-vcs-discard-coverage");
+    mkdirSync(discardDir, { recursive: true });
+  }
+  return { NODE_V8_COVERAGE: discardDir };
 }
 
 /**
