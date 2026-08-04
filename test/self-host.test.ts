@@ -8,7 +8,7 @@
 // inputs. Nothing is mocked: the engine that ships is the engine under test.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,6 +34,7 @@ import {
   loadConfig,
   main,
   readCommittedFile,
+  resolveBundleTarget,
   readSourceFiles,
   runGit,
   verifySelfHost,
@@ -919,4 +920,29 @@ test("compareTrees truncates the absent-blob list when more than 5 are missing",
   } finally {
     cleanup();
   }
+});
+
+// The lexical rule in loadConfig is necessary but not sufficient: git tracks
+// symbolic links, so a pull request can commit a lexically innocent
+// `selfhost.bundle` that points outside the tree, or make an ancestor a link
+// and keep an ordinary-looking nested path. writeFileSync follows both.
+test("resolveBundleTarget refuses a symlinked bundle and a symlinked ancestor", () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-symlink-root-"));
+  const outside = mkdtempSync(join(tmpdir(), "pm-vcs-symlink-outside-"));
+  temps.push(root, outside);
+
+  // An honest path resolves and is returned unchanged.
+  assert.equal(resolveBundleTarget(root, "selfhost.bundle"), join(root, "selfhost.bundle"));
+
+  // The bundle itself is a link to a file outside the repository.
+  writeFileSync(join(outside, "target"), "x");
+  symlinkSync(join(outside, "target"), join(root, "linked.bundle"));
+  assert.throws(() => resolveBundleTarget(root, "linked.bundle"), /symbolic link/);
+
+  // An ancestor directory is a link; the leaf name looks entirely ordinary.
+  symlinkSync(outside, join(root, "generated"));
+  assert.throws(() => resolveBundleTarget(root, "generated/selfhost.bundle"), /outside the repository/);
+
+  // A directory that does not exist is named as such rather than as an escape.
+  assert.throws(() => resolveBundleTarget(root, "absent/selfhost.bundle"), /does not exist/);
 });

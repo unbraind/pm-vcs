@@ -15,9 +15,9 @@
 // alone and the bundle is reproducible.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -148,6 +148,50 @@ export function loadConfig(path: string): SelfHostConfig {
   assertRepositoryRelative(record.bundle, "bundle");
   for (const entry of record.exclude as readonly string[]) assertRepositoryRelative(entry, "exclude entry");
   return { bundle: record.bundle, ref: record.ref, exclude: record.exclude as readonly string[] };
+}
+
+/**
+ * Resolves the bundle's write target, refusing anything that leaves the repository.
+ *
+ * The lexical check in {@link loadConfig} is necessary but not sufficient:
+ * `selfhost.bundle` is lexically fine, and git tracks symbolic links, so a pull
+ * request could commit that name as a link to a file outside the tree — or make
+ * an ancestor directory a link and keep a perfectly ordinary-looking
+ * `generated/selfhost.bundle`. `writeFileSync` follows both, so the lexical rule
+ * would pass while the write landed elsewhere.
+ *
+ * Resolution therefore happens against the filesystem: the containing directory
+ * is fully resolved and must sit inside the resolved repository root, and the
+ * target itself must not be a link. Nothing here is normalised away — a link is
+ * refused rather than silently followed to wherever it happens to point.
+ *
+ * @param root - The repository root.
+ * @param bundle - The configured, already lexically validated bundle path.
+ * @returns The absolute path to write.
+ * @throws Error When the target or an ancestor escapes the repository.
+ */
+export function resolveBundleTarget(root: string, bundle: string): string {
+  const target = join(root, bundle);
+  const realRoot = realpathSync(root);
+  let realParent: string;
+  try {
+    realParent = realpathSync(dirname(target));
+  } catch {
+    throw new Error(`self-host: the directory for ${bundle} does not exist under ${root}.`);
+  }
+  if (realParent !== realRoot && !realParent.startsWith(realRoot + sep)) {
+    throw new Error(
+      `self-host: ${bundle} resolves outside the repository (${realParent}). `
+        + `Refusing to write through a symbolic link.`,
+    );
+  }
+  if (lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+    throw new Error(
+      `self-host: ${bundle} is a symbolic link. Refusing to write through it — `
+        + `the bundle must be a regular file inside the repository.`,
+    );
+  }
+  return target;
 }
 
 /**
@@ -631,7 +675,7 @@ export function main(options?: { root?: string; args?: readonly string[] }): voi
         signature,
         `self-host: source snapshot at ${headSha}\n`,
       );
-      writeFileSync(join(root, config.bundle), bytes);
+      writeFileSync(resolveBundleTarget(root, config.bundle), bytes);
       console.log(`self-host: wrote ${config.bundle} (${bytes.length} bytes)`);
     } finally {
       cleanup();
