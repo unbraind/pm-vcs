@@ -194,6 +194,24 @@ export function verifySelfHost(
     const detail = error instanceof Error ? error.message : String(error);
     return { ok: false, problems: [`the bundle is malformed or its objects do not hash to their ids: ${detail}`] };
   }
+  // Completeness, checked before anything reads through `store`. The store is
+  // shared with the source side — `buildSourceTree` has already written every
+  // source blob into it — so a bundle that omits an object it declares would
+  // still resolve here, borrowing the missing bytes from the source. The tip
+  // tree id would match and the gate would call a truncated bundle byte-identical.
+  // Comparing the declared object list against the lines actually carried closes
+  // that, and it is the only check here that does not consult `store` at all.
+  const carried = new Set(parseBundle(bundleBytes).lines.map((line) => line.id));
+  const undelivered = imported.header.objects.filter((id) => !carried.has(id));
+  if (undelivered.length > 0) {
+    return {
+      ok: false,
+      problems: [
+        `the bundle declares ${undelivered.length} object(s) it does not carry, so it is not self-contained: `
+          + undelivered.slice(0, 5).join(", ") + (undelivered.length > 5 ? ", …" : ""),
+      ],
+    };
+  }
   const tip = imported.header.refs[ref];
   if (tip === undefined) {
     const advertised = Object.keys(imported.header.refs).sort().join(", ") || "(none)";
@@ -314,25 +332,41 @@ function runGit(cwd: string, args: readonly string[]): string {
 
 /**
  * Enumerates the git-tracked source: every path `git ls-files` reports.
+ *
+ * NUL-delimited (`-z`) rather than newline-delimited, because a newline is a
+ * legal character in a git path. Splitting on `"\n"` would silently cut such a
+ * path into two entries, and every one of them would then be compared against
+ * the bundle under the wrong name — a gate that desynchronises its own path
+ * list can report a mismatch that is not there, or miss one that is.
  */
 function listTrackedFiles(root: string): string[] {
-  return runGit(root, ["ls-files"]).split("\n").filter((line) => line.length > 0);
+  return runGit(root, ["ls-files", "-z"]).split("\0").filter((line) => line.length > 0);
 }
 
 /**
- * Extracts the committed tree (`HEAD`) into a fresh directory so the gate reads
+ * Materializes the committed tree (`HEAD`) in a fresh directory so the gate reads
  * committed content and mode, never the working tree. A dirty checkout cannot
  * affect the verdict because the source bytes come from here, not from disk.
+ *
+ * Uses a detached worktree rather than `git archive | tar`. Both produce the same
+ * bytes, but the pipe made `tar` the only non-`git` binary the gate depended on,
+ * and nothing tested that dependency: `accept:self-host` runs inside
+ * `release:check` and therefore `prepublishOnly`, while the Windows CI job never
+ * invokes it. A gate that can fail at publish time on a platform its own CI does
+ * not exercise is worth one extra `git` call to avoid.
+ *
+ * The worktree is registered in `.git/worktrees` for the duration; the caller's
+ * cleanup removes it, and a `git worktree prune` recovers from an interrupted run.
+ *
+ * @returns A cleanup function that removes the worktree registration.
  */
-function extractHead(root: string, into: string): void {
-  const archive = spawnSync("git", ["archive", "HEAD"], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
-  if (archive.status !== 0) {
-    throw new Error(`self-host: git archive HEAD failed: ${archive.stderr?.toString().trim() ?? ""}`);
-  }
-  const tar = spawnSync("tar", ["-x", "-C", into], { input: archive.stdout, maxBuffer: 64 * 1024 * 1024 });
-  if (tar.status !== 0) {
-    throw new Error(`self-host: tar extraction failed: ${tar.stderr?.toString().trim() ?? ""}`);
-  }
+function extractHead(root: string, into: string): () => void {
+  runGit(root, ["worktree", "add", "--detach", "--quiet", into, "HEAD"]);
+  return () => {
+    // Best effort: the verdict is already computed by the time this runs, and a
+    // failure to unregister must not turn a passing gate into a failing one.
+    spawnSync("git", ["worktree", "remove", "--force", into], { cwd: root });
+  };
 }
 
 /**
@@ -340,6 +374,12 @@ function extractHead(root: string, into: string): void {
  */
 function readCommittedFile(root: string, path: string): Buffer | null {
   const result = spawnSync("git", ["cat-file", "blob", `HEAD:${path}`], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
+  // `spawnSync` reports a failure to *launch* in `error`, leaving `status` null.
+  // Treating that as "file absent" would turn a missing `git` into a clean
+  // verdict about the repository, so it has to be told apart from exit != 0.
+  if (result.error) {
+    throw new Error(`self-host: could not run git: ${result.error.message}`);
+  }
   if (result.status !== 0) return null;
   return result.stdout as Buffer;
 }
@@ -365,7 +405,20 @@ function readSourceFiles(
   const files = new Map<string, SourceFile>();
   for (const path of tracked) {
     if (isExcluded(path, exclude)) continue;
-    const observed = readWorkingFile(root, path);
+    let observed;
+    try {
+      observed = readWorkingFile(root, path);
+    } catch (error) {
+      // `readWorkingFile` reports this as a bare ENOENT, which names a temp
+      // directory the reader has never heard of and explains nothing. The
+      // interesting fact is *why* a path git tracks is not in the tree we
+      // extracted from HEAD — almost always an addition staged but not
+      // committed — so say that instead.
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `self-host: tracked path ${path} is absent from ${root} (uncommitted addition?): ${detail}`,
+      );
+    }
     files.set(path, { content: observed.content, mode: observed.executable ? "100755" : "100644" });
   }
   return files;
@@ -436,16 +489,15 @@ function main(): void {
 
   const extractDir = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-src-"));
   const { store, cleanup } = freshStore();
+  let removeWorktree: (() => void) | undefined;
   try {
-    extractHead(root, extractDir);
+    removeWorktree = extractHead(root, extractDir);
+    // `readSourceFiles` now raises the absent-path failure itself, naming the
+    // one path at fault. The post-hoc `missing` filter that used to live here
+    // could never fire — every non-excluded tracked path either landed in the
+    // map or had already thrown — so it was an unreachable diagnostic standing
+    // in for one that never ran.
     const sourceFiles = readSourceFiles(extractDir, tracked, config.exclude);
-    const missing = tracked.filter((path) => !isExcluded(path, config.exclude) && !sourceFiles.has(path));
-    if (missing.length > 0) {
-      throw new Error(
-        `self-host: ${missing.length} tracked path(s) are in git ls-files but absent from HEAD (uncommitted additions?): `
-          + missing.join(", "),
-      );
-    }
     const sourceTreeId = buildSourceTree(store, sourceFiles);
     const bundleBytes = readCommittedFile(root, config.bundle);
     if (bundleBytes === null) {
@@ -465,6 +517,10 @@ function main(): void {
     parseBundle(bundleBytes);
     console.log("self-host: the committed bundle's tip tree is byte-identical to the committed source.");
   } finally {
+    // Unregister before deleting: `git worktree remove` needs the directory it
+    // is removing to still be there, and a stale registration left behind would
+    // make the *next* run's `worktree add` fail on a path that no longer exists.
+    removeWorktree?.();
     rmSync(extractDir, { recursive: true, force: true });
     cleanup();
   }

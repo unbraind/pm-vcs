@@ -8,7 +8,7 @@
 // inputs. Nothing is mocked: the engine that ships is the engine under test.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -74,8 +74,11 @@ function bundleFor(
 }
 
 const opened: Scratch[] = [];
+/** Temp directories a test created directly, removed with the scratch stores. */
+const temps: string[] = [];
 afterEach(() => {
   for (const item of opened.splice(0)) item.cleanup();
+  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 /** A scratch store that is cleaned up after each test. */
@@ -95,12 +98,37 @@ test("isExcluded matches exact paths and directory prefixes", () => {
   assert.equal(isExcluded("engine/model.ts", exclude), false);
 });
 
-test("loadConfig accepts a well-formed configuration and rejects bad shapes", () => {
+test("loadConfig accepts the repository's own well-formed configuration", () => {
   const cfg: SelfHostConfig = loadConfig(join(import.meta.dirname, "..", "self-host.json"));
   assert.equal(cfg.bundle, "selfhost.bundle");
   assert.equal(cfg.ref, "refs/heads/self-host");
   assert.deepEqual([...cfg.exclude], ["selfhost.bundle"]);
-  assert.throws(() => loadConfig(join(tmpdir(), "definitely-not-present-self-host.json")));
+});
+
+// The config is the gate's only tunable, so a malformed one must fail loudly
+// rather than degrade into a weaker check. Each row is a shape that would
+// otherwise leave the gate comparing against nothing in particular.
+test("loadConfig rejects every malformed shape, not merely a missing file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-cfg-"));
+  temps.push(dir);
+  const cases: ReadonlyArray<readonly [string, string]> = [
+    ["not-an-object", '"a string"'],
+    ["null-body", "null"],
+    ["array-body", "[]"],
+    ["missing-bundle", '{"ref":"refs/heads/x","exclude":[]}'],
+    ["empty-bundle", '{"bundle":"","ref":"refs/heads/x","exclude":[]}'],
+    ["missing-ref", '{"bundle":"b","exclude":[]}'],
+    ["empty-ref", '{"bundle":"b","ref":"","exclude":[]}'],
+    ["exclude-not-array", '{"bundle":"b","ref":"refs/heads/x","exclude":"nope"}'],
+    ["exclude-entry-not-string", '{"bundle":"b","ref":"refs/heads/x","exclude":[1]}'],
+    ["malformed-json", "{not json"],
+  ];
+  for (const [name, body] of cases) {
+    const path = join(dir, `${name}.json`);
+    writeFileSync(path, body);
+    assert.throws(() => loadConfig(path), new RegExp("self-host|JSON"), `${name} should be rejected`);
+  }
+  assert.throws(() => loadConfig(join(dir, "definitely-not-present.json")));
 });
 
 test("buildSourceTree is deterministic over content and insertion order", () => {
@@ -199,6 +227,54 @@ test("verifySelfHost rejects a bundle whose object id does not match its bytes",
     const result = verifySelfHost(store, corrupted, ref, sourceTreeId);
     assert.equal(result.ok, false);
     assert.ok(result.problems.some((p) => p.includes("malformed") || p.includes("hash")), result.problems.join("\n"));
+  } finally {
+    cleanup();
+  }
+});
+
+// Both other tamper tests *change* an object. Removing one is the different
+// failure: the bundle stays internally well-formed and every surviving object
+// still hashes to its id, so only walking the tip's references catches it.
+test("verifySelfHost fails when the bundle omits an object its tree references", () => {
+  const { bytes } = bundleFor([["a.txt", "x"], ["b.txt", "y"]]);
+  const text = bytes.toString("utf8").split("\n");
+  const lineIndex = text.findIndex((line) => line.startsWith("blob "));
+  assert.ok(lineIndex >= 0);
+  text.splice(lineIndex, 1);
+  const pruned = Buffer.from(text.join("\n"), "utf8");
+  const { store, cleanup } = own();
+  try {
+    const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"], ["b.txt", "y"]]));
+    const result = verifySelfHost(store, pruned, ref, sourceTreeId);
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.length > 0, "an omitted object must be reported");
+  } finally {
+    cleanup();
+  }
+});
+
+// The ref exists but points at the wrong *kind* of object. The tip is read as a
+// commit, so this is the branch where that read throws rather than returning a
+// commit whose tree happens to disagree.
+test("verifySelfHost fails when the advertised ref points at a non-commit object", () => {
+  // `exportBundle` refuses to build this: it walks reachability from the tip and
+  // needs a commit. So the bundle is assembled honestly and then its header is
+  // repointed at a blob that is already carried inside it — every object still
+  // hashes to its id, and only reading the tip as a commit exposes the problem.
+  const { bytes } = bundleFor([["a.txt", "x"]]);
+  const lines = bytes.toString("utf8").split("\n");
+  const header = JSON.parse(lines[1]) as { refs: Record<string, string>; objects: string[] };
+  const blobLine = lines.find((line) => line.startsWith("blob "));
+  assert.ok(blobLine, "the bundle should carry at least one blob");
+  header.refs[ref] = blobLine.split(" ")[1];
+  lines[1] = JSON.stringify(header);
+  const repointed = Buffer.from(lines.join("\n"), "utf8");
+  const { store, cleanup } = own();
+  try {
+    const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"]]));
+    const result = verifySelfHost(store, repointed, ref, sourceTreeId);
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.length > 0, result.problems.join("\n"));
   } finally {
     cleanup();
   }
