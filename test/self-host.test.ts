@@ -134,6 +134,15 @@ test("loadConfig rejects every malformed shape, not merely a missing file", () =
     ["exclude-not-array", '{"bundle":"b","ref":"refs/heads/x","exclude":"nope"}'],
     ["exclude-entry-not-string", '{"bundle":"b","ref":"refs/heads/x","exclude":[1]}'],
     ["malformed-json", "{not json"],
+    // `bundle` is resolved with join(root, ...) before writing, so a path that
+    // escapes the repository would let a pull request choose where a
+    // maintainer's own `self-host:write` writes.
+    ["bundle-absolute-posix", '{"bundle":"/etc/passwd","ref":"refs/heads/x","exclude":[]}'],
+    ["bundle-absolute-windows", '{"bundle":"C:\\\\temp\\\\x","ref":"refs/heads/x","exclude":[]}'],
+    ["bundle-parent-escape", '{"bundle":"../outside.bundle","ref":"refs/heads/x","exclude":[]}'],
+    ["bundle-nested-escape", '{"bundle":"a/../../outside.bundle","ref":"refs/heads/x","exclude":[]}'],
+    ["bundle-backslash-escape", '{"bundle":"a\\\\..\\\\..\\\\outside","ref":"refs/heads/x","exclude":[]}'],
+    ["exclude-parent-escape", '{"bundle":"b","ref":"refs/heads/x","exclude":["../elsewhere"]}'],
   ];
   for (const [name, body] of cases) {
     const path = join(dir, `${name}.json`);

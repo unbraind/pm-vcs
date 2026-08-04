@@ -139,7 +139,38 @@ export function loadConfig(path: string): SelfHostConfig {
   if (!Array.isArray(record.exclude) || record.exclude.some((entry) => typeof entry !== "string")) {
     throw new Error("self-host: configuration `exclude` must be a list of strings.");
   }
+  // `bundle` is documented as repository-relative, and `--write` resolves it with
+  // `join(root, config.bundle)` before writing. Without this check an absolute
+  // path or a `..` segment would place the bundle outside the repository — and
+  // since this file arrives with the source, a pull request could add one and
+  // have a maintainer's own `self-host:write` write wherever it pointed. Checked
+  // as a shape, so the rule holds without needing to know the root.
+  assertRepositoryRelative(record.bundle, "bundle");
+  for (const entry of record.exclude as readonly string[]) assertRepositoryRelative(entry, "exclude entry");
   return { bundle: record.bundle, ref: record.ref, exclude: record.exclude as readonly string[] };
+}
+
+/**
+ * Rejects a configured path that is not confined to the repository.
+ *
+ * Absolute paths (POSIX and Windows drive/UNC forms) and any `..` segment are
+ * refused. Normalising and re-checking would be weaker: `join` collapses
+ * segments, so a value only has to *resolve* inside the tree to pass, and that
+ * is a property of the current root rather than of the configuration.
+ *
+ * @param value - The configured path.
+ * @param field - Field name, for the error message.
+ * @throws Error When the path is absolute or escapes via `..`.
+ */
+function assertRepositoryRelative(value: string, field: string): void {
+  const segments = value.split(/[/\\]/);
+  const absolute = value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:/.test(value);
+  if (absolute || segments.includes("..")) {
+    throw new Error(
+      `self-host: configuration ${field} "${value}" must be a repository-relative path `
+        + `without ".." segments.`,
+    );
+  }
 }
 
 /**
