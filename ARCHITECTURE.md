@@ -387,12 +387,26 @@ The concrete artefacts and their contract:
 
 - **`selfhost.bundle`** is the tracked text bundle, produced by the engine's own `exportBundle`.
   It advertises one ref, `refs/heads/self-host`, whose tip commits the source snapshot. The
-  trees inside it use the legacy (FileId-free) encoding, so a tree id is a function of content
-  and mode alone and the bundle is reproducible from the same source.
-- **`self-host.json`** is the gate's data file. It names the bundle path, the ref, and the
-  **exclusion set**: the *tracked* paths deliberately kept out of the history. The exclusion
-  set is data, not scattered literals — the only entry is the bundle file itself, which cannot
-  contain itself. Git-ignored paths (`dist/`, `coverage/`, `node_modules/`) never appear in
+  trees inside it use the legacy (FileId-free) encoding, which drops FileId metadata from the
+  hash — names, modes and directory structure still contribute, so a tree id is a function of
+  the *shape and content* of the source rather than of content alone. Dropping FileId is what
+  makes it reproducible: two runs over identical source produce identical tree ids.
+
+  The *bundle file* is not a pure function of the source, though, and it is worth being precise
+  about that: it accumulates one commit per regeneration, and each commit carries the `HEAD` sha
+  in its message. Identical source with a different history therefore yields a different bundle.
+  The gate does not compare bundle bytes — it compares the tip **tree** id, which is the part
+  that is determined by the source.
+- **`self-host.json`** is the gate's data file. It records the bundle path, names the ref, and
+  holds the **exclusion set**: the *tracked* paths deliberately kept out of the history. The
+  exclusion set is data, not scattered literals — the only entry is the bundle file itself,
+  which cannot contain itself, and that entry is **required**, because omitting it makes every
+  regeneration fold the previous bundle into its own source tree.
+
+  The bundle path here is **recorded, not obeyed**: it is checked against a constant in
+  `scripts/self-host.ts` and rejected if it disagrees. This file ships with the source, so a
+  pull request can set any value in it; letting that value choose a write target made `--write`
+  a write primitive aimable at `README.md` or `.git/hooks/pre-commit`. Git-ignored paths (`dist/`, `coverage/`, `node_modules/`) never appear in
   `git ls-files` and need no entry. A tracked path in neither the bundle nor the exclusion set
   fails the gate closed.
 - **`npm run self-host:write`** regenerates the bundle. It snapshots the current source, appends
