@@ -1,0 +1,15 @@
+id: pm-vcs-r7h2
+title: Self-host verify-only gate script
+description: ""
+type: Task
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-08-04T05:47:28.015Z"
+updated_at: "2026-08-04T06:46:49.147Z"
+author: pi-agent
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-390t,parent,"2026-08-04T05:47:32.839Z",pi-agent,"cli:update:dep",detected
+files[1]{path,scope,note}:
+  scripts/self-host.ts,project,"verify-only gate logic (verifySelfHost,buildSourceTree,isExcluded,loadConfig)"
+body: ""

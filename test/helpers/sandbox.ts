@@ -40,6 +40,41 @@ export interface Sandbox {
 }
 
 /**
+ * Environment that stops a spawned Node process writing V8 coverage into the
+ * parent test run's report.
+ *
+ * The Node test runner sets `NODE_V8_COVERAGE` and **re-injects it into child
+ * processes even when it is deleted from `env`**, so this suite's real `pm` and
+ * `git` children were dropping coverage files into the parent's directory. The
+ * lcov reporter then intermittently produced an empty file and the coverage gate
+ * failed with "source file(s) never loaded" — on a suite that had just reported
+ * 100%. That is the long-standing nondeterminism in this package's coverage.
+ *
+ * Disables collection in the child rather than redirecting it. Node treats a
+ * non-empty value as a *directory*, so `/dev/null` creates a `dev\null` folder
+ * on Windows and writes into it — the opposite of discarding, on a package with
+ * Windows CI — and any real directory accumulates one coverage JSON per child
+ * exit. An empty value collects nothing at all, which is the only form with no
+ * output to place, bound, or clean up.
+ *
+ * @returns Environment overrides to merge into a child process's `env`.
+ */
+export function discardChildCoverage(): Record<string, string> {
+  // An empty value disables collection in the child outright, so nothing is
+  // written anywhere and there is nothing to clean up.
+  //
+  // Redirecting to a directory was the wrong shape, in two escalating ways. A
+  // fresh `mkdtemp` per call left 1,980 directories and 658 MB after one sweep,
+  // because `run()` is called for every `git` and `pm` invocation. Collapsing
+  // that to a single shared directory bounded the directory *count* at one but
+  // not the disk: Node still writes a coverage JSON per instrumented child exit,
+  // so one run still accumulated 236 files and 232 MB in it. Redirection was
+  // always going to leak, because the children were still being asked to
+  // produce output nobody wanted.
+  return { NODE_V8_COVERAGE: "" };
+}
+
+/**
  * Runs a command, returning trimmed stdout and surfacing failures loudly.
  *
  * @param file - Executable to run.
@@ -55,7 +90,7 @@ function run(file: string, args: readonly string[], cwd: string): string {
     // A stuck `pm` or `git` should fail one test rather than stall the whole CI
     // job with no output.
     timeout: 120_000,
-    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0", ...discardChildCoverage() },
   }).trim();
 }
 

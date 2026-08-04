@@ -68,6 +68,9 @@ jobs:
       - name: Prove materialized files become metadata-only
         run: npm run accept:stat-cache
 
+      - name: Prove the self-host bundle matches the committed source
+        run: npm run accept:self-host
+
       - name: Production dependency audit
         run: npm run audit:prod
 

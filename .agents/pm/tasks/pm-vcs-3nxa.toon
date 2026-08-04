@@ -1,0 +1,11 @@
+id: pm-vcs-3nxa
+title: Regenerate selfhost.bundle for the updated source
+description: "Run npm run self-host:write to regenerate the bundle after exporting private functions, adding errorMessage/isMainInvocation, and simplifying headCommitTimestamp. The gate compares committed bundle to committed source so they must be committed together."
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-08-04T11:15:48.971Z"
+updated_at: "2026-08-04T11:15:48.971Z"
+author: "harness:pi"
+body: ""

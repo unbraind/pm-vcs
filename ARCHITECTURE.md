@@ -383,6 +383,58 @@ scratch repository, re-verifies every object against its own id, and asserts the
 pm-vcs history following it, and the check cannot be satisfied by regenerating from a dirty
 tree.
 
+The concrete artefacts and their contract:
+
+- **`selfhost.bundle`** is the tracked text bundle, produced by the engine's own `exportBundle`.
+  It advertises one ref, `refs/heads/self-host`, whose tip commits the source snapshot. The
+  trees inside it use the legacy (FileId-free) encoding, which drops FileId metadata from the
+  hash — names, modes and directory structure still contribute, so a tree id is a function of
+  the *shape and content* of the source rather than of content alone. Dropping FileId is what
+  makes it reproducible: two runs over identical source produce identical tree ids.
+
+  The *bundle file* is not a pure function of the source, though, and it is worth being precise
+  about that: it accumulates one commit per regeneration, and each commit carries the `HEAD` sha
+  in its message. Identical source with a different history therefore yields a different bundle.
+  The gate does not compare bundle bytes — it compares the tip **tree** id, which is the part
+  that is determined by the source.
+- **`self-host.json`** is the gate's data file. It records the bundle path, names the ref, and
+  holds the **exclusion set**: the *tracked* paths deliberately kept out of the history. The
+  exclusion set is data, not scattered literals — the only entry is the bundle file itself,
+  which cannot contain itself, and that entry is **required**, because omitting it makes every
+  regeneration fold the previous bundle into its own source tree.
+
+  The bundle path here is **recorded, not obeyed**: it is checked against a constant in
+  `scripts/self-host.ts` and rejected if it disagrees. This file ships with the source, so a
+  pull request can set any value in it; letting that value choose a write target made `--write`
+  a write primitive aimable at `README.md` or `.git/hooks/pre-commit`. Git-ignored paths (`dist/`, `coverage/`, `node_modules/`) never appear in
+  `git ls-files` and need no entry. A tracked path in neither the bundle nor the exclusion set
+  fails the gate closed.
+- **`npm run self-host:write`** regenerates the bundle. It snapshots the current source, appends
+  one commit when the tree changed and leaves the history untouched when it has not, and writes
+  the file. It is the **only** path that writes the bundle.
+- **`npm run accept:self-host`** is the gate, and it **never writes**. It reads the **committed**
+  bundle and the **committed** source both straight out of `HEAD` — the bundle through
+  `git cat-file`, the source through a detached `git worktree` — so a dirty working tree cannot
+  affect the verdict and regenerating the bundle without committing it changes nothing. The
+  configuration and the tracked-path list are read from that extracted worktree too, not from the
+  checkout: an uncommitted edit to `self-host.json` could otherwise exclude a committed path, and
+  a staged add or delete could move `git ls-files` without moving the extracted tree. `git` is the
+  only external binary involved; an earlier `git archive | tar` pipe was removed because nothing
+  on Windows exercised it while the gate sits inside `release:check` and `prepublishOnly`.
+
+  It enumerates the source with `git ls-files -z` (NUL-delimited, because a newline is legal in a
+  path), drops the exclusion set, rebuilds the source tree through the engine's `buildTree`, and
+  imports the bundle through `importBundleObjects` — **into an object store of its own**. That
+  isolation is the self-containment proof: sharing a store with the source side would let a
+  bundle missing an object borrow the bytes from the source and still resolve. The full ancestry
+  is walked from the tip, so a missing ancestor commit is a hard read failure rather than an
+  unnoticed truncation, and blob presence is asserted explicitly, because flattening a tree reads
+  the tree objects and never the content behind them.
+
+  Finally it asserts the bundle's tip tree id equals the source tree id. Because canonical trees
+  hash every name, mode and blob id beneath them, that hash equality is the byte-exactness proof:
+  it covers content and mode together, with no line-ending normalisation anywhere in the path.
+
 Git remains the transport to GitHub. The claim is not that pm-vcs replaces git here; it is
 that pm-vcs correctly versions a real, active codebase — and that the repository can prove it
 on every commit.
@@ -412,7 +464,7 @@ on every commit.
 | stable file IDs across edit/move/copy/delete | Epic Games Lore | **shipped** |
 | PM item ↔ native file/change attribution | pm SDK | **shipped** |
 | remotes, clone, fetch, push | git transport | **shipped** |
-| self-hosted source, CI-gated | — | **Phase 4** |
+| self-hosted source, CI-gated | — | **shipped** |
 | patch series as an object | kernel lore / `git format-patch` | **Phase 5** |
 | review + issues as native records | Forgejo, but in-repository | **Phase 5** |
 | served repository | Forgejo / `git daemon` | **Phase 5** |
