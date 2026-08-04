@@ -269,6 +269,23 @@ test("writeSelfHostBundle appends a commit when the source tree changes", () => 
   }
 });
 
+test("writeSelfHostBundle appends against a fresh scratch ref store", () => {
+  // Mirrors the real script: the existing bundle's objects are imported into the
+  // store, but its ref is never published into the scratch ref store. The append
+  // must still succeed and the ref must end up at the new tip.
+  const write = own();
+  const treeA = buildSourceTree(write.store, files([["a.txt", "x"]]));
+  const first = writeSelfHostBundle(write.store, write.refs, null, ref, treeA, signature, "first\n");
+  const verify = own();
+  const treeB = buildSourceTree(verify.store, files([["a.txt", "x"], ["b.txt", "y"]]));
+  const bytes = writeSelfHostBundle(verify.store, verify.refs, first, ref, treeB, signature, "second\n");
+  assert.equal(verify.refs.read(ref) !== null, true);
+  const result = verifySelfHost(verify.store, bytes, ref, treeB);
+  assert.equal(result.ok, true, result.problems.join("\n"));
+  write.cleanup();
+  verify.cleanup();
+});
+
 test("a bundle written by exportBundle round-trips through verifySelfHost", () => {
   const { store, refs, cleanup } = own();
   try {

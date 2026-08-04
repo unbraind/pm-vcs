@@ -291,7 +291,12 @@ export function writeSelfHostBundle(
     message,
   };
   const tipId = writeCommit(store, commit);
-  refs.compareAndSwap(ref, parent, tipId);
+  // The scratch ref store is fresh on a real run, so the expected value is the
+  // ref's current state (null until something publishes it), not the parent
+  // commit id. Using the parent here would make every run after the first fail
+  // with a compare-and-swap mismatch, because the imported bundle's objects are
+  // in the store but its ref was never published into this scratch ref store.
+  refs.compareAndSwap(ref, refs.read(ref), tipId);
   return exportBundle(store, refs, [ref]);
 }
 
