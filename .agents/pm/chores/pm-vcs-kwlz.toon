@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-08-06T20:46:50.582Z"
-updated_at: "2026-08-06T21:51:30.398Z"
+updated_at: "2026-08-06T22:00:58.134Z"
 closed_at: "2026-08-06T20:47:08.526Z"
 completed_at: "2026-08-06T20:47:08.526Z"
 author: pi-agent
@@ -14,8 +14,13 @@ acceptance_criteria: "CI runs pm health --strict-exit immediately after dependen
 resolution: Added a strict tracked-state health gate and corrected the merge-safety boundary after exact reviewer feedback.
 expected_result: CI rejects durable pm project-health failures without overstating coverage of clone-local merge receipts.
 actual_result: "Package health passes locally. Published pm 2026.8.6 black-box proof showed pending receipts disappear in a fresh clone, durable history drift blocks the unrepaired merge, and history-repair can erase that last CI signal; upstream pm-cli#921 records the gap."
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-08-06T21:21:17.806Z",codex,"Greptile P1 was valid as a scope correction: a fresh checkout cannot inspect .git-local receipts. The gate remains useful for durable health and catches unrepaired lossy merges through history drift,but it is not a complete no-loss guarantee."
+  "2026-08-06T22:00:58.134Z",codex,"Refreshed the package's development/runtime lock projection to @unbrained/pm-cli 2026.8.6 and pm-changelog 2026.8.6 where applicable, so the health and changelog gates execute against the current published contracts. Existing peer minima remain compatibility claims, not the tested tool version."
+files[3]{path,scope}:
+  .gitattributes,project
+  package-lock.json,project
+  package.json,project
 tests[2]:
   - command: "npm run release:check"
     scope: project
