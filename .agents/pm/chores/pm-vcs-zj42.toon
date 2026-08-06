@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags[3]: dependencies,pm-sdk,release-readiness
 created_at: "2026-07-31T11:44:36.258Z"
-updated_at: "2026-07-31T12:27:04.826Z"
+updated_at: "2026-08-06T22:13:28.470Z"
 deadline: "2026-08-01T11:44:36.258Z"
 closed_at: "2026-07-31T11:59:33.263Z"
 completed_at: "2026-07-31T11:59:33.263Z"
@@ -20,15 +20,20 @@ dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-ijj7,parent,"2026-07-31T11:44:36.258Z","harness:codex","cli:create:dep",detected
 comments[1]{created_at,author,text}:
   "2026-07-31T11:44:36.258Z","harness:codex","Registry verification on 2026-07-31 found pm CLI 2026.7.31, pm-changelog 2026.7.29-1, @types/node 26.1.2, and TypeScript 7.0.2 latest."
-notes[4]{created_at,author,text}:
+notes[5]{created_at,author,text}:
   "2026-07-31T11:44:36.258Z","harness:codex",Preserve the companion decision that new packages remain unpublished until maintainer approval.
   "2026-07-31T11:59:32.885Z","harness:codex","Adopted @unbrained/pm-cli 2026.7.31, pm-changelog 2026.7.29-1, and @types/node 26.1.2. The stricter SDK exposed invalid successful exit_code:0 payloads; removed them and pinned the contract. Clean npm ci and Bun install pass; 341-test coverage gate is 100/100/100; audit has 0 vulnerabilities; npm pack and changelog gates pass; fresh npm and Bun installed-package probes activate all 27 commands."
   "2026-07-31T12:04:13.727Z","harness:codex","Fresh-package validation also exposed an upstream pm CLI agent-UX gap: local npm tarballs are rejected as non-directory package sources. Filed unbraind/pm-cli#844 with safe extraction and provenance requirements; validation continued through the installed unpacked package directory."
   "2026-07-31T12:27:04.825Z","harness:codex","The recorded 341-test count was the exact passing scope when this item closed. The subsequent portable source-workspace regression added one test, making the Phase 2 final gate 342 before review; PR review follow-up later expands the suite again. Append-only history intentionally preserves each time-scoped result."
+  "2026-08-06T22:13:28.470Z",codex,"The 2026.8.6 SDK always supplies the host-bound client on normal invocations, revealing that the legacy tracker-bound fallback lacked a direct behavioral test. Added a fresh-workspace init/list acceptance case; no coverage threshold or source exclusion changed."
 learnings[1]{created_at,author,text}:
   "2026-07-31T11:44:36.258Z","harness:codex",An unreleased package still needs current SDK validation; release gating and dependency currency are independent controls.
-files[1]{path,scope,note}:
-  package.json,project,Development and release-tool versions
+files[2]:
+  - path: package.json
+    scope: project
+    note: Development and release-tool versions
+  - path: test/vcs-commands.test.ts
+    scope: project
 tests[1]{command,scope,timeout_seconds,note}:
   "npm run release:check",project,240,Complete unreleased package gate
 docs[1]{path,scope,note}:

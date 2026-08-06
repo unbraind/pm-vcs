@@ -165,6 +165,24 @@ test("pmClient prefers the invocation's host-bound SDK client", () => {
   assert.equal(pmClient(context), client);
 });
 
+test("pmClient builds a tracker-bound fallback for legacy host contexts", async () => {
+  const { root } = freshRepoDir();
+  const tracker = join(root, ".agents", "pm");
+  const client = pmClient({
+    command: "vcs files",
+    args: [],
+    options: {},
+    global: {},
+    pm_root: tracker,
+    repo_root: root,
+  });
+
+  await client.init("fallback");
+  const listed = await client.list({ limit: "1" });
+  assert.ok("items" in listed);
+  assert.deepEqual(listed.items, []);
+});
+
 test("linkedFiles normalizes omitted SDK linked projections", () => {
   assert.deepEqual(linkedFiles({ item: {} }), []);
   assert.deepEqual(linkedFiles({ item: {}, linked: { files: [], tests: [], docs: [] } }), []);

@@ -43,6 +43,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify tracked pm project health
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Catch durable checkout-visible failures: conflict markers, parse failures,
+          # invalid or drifted history, tracked runtime caches, extension health,
+          # stale in-progress work, and any merge evidence present in this clone.
+          #
+          # This is not a lossless-merge attestation. Merge receipts are clone-local and
+          # absent from a fresh CI checkout. Some unreconciled loss shapes surface as
+          # history drift, but reconciliation or history repair can remove that signal.
+          # Keep receipt review as a local pre-push step; pm-cli#921 and pm-cli#922 track
+          # the missing durable proof.
+          #
+          # `--strict-exit` is load-bearing: non-strict health may report findings while
+          # still exiting successfully.
+          ./node_modules/.bin/pm health --strict-exit
+
       - name: Type check
         run: npm run typecheck
 
