@@ -1,0 +1,15 @@
+id: pm-vcs-kwlz
+title: Gate CI on pm health so a silently discarded peer edit cannot merge
+description: ""
+type: Chore
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-06T20:46:50.582Z"
+updated_at: "2026-08-06T20:47:08.571Z"
+closed_at: "2026-08-06T20:47:08.526Z"
+completed_at: "2026-08-06T20:47:08.526Z"
+author: pi-agent
+acceptance_criteria: "CI runs the pm health command with the strict-exit flag immediately after npm ci; the gate uses pm health rather than pm validate, because pm validate returns ok:true after a same-field merge silently discards a peer edit; the strict-exit flag is present so an ok:false health result fails the build"
+close_reason: Added the pm health strict-exit CI step immediately after Install dependencies. Verified the gate exits 0 on a clean tree and exits 1 naming the affected item under pending_merge_decision_items on a reproduced same-field merge that discarded a peer title edit.
+body: ""
