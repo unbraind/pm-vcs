@@ -48,8 +48,8 @@ jobs:
         run: |
           set -euo pipefail
           # Catch durable checkout-visible failures: conflict markers, parse failures,
-          # invalid or drifted history, attribution failures, tracked runtime caches,
-          # extension health, and any merge evidence present in this clone.
+          # invalid or drifted history, tracked runtime caches, extension health,
+          # stale in-progress work, and any merge evidence present in this clone.
           #
           # This is not a lossless-merge attestation. Merge receipts are clone-local and
           # absent from a fresh CI checkout. Some unreconciled loss shapes surface as
