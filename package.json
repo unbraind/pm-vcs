@@ -33,7 +33,7 @@
     "pack:dry-run": "npm pack --dry-run",
     "changelog": "pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --release-version-from-package --date 2026-07-30 --since-previous-tag --until-release-tag --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release",
     "changelog:full": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release",
-    "changelog:check": "pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --release-version-from-package --date 2026-07-30 --since-previous-tag --until-release-tag --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --check",
+    "changelog:check": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --check",
     "release:check": "npm run typecheck && npm run build && npm run coverage && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run changelog:check",
     "prepublishOnly": "npm run release:check",
     "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary",

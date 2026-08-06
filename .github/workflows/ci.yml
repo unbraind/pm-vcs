@@ -43,22 +43,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify pm project integrity and merge safety
+      - name: Verify tracked pm project health
         shell: bash
         run: |
           set -euo pipefail
-          # `pm validate` is deliberately NOT the command here. After a same-field merge
-          # conflict the field-aware driver writes a marker-free .toon that already holds
-          # the winning value and records the discarded peer value in a clone-local
-          # receipt. That file is valid TOON, so `pm validate` returns ok:true while
-          # another agent's edit has been silently dropped. `pm health` is the only
-          # surface that goes red, via integrity.counts.pending_merge_decisions.
+          # Gate durable workspace health: history integrity, attribution, tracked caches,
+          # extension state, and any merge evidence that exists in this checkout.
+          # `--strict-exit` is required because non-strict health reports findings without
+          # necessarily failing the shell command.
           #
-          # --strict-exit is load-bearing: a bare `pm health` exits 0 EVEN WHEN ok:false,
-          # so without this flag the step is a no-op that always passes.
-          #
-          # A fresh runner checkout has no merge drivers installed. That is a warn, not a
-          # failure (upstream GH-815), so this gate does not need `pm merge install`.
+          # This fresh checkout cannot inspect clone-local merge receipts. It can catch an
+          # unreconciled lossy merge through tracked history drift, but pm-cli#921 documents
+          # a repair path that can erase that signal. Receipt reconciliation remains a local
+          # pre-push responsibility until pm provides durable CI-verifiable attestation.
           ./node_modules/.bin/pm health --strict-exit
 
       - name: Type check
