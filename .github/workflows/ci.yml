@@ -43,16 +43,26 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify pm project integrity and merge safety
+      - name: Verify pm tracker integrity
         shell: bash
         run: |
           set -euo pipefail
-          # `pm validate` is deliberately NOT the command here. After a same-field merge
-          # conflict the field-aware driver writes a marker-free .toon that already holds
-          # the winning value and records the discarded peer value in a clone-local
-          # receipt. That file is valid TOON, so `pm validate` returns ok:true while
-          # another agent's edit has been silently dropped. `pm health` is the only
-          # surface that goes red, via integrity.counts.pending_merge_decisions.
+          # WHAT THIS CATCHES, all visible in a fresh checkout: conflict markers left in
+          # item or history files, item parse failures, invalid history JSON, history hash
+          # drift, unknown-author history events, stale in-progress work, and tracked
+          # runtime cache files.
+          #
+          # WHAT THIS DOES NOT CATCH - stated explicitly so nobody relies on it. It does
+          # NOT detect a merge that silently discarded a peer agent's edit. When two
+          # branches edit the same scalar field, the field-aware driver keeps one value and
+          # records the discarded one in a merge receipt under .agents/pm/runtime/, which
+          # `pm init` gitignores, so the receipt is never pushed. A fresh checkout of that
+          # commit reports zero pending decisions and this step exits 0 - verified
+          # directly, not assumed. The pushed history does not disambiguate it either:
+          # both writes are present in timestamp order and the item matches the latest, so
+          # `pm history <id> --verify` reports ok too. Tracked upstream as
+          # unbraind/pm-cli#922. Do not add a comment here claiming merge safety until
+          # that is closed.
           #
           # --strict-exit is load-bearing: a bare `pm health` exits 0 EVEN WHEN ok:false,
           # so without this flag the step is a no-op that always passes.
