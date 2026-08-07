@@ -170,11 +170,19 @@ test("identity inventory includes annotated taggers", async () => {
 test("object inventory incrementally accepts commits and tags and ignores other objects", () => {
   const inventory = new GitObjectInventory();
   inventory.consume(Buffer.from("a".repeat(40)));
-  inventory.consume(Buffer.from(` commit\n${"b".repeat(40)} blob\n${"c".repeat(40)} tag\n`));
+  inventory.consume(Buffer.from(` commit\n${"b".repeat(40)} blob\n${"c".repeat(40)} tag\n${"d".repeat(40)} tree\n`));
   assert.deepEqual(inventory.finish(), [
     { id: "a".repeat(40), type: "commit" },
     { id: "c".repeat(40), type: "tag" },
   ]);
+});
+
+test("object inventory refuses malformed complete records", () => {
+  const inventory = new GitObjectInventory();
+  assert.throws(
+    () => inventory.consume(Buffer.from(`${"a".repeat(40)} unknown\n`)),
+    /invalid object inventory record/,
+  );
 });
 
 test("object inventory refuses a truncated final record", () => {
@@ -220,6 +228,17 @@ test("batch parser rejects malformed tag identities and oversized tag headers", 
   assert.throws(
     () => oversized.consume(batch(object, `tagger ${"x".repeat(1024 * 1024)}`, "")),
     /Tag .* oversized identity header/,
+  );
+  const terminatedOversized = new IdentityBatchParser([object]);
+  assert.throws(
+    () => terminatedOversized.consume(batch(object, `tagger ${"x".repeat(1024 * 1024)}\n\nmessage`)),
+    /Tag .* oversized identity header/,
+  );
+  const commit = { id: "a".repeat(40), type: "commit" } as const;
+  const terminatedOversizedCommit = new IdentityBatchParser([commit]);
+  assert.throws(
+    () => terminatedOversizedCommit.consume(batch(commit, `author ${"x".repeat(1024 * 1024)}\n\nmessage`)),
+    /Commit .* oversized identity header/,
   );
 });
 

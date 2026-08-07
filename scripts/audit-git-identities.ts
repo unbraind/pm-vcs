@@ -125,8 +125,11 @@ export class GitObjectInventory {
     const lines = this.#pending.split("\n");
     this.#pending = lines.pop()!;
     for (const line of lines) {
-      const match = /^([0-9a-f]+) (commit|tag)$/.exec(line);
-      if (match) this.#objects.push({ id: match[1]!, type: match[2] as GitObject["type"] });
+      const match = /^([0-9a-f]+) (blob|commit|tag|tree)$/.exec(line);
+      if (!match) throw new Error("git cat-file returned an invalid object inventory record.");
+      if (match[2] === "commit" || match[2] === "tag") {
+        this.#objects.push({ id: match[1]!, type: match[2] });
+      }
     }
   }
 
@@ -230,6 +233,9 @@ export class IdentityBatchParser {
           this.#identityHeader = Buffer.concat([this.#identityHeader, this.#pending.subarray(0, consumed)]);
           const delimiter = this.#identityHeader.indexOf("\n\n");
           if (delimiter >= 0) {
+            if (delimiter > maxIdentityHeaderBytes) {
+              throw new Error(`${object.type === "commit" ? "Commit" : "Tag"} ${object.id} has an oversized identity header.`);
+            }
             const header = this.#identityHeader.subarray(0, delimiter).toString("utf8");
             collectObjectIdentities(this.#addresses, object, header);
             this.#identityHeader = Buffer.alloc(0);
