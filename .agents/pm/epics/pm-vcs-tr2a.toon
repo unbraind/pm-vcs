@@ -6,9 +6,10 @@ status: in_progress
 priority: 1
 tags[2]: architecture,"area:vcs"
 created_at: "2026-07-30T22:37:20.377Z"
-updated_at: "2026-07-31T06:32:02.798Z"
+updated_at: "2026-08-07T06:29:34.055Z"
 author: "harness:claude-code"
 acceptance_criteria: "pm-vcs can init a repository, stage and commit content, branch, switch, diff any two revisions, and three-way merge with a correctly computed merge base, entirely through its own code; structured records merge per field rather than per line; every mutating operation is recorded in an operation log that undo can rewind; two repositories can exchange history through an export/import bundle; no code path shells out to git for any of it; 100 percent line, branch and function coverage"
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-07-30T22:55:31.609Z","harness:claude-code","Engine complete and functionally verified against real repositories: 26 end-to-end checks over init, stage, commit, branch, switch, merge (clean, fast-forward, up-to-date, conflicted), undo, bundle round-trip, compare-and-swap refusal and dirty-switch refusal; plus 15 checks over the per-field record path. Myers diff property-checked over 4000 random line-pair inputs in both directions. Two bugs caught during construction worth recording: computeStatus originally called store.write to hash a working file, so asking for status left every unstaged revision in the object store; and readWorkingFile used statSync, which follows symlinks, making its own symlink branch unreachable. A third was a false optimisation - the index carried a size field used to short-circuit change detection, which reported every reformat of a canonicalised record path as a modification. readWorkingFile has already read the whole file by that point, so hashing it costs less than the read did; the field was removed rather than repaired."
+  "2026-08-07T06:29:34.041Z","harness:codex","2026-08-07 continuation: child pm-vcs-ol9m completed the exact identity-audit coverage tranche at 507 tests and 100/100/100 across 26 required sources. Phase 5 distribution and parser-backed docstring work remain open; raw-history privacy remains release-blocking under pm-vcs-mhbz."
 body: ""
