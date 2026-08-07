@@ -26,6 +26,7 @@ const identityPatterns = {
   tagger: /^tagger [^<>\n]*<([^<>\n]+)> \d+ [+-]\d+$/,
 } as const;
 
+/** Physical commit or annotated-tag object selected for raw identity-header inspection. */
 export interface GitObject {
   readonly id: string;
   readonly type: "commit" | "tag";
@@ -54,8 +55,8 @@ export async function streamProcess(
     });
     let settled = false;
     let stderr = "";
+    /** Cancel the timer, terminate the child, and reject with actionable context. */
     const fail = (error: Error): void => {
-      if (settled) return;
       settled = true;
       clearTimeout(timer);
       child.kill();

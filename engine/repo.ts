@@ -112,7 +112,7 @@ export const REPOSITORY_FORMAT = "pmvcs-1";
 /** Branch a fresh repository starts on. */
 export const DEFAULT_BRANCH = "main";
 
-/** How a merge turned out. */
+/** Merge classification, resulting tip, bases, clean paths, and unresolved conflicts returned to callers. */
 export interface MergeReport {
   /** What the merge did: nothing, a fast-forward, or a real merge commit. */
   readonly kind: "up_to_date" | "fast_forward" | "merged";
@@ -136,7 +136,7 @@ export interface LogEntry {
   readonly changeId: ObjectId;
 }
 
-/** Options that vary per commit. */
+/** Message, signatures, emptiness policy, and PM attribution supplied when recording a commit. */
 export interface CommitOptions {
   readonly message: string;
   readonly author: Signature;
@@ -158,10 +158,13 @@ export class Repository {
   /** Absolute path to the control directory. */
   readonly controlDirectory: string;
 
+  /** Immutable content-addressed storage shared by every repository operation. */
   readonly objects: ObjectStore;
 
+  /** Ref storage with compare-and-swap protection for concurrent branch and tag writers. */
   readonly refs: RefStore;
 
+  /** Append-only command receipts supporting audit and reversible ref movement. */
   readonly operations: OperationLog;
 
   /**

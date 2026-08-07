@@ -18,7 +18,7 @@ import { compareByteOrder } from "./model.ts";
 /** Prefix under which remote-tracking refs live. */
 export const REMOTE_PREFIX = "refs/remotes/";
 
-/** A named remote repository. */
+/** Clone-local name and transport location for another repository. */
 export interface Remote {
   /** The name the local repository refers to it by, e.g. `origin`. */
   readonly name: string;

@@ -27,7 +27,7 @@ export const ALWAYS_IGNORED = [".git", ".hg", ".svn", ".bzr", "_darcs", "CVS", "
 /** Name of the per-project ignore file, read from the repository root. */
 export const IGNORE_FILE = ".pmvcsignore";
 
-/** A compiled set of ignore rules. */
+/** Ordered exclusion and re-inclusion patterns compiled from one repository ignore file. */
 export interface IgnoreRules {
   /** Patterns from the project's ignore file, in file order. */
   readonly patterns: readonly string[];

@@ -18,7 +18,7 @@ import { REMOTE_PREFIX, trackingRef } from "./remotes.ts";
 import { DEFAULT_BRANCH, Repository } from "./repo.ts";
 import { FileTransport, type PushUpdate, type Transport, openTransport, resolveRemoteLocation } from "./transport.ts";
 
-/** What a fetch did. */
+/** Remote identity, tracking movements, tag conflicts, transferred objects, and no-op state from a fetch. */
 export interface FetchReport {
   /** The remote that was contacted. */
   readonly remote: string;
@@ -39,7 +39,7 @@ export interface FetchReport {
   readonly upToDate: boolean;
 }
 
-/** What a push did. */
+/** Remote identity, published ref movements, stored objects, and no-op state from a push. */
 export interface PushReport {
   /** The remote that was written to. */
   readonly remote: string;
@@ -53,7 +53,7 @@ export interface PushReport {
   readonly upToDate: boolean;
 }
 
-/** What a clone produced. */
+/** New working-tree location, origin, checked-out branch, and initial transfer evidence from cloning. */
 export interface CloneReport {
   /** Absolute path to the new working tree. */
   readonly root: string;

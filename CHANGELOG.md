@@ -46,6 +46,7 @@
 
 ### Other
 
+- Port the parser-backed docstring gate into pm-vcs ([pm-vcs-yaks](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-yaks.toon))
 - Cover the Git identity release audit in the exact source gate ([pm-vcs-ol9m](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-ol9m.toon))
 - Upgrade upload-artifact to v7 without breaking the self-host gate ([pm-vcs-qzy7](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-qzy7.toon))
 - Gate CI on strict tracked pm project health ([pm-vcs-kwlz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-kwlz.toon))

@@ -210,6 +210,7 @@ export function mergeTrees(
   const merged: string[] = [];
   const conflicts: MergeConflict[] = [];
 
+  /** Preserve compatible file identity and surface deterministic conflicts when both sides disagree. */
   const reconcileIdentity = (
     path: string,
     ourEntry: { fileId?: FileId; copiedFrom?: FileId },
