@@ -161,7 +161,7 @@ export class Repository {
   /** Immutable content-addressed storage shared by every repository operation. */
   readonly objects: ObjectStore;
 
-  /** Compare-and-swap branch, tag, and HEAD storage for concurrent writers. */
+  /** Ref storage with compare-and-swap protection for concurrent branch and tag writers. */
   readonly refs: RefStore;
 
   /** Append-only command receipts supporting audit and reversible ref movement. */

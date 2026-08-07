@@ -530,8 +530,8 @@ export function encodeRecord(document: RecordDocument): Buffer {
  *
  * @param payload - Canonical record bytes.
  * @returns The record's fields.
- * @throws ObjectStoreError When the bytes are not a JSON object, or a field holds a
- *   value outside {@link RecordValue} — a nested object, or a non-finite number.
+ * @throws ObjectStoreError When the bytes are not a JSON object, a field holds a
+ *   non-finite number, or recursively structured metadata exceeds the depth limit.
  */
 export function decodeRecord(payload: Buffer): RecordDocument {
   let parsed: unknown;
@@ -543,10 +543,10 @@ export function decodeRecord(payload: Buffer): RecordDocument {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new ObjectStoreError("malformed_object", "Record payload is not a JSON object.");
   }
-  // `RecordValue` admits scalars, null and arrays of those. Casting past that let a
-  // tampered bundle put a nested object or a non-finite number into a document whose
-  // type says neither can occur, and the first thing to notice would be the record
-  // merge, arbitrarily later and with no way to attribute it.
+  // Validate every recursively structured `RecordValue` before narrowing the
+  // parsed object. JSON cannot express the other TypeScript-only value kinds,
+  // leaving non-finite numbers and excessive container depth as the hostile
+  // payloads that must be rejected here.
   /** Reject unsupported values and containers exceeding the canonical record nesting ceiling. */
   const assertValue = (value: unknown, path: string, depth = 0): void => {
     if (value === null || typeof value === "string" || typeof value === "boolean") return;

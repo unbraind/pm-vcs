@@ -127,15 +127,16 @@ interface Violation {
  */
 export function collectSourceFiles(dir: string): string[] {
   const found: string[] = [];
-  for (const entry of readdirSync(dir)) {
+  for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+    const entry = dirent.name;
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) {
+    if (dirent.isDirectory()) {
       if (!SKIP_DIRECTORIES.has(entry)) found.push(...collectSourceFiles(full));
       continue;
     }
     const isTypeScript = entry.endsWith(".ts") || entry.endsWith(".mts") || entry.endsWith(".cts");
     const isDeclaration = entry.endsWith(".d.ts") || entry.endsWith(".d.mts") || entry.endsWith(".d.cts");
-    if (isTypeScript && !isDeclaration) found.push(full);
+    if (dirent.isFile() && isTypeScript && !isDeclaration) found.push(full);
   }
   return found;
 }

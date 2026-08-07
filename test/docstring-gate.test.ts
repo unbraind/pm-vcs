@@ -12,7 +12,7 @@
  */
 import { describe, it } from "node:test";
 import { deepEqual, equal, match, ok } from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -641,6 +641,18 @@ describe("docstring-gate: helpers and CLI entry", () => {
         writeFileSync(join(dir, skipped, "ignored.ts"), "export const ignored = true;\n");
       }
       writeFileSync(join(dir, "index.ts"), "");
+      deepEqual(collectSourceFiles(dir), [join(dir, "index.ts")]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("collectSourceFiles ignores dangling and cyclic directory symlinks", () => {
+    const dir = mkdtempSync(join(tmpdir(), "docstring-symlink-"));
+    try {
+      writeFileSync(join(dir, "index.ts"), "");
+      symlinkSync(join(dir, "missing"), join(dir, "0-dangling"));
+      symlinkSync(dir, join(dir, "1-cycle"));
       deepEqual(collectSourceFiles(dir), [join(dir, "index.ts")]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
