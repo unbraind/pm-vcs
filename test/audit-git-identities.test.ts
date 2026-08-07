@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
+import { pathToFileURL } from "node:url";
 
-import { auditGitIdentities, collectGitIdentities } from "../scripts/audit-git-identities.ts";
+import {
+  auditGitIdentities,
+  collectGitIdentities,
+  GitObjectInventory,
+  IdentityBatchParser,
+  isMainInvocation,
+  main,
+  streamProcess,
+  type GitObject,
+} from "../scripts/audit-git-identities.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 let dir: { root: string; cleanup(): void } | null = null;
@@ -34,6 +44,11 @@ function repository(): { root: string; allowlist: string; first: string } {
   const allowlist = join(root, "approved.txt");
   writeFileSync(allowlist, "public@example.test\n");
   return { root, allowlist, first: git(root, ["rev-parse", "HEAD"]) };
+}
+
+/** Encodes one raw object using Git's batch-response protocol. */
+function batch(object: GitObject, body: string, separator = "\n"): Buffer {
+  return Buffer.from(`${object.id} ${object.type} ${Buffer.byteLength(body)}\n${body}${separator}`);
 }
 
 test("identity audit accepts an allowlisted reachable history", async () => {
@@ -70,7 +85,7 @@ test("identity inventory refuses malformed commits and unusable repositories", a
   const { root } = repository();
   git(root, ["hash-object", "--literally", "-w", "-t", "commit", "--stdin"], "malformed\n");
   await assert.rejects(collectGitIdentities(root), /exactly one well-formed author identity/);
-  await assert.rejects(collectGitIdentities(join(root, "missing")), /git cat-file.*failed/);
+  await assert.rejects(collectGitIdentities(join(root, "missing")), /git .*cat-file.*failed/);
 });
 
 test("identity inventory rejects a multi-angle commit identity", async () => {
@@ -150,4 +165,158 @@ test("identity inventory includes annotated taggers", async () => {
   git(root, ["config", "user.email", "tagger-private@example.test"]);
   git(root, ["tag", "-am", "release", "v1"]);
   await assert.rejects(auditGitIdentities(root, allowlist), /rejected 1 non-public address/);
+});
+
+test("object inventory incrementally accepts commits and tags and ignores other objects", () => {
+  const inventory = new GitObjectInventory();
+  inventory.consume(Buffer.from("a".repeat(40)));
+  inventory.consume(Buffer.from(` commit\n${"b".repeat(40)} blob\n${"c".repeat(40)} tag\n${"d".repeat(40)} tree\n`));
+  assert.deepEqual(inventory.finish(), [
+    { id: "a".repeat(40), type: "commit" },
+    { id: "c".repeat(40), type: "tag" },
+  ]);
+});
+
+test("object inventory refuses malformed complete records", () => {
+  const inventory = new GitObjectInventory();
+  assert.throws(
+    () => inventory.consume(Buffer.from(`${"a".repeat(40)} unknown\n`)),
+    /invalid object inventory record/,
+  );
+});
+
+test("object inventory refuses a truncated final record", () => {
+  const inventory = new GitObjectInventory();
+  inventory.consume(Buffer.from(`${"a".repeat(40)} commit`));
+  assert.throws(() => inventory.finish(), /truncated object inventory/);
+});
+
+test("batch parser validates chunked commits and annotated tags", () => {
+  const commit = { id: "a".repeat(40), type: "commit" } as const;
+  const tag = { id: "b".repeat(40), type: "tag" } as const;
+  const bytes = Buffer.concat([
+    batch(commit, "author Public <public@example.test> 0 +0000\ncommitter Public <public@example.test> 0 +0000\n\nmessage"),
+    batch(tag, "object deadbeef\ntype commit\ntag release\ntagger Tagger <tagger@example.test> 0 +0000\n\nmessage"),
+  ]);
+  const parser = new IdentityBatchParser([commit, tag]);
+  for (const byte of bytes) parser.consume(Buffer.of(byte));
+  assert.deepEqual(parser.finish(), new Set(["public@example.test", "tagger@example.test"]));
+});
+
+test("batch parser rejects malformed protocol headers", () => {
+  const object = { id: "a".repeat(40), type: "commit" } as const;
+  for (const header of [
+    "not-a-header\n",
+    `${"b".repeat(40)} commit 1\n`,
+    `${object.id} tag 1\n`,
+  ]) {
+    const parser = new IdentityBatchParser([object]);
+    assert.throws(() => parser.consume(Buffer.from(header)), /invalid header/);
+  }
+  const unsafe = new IdentityBatchParser([object]);
+  assert.throws(
+    () => unsafe.consume(Buffer.from(`${object.id} commit 999999999999999999999\n`)),
+    /invalid size/,
+  );
+});
+
+test("batch parser rejects malformed tag identities and oversized tag headers", () => {
+  const object = { id: "b".repeat(40), type: "tag" } as const;
+  const malformed = new IdentityBatchParser([object]);
+  assert.throws(() => malformed.consume(batch(object, "object deadbeef\n")), /well-formed tagger identity/);
+  const oversized = new IdentityBatchParser([object]);
+  assert.throws(
+    () => oversized.consume(batch(object, `tagger ${"x".repeat(1024 * 1024)}`, "")),
+    /Tag .* oversized identity header/,
+  );
+  const terminatedOversized = new IdentityBatchParser([object]);
+  assert.throws(
+    () => terminatedOversized.consume(batch(object, `tagger ${"x".repeat(1024 * 1024)}\n\nmessage`)),
+    /Tag .* oversized identity header/,
+  );
+  const commit = { id: "a".repeat(40), type: "commit" } as const;
+  const terminatedOversizedCommit = new IdentityBatchParser([commit]);
+  assert.throws(
+    () => terminatedOversizedCommit.consume(batch(commit, `author ${"x".repeat(1024 * 1024)}\n\nmessage`)),
+    /Commit .* oversized identity header/,
+  );
+});
+
+test("batch parser refuses missing separators, partial objects, and surplus bytes", () => {
+  const object = { id: "a".repeat(40), type: "commit" } as const;
+  const body = "author Public <public@example.test> 0 +0000\ncommitter Public <public@example.test> 0 +0000\n\nmessage";
+  const missingSeparator = new IdentityBatchParser([object]);
+  assert.throws(() => missingSeparator.consume(batch(object, body, "x")), /omitted the separator/);
+
+  const missingObject = new IdentityBatchParser([object]);
+  assert.throws(() => missingObject.finish(), /truncated or unrequested/);
+
+  const partialObject = new IdentityBatchParser([object]);
+  partialObject.consume(Buffer.from(`${object.id} commit ${Buffer.byteLength(body)}\npartial`));
+  assert.throws(() => partialObject.finish(), /truncated or unrequested/);
+
+  const surplus = new IdentityBatchParser([object]);
+  surplus.consume(Buffer.concat([batch(object, body), Buffer.from("surplus")]));
+  assert.throws(() => surplus.finish(), /truncated or unrequested/);
+});
+
+test("stream transport reports real spawn, exit, signal, consumer, and timeout failures", async () => {
+  dir = makeTempDir();
+  const options = { cwd: dir.root, timeoutMs: 1_000 };
+  await assert.rejects(
+    streamProcess(join(dir.root, "missing-command"), [], options, () => {}),
+    /failed: spawn .* ENOENT/,
+  );
+  await assert.rejects(
+    streamProcess(process.execPath, ["-e", "console.error('detail'); process.exit(2)"], options, () => {}),
+    /failed: detail/,
+  );
+  await assert.rejects(
+    streamProcess(process.execPath, ["-e", "process.exit(2)"], options, () => {}),
+    /failed\.$/,
+  );
+  await assert.rejects(
+    streamProcess(process.execPath, ["-e", "process.kill(process.pid, 'SIGTERM')"], options, () => {}),
+    /with SIGTERM/,
+  );
+  await assert.rejects(
+    streamProcess(process.execPath, ["-e", "process.stdout.write('x')"], options, () => { throw "not-an-error"; }),
+    /output consumer failed/,
+  );
+  await assert.rejects(
+    streamProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { ...options, timeoutMs: 20 }, () => {}),
+    /timed out after 20ms/,
+  );
+});
+
+test("stream transport reports a real broken stdin pipe", async () => {
+  dir = makeTempDir();
+  await assert.rejects(
+    streamProcess(
+      process.execPath,
+      ["-e", "process.stdin.destroy(); setTimeout(() => {}, 100)"],
+      { cwd: dir.root, input: "x".repeat(16 * 1024 * 1024), timeoutMs: 1_000 },
+      () => {},
+    ),
+    /stdin failed/,
+  );
+});
+
+test("main invocation detection resolves matching, different, and absent scripts", () => {
+  const script = resolve("/tmp/audit-git-identities.ts");
+  const url = pathToFileURL(script).href;
+  assert.equal(isMainInvocation(["node", script], url), true);
+  assert.equal(isMainInvocation(["node", "/tmp/other.ts"], url), false);
+  assert.equal(isMainInvocation(["node"], url), false);
+});
+
+test("command main succeeds for a public repository and marks a refusal", async () => {
+  const { root, allowlist } = repository();
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  await main(root, allowlist);
+  assert.equal(process.exitCode, undefined);
+  await main(root, join(root, "missing-allowlist"));
+  assert.equal(process.exitCode, 1);
+  process.exitCode = previousExitCode;
 });

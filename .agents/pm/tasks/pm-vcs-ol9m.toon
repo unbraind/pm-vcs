@@ -1,0 +1,30 @@
+id: pm-vcs-ol9m
+title: Cover the Git identity release audit in the exact source gate
+description: "Bring scripts/audit-git-identities.ts under the package's genuine 100/100/100 coverage gate with behavior-driven tests of real Git object databases and real subprocess failure behavior. Linked ecosystem tracker: pm-cli-website-9asz in the companion hub."
+type: Task
+status: closed
+priority: 1
+tags[4]: coverage,privacy,quality,release
+created_at: "2026-08-07T06:16:12.444Z"
+updated_at: "2026-08-07T06:42:23.222Z"
+closed_at: "2026-08-07T06:42:23.170Z"
+completed_at: "2026-08-07T06:42:23.170Z"
+author: "harness:codex"
+estimated_minutes: 180
+acceptance_criteria: coverageGate.sources includes scripts/audit-git-identities.ts; behavior-driven tests cover all executable lines branches and functions without ignore pragmas; audit still fails closed on the known historical private identity; full coverage and all non-privacy release gates pass
+parent: pm-vcs-tr2a
+resolution: Added the identity audit to the exact source set; extracted and covered streamed parsers and real process transport; then hardened inventory and header-limit fail-closed behavior from exact-head review.
+notes[4]{created_at,author,text}:
+  "2026-08-07T06:25:31.549Z","harness:codex","Verification: npm run coverage passed 507/507 tests with 100.00 percent lines branches and functions across 26 required sources including scripts/audit-git-identities.ts. The parser is tested directly against valid malformed truncated and surplus Git batch protocol bytes; process transport is exercised with real child processes for spawn stderr exit signal consumer timeout and broken-stdin paths. accept:stat-cache accept:self-host audit:prod pack:dry-run and changelog:check pass. audit:identities intentionally rejects the one remaining non-public historical address tracked by pm-vcs-mhbz."
+  "2026-08-07T06:27:20.820Z","harness:codex",Self-host bundle regenerated so the repository's own VCS snapshot includes the identity audit parser and test tranche; exact committed-head equivalence will be rerun after commit.
+  "2026-08-07T06:38:24.113Z","harness:codex","Reopened for exact-head CodeRabbit findings: fail closed on malformed inventory records and on oversized identity headers whose delimiter arrives in the same chunk. Both findings were verified against the current code; one thread had been auto-resolved prematurely."
+  "2026-08-07T06:42:22.755Z","harness:codex","CodeRabbit remediation verified: complete inventory records now accept only Git's four physical object types and reject malformed or unknown records; identity headers now enforce the 1 MiB limit whether or not the delimiter arrives in the same chunk. Added blob tree malformed-record and terminated oversized commit/tag cases. Full gate passes 508/508 with 100.00 percent lines branches and functions across all 26 sources."
+learnings[1]{created_at,author,text}:
+  "2026-08-07T06:25:31.549Z","harness:codex",Security and release scripts can join the exact coverage gate without test-only exclusions by separating deterministic protocol parsing from real bounded subprocess transport; malformed protocol belongs in parser contract tests while OS process failures remain real integration tests.
+files[2]{path,scope,note}:
+  scripts/audit-git-identities.ts,project,identity release gate under test
+  selfhost.bundle,project,self-hosted source bundle refreshed for covered audit tooling
+tests[1]{command,path,scope,note}:
+  npm run coverage,test/audit-git-identities.test.ts,project,real Git and subprocess behavior coverage
+close_reason: All implementation and exact-head review findings are addressed at 508 tests and exact 100/100/100; historical privacy remains separately blocked.
+body: ""
