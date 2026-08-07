@@ -6,21 +6,39 @@ status: open
 priority: 0
 tags[4]: do-not-publish,git-history,privacy,release-blocker
 created_at: "2026-08-01T04:14:51.644Z"
-updated_at: "2026-08-01T05:56:44.287Z"
+updated_at: "2026-08-07T05:30:33.328Z"
 author: codex
 estimated_minutes: 180
 acceptance_criteria: "Choose a public noreply identity; rewrite all reachable branches and tags plus audit unreachable objects; independently scan the rewritten object database and working tree; coordinate force updates and invalidate stale clones; verify GitHub, npm provenance, changelog links, and PR refs; document the migration without publishing the removed personal value."
 severity: critical
 component: release/privacy
 customer_impact: Publishing releases before remediation would preserve personal data in every distributed clone and package provenance link.
-notes[7]{created_at,author,text}:
-  "2026-08-01T04:15:38.103Z",codex,"Immediate containment: replaced the tracked mailmap entries with name-only aliases targeting the GitHub noreply identity, and configured this clone to use that noreply address for new commits. Raw historical commit objects remain unchanged and keep this issue release-blocking."
-  "2026-08-01T04:25:46.765Z",codex,First review confirmed that the prior name-only mailmap syntax was invalid. Removed it instead of tracking historical private addresses. Added a TypeScript audit that scans author and committer metadata in all refs plus unreachable or dangling commit objects; it currently fails with two non-public addresses and keeps this item release-blocking.
-  "2026-08-01T04:44:56.149Z",codex,"Cubic second-round review strengthened the audit implementation: Git failures now require exact status zero, launch errors remain actionable, and a 256 MiB output ceiling avoids the default spawnSync ENOBUFS limit for large histories."
-  "2026-08-01T05:07:49.749Z",codex,"Final Cubic review replaced ref traversal and one-process-per-dangling-tip inspection with replacement-disabled cat-file enumeration of every physical commit object and one raw batch read. Real Git subprocess tests cover allowlisted reachable history, unreachable private ancestors behind replacement refs, malformed commit objects, and unusable repositories. audit:identities is now inside release:check, intentionally making release fail closed until the coordinated rewrite removes both historical addresses."
-  "2026-08-01T05:13:50.627Z",codex,"Enforcement result is now intentionally red only at the historical identity boundary: npm run audit:identities rejects two non-public addresses without printing them. All preceding code-quality gates pass, so release:check will remain fail-closed at this step until the coordinated rewrite tracked here is completed."
-  "2026-08-01T05:25:21.784Z",codex,"The raw-object audit now accepts a valid empty repository as zero identities. The allowlist intentionally does not add the two historical addresses: doing so would convert a privacy release blocker into an approval. They must be rewritten and pruned before release, as this item already requires."
-  "2026-08-01T05:56:44.269Z",codex,"CodeRabbit found annotated tagger identities were outside the first audit. The gate now inventories raw physical commit and annotated-tag objects, ignores replacement overlays, and checks exactly one header identity per required field. It still fails closed with two non-public historical addresses and never prints them."
+notes[8]:
+  - created_at: "2026-08-01T04:15:38.103Z"
+    author: codex
+    text: "Immediate containment: replaced the tracked mailmap entries with name-only aliases targeting the GitHub noreply identity, and configured this clone to use that noreply address for new commits. Raw historical commit objects remain unchanged and keep this issue release-blocking."
+  - created_at: "2026-08-01T04:25:46.765Z"
+    author: codex
+    text: First review confirmed that the prior name-only mailmap syntax was invalid. Removed it instead of tracking historical private addresses. Added a TypeScript audit that scans author and committer metadata in all refs plus unreachable or dangling commit objects; it currently fails with two non-public addresses and keeps this item release-blocking.
+  - created_at: "2026-08-01T04:44:56.149Z"
+    author: codex
+    text: "Cubic second-round review strengthened the audit implementation: Git failures now require exact status zero, launch errors remain actionable, and a 256 MiB output ceiling avoids the default spawnSync ENOBUFS limit for large histories."
+  - created_at: "2026-08-01T05:07:49.749Z"
+    author: codex
+    text: "Final Cubic review replaced ref traversal and one-process-per-dangling-tip inspection with replacement-disabled cat-file enumeration of every physical commit object and one raw batch read. Real Git subprocess tests cover allowlisted reachable history, unreachable private ancestors behind replacement refs, malformed commit objects, and unusable repositories. audit:identities is now inside release:check, intentionally making release fail closed until the coordinated rewrite removes both historical addresses."
+  - created_at: "2026-08-01T05:13:50.627Z"
+    author: codex
+    text: "Enforcement result is now intentionally red only at the historical identity boundary: npm run audit:identities rejects two non-public addresses without printing them. All preceding code-quality gates pass, so release:check will remain fail-closed at this step until the coordinated rewrite tracked here is completed."
+  - created_at: "2026-08-01T05:25:21.784Z"
+    author: codex
+    text: "The raw-object audit now accepts a valid empty repository as zero identities. The allowlist intentionally does not add the two historical addresses: doing so would convert a privacy release blocker into an approval. They must be rewritten and pruned before release, as this item already requires."
+  - created_at: "2026-08-01T05:56:44.269Z"
+    author: codex
+    text: "CodeRabbit found annotated tagger identities were outside the first audit. The gate now inventories raw physical commit and annotated-tag objects, ignores replacement overlays, and checks exactly one header identity per required field. It still fails closed with two non-public historical addresses and never prints them."
+  - created_at: "2026-08-07T05:19:03.594Z"
+    author: "harness:codex"
+    text: "Correction after a policy-level audit on 2026-08-07: the apparent local pass did not prove the coordinated rewrite succeeded. The approved-identity file itself still allowlisted a maintainer personal address, contradicting this item's explicit rule that allowlisting must not convert a privacy blocker into approval. The remote mirror's additional rejected address belongs to Dependabot's public GitHub noreply identity on closed dependency PR refs #13-#15 and is safe to approve. The allowlist now contains only GitHub public service/noreply identities, and audit:identities again fails closed on the remaining personal address. This P0 remains open until the raw history is actually rewritten and pruned."
+    edited_at: "2026-08-07T05:30:33.328Z"
 files[3]{path,scope,note}:
   scripts/audit-git-identities.ts,project,fail-closed reachable and unreachable author and committer identity inventory
   .github/approved-git-identities.txt,project,approved public commit metadata addresses
