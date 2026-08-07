@@ -11,6 +11,7 @@ import {
   runPreflight,
   spawnDriver,
 } from "../preflight.ts";
+import { withoutPmContext } from "../scripts/pm-environment.ts";
 import { type Sandbox, createSandbox, discardChildCoverage, packageRoot } from "./helpers/sandbox.ts";
 
 const sandboxes: Sandbox[] = [];
@@ -99,13 +100,31 @@ test("a fresh clone has no drivers and fails loudly, then passes after merge ins
     encoding: "utf8",
     // Same reason as test/helpers/sandbox.ts: the runner re-injects
     // NODE_V8_COVERAGE into children, which then corrupt the parent's report.
-    env: { ...process.env, ...discardChildCoverage() },
+    env: withoutPmContext({
+      ...process.env,
+      ...discardChildCoverage(),
+    }),
   });
   const cured = await runPreflight({ repoRoot: clone.root, pmRoot: clone.pmRoot });
   assert.ok(
     !cured.failed.includes("merge_drivers_configured"),
     `merge install should clear the driver failure, still failing: ${JSON.stringify(cured.failed)}`,
   );
+});
+
+test("disposable CLI environments remove inherited PM context without mutating the parent", () => {
+  const inherited: NodeJS.ProcessEnv = {
+    KEEP_ME: "available",
+    PM_GLOBAL_PATH: "/parent/global",
+    PM_PATH: "/parent/tracker",
+    PM_SOURCE_PM_PATH: "/parent/source-tracker",
+    PM_SOURCE_WORKSPACE_ROOT: "/parent/workspace",
+  };
+
+  const isolated = withoutPmContext(inherited);
+
+  assert.deepEqual(isolated, { KEEP_ME: "available" });
+  assert.equal(inherited.PM_PATH, "/parent/tracker");
 });
 
 test("a linked worktree inherits the clone's drivers and passes", async () => {

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Absorb pm 2026.8.7 merge and toolchain contracts ([pm-vcs-o3jj](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-o3jj.toon))
 - Add scripts/self-host.ts to coverageGate.sources and bring it to 100/100/100 ([pm-vcs-4t67](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-4t67.toon))
 - Clone builds a working tree from a remote and inherits its record configuration ([pm-vcs-jj9r](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-jj9r.toon))
 - Push refuses a non-fast-forward and lands every ref under compare-and-swap ([pm-vcs-64x4](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-64x4.toon))

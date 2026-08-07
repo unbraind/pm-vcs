@@ -47,6 +47,7 @@
       ".",
       "scripts/audit-git-identities.ts",
       "scripts/docstring-gate.ts",
+      "scripts/pm-environment.ts",
       "scripts/self-host.ts"
     ],
     "tests": [
@@ -116,7 +117,7 @@
   "homepage": "https://github.com/unbraind/pm-vcs#readme",
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "@unbrained/pm-cli": "^2026.8.6",
+    "@unbrained/pm-cli": "^2026.8.7",
     "pm-changelog": "^2026.8.7",
     "typescript": "^7.0.2",
     "typescript5": "npm:typescript@^5.9.3"

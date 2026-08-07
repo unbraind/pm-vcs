@@ -1,0 +1,33 @@
+id: pm-vcs-op2c
+title: Make every production TypeScript script part of exact coverage and add lint and duplication gates
+description: "The current exact coverage gate reports 100/100/100 for its configured source set but omits accept-native-toon.ts and accept-stat-cache.ts; the package also has no explicit ESLint or jscpd release gate. Add behavior-driven instrumentation for every production script, a meaningful statement/branch/function/line contract where the runner supports it, parser-aware lint for the mandatory TypeScript rules, and a fail-closed duplicate-code gate without artificial tests or exclusions."
+type: Issue
+status: open
+priority: 0
+tags[7]: coverage,docstrings,duplication,lint,quality,release-blocker,typescript
+created_at: "2026-08-07T13:01:18.790Z"
+updated_at: "2026-08-07T13:01:47.575Z"
+author: codex
+estimated_minutes: 480
+acceptance_criteria: "Every source and production script is instrumented by the repository coverage command; every supported coverage dimension is exactly 100%; ESLint enforces no explicit any, no inline or dynamic imports, erasable syntax, and repository conventions; jscpd or an equivalently strict duplicate-code detector runs fail-closed; release:check and prepublishOnly include all gates; tests are behavioral and do not use coverage ignores, artificial execution, or broad exclusions"
+definition_of_ready: "Inventory all shipped and operational TypeScript files, inspect current compiler and Node coverage capabilities, and select maintained lint and duplication tooling compatible with TypeScript 7"
+value: Makes the package's 100 percent claim literal across all production TypeScript
+impact: "Prevents uninstrumented acceptance logic, duplicated implementation, and forbidden TypeScript constructs from bypassing release review"
+outcome: One reproducible mandatory quality gate covers all production sources without cheats
+why_now: The pm 2026.8.7 compatibility audit proved configured coverage is exact but discovered two acceptance scripts and lint/duplication enforcement outside that gate
+parent: pm-vcs-tr2a
+reviewer: maintainer
+risk: high
+confidence: high
+sprint: 2026-08-quality
+release: Unreleased
+severity: critical
+environment: pm-vcs 2026.7.30 on Node 22 and TypeScript 7
+repro_steps: "Inspect package.json coverageGate.sources and scripts; accept-native-toon.ts and accept-stat-cache.ts are absent, and no lint or duplicate-code script is defined"
+expected_result: "All production TypeScript and all mandatory quality policies are enforced by release:check"
+actual_result: "Configured sources pass exact 100/100/100, but two acceptance scripts are outside instrumentation and no explicit lint or duplicate-code gate exists"
+component: quality/release
+customer_impact: A release could currently satisfy configured coverage while regressions in operational acceptance scripts or duplicated/forbidden code remain undetected
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-o3jj,discovered_from,"2026-08-07T13:01:47.549Z",codex,pm-audit,asserted
+body: ""
