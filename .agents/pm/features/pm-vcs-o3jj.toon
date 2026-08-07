@@ -6,7 +6,7 @@ status: closed
 priority: 1
 tags[5]: compatibility,merge-safety,multi-agent,pm-cli,toolchain
 created_at: "2026-08-07T12:45:56.604Z"
-updated_at: "2026-08-07T13:01:55.697Z"
+updated_at: "2026-08-07T13:06:14.451Z"
 closed_at: "2026-08-07T13:01:55.680Z"
 completed_at: "2026-08-07T13:01:55.680Z"
 claim_principal: codex
@@ -29,18 +29,20 @@ expected_result: pm-vcs uses the published 2026.8.7 PM tooling and merge contrac
 actual_result: "Fresh npm ci resolved pm CLI and pm-changelog 2026.8.7; 555 tests and exact configured 100/100/100 coverage passed with every functional, documentation, packaging, and tracker-health gate. The existing historical identity audit still correctly refuses publication, and the newly identified all-source lint/duplication gap is tracked as pm-vcs-op2c."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-op2c,related_to,"2026-08-07T13:01:47.157Z",codex,pm-audit,asserted
-notes[4]{created_at,author,text}:
+notes[5]{created_at,author,text}:
   "2026-08-07T12:46:41.753Z",codex,"Verified npm latest for both @unbrained/pm-cli and pm-changelog is 2026.8.7. A lock-only install initially preserved pm CLI 2026.8.6 under the old range, so both devDependency ranges were advanced to ^2026.8.7 and a clean npm ci now resolves 2026.8.7 for both with zero install-audit vulnerabilities. The runtime peer compatibility floor remains >=2026.8.1."
   "2026-08-07T12:52:06.129Z",codex,"The first linked run passed health, self-host, production audit, changelog, docstring, and pack gates but failed native-TOON, stat-cache, coverage, and npm test because linked tests intentionally export sandbox PM_PATH variables. Both acceptance scripts inherited those variables into disposable child projects, so pm 2026.8.7 safely refused pm init against the discovered sandbox tracker. Child PM invocations now clear PM_PATH, PM_GLOBAL_PATH, PM_SOURCE_PM_PATH, and PM_SOURCE_WORKSPACE_ROOT; native TOON and Linux strace stat-cache acceptance both pass in schema-sandbox context."
   "2026-08-07T12:54:20.928Z",codex,"After the acceptance scripts were isolated, exact coverage narrowed to one remaining failure: the fresh-clone preflight test's direct pm merge install child still inherited the linked sandbox PM_PATH and installed drivers into the wrong repository. The test now clears the same four PM context variables for that child, ensuring it proves clone-local driver installation even under an agent-linked test runner."
   "2026-08-07T13:01:47.157Z","harness:codex","Final verification on 2026-08-07: npm test passed 555/555; npm run coverage reported exact 100.00 percent lines, branches, and functions across all 27 configured production source files; typecheck, build, 30-file docstring gate, native TOON, installed-CLI strace stat-cache, byte-identical self-host, production dependency audit, dry-run package, changelog check, pm validate, and strict read-only pm health passed. npm run audit:identities correctly remains red on one undisclosed non-public historical address under pm-vcs-mhbz; no publication was attempted. Validation retains only pre-existing legacy metadata/resolution warnings plus unowned LICENSE. The audit also found that the two acceptance scripts are outside the configured coverage source set and that no explicit lint or duplicate-code release gate exists, now tracked independently as pm-vcs-op2c rather than overstating the configured 100/100/100 result."
-files[6]{path,scope,note}:
+  "2026-08-07T13:06:14.429Z","harness:codex","Exact-head CI on PR #19 caught that the earlier local self-host verification ran before the source commit and therefore correctly assessed the prior committed tree. Both Node 22 and Node 26 jobs refused the stale committed bundle; Windows launcher checks passed. Regenerate selfhost.bundle only after all PM evidence and source edits are finalized, commit it with the source, then verify committed HEAD byte identity."
+files[7]{path,scope,note}:
   .gitattributes,project,Canonical pm 2026.8.7 extension merge fence
   package-lock.json,project,Reproducible published PM toolchain resolution
   package.json,project,Published PM development-tool ranges
   scripts/accept-native-toon.ts,project,Fresh-project PM environment isolation
   scripts/accept-stat-cache.ts,project,Fresh-project and traced-status PM environment isolation
   test/preflight.test.ts,project,Fresh-clone merge-install test isolation from linked PM context
+  selfhost.bundle,project,Self-hosted pm-vcs snapshot regenerated from the finalized committed source change
 tests[10]:
   - command: node_modules/.bin/pm health --check-only --require-merge-drivers --strict-exit
     scope: project
