@@ -46,6 +46,7 @@
 
 ### Other
 
+- Upgrade upload-artifact to v7 without breaking the self-host gate ([pm-vcs-qzy7](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-qzy7.toon))
 - Gate CI on strict tracked pm project health ([pm-vcs-kwlz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-kwlz.toon))
 - Phase 4: pm-vcs versions its own source ([pm-vcs-390t](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-390t.toon))
 - Address the PR \#10 bot review: fixture-only main, shared git runner, no external chmod ([pm-vcs-stp3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-stp3.toon))
