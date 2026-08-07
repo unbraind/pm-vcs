@@ -18,6 +18,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { RACY_WINDOW_NS } from "../engine/worktree.ts";
+import { withoutPmContext } from "./pm-environment.ts";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const executable = join(packageRoot, "node_modules", "@unbrained", "pm-cli", "dist", "cli.js");
@@ -29,13 +30,7 @@ function runPm(arguments_: readonly string[]): void {
   const result = spawnSync(process.execPath, [executable, ...arguments_], {
     cwd: project,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      PM_GLOBAL_PATH: undefined,
-      PM_PATH: undefined,
-      PM_SOURCE_PM_PATH: undefined,
-      PM_SOURCE_WORKSPACE_ROOT: undefined,
-    },
+    env: withoutPmContext(process.env),
     timeout: 120_000,
   });
   if (result.status !== 0) {
@@ -61,13 +56,7 @@ function traceStatus(name: string): string {
   ], {
     cwd: project,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      PM_GLOBAL_PATH: undefined,
-      PM_PATH: undefined,
-      PM_SOURCE_PM_PATH: undefined,
-      PM_SOURCE_WORKSPACE_ROOT: undefined,
-    },
+    env: withoutPmContext(process.env),
     timeout: 120_000,
   });
   if (result.status !== 0) {

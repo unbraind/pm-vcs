@@ -47,6 +47,7 @@
       ".",
       "scripts/audit-git-identities.ts",
       "scripts/docstring-gate.ts",
+      "scripts/pm-environment.ts",
       "scripts/self-host.ts"
     ],
     "tests": [
