@@ -2,12 +2,29 @@ id: pm-vcs-yaks
 title: Port the parser-backed docstring gate into pm-vcs
 description: "pm-changelog enforces full docstring coverage with a gate that parses each file into a syntax tree, rejects a docstring that only restates its identifier, and walks its roots rather than reading a frozen file list. pm-vcs has none, so its docstring coverage is a convention rather than a gate. Porting it needs one extension: pm-vcs keeps six source files at the repository root alongside engine/ and scripts/, and the gate currently accepts only directories as roots, so a root-level file would go unscanned - which is the frozen-list failure the gate exists to prevent, arriving by a different door."
 type: Chore
-status: open
+status: closed
 priority: 1
 tags[2]: "area:vcs",quality
 created_at: "2026-08-02T21:36:36.043Z"
-updated_at: "2026-08-02T21:36:36.043Z"
+updated_at: "2026-08-07T09:28:46.165Z"
+closed_at: "2026-08-07T09:16:30.143Z"
+completed_at: "2026-08-07T09:16:30.143Z"
+claim_principal: "harness:codex"
 author: "harness:claude-code"
+estimated_minutes: 300
 acceptance_criteria: "npm run docstring fails on an undocumented export anywhere under the repository's source roots including the root-level files; the gate refuses to pass when a configured root is missing or yields no files; the roots cannot silently stop covering a source file added later; release:check runs it"
+outcome: "Every shipped TypeScript declaration and substantial named helper is protected by a parser-backed, anti-vacuity documentation gate that scans root-level and nested sources automatically."
 parent: pm-vcs-tr2a
+resolution: "Added the TypeScript-5 AST gate, 46 adversarial tests, root-recursive source discovery, 31 high-quality documentation repairs, and deterministic identity-audit coverage."
+expected_result: "Undocumented or vacuously excluded root-level and nested TypeScript declarations fail locally and in release:check without weakening exact coverage."
+actual_result: "npm run docstring scans 30 production files; 554 tests pass with exact 100/100/100 across 27 measured files; release:check reaches and then correctly stops at the unrelated one-address identity privacy blocker."
+notes[4]{created_at,author,text}:
+  "2026-08-07T09:13:50.843Z","harness:codex","TDD implementation: ported the TypeScript-5 parser gate with the repository root as its only default source root, pruning only known non-production directories. This automatically covers six root-level modules plus engine/ and scripts/ without a frozen file list. The gate rejected 31 existing declarations; each now has informative, behavior-specific documentation. Its 46 adversarial tests reject string/comment lookalikes, name-restating docs, frozen or empty roots, undocumented root/nested files, and unsupported declaration shapes. Full suite passes 554 tests at exact 100/100/100 across 27 source files. The first two full runs also exposed an old timing-dependent identity-audit branch; removing the redundant post-settlement failure guard made Promise settlement authoritative and restored deterministic exact coverage."
+  "2026-08-07T09:16:29.736Z","harness:codex","Authoritative release:check executed the new docstring gate, exact 100/100/100 coverage, installed-CLI stat-cache acceptance, committed self-host verification, and zero-vulnerability production audit successfully, then failed closed exactly at audit:identities with one non-public address. That independent P0 remains pm-vcs-mhbz; this quality tranche does not rewrite history, weaken the allowlist, publish, or claim release readiness."
+  "2026-08-07T09:19:45.821Z","harness:codex","Exact committed-head release validation caught a self-host ordering defect in this tranche: the first bundle refresh ran before the new gate and test were tracked, so git ls-files excluded them and accept:self-host correctly rejected two absent paths. The files are now committed; regenerate the bundle from this complete tracked set before amending, then rerun the exact-head gate."
+  "2026-08-07T09:28:46.165Z","harness:codex","Corrected the unreleased changelog heading, regenerated the self-host bundle from the complete tracked tree, and reran the exact-head release pipeline: docstring, 554-test exact 100/100/100 coverage, installed-CLI stat-cache acceptance, self-host byte identity, and production audit all pass before the unchanged historical identity gate fails closed. A packed tarball then passed fresh npm and Bun project-layout smoke workflows with pm CLI 2026.8.6: init, local package activation, vcs init, and vcs status. The npm registry metadata endpoint currently returns 404 for @unbrained/pm-cli even though the locked 2026.8.6 artifact is installed; no registry availability or publication claim is made."
+tests[2]{command,path,scope,timeout_seconds}:
+  npm run docstring,scripts/docstring-gate.ts,project,120
+  npm run coverage,test/docstring-gate.test.ts,project,1800
+close_reason: "Parser-backed root-recursive docstring gate is enforced in release:check with exact test coverage; independent identity privacy blocker remains open"
 body: ""

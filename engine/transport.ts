@@ -52,7 +52,7 @@ export interface PushUpdate {
   readonly next: ObjectId;
 }
 
-/** What a remote did with a push. */
+/** Authoritative receiver receipt listing ref movements and newly accepted objects after publication. */
 export interface PushReceipt {
   /** Refs that moved, with the value each moved from. */
   readonly updated: readonly PushUpdate[];
@@ -142,7 +142,7 @@ export class FileTransport implements Transport {
     }
   }
 
-  /** @inheritdoc */
+  /** Read the receiver's public refs, attached branch, and history-shaping record configuration. */
   advertise(): Advertisement {
     const repository = this.open();
     const head = repository.refs.readHead();
@@ -153,7 +153,7 @@ export class FileTransport implements Transport {
     };
   }
 
-  /** @inheritdoc */
+  /** Export requested reachable history while honoring only caller tips the receiver actually possesses. */
   fetch(refNames: readonly string[], haves: readonly ObjectId[]): Buffer {
     const repository = this.open();
     // The offer is filtered rather than trusted. A caller's tips include commits
@@ -165,7 +165,7 @@ export class FileTransport implements Transport {
     return exportBundle(repository.objects, repository.refs, refNames, common);
   }
 
-  /** @inheritdoc */
+  /** Verify incoming closure and fast-forward policy before atomically publishing requested receiver refs. */
   push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): PushReceipt {
     const repository = this.open();
     const { added } = importBundleObjects(repository.objects, bundle);

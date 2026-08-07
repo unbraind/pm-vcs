@@ -24,7 +24,7 @@ export type FileMode = (typeof FILE_MODES)[number];
 /** Stable identity of one logical file across path and content changes. */
 export type FileId = string;
 
-/** Whether a value is a canonical file identity. */
+/** Validate that a candidate uses the fixed-width lowercase hexadecimal representation of a stable file identity. */
 export function isFileId(value: string): boolean {
   return /^[0-9a-f]{32}$/.test(value);
 }
@@ -43,7 +43,7 @@ export interface TreeEntry {
   readonly copiedFrom?: FileId;
 }
 
-/** Who made a change and when. */
+/** Author or committer identity paired with an absolute instant and its original timezone offset. */
 export interface Signature {
   /** Display name. */
   readonly name: string;
@@ -547,6 +547,7 @@ export function decodeRecord(payload: Buffer): RecordDocument {
   // tampered bundle put a nested object or a non-finite number into a document whose
   // type says neither can occur, and the first thing to notice would be the record
   // merge, arbitrarily later and with no way to attribute it.
+  /** Reject unsupported values and containers exceeding the canonical record nesting ceiling. */
   const assertValue = (value: unknown, path: string, depth = 0): void => {
     if (value === null || typeof value === "string" || typeof value === "boolean") return;
     if (typeof value === "number") {

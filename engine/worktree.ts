@@ -280,6 +280,7 @@ export function decodeIndex(contents: string): IndexEntry[] {
  */
 export function listWorkingTree(root: string, controlDirectory: string, rules: IgnoreRules): string[] {
   const found: string[] = [];
+  /** Descend through materializable entries without following symlinks or tool-owned directories. */
   const walk = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       if (directory === root && entry.name === controlDirectory) continue;

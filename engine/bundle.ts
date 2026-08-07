@@ -29,7 +29,7 @@ import { BRANCH_PREFIX, type RefStore, TAG_PREFIX } from "./refs.ts";
 /** Format marker written as a bundle's first line. */
 export const BUNDLE_FORMAT = "pmvcs-bundle-1";
 
-/** What a bundle carries. */
+/** Canonical inventory of refs, prerequisites, and object payloads serialized into one transport-neutral archive. */
 export interface BundleContents {
   /** Ref name to commit id, for the refs the bundle advertises. */
   readonly refs: Readonly<Record<string, ObjectId>>;
@@ -39,7 +39,7 @@ export interface BundleContents {
   readonly objects: readonly ObjectId[];
 }
 
-/** Outcome of importing a bundle. */
+/** Verified object-store additions, existing objects, and advertised refs produced by importing an archive. */
 export interface ImportReport {
   /** Objects newly written to the store. */
   readonly added: readonly ObjectId[];
@@ -70,6 +70,7 @@ interface BundleLine {
  */
 function closure(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId> {
   const objects = new Set<ObjectId>();
+  /** Add a tree and every descendant tree or leaf object without revisiting shared subtrees. */
   const walkTree = (treeIdentifier: ObjectId): void => {
     if (objects.has(treeIdentifier)) return;
     objects.add(treeIdentifier);

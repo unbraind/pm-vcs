@@ -31,7 +31,7 @@ export const BRANCH_PREFIX = "refs/heads/";
 /** Prefix under which tag refs live. */
 export const TAG_PREFIX = "refs/tags/";
 
-/** What HEAD currently points at. */
+/** Attached or detached repository position, including the nullable tip of an unborn branch. */
 export type HeadState =
   /** HEAD names a branch, which may or may not exist yet (an unborn branch). */
   | { readonly kind: "branch"; readonly ref: string; readonly target: ObjectId | null }
@@ -256,6 +256,7 @@ export class RefStore {
   list(prefix: string): RefEntry[] {
     const base = join(this.root, ...prefix.split("/").filter(Boolean));
     const found: RefEntry[] = [];
+    /** Recursively collect valid ref files while ignoring lock and temporary artifacts. */
     const walk = (directory: string): void => {
       let entries: Dirent[];
       try {

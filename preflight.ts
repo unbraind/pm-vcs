@@ -54,7 +54,7 @@ export type CheckStatus =
   /** Worth knowing, but not a reason to refuse to work. */
   | "warn";
 
-/** One preflight finding. */
+/** Stable safety-check outcome with observed evidence and an actionable remediation when it does not pass. */
 export interface PreflightCheck {
   /** Stable machine-readable check name. */
   readonly name: string;
@@ -66,7 +66,7 @@ export interface PreflightCheck {
   readonly remediation: string | null;
 }
 
-/** Full preflight result. */
+/** Aggregate merge-safety verdict, checked roots, ordered evidence, and machine-readable failed check names. */
 export interface PreflightReport {
   /** True only when no check failed; warnings do not clear it. */
   readonly ok: boolean;

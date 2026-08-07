@@ -42,7 +42,7 @@ export interface HeadTransition {
   readonly after: string;
 }
 
-/** One recorded operation. */
+/** Durable command receipt containing every ref and HEAD transition needed for later inspection or undo. */
 export interface Operation {
   /** Monotonic sequence number, starting at 1. */
   readonly sequence: number;

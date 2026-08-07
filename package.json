@@ -24,6 +24,7 @@
     "check": "npm run typecheck",
     "audit:prod": "node --input-type=module -e \"import { spawnSync } from 'node:child_process'; import { devNull } from 'node:os'; const env = { ...process.env, npm_config_userconfig: devNull, NPM_CONFIG_USERCONFIG: devNull }; for (const key of Object.keys(env)) if (key.toLowerCase() === 'npm_config_allow_scripts') delete env[key]; const win = process.platform === 'win32'; const r = spawnSync(win ? 'npm.cmd' : 'npm', ['audit', '--omit=dev', '--ignore-scripts'], { stdio: 'inherit', env, shell: win }); process.exit(r.status ?? 1);\"",
     "audit:identities": "node scripts/audit-git-identities.ts",
+    "docstring": "node scripts/docstring-gate.ts",
     "accept:native-toon": "node scripts/accept-native-toon.ts",
     "preaccept:stat-cache": "npm run build",
     "accept:stat-cache": "node scripts/accept-stat-cache.ts",
@@ -34,7 +35,7 @@
     "changelog": "pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --release-version-from-package --date 2026-07-30 --since-previous-tag --until-release-tag --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release",
     "changelog:full": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release",
     "changelog:check": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --check",
-    "release:check": "npm run typecheck && npm run build && npm run coverage && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run changelog:check",
+    "release:check": "npm run typecheck && npm run build && npm run docstring && npm run coverage && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run changelog:check",
     "prepublishOnly": "npm run release:check",
     "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary",
     "prepare": "node scripts/prepare-merge-driver.mjs",
@@ -45,6 +46,7 @@
     "sources": [
       ".",
       "scripts/audit-git-identities.ts",
+      "scripts/docstring-gate.ts",
       "scripts/self-host.ts"
     ],
     "tests": [
@@ -72,6 +74,7 @@
       "test/review-findings.test.ts",
       "test/rewrite-commands.test.ts",
       "test/audit-git-identities.test.ts",
+      "test/docstring-gate.test.ts",
       "test/attribution.test.ts",
       "test/remotes.test.ts",
       "test/sync.test.ts",
@@ -114,8 +117,9 @@
   "devDependencies": {
     "@types/node": "^26.1.2",
     "@unbrained/pm-cli": "^2026.8.6",
-    "pm-changelog": "^2026.8.6",
-    "typescript": "^7.0.2"
+    "pm-changelog": "^2026.8.7",
+    "typescript": "^7.0.2",
+    "typescript5": "npm:typescript@^5.9.3"
   },
   "peerDependencies": {
     "@unbrained/pm-cli": ">=2026.8.1"

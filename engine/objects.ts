@@ -49,6 +49,7 @@ export class ObjectStoreError extends Error {
   /** Stable machine-readable discriminator for the fault. */
   readonly code: string;
 
+  /** Construct a repository fault carrying a stable code while retaining the native error message contract. */
   constructor(code: string, message: string) {
     super(message);
     this.name = "ObjectStoreError";
@@ -290,4 +291,3 @@ export class ObjectStore {
     }
   }
 }
-

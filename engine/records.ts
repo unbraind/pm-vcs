@@ -250,6 +250,7 @@ export function mergeAppendOnlyLog(
   // means a line one side appended twice survives twice, while a line both sides
   // inherited from the base is not duplicated by the merge.
   const kept = new Map<string, number>();
+  /** Count byte-identical event occurrences so repeated legitimate entries survive branch union. */
   const counts = (lines: readonly string[]): Map<string, number> => {
     const tally = new Map<string, number>();
     for (const line of lines) {
