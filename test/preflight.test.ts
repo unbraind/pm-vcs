@@ -99,7 +99,14 @@ test("a fresh clone has no drivers and fails loudly, then passes after merge ins
     encoding: "utf8",
     // Same reason as test/helpers/sandbox.ts: the runner re-injects
     // NODE_V8_COVERAGE into children, which then corrupt the parent's report.
-    env: { ...process.env, ...discardChildCoverage() },
+    env: {
+      ...process.env,
+      ...discardChildCoverage(),
+      PM_GLOBAL_PATH: undefined,
+      PM_PATH: undefined,
+      PM_SOURCE_PM_PATH: undefined,
+      PM_SOURCE_WORKSPACE_ROOT: undefined,
+    },
   });
   const cured = await runPreflight({ repoRoot: clone.root, pmRoot: clone.pmRoot });
   assert.ok(

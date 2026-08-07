@@ -29,6 +29,13 @@ function runPm(arguments_: readonly string[]): void {
   const result = spawnSync(process.execPath, [executable, ...arguments_], {
     cwd: project,
     encoding: "utf8",
+    env: {
+      ...process.env,
+      PM_GLOBAL_PATH: undefined,
+      PM_PATH: undefined,
+      PM_SOURCE_PM_PATH: undefined,
+      PM_SOURCE_WORKSPACE_ROOT: undefined,
+    },
     timeout: 120_000,
   });
   if (result.status !== 0) {
@@ -54,6 +61,13 @@ function traceStatus(name: string): string {
   ], {
     cwd: project,
     encoding: "utf8",
+    env: {
+      ...process.env,
+      PM_GLOBAL_PATH: undefined,
+      PM_PATH: undefined,
+      PM_SOURCE_PM_PATH: undefined,
+      PM_SOURCE_WORKSPACE_ROOT: undefined,
+    },
     timeout: 120_000,
   });
   if (result.status !== 0) {
