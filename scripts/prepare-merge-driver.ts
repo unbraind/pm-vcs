@@ -12,6 +12,13 @@ import { join } from "node:path";
 
 import { invokeWhenMain } from "./pm-environment.ts";
 
+/** Injectable process boundary used to verify Windows shim execution. */
+type MergeInstaller = (
+  executable: string,
+  arguments_: string[],
+  options: { stdio: "inherit"; env: NodeJS.ProcessEnv; shell: boolean },
+) => unknown;
+
 /** Returns true only for a regular executable path candidate. */
 export function isExecutableFile(path: string, platform: NodeJS.Platform): boolean {
   try {
@@ -24,8 +31,8 @@ export function isExecutableFile(path: string, platform: NodeJS.Platform): boole
   }
 }
 
-/** Resolves whether a real `pm` launcher exists on the supplied process path. */
-export function pmOnPath(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform): boolean {
+/** Resolves the exact real `pm` launcher on the supplied process path. */
+export function pmOnPath(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | null {
   const directories = (environment.PATH ?? "")
     .split(platform === "win32" ? ";" : ":")
     .map((entry) => platform === "win32" && entry.startsWith('"') && entry.endsWith('"')
@@ -36,14 +43,30 @@ export function pmOnPath(environment: NodeJS.ProcessEnv, platform: NodeJS.Platfo
   const extensions = platform === "win32"
     ? (environment.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((entry) => entry.trim()).filter(Boolean)
     : [""];
-  return directories.some((directory) => extensions.some((extension) =>
-    isExecutableFile(join(directory, `pm${extension}`), platform)));
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidate = join(directory, `pm${extension}`);
+      if (isExecutableFile(candidate, platform)) return candidate;
+    }
+  }
+  return null;
 }
 
 /** Installs merge drivers when available and reports whether installation ran. */
-export function main(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform): boolean {
-  if (!pmOnPath(environment, platform)) return false;
-  execFileSync("pm", ["merge", "install"], { stdio: "inherit", env: environment });
+export function main(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  install: MergeInstaller = execFileSync,
+): boolean {
+  const executable = pmOnPath(environment, platform);
+  if (executable === null) return false;
+  install(executable, ["merge", "install"], {
+    stdio: "inherit",
+    env: environment,
+    // Node cannot launch .cmd shims through execFile on Windows. Discovery
+    // validated this exact path before it crosses the command-shell boundary.
+    shell: platform === "win32",
+  });
   return true;
 }
 
