@@ -504,10 +504,11 @@ the code rather than an intention in a document.
 
 ## 13. Testing
 
-The gate is 100% of lines, branches and functions, enforced by `scripts/coverage-gate.ts`,
-which additionally fails when a source file is absent from the report at all — Node omits files
-no test loads, so a module could otherwise go entirely unexercised while the percentage read
-100%.
+The c8 gate instruments all production TypeScript with `--all` and requires 100% statements,
+branches, functions, and lines. A source file that no test loads is therefore measured at zero
+instead of disappearing from the report. ESLint separately rejects unsafe and non-erasable
+TypeScript syntax, the docstring gate requires production declarations to explain their public
+contract, and jscpd fails on any duplicated production block.
 
 Tests build real repositories in temporary directories through the real engine and drive
 commands through the host's real extension loader (`createExtensionTestHarness`). There are no

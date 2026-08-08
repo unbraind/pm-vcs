@@ -44,7 +44,9 @@ export function parseWorkingRecord(path: string, content: Buffer): RecordDocumen
     throw new ObjectStoreError(
       "malformed_object",
       `Record path ${path} is neither a valid native PM TOON item nor a valid JSON object.`
-      + (toonError instanceof Error ? ` Native TOON parser: ${toonError.message}` : ""),
+      + (toonError === undefined
+        ? ""
+        : ` Native TOON parser: ${String(toonError).replace(/^[^:]+: /, "")}`),
     );
   }
 }

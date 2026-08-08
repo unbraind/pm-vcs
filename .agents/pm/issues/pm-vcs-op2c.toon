@@ -2,11 +2,14 @@ id: pm-vcs-op2c
 title: Make every production TypeScript script part of exact coverage and add lint and duplication gates
 description: "The current exact coverage gate reports 100/100/100 for its configured source set but omits accept-native-toon.ts and accept-stat-cache.ts; the package also has no explicit ESLint or jscpd release gate. Add behavior-driven instrumentation for every production script, a meaningful statement/branch/function/line contract where the runner supports it, parser-aware lint for the mandatory TypeScript rules, and a fail-closed duplicate-code gate without artificial tests or exclusions."
 type: Issue
-status: open
+status: closed
 priority: 0
 tags[7]: coverage,docstrings,duplication,lint,quality,release-blocker,typescript
 created_at: "2026-08-07T13:01:18.790Z"
-updated_at: "2026-08-07T13:01:47.575Z"
+updated_at: "2026-08-08T00:44:08.601Z"
+closed_at: "2026-08-08T00:41:52.546Z"
+completed_at: "2026-08-08T00:41:52.546Z"
+claim_principal: "harness:codex"
 author: codex
 estimated_minutes: 480
 acceptance_criteria: "Every source and production script is instrumented by the repository coverage command; every supported coverage dimension is exactly 100%; ESLint enforces no explicit any, no inline or dynamic imports, erasable syntax, and repository conventions; jscpd or an equivalently strict duplicate-code detector runs fail-closed; release:check and prepublishOnly include all gates; tests are behavioral and do not use coverage ignores, artificial execution, or broad exclusions"
@@ -24,10 +27,33 @@ release: Unreleased
 severity: critical
 environment: pm-vcs 2026.7.30 on Node 22 and TypeScript 7
 repro_steps: "Inspect package.json coverageGate.sources and scripts; accept-native-toon.ts and accept-stat-cache.ts are absent, and no lint or duplicate-code script is defined"
+resolution: "Replaced the hand-maintained coverage source list with c8 --all exact four-dimension instrumentation; added behavior-driven acceptance-script coverage, parser-aware ESLint policy, zero-duplication jscpd enforcement, CI and release integration, and current developer documentation."
 expected_result: "All production TypeScript and all mandatory quality policies are enforced by release:check"
-actual_result: "Configured sources pass exact 100/100/100, but two acceptance scripts are outside instrumentation and no explicit lint or duplicate-code gate exists"
+actual_result: "All 572 tests pass and every one of 32 production TypeScript files reports 100% statements, branches, functions, and lines; ESLint has zero warnings, jscpd reports zero clones, and the docstring gate reports a complete documented surface."
+fixed_version: Unreleased
 component: quality/release
 customer_impact: A release could currently satisfy configured coverage while regressions in operational acceptance scripts or duplicated/forbidden code remain undetected
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-o3jj,discovered_from,"2026-08-07T13:01:47.549Z",codex,pm-audit,asserted
+notes[2]{created_at,author,text}:
+  "2026-08-08T00:41:47.815Z","harness:codex","The package remains intentionally unpublished: audit:identities still rejects exactly one known non-public historical address,independently of these clean code-quality gates."
+  "2026-08-08T00:42:45.025Z","harness:codex",The default pm health --strict-exit reproduced the known unbraind/pm-cli#928 silent provider-refresh hang and was stopped after four minutes; CI now uses the documented --check-only mode and the read-only strict health gate completes promptly.
+learnings[1]{created_at,author,text}:
+  "2026-08-08T00:41:47.815Z","harness:codex",An explicit source allowlist can report perfect coverage while omitting operational scripts. c8 --all makes absence measurable; behavior-driven failure fixtures also exposed unreachable defensive branches that were better simplified.
+files[5]{path,scope,note}:
+  .github/workflows/ci.yml,project,Mandatory quality and deterministic tracker-health gates
+  .jscpd.json,project,Fail-closed zero-duplication production scan
+  scripts/eslint.config.ts,project,Parser-aware mandatory TypeScript policy
+  test/c8-gaps.test.ts,project,Behavior-driven branches exposed by all-source instrumentation
+  test/quality-scripts.test.ts,project,Behavioral operational-script and quality-policy coverage
+tests[5]{command,path,scope,timeout_seconds,pm_context_mode}:
+  npm run check,package.json,project,60,tracker
+  npm run coverage,package.json,project,300,tracker
+  npm run docstring,package.json,project,60,tracker
+  "npm run accept:native-toon",scripts/accept-native-toon.ts,project,120,tracker
+  "npm run accept:stat-cache",scripts/accept-stat-cache.ts,project,120,tracker
+docs[2]{path,scope,note}:
+  ARCHITECTURE.md,project,Exact all-source testing architecture
+  README.md,project,Developer quality-gate contract
+close_reason: Exact all-source quality gates implemented and verified
 body: ""

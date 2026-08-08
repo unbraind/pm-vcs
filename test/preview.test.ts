@@ -161,6 +161,35 @@ test("preview classifies a tracker JSON artifact and a driverless path", () => {
   assert.equal(report.totals.unprotected, 1);
 });
 
+test("preview reports clean disjoint changes for item and generic JSON documents", () => {
+  const sandbox = track(createSandbox());
+  const itemId = sandbox.createItem("Task", "Base title");
+  const base = sandbox.commit("Add the item");
+  const settingsPath = join(sandbox.pmRoot, "settings.json");
+  const baseSettings = JSON.parse(sandbox.git("show", `${base}:.agents/pm/settings.json`)) as Record<string, unknown>;
+
+  sandbox.git("checkout", "-q", "-b", "clean-a");
+  sandbox.pm("update", itemId, "--title", "Ours title");
+  writeFileSync(settingsPath, `${JSON.stringify({ ...baseSettings, ours_only: true }, null, 2)}\n`);
+  sandbox.commit("Change one field on ours");
+
+  sandbox.git("checkout", "-q", "-b", "clean-b", base);
+  sandbox.pm("update", itemId, "--description", "Their description");
+  writeFileSync(settingsPath, `${JSON.stringify({ ...baseSettings, theirs_only: true }, null, 2)}\n`);
+  sandbox.commit("Change another field on theirs");
+
+  sandbox.git("checkout", "-q", "clean-a");
+  const report = previewMerge({
+    ref: "clean-b",
+    repoRoot: sandbox.root,
+    trackerPrefix: ".agents/pm",
+  });
+  const item = report.entries.find((entry) => entry.path.endsWith(`${itemId}.toon`));
+  const settings = report.entries.find((entry) => entry.path.endsWith("settings.json"));
+  assert.equal(item?.resolution, "clean");
+  assert.equal(settings?.resolution, "clean");
+});
+
 test("preview merges a relationship event stream through its own driver", () => {
   const sandbox = track(createSandbox());
   const base = sandbox.git("rev-parse", "HEAD");

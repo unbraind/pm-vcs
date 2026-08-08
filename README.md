@@ -385,14 +385,16 @@ Everything below is tracked as an epic in this repository's own tracker, under
 
 ```bash
 npm ci
-npm run check        # typecheck
-npm run coverage     # the suite behind a 100/100/100 gate
+npm run check        # typecheck, strict lint, and zero-duplication gate
+npm run docstring    # every production API declaration is documented
+npm run coverage     # all production TypeScript at 100/100/100/100
 npm run release:check
 ```
 
-The coverage gate walks the source tree and fails when a file is **absent** from the report,
-not only when it is under threshold. Node omits never-loaded files entirely, so an untested
-module would otherwise pass a 100% threshold by not being measured.
+The c8 coverage gate instruments every production TypeScript file with `--all` and requires
+100% statements, branches, functions, and lines. A never-loaded module therefore fails instead
+of disappearing from the report. ESLint rejects unsafe or non-erasable TypeScript syntax, the
+docstring gate covers production declarations, and jscpd permits no production clone.
 
 Tests run against real repositories and real filesystems. There are no mocks and no
 hand-built `api` doubles: this is filesystem and merge code, and a fake of either would only
