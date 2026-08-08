@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Release bot identity absent from the allowlist would break the audit on the first release ([pm-vcs-gehh](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-gehh.toon))
 - Public git history embeds a personal author email and blocks release approval ([pm-vcs-mhbz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-mhbz.toon))
 - Fix NODE_V8_COVERAGE lcov corruption in test helpers ([pm-vcs-lapg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-lapg.toon))
 - The 100 percent branch gate rested on an incidental execution, so an unrelated change failed CI on Node 26 only ([pm-vcs-8e8k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8e8k.toon))

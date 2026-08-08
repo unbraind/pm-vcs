@@ -1,0 +1,15 @@
+id: pm-vcs-gehh
+title: Release bot identity absent from the allowlist would break the audit on the first release
+description: "The release workflow configures the GitHub Actions bot as the author of the release commit while that address is not in the approved identity list, so the first release would write a commit the identity audit rejects on every subsequent run and the gate would stay red with no way forward that does not involve rewriting a release commit or weakening the check. Found by CodeRabbit on the pm-rust pull request and swept across every fleet package carrying an identity audit, which found the same shape here and in pm-rl."
+type: Issue
+status: closed
+priority: 1
+tags[1]: gate-integrity
+created_at: "2026-08-08T12:58:52.120Z"
+updated_at: "2026-08-08T12:59:04.473Z"
+closed_at: "2026-08-08T12:59:04.458Z"
+completed_at: "2026-08-08T12:59:04.458Z"
+author: pi-agent
+acceptance_criteria: "The GitHub Actions bot identity used by the release workflow is present in the approved list with a comment recording why removing it would break the gate, audit identities passes with the widened list, and the audit still fails closed on unapproved identities as its existing test asserts."
+close_reason: "Allowlisted the GitHub Actions bot identity with the reason recorded inline so a later tidy-up does not remove it. audit:identities exits 0 and the existing test still asserts an unapproved identity is rejected even when an approved authoring identity is allowlisted, so the list widened by exactly one deliberate entry rather than becoming permissive."
+body: ""

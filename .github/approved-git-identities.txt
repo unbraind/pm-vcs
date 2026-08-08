@@ -17,3 +17,9 @@ stefan@preu.at
 noreply@github.com
 # Dependabot's public GitHub noreply address on dependency pull-request refs.
 49699333+dependabot[bot]@users.noreply.github.com
+
+# The GitHub Actions bot, which authors the release commit created by
+# .github/workflows/release.yml. It must be listed here: the first release would
+# otherwise write a commit that this very audit rejects on every subsequent run,
+# leaving the gate permanently red. Found on unbraind/pm-rust#6 and swept fleet-wide.
+41898282+github-actions[bot]@users.noreply.github.com
