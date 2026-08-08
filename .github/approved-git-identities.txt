@@ -1,5 +1,16 @@
-# Public service and noreply addresses approved for commit metadata.
-# Personal addresses must be removed from history, never allowlisted here.
+# Approved commit-metadata email addresses.
+#
+# An approved public authoring identity is a deliberately published address the
+# maintainer has chosen to sign the fleet's commits with; it is part of the
+# public history of the unbraind/pm-* repositories and may be allowlisted here.
+# An unapproved identity is any address not listed below: the audit fails closed
+# on it, and adding an address here never converts a privacy violation into an
+# approval — only a maintainer decision recorded in the tracker may approve an
+# authoring identity.
+# The maintainer's approved public authoring identity per the 2026-07-21
+# decision (see pm-vcs-mhbz closure). Present in the public history of every
+# unbraind/pm-* repo; intentionally retained, not rewritten.
+stefan@preu.at
 # The maintainer's GitHub noreply address.
 1153461+unbraind@users.noreply.github.com
 # GitHub's committer for merges made through the web UI.

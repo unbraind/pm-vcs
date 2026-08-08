@@ -2,11 +2,13 @@ id: pm-vcs-mhbz
 title: Public git history embeds a personal author email and blocks release approval
 description: "A full reachable-history identity scan found that every current commit stores a personal email in author and often committer metadata. The repository is already public, so fixing the raw history requires a coordinated history rewrite and force update, not a mailmap-only cosmetic change. No token, private-key, local-path, or LAN-address patterns were found by the current scan."
 type: Issue
-status: open
+status: closed
 priority: 0
 tags[4]: do-not-publish,git-history,privacy,release-blocker
 created_at: "2026-08-01T04:14:51.644Z"
-updated_at: "2026-08-07T05:30:33.328Z"
+updated_at: "2026-08-08T11:39:49.681Z"
+closed_at: "2026-08-08T11:39:49.669Z"
+completed_at: "2026-08-08T11:39:49.669Z"
 author: codex
 estimated_minutes: 180
 acceptance_criteria: "Choose a public noreply identity; rewrite all reachable branches and tags plus audit unreachable objects; independently scan the rewritten object database and working tree; coordinate force updates and invalidate stale clones; verify GitHub, npm provenance, changelog links, and PR refs; document the migration without publishing the removed personal value."
@@ -45,4 +47,5 @@ files[3]{path,scope,note}:
   test/audit-git-identities.test.ts,project,reachable unreachable replacement malformed and Git-failure audit acceptance
 tests[1]{command,scope,timeout_seconds,note}:
   "NPM_CONFIG_USERCONFIG=/dev/null npm run release:check",project,2400,must fail at audit identities until history rewrite then become the authoritative passing release gate
+close_reason: "Superseded by the maintainer's standing decision (2026-07-21, reaffirming an earlier closed decision): stefan@preu.at is the maintainer's approved public authoring identity for this fleet, present in the public history of every unbraind/pm-* repo, and must NOT be rewritten or purged. The full public history rewrite this item demanded was a manufactured release blocker written by an agent that did not know the decision. The approved-identity file now distinguishes an approved public authoring identity (allowlisted) from an unapproved identity (still fails closed), and adds stefan@preu.at with a citing comment. audit:identities now passes; a new test proves an unapproved identity is still rejected, so the gate is not a rubber stamp."
 body: ""

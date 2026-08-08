@@ -5,9 +5,11 @@ import {
   applyEdits,
   buildHunks,
   diffLines,
+  diffLinesWithStats,
   formatUnifiedDiff,
   splitLines,
   unifiedDiff,
+  type Edit,
 } from "../engine/diff.ts";
 
 test("splitLines drops the trailing empty line but keeps an empty file empty", () => {
@@ -150,4 +152,194 @@ test("buildHunks emits a pure-insertion hunk with a zero left start", () => {
   assert.equal(hunks.length, 1);
   assert.equal(hunks[0].leftCount, 0);
   assert.equal(hunks[0].rightCount, 1);
+});
+
+/**
+ * The pre-band reference Myers diff: snapshots the FULL-WIDTH furthest array once
+ * per edit distance.
+ *
+ * Kept here verbatim from the implementation before `pm-vcs-ze24` so the banded
+ * diff can be proved to produce byte-identical edit scripts against the original
+ * unbounded algorithm, and so the snapshot allocation of the two can be compared
+ * directly. This is the implementation the band test must fail against.
+ *
+ * @param left - The original lines.
+ * @param right - The revised lines.
+ * @returns The edit script and the full-width snapshot allocation statistics.
+ */
+function referenceDiffLines(left: readonly string[], right: readonly string[]): {
+  edits: Edit[];
+  peakSnapshotEntries: number;
+  totalSnapshotEntries: number;
+  distance: number;
+} {
+  const leftLength = left.length;
+  const rightLength = right.length;
+  const maximum = leftLength + rightLength;
+  if (maximum === 0) return { edits: [], peakSnapshotEntries: 0, totalSnapshotEntries: 0, distance: 0 };
+  const trace: Int32Array[] = [];
+  const furthest = new Int32Array(2 * maximum + 1);
+  let peakSnapshotEntries = 0;
+  let totalSnapshotEntries = 0;
+  let distance = -1;
+  for (let d = 0; distance < 0; d += 1) {
+    const snapshot = Int32Array.from(furthest);
+    trace.push(snapshot);
+    peakSnapshotEntries = Math.max(peakSnapshotEntries, snapshot.length);
+    totalSnapshotEntries += snapshot.length;
+    for (let k = -d; k <= d; k += 2) {
+      const goDown = k === -d || (k !== d && furthest[k - 1 + maximum] < furthest[k + 1 + maximum]);
+      let x = goDown ? furthest[k + 1 + maximum] : furthest[k - 1 + maximum] + 1;
+      let y = x - k;
+      while (x < leftLength && y < rightLength && left[x] === right[y]) {
+        x += 1;
+        y += 1;
+      }
+      furthest[k + maximum] = x;
+      if (x >= leftLength && y >= rightLength) {
+        distance = d;
+        break;
+      }
+    }
+  }
+  const edits: Edit[] = [];
+  let x = leftLength;
+  let y = rightLength;
+  for (let d = distance; d > 0; d -= 1) {
+    const previous = trace[d]!;
+    const k = x - y;
+    const goDown = k === -d || (k !== d && previous[k - 1 + maximum] < previous[k + 1 + maximum]);
+    const previousK = goDown ? k + 1 : k - 1;
+    const previousX = previous[previousK + maximum]!;
+    const previousY = previousX - previousK;
+    while (x > previousX && y > previousY) {
+      x -= 1;
+      y -= 1;
+      edits.push({ kind: "equal", text: left[x]!, leftIndex: x, rightIndex: y });
+    }
+    if (goDown) {
+      y -= 1;
+      edits.push({ kind: "insert", text: right[y]!, leftIndex: null, rightIndex: y });
+    } else {
+      x -= 1;
+      edits.push({ kind: "delete", text: left[x]!, leftIndex: x, rightIndex: null });
+    }
+  }
+  while (x > 0 && y > 0) {
+    x -= 1;
+    y -= 1;
+    edits.push({ kind: "equal", text: left[x]!, leftIndex: x, rightIndex: y });
+  }
+  return { edits: edits.reverse(), peakSnapshotEntries, totalSnapshotEntries, distance };
+}
+
+test("the banded diff produces byte-identical edit scripts to the unbounded reference over many random inputs", () => {
+  // The band only changes how the trace is stored, not the search or the
+  // backtrack decisions, so the edit script must be identical to the original
+  // full-width algorithm for every input. A seeded input space makes this a
+  // reproducible property rather than a handful of hand-picked cases.
+  const random = mulberry32(0xbadf00d);
+  for (let trial = 0; trial < 2000; trial += 1) {
+    const left = randomLines(random, 12);
+    const right = randomLines(random, 12);
+    const actual = diffLines(left, right);
+    const reference = referenceDiffLines(left, right);
+    assert.deepEqual(
+      actual,
+      reference.edits,
+      `trial ${trial}: ${JSON.stringify(left)} -> ${JSON.stringify(right)}`,
+    );
+    assert.deepEqual(applyEdits(actual), right);
+  }
+});
+
+test("the banded diff also matches the reference on structured and edge-shaped inputs", () => {
+  // Random lines over a small alphabet exercise many edit paths, but a few
+  // structured shapes catch off-by-one band edges the random set may miss:
+  // pure insertion/deletion, a single middle change, and interleaving.
+  const shapes: Array<[string[], string[]]> = [
+    [[], []],
+    [[], ["a"]],
+    [["a"], []],
+    [["a", "b", "c", "d", "e"], ["a", "X", "c", "Y", "e"]],
+    [["a", "a", "a", "a"], ["a", "a"]],
+    [["a", "b", "a", "b"], ["b", "a", "b", "a"]],
+    [Array.from({ length: 30 }, (_, i) => `l${i}`), Array.from({ length: 30 }, (_, i) => (i === 15 ? `CHANGED` : `l${i}`))],
+  ];
+  for (const [left, right] of shapes) {
+    assert.deepEqual(diffLines(left, right), referenceDiffLines(left, right).edits);
+  }
+});
+
+test("peak snapshot allocation is bounded by the reachable band, not the full width", () => {
+  // A 2000-line file with a single changed line: the combined width is large
+  // (2 * 4000 + 1 = 8001 entries) but the edit distance is tiny (one delete plus
+  // one insert = 2), so the reachable band is only 2 * 2 + 1 = 5 entries. The
+  // banded snapshot must be proportional to the band; the unbounded reference
+  // snapshots the full width every time, so this assertion fails against it.
+  const left = Array.from({ length: 2000 }, () => "same");
+  const right = left.slice();
+  right[1000] = "different";
+  const maximum = left.length + right.length;
+  const actual = diffLinesWithStats(left, right);
+  const reference = referenceDiffLines(left, right);
+  assert.equal(actual.distance, 2);
+  // The largest banded snapshot is exactly the band at the terminating distance.
+  assert.equal(actual.peakSnapshotEntries, 2 * actual.distance + 1);
+  // The band is far smaller than the full width, which the reference pays for.
+  assert.ok(actual.peakSnapshotEntries < 2 * maximum + 1, "peak must be below the full width");
+  assert.ok(actual.peakSnapshotEntries < reference.peakSnapshotEntries, "peak must beat the unbounded reference");
+  // The total trace is the sum of the band, not distance times the full width.
+  assert.equal(actual.totalSnapshotEntries, (actual.distance + 1) ** 2);
+  assert.ok(actual.totalSnapshotEntries < reference.totalSnapshotEntries);
+  // And the script still matches the reference exactly.
+  assert.deepEqual(actual.edits, reference.edits);
+});
+
+test("a pathological no-common-lines diff holds a trace bounded by the closed-form band budget", () => {
+  // Two files with no line in common: the edit distance is the whole combined
+  // length (2 * size). The old full-width trace allocated one
+  // (2 * (left + right) + 1)-entry snapshot per distance; the banded trace keeps
+  // the sum of (2d + 1) over d = 0..2*size = (2*size + 1)^2 entries.
+  //
+  // The band bound is a RELATIVE win, not an absolute ceiling: the trace is
+  // still O(d^2), so at size 10000 it holds ~1.6 GiB of live Int32 storage
+  // (400,040,001 entries) against the unbounded ~3.2 GiB. That is why the full
+  // pathological size is opt-in — a routine 577-test run must not depend on
+  // 1.6 GiB being free on the runner — and why the budget below is asserted in
+  // bytes rather than inferred from the test not crashing. An absolute ceiling
+  // needs the linear-space divide-and-conquer variant, tracked as pm-vcs-6ht8.
+  const size = process.env.PM_VCS_DIFF_PATHOLOGICAL_SIZE === "10000" ? 10000 : 2000;
+  const left = Array.from({ length: size }, (_, i) => `left-${i}`);
+  const right = Array.from({ length: size }, (_, i) => `right-${i}`);
+  const result = diffLinesWithStats(left, right);
+  assert.equal(result.distance, 2 * size);
+  // The largest snapshot is the band at the terminating distance, not the
+  // rectangular distance-times-width the unbounded reference would pay.
+  assert.equal(result.peakSnapshotEntries, 2 * result.distance + 1);
+  assert.equal(result.totalSnapshotEntries, (result.distance + 1) ** 2);
+  const rectangularTotal = (result.distance + 1) * (2 * (left.length + right.length) + 1);
+  assert.ok(result.totalSnapshotEntries < rectangularTotal, "banded total must be below the unbounded rectangular total");
+  // The comparison above holds for every input, so on its own it bounds nothing.
+  // Assert the budget in bytes instead: each entry is one Int32, and the banded
+  // trace must fit the closed form (2*size + 1)^2 exactly. A regression that
+  // reintroduced full-width snapshots would exceed this even though it would
+  // still satisfy the inequality above.
+  const traceBytes = result.totalSnapshotEntries * Int32Array.BYTES_PER_ELEMENT;
+  const budgetBytes = (2 * size + 1) ** 2 * Int32Array.BYTES_PER_ELEMENT;
+  assert.equal(traceBytes, budgetBytes);
+  // With d = 2 * size and both sides the same length, the rectangular trace is
+  // (d + 1) * (2d + 1) entries against the band's (d + 1)^2, so the band saves a
+  // factor of (d + 1) / (2d + 1) — approaching one half from above, never
+  // reaching it. Asserting the limit itself would fail by a few thousand bytes.
+  assert.ok(
+    traceBytes / (rectangularTotal * Int32Array.BYTES_PER_ELEMENT) < 0.51,
+    "banded trace must approach half the unbounded rectangular trace",
+  );
+  // Nothing is in common, so every edit is an insertion or a deletion.
+  assert.ok(result.edits.every((edit) => edit.kind !== "equal"));
+  assert.equal(result.edits.filter((edit) => edit.kind === "delete").length, size);
+  assert.equal(result.edits.filter((edit) => edit.kind === "insert").length, size);
+  // Replaying the script reproduces the right side exactly.
+  assert.deepEqual(applyEdits(result.edits), right);
 });

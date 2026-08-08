@@ -2,13 +2,23 @@ id: pm-vcs-ze24
 title: Bound the Myers trace to the reachable diagonal band
 description: "Raised in review: the line diff snapshots the full-width furthest-reaching array once per edit distance, so peak memory is proportional to edit distance times combined input length. Two ten-thousand-line files with nothing in common would need roughly three gigabytes. At distance d only diagonals minus d through d carry information, so each snapshot can be bounded by 2d plus 1 with an offset recorded for the backtrack. Belongs to the scale phase alongside packed storage."
 type: Feature
-status: open
+status: closed
 priority: 2
 tags: []
 created_at: "2026-07-31T07:35:10.272Z"
-updated_at: "2026-07-31T07:35:12.441Z"
+updated_at: "2026-08-08T12:01:45.599Z"
+closed_at: "2026-08-08T12:01:45.584Z"
+completed_at: "2026-08-08T12:01:45.584Z"
 author: "harness:claude-code"
 acceptance_criteria: Peak diff memory is bounded by the reachable band rather than the full width; the backtrack reconstructs identical edit scripts before and after the change; a pathological ten-thousand-line no-common-lines diff completes within a bounded memory budget
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-b7cb,parent,"2026-07-31T07:35:12.388Z","harness:claude-code","cli:update:dep",detected
+notes[2]{created_at,author,text}:
+  "2026-08-08T11:52:45.661Z",pi-agent,"Found the Myers diff in engine/diff.ts: diffLines snapshots the full-width furthest array (2*(n+m)+1 entries) once per edit distance via Int32Array.from, and backtrack reuses it. Peak memory = (distance+1)*(2*(n+m)+1) Int32 entries. The working furthest array is a single O(n+m) allocation; only the per-distance snapshots are the problem."
+  "2026-08-08T11:52:50.881Z",pi-agent,"Measured before/after peak memory. Sample input: 2000 identical lines with one changed line (n+m=4000, distance=2). BEFORE (old full-width snapshots): peak per-snapshot = 2*4000+1 = 8001 Int32 entries; total trace = 3*8001 = 24003 entries. AFTER (banded): peak per-snapshot = 2*2+1 = 5 entries; total = (2+1)^2 = 9 entries. Pathological 10000-line no-common case (n=m=10000, distance=20000): BEFORE total = 20001*40001 = 800080001 entries ~= 3.2 GiB (the blow-up). AFTER total = 20001^2 = 400040001 entries ~= 1.6 GiB; peak per-snapshot = 40001 (band). Completes in ~5s without OOM."
+files[1]{path,scope,note}:
+  engine/diff.ts,project,"banded Myers trace: 2d+1 snapshots with a recorded offset"
+tests[1]{command,scope,timeout_seconds,note}:
+  npm run test,project,600,"577 tests: banded bound assertions plus byte-identical equivalence against an unbounded reference implementation"
+close_reason: "Implemented the banded Myers trace in engine/diff.ts. Each snapshot is now bounded to the 2d+1 reachable diagonals with a recorded offset for the backtrack, so the trace costs O(d squared) instead of O(d times combined length), while the working furthest-reaching array stays a single full-width allocation rather than one per distance. All three acceptance criteria are evidenced by tests rather than asserted: peak snapshot allocation equals 2d+1 and is strictly below both the full width and the unbounded reference, edit scripts are byte-identical to an unbounded reference implementation kept in the test file across randomized and edge-shaped inputs, and the pathological ten-thousand-line no-common-lines case completes with a total bounded by (d+1) squared against the rectangular total. Full suite 577 passing, coverage 100/100/100/100 across engine and scripts, and typecheck, lint, duplicates, docstring and audit:identities all pass."
 body: ""
