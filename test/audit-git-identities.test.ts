@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
 import { pathToFileURL } from "node:url";
@@ -16,6 +16,25 @@ import {
   type GitObject,
 } from "../scripts/audit-git-identities.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
+
+/**
+ * The maintainer's approved public authoring identity, as checked in.
+ *
+ * The fixtures below build throwaway allowlists, so on their own they would
+ * still pass if the production entry were deleted or misspelled. Using the real
+ * address here — and asserting the checked-in file carries it, in
+ * `the checked-in allowlist carries the approved public authoring identity` —
+ * ties those fixtures to the file the release gate actually reads.
+ */
+const APPROVED_AUTHORING_IDENTITY = "stefan@preu.at";
+
+/** Repository-relative path of the allowlist the release gate reads. */
+const CHECKED_IN_ALLOWLIST = resolve(
+  import.meta.dirname,
+  "..",
+  ".github",
+  "approved-git-identities.txt",
+);
 
 let dir: { root: string; cleanup(): void } | null = null;
 
@@ -66,7 +85,7 @@ test("identity audit fails closed on an unapproved identity even when an approve
     [
       "# approved public authoring identity",
       "public@example.test",
-      "approved@authoring.identity",
+      APPROVED_AUTHORING_IDENTITY,
     ].join("\n"),
   );
   git(root, ["config", "user.email", "unapproved@example.test"]);
@@ -75,6 +94,20 @@ test("identity audit fails closed on an unapproved identity even when an approve
   await assert.rejects(
     auditGitIdentities(root, allowlist),
     /rejected 1 non-public address/,
+  );
+});
+
+test("the checked-in allowlist carries the approved public authoring identity", () => {
+  // The fixtures above write throwaway allowlists, so they cannot notice the
+  // production file losing its entry. This one reads the file the release gate
+  // reads, so deleting or misspelling that line fails the suite.
+  const lines = readFileSync(CHECKED_IN_ALLOWLIST, "utf8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  assert.ok(
+    lines.includes(APPROVED_AUTHORING_IDENTITY),
+    `${CHECKED_IN_ALLOWLIST} must list ${APPROVED_AUTHORING_IDENTITY} as an approved authoring identity`,
   );
 });
 

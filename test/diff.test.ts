@@ -296,15 +296,20 @@ test("peak snapshot allocation is bounded by the reachable band, not the full wi
   assert.deepEqual(actual.edits, reference.edits);
 });
 
-test("a pathological 10000-line no-common-lines diff completes within a bounded memory budget", () => {
-  // Two 10000-line files with no line in common: the edit distance is the whole
-  // combined length (20000). The old full-width trace would allocate one
-  // 40001-entry snapshot per distance — 20001 * 40001 entries, about 3.2 GiB of
-  // Int32 storage — which is the blow-up `pm-vcs-ze24` was raised against. The
-  // banded trace keeps the sum of (2d + 1) over d = 0..20000 = (20001)^2 entries
-  // (about 1.6 GiB), and this test completing without an out-of-memory crash is
-  // the bounded-budget assertion.
-  const size = 10000;
+test("a pathological no-common-lines diff holds a trace bounded by the closed-form band budget", () => {
+  // Two files with no line in common: the edit distance is the whole combined
+  // length (2 * size). The old full-width trace allocated one
+  // (2 * (left + right) + 1)-entry snapshot per distance; the banded trace keeps
+  // the sum of (2d + 1) over d = 0..2*size = (2*size + 1)^2 entries.
+  //
+  // The band bound is a RELATIVE win, not an absolute ceiling: the trace is
+  // still O(d^2), so at size 10000 it holds ~1.6 GiB of live Int32 storage
+  // (400,040,001 entries) against the unbounded ~3.2 GiB. That is why the full
+  // pathological size is opt-in — a routine 577-test run must not depend on
+  // 1.6 GiB being free on the runner — and why the budget below is asserted in
+  // bytes rather than inferred from the test not crashing. An absolute ceiling
+  // needs the linear-space divide-and-conquer variant, tracked as pm-vcs-6ht8.
+  const size = process.env.PM_VCS_DIFF_PATHOLOGICAL_SIZE === "10000" ? 10000 : 2000;
   const left = Array.from({ length: size }, (_, i) => `left-${i}`);
   const right = Array.from({ length: size }, (_, i) => `right-${i}`);
   const result = diffLinesWithStats(left, right);
@@ -315,6 +320,22 @@ test("a pathological 10000-line no-common-lines diff completes within a bounded 
   assert.equal(result.totalSnapshotEntries, (result.distance + 1) ** 2);
   const rectangularTotal = (result.distance + 1) * (2 * (left.length + right.length) + 1);
   assert.ok(result.totalSnapshotEntries < rectangularTotal, "banded total must be below the unbounded rectangular total");
+  // The comparison above holds for every input, so on its own it bounds nothing.
+  // Assert the budget in bytes instead: each entry is one Int32, and the banded
+  // trace must fit the closed form (2*size + 1)^2 exactly. A regression that
+  // reintroduced full-width snapshots would exceed this even though it would
+  // still satisfy the inequality above.
+  const traceBytes = result.totalSnapshotEntries * Int32Array.BYTES_PER_ELEMENT;
+  const budgetBytes = (2 * size + 1) ** 2 * Int32Array.BYTES_PER_ELEMENT;
+  assert.equal(traceBytes, budgetBytes);
+  // With d = 2 * size and both sides the same length, the rectangular trace is
+  // (d + 1) * (2d + 1) entries against the band's (d + 1)^2, so the band saves a
+  // factor of (d + 1) / (2d + 1) — approaching one half from above, never
+  // reaching it. Asserting the limit itself would fail by a few thousand bytes.
+  assert.ok(
+    traceBytes / (rectangularTotal * Int32Array.BYTES_PER_ELEMENT) < 0.51,
+    "banded trace must approach half the unbounded rectangular trace",
+  );
   // Nothing is in common, so every edit is an insertion or a deletion.
   assert.ok(result.edits.every((edit) => edit.kind !== "equal"));
   assert.equal(result.edits.filter((edit) => edit.kind === "delete").length, size);
