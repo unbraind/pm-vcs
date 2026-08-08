@@ -4,6 +4,7 @@
 
 ### Added
 
+- Bound the Myers trace to the reachable diagonal band ([pm-vcs-ze24](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ze24.toon))
 - Make every production TypeScript script part of exact coverage and add lint and duplication gates ([pm-vcs-op2c](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-op2c.toon))
 - Absorb pm 2026.8.7 merge and toolchain contracts ([pm-vcs-o3jj](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-o3jj.toon))
 - Add scripts/self-host.ts to coverageGate.sources and bring it to 100/100/100 ([pm-vcs-4t67](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-4t67.toon))
@@ -33,6 +34,7 @@
 
 ### Fixed
 
+- Public git history embeds a personal author email and blocks release approval ([pm-vcs-mhbz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-mhbz.toon))
 - Fix NODE_V8_COVERAGE lcov corruption in test helpers ([pm-vcs-lapg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-lapg.toon))
 - The 100 percent branch gate rested on an incidental execution, so an unrelated change failed CI on Node 26 only ([pm-vcs-8e8k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8e8k.toon))
 - A fetched branch can be neither named nor listed, so the push refusal's own remediation cannot be followed ([pm-vcs-dh19](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-dh19.toon))

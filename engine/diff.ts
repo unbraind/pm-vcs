@@ -52,26 +52,79 @@ export function splitLines(text: string): string[] {
 }
 
 /**
- * Computes the shortest edit script between two line sequences.
+ * One banded furthest-reaching snapshot, taken at a single edit distance.
+ *
+ * `furthest` stores the furthest x reached on each diagonal of the reachable
+ * band at the edit distance this snapshot was taken; `offset` maps a diagonal
+ * number `k` to an index via `k + offset` (so the band runs from `-offset` to
+ * `+offset`). Only the diagonals that carry information at that distance are
+ * kept, which is what bounds peak memory to the band rather than the full width.
+ */
+interface TraceSnapshot {
+  readonly furthest: Int32Array;
+  readonly offset: number;
+}
+
+/**
+ * The forward Myers search result: the banded trace plus allocation statistics.
+ *
+ * The statistics exist so the band bound is testable: `peakSnapshotEntries` is
+ * the largest single snapshot and `totalSnapshotEntries` the sum across every
+ * distance, both proportional to the reachable band rather than to the combined
+ * input length.
+ */
+export interface DiffSearch {
+  readonly snapshots: readonly TraceSnapshot[];
+  readonly distance: number;
+  readonly peakSnapshotEntries: number;
+  readonly totalSnapshotEntries: number;
+}
+
+/**
+ * A diff result annotated with the trace allocation statistics.
+ *
+ * Returned by {@link diffLinesWithStats} so callers that only need the script
+ * use {@link diffLines} and callers that must prove the memory bound (tests)
+ * read the snapshot statistics from one pass.
+ */
+export interface DiffResult {
+  readonly edits: Edit[];
+  readonly distance: number;
+  readonly peakSnapshotEntries: number;
+  readonly totalSnapshotEntries: number;
+}
+
+/**
+ * Runs the forward Myers search, snapshotting only the reachable diagonal band.
+ *
+ * The working `furthest` array stays full width — a single `O(n + m)`
+ * allocation, not one per distance — but each snapshot copied into the trace is
+ * bounded to the `2d + 1` diagonals that carry information at edit distance `d`.
+ * The snapshot taken at the top of the distance-`d` pass records the state after
+ * distance `d - 1`, whose meaningful diagonals are `-(d - 1)..(d - 1)`; it is
+ * stored in a `2d + 1` entry array with offset `d`, so the backtrack can look up
+ * `previousK + d` for any `previousK` it can reach. That bounds the per-snapshot
+ * cost to the band and the total trace to `O(d^2)` instead of `O(d * (n + m))`.
  *
  * @param left - The original lines.
  * @param right - The revised lines.
- * @returns The edit script, in order, covering every line of both sides.
+ * @returns The banded trace, the terminating edit distance, and the snapshot
+ * allocation statistics.
  */
-export function diffLines(left: readonly string[], right: readonly string[]): Edit[] {
+function searchForward(left: readonly string[], right: readonly string[]): DiffSearch {
   const leftLength = left.length;
   const rightLength = right.length;
   const maximum = leftLength + rightLength;
   // Two empty inputs have one edit script — the empty one — and the search below
   // would read `furthest[1]` on an array of length 1 to find it, producing NaN
   // cursors and falling out of the loop instead of returning from it.
-  if (maximum === 0) return [];
-  // `trace[d][k]` records the furthest x reached on diagonal k at edit
-  // distance d. Keeping every step is what lets the backtrack below recover
-  // the actual script rather than only its length.
-  const trace: Array<Int32Array> = [];
-  // Diagonals run from -maximum to +maximum, offset into a flat array.
+  if (maximum === 0) return { snapshots: [], distance: 0, peakSnapshotEntries: 0, totalSnapshotEntries: 0 };
+  // One full-width working array; the cost is a single `O(n + m)` allocation,
+  // not the per-distance snapshots that dominated the old memory.
   const furthest = new Int32Array(2 * maximum + 1);
+  const snapshots: TraceSnapshot[] = [];
+  let peakSnapshotEntries = 0;
+  let totalSnapshotEntries = 0;
 
   // The search runs until a script is found rather than to a fixed bound, and that
   // is not an unbounded loop: `d` reaches at most `maximum`, since deleting every
@@ -81,7 +134,18 @@ export function diffLines(left: readonly string[], right: readonly string[]): Ed
   // allows none.
   let distance = -1;
   for (let d = 0; distance < 0; d += 1) {
-    trace.push(Int32Array.from(furthest));
+    // Snapshot the band of the current furthest state — the state after distance
+    // `d - 1` — before this pass overwrites it. Only diagonals of parity `d - 1`
+    // within `-(d - 1)..(d - 1)` hold values at that point; the outer `k = ±d`
+    // slots stay zero and are never read by the backtrack (its `k = ±d` cases
+    // short-circuit the comparison that would touch them).
+    const band = new Int32Array(2 * d + 1);
+    for (let k = -(d - 1); k <= d - 1; k += 2) {
+      band[k + d] = furthest[k + maximum];
+    }
+    snapshots.push({ furthest: band, offset: d });
+    peakSnapshotEntries = Math.max(peakSnapshotEntries, band.length);
+    totalSnapshotEntries += band.length;
     for (let k = -d; k <= d; k += 2) {
       // Step down (an insertion from the right side) when the diagonal below is
       // behind, otherwise step right (a deletion from the left side).
@@ -99,55 +163,81 @@ export function diffLines(left: readonly string[], right: readonly string[]): Ed
       }
     }
   }
-  return backtrack(left, right, trace, distance, maximum);
+  return { snapshots, distance, peakSnapshotEntries, totalSnapshotEntries };
 }
 
 /**
- * Walks the recorded traces backwards to turn an edit distance into a script.
+ * Walks the banded traces backwards to turn an edit distance into a script.
  *
  * @param left - The original lines.
  * @param right - The revised lines.
- * @param trace - Furthest-reaching x per diagonal, one snapshot per distance.
- * @param distance - The edit distance the forward search terminated at.
- * @param offset - The index shift applied to diagonal numbers.
+ * @param search - The banded trace and terminating distance from {@link searchForward}.
  * @returns The edit script in forward order.
  */
-function backtrack(
-  left: readonly string[],
-  right: readonly string[],
-  trace: readonly Int32Array[],
-  distance: number,
-  offset: number,
-): Edit[] {
+function backtrack(left: readonly string[], right: readonly string[], search: DiffSearch): Edit[] {
   const edits: Edit[] = [];
   let x = left.length;
   let y = right.length;
-  for (let d = distance; d > 0; d -= 1) {
-    const previous = trace[d];
+  for (let d = search.distance; d > 0; d -= 1) {
+    const previous = search.snapshots[d]!;
+    const offset = previous.offset;
     const k = x - y;
-    const goDown = k === -d || (k !== d && previous[k - 1 + offset] < previous[k + 1 + offset]);
+    const goDown = k === -d || (k !== d && previous.furthest[k - 1 + offset] < previous.furthest[k + 1 + offset]);
     const previousK = goDown ? k + 1 : k - 1;
-    const previousX = previous[previousK + offset];
+    const previousX = previous.furthest[previousK + offset];
     const previousY = previousX - previousK;
     while (x > previousX && y > previousY) {
       x -= 1;
       y -= 1;
-      edits.push({ kind: "equal", text: left[x], leftIndex: x, rightIndex: y });
+      edits.push({ kind: "equal", text: left[x]!, leftIndex: x, rightIndex: y });
     }
     if (goDown) {
       y -= 1;
-      edits.push({ kind: "insert", text: right[y], leftIndex: null, rightIndex: y });
+      edits.push({ kind: "insert", text: right[y]!, leftIndex: null, rightIndex: y });
     } else {
       x -= 1;
-      edits.push({ kind: "delete", text: left[x], leftIndex: x, rightIndex: null });
+      edits.push({ kind: "delete", text: left[x]!, leftIndex: x, rightIndex: null });
     }
   }
   while (x > 0 && y > 0) {
     x -= 1;
     y -= 1;
-    edits.push({ kind: "equal", text: left[x], leftIndex: x, rightIndex: y });
+    edits.push({ kind: "equal", text: left[x]!, leftIndex: x, rightIndex: y });
   }
   return edits.reverse();
+}
+
+/**
+ * Computes the shortest edit script between two line sequences.
+ *
+ * @param left - The original lines.
+ * @param right - The revised lines.
+ * @returns The edit script, in order, covering every line of both sides.
+ */
+export function diffLines(left: readonly string[], right: readonly string[]): Edit[] {
+  return backtrack(left, right, searchForward(left, right));
+}
+
+/**
+ * Computes the edit script together with the trace allocation statistics.
+ *
+ * The script is identical to {@link diffLines}; the statistics let a caller
+ * prove the trace memory is bounded by the reachable band (`2d + 1` per
+ * snapshot) rather than by the full width (`2 * (n + m) + 1` per snapshot),
+ * which is the property `pm-vcs-ze24` requires to be testable.
+ *
+ * @param left - The original lines.
+ * @param right - The revised lines.
+ * @returns The edit script plus the peak and total snapshot allocation.
+ */
+export function diffLinesWithStats(left: readonly string[], right: readonly string[]): DiffResult {
+  const search = searchForward(left, right);
+  return {
+    edits: backtrack(left, right, search),
+    distance: search.distance,
+    peakSnapshotEntries: search.peakSnapshotEntries,
+    totalSnapshotEntries: search.totalSnapshotEntries,
+  };
 }
 
 /**
