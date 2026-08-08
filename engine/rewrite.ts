@@ -45,9 +45,8 @@ import {
   reachable,
 } from "./merge.ts";
 import { mergeRecords } from "./records.ts";
-import { type RepositoryConfig, isRecordPath } from "./config.ts";
+import { type RepositoryConfig, isRecordPath, matchesGlob } from "./config.ts";
 import { buildTree, flattenTree } from "./worktree.ts";
-import { matchesGlob } from "./config.ts";
 
 /** One path that could not be merged automatically. */
 export interface MergeConflict {
@@ -225,7 +224,7 @@ export function mergeTrees(
       const selected = compareByteOrder(ourEntry.fileId as FileId, theirEntry.fileId as FileId) <= 0
         ? ourEntry : theirEntry;
       return {
-        ...(selected.fileId === undefined ? {} : { fileId: selected.fileId }),
+        fileId: selected.fileId as FileId,
         ...(selected.copiedFrom === undefined ? {} : { copiedFrom: selected.copiedFrom }),
       };
     }
@@ -260,10 +259,11 @@ export function mergeTrees(
       if (theirEntry) files.set(path, theirEntry);
       continue;
     }
-    if (ourEntry?.id === theirEntry?.id && ourEntry?.mode === theirEntry?.mode) {
-      if (ourEntry) files.set(path, {
-        ...ourEntry,
-        ...reconcileIdentity(path, ourEntry, theirEntry ?? {}),
+    if (ourEntry && theirEntry && ourEntry.id === theirEntry.id && ourEntry.mode === theirEntry.mode) {
+      files.set(path, {
+        id: ourEntry.id,
+        mode: ourEntry.mode,
+        ...reconcileIdentity(path, ourEntry, theirEntry),
       });
       continue;
     }

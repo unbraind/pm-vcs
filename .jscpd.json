@@ -1,0 +1,7 @@
+{
+  "threshold": 0,
+  "reporters": ["console"],
+  "format": ["typescript"],
+  "ignore": ["**/*.d.ts", "**/coverage/**", "**/dist/**", "**/node_modules/**", "**/test/**"],
+  "exitCode": 1
+}

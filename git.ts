@@ -82,9 +82,10 @@ export class VcsError extends Error {
  *
  * @param args - Git arguments, passed with no shell interpretation.
  * @param cwd - Directory to run git in.
+ * @param timeoutMs - Process ceiling; tests may lower it to exercise termination.
  * @returns The captured status, stdout and trimmed stderr.
  */
-export function runGit(args: readonly string[], cwd: string): GitResult {
+export function runGit(args: readonly string[], cwd: string, timeoutMs = GIT_TIMEOUT_MS): GitResult {
   const result = spawnSync("git", [...args], {
     cwd,
     encoding: "utf8",
@@ -92,7 +93,7 @@ export function runGit(args: readonly string[], cwd: string): GitResult {
     // ceiling truncates them into unparseable fragments, and spawnSync reports
     // that as an ENOBUFS error with empty output rather than as a short read.
     maxBuffer: 64 * 1024 * 1024,
-    timeout: GIT_TIMEOUT_MS,
+    timeout: timeoutMs,
     // Keep git from consulting a pager or prompting for credentials: either
     // would hang a command an agent is waiting on.
     env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
@@ -103,7 +104,7 @@ export function runGit(args: readonly string[], cwd: string): GitResult {
     if ((result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
       throw new VcsError(
         "git_timed_out",
-        `git ${args.join(" ")} did not finish within ${GIT_TIMEOUT_MS / 1000}s and was terminated.`,
+        `git ${args.join(" ")} did not finish within ${timeoutMs / 1000}s and was terminated.`,
         "Check for a stale .git/index.lock, an unreachable remote, or a credential helper waiting on input, then retry.",
       );
     }

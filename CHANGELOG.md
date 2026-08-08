@@ -4,6 +4,7 @@
 
 ### Added
 
+- Make every production TypeScript script part of exact coverage and add lint and duplication gates ([pm-vcs-op2c](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-op2c.toon))
 - Absorb pm 2026.8.7 merge and toolchain contracts ([pm-vcs-o3jj](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-o3jj.toon))
 - Add scripts/self-host.ts to coverageGate.sources and bring it to 100/100/100 ([pm-vcs-4t67](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-4t67.toon))
 - Clone builds a working tree from a remote and inherits its record configuration ([pm-vcs-jj9r](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-jj9r.toon))

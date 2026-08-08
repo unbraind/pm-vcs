@@ -12,50 +12,37 @@
  * ```
  */
 
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
-import { withoutPmContext } from "./pm-environment.ts";
+import { errorMessage, packageRoot, pmExecutable, runPm, setExitCodeWhenMain } from "./pm-environment.ts";
 
-const packageRoot = resolve(import.meta.dirname, "..");
-const executable = join(packageRoot, "node_modules", "@unbrained", "pm-cli", "dist", "cli.js");
-const project = mkdtempSync(join(tmpdir(), "pm-vcs-native-toon-"));
-const initOnly = process.argv.includes("--init-only");
-
-/** Runs one installed-CLI acceptance step or preserves its actionable failure. */
-function run(arguments_: readonly string[]): void {
-  const result = spawnSync(process.execPath, [executable, ...arguments_], {
-    cwd: project,
-    encoding: "utf8",
-    env: withoutPmContext(process.env),
-    timeout: 120_000,
-  });
-  if (result.status !== 0) {
-    const detail = result.error?.message ?? (result.stderr.trim() || result.stdout.trim());
-    throw new Error(`pm ${arguments_.join(" ")} failed${detail.length > 0 ? `: ${detail}` : "."}`);
+/** Runs the installed-CLI workflow and returns a process-compatible status. */
+export function main(arguments_: readonly string[], executable = pmExecutable): number {
+  const project = mkdtempSync(join(tmpdir(), "pm-vcs-native-toon-"));
+  let status = 0;
+  try {
+    runPm(project, ["init", "toon-acceptance", "--yes", "--author", "acceptance", "--agent-guidance", "skip"], executable);
+    if (arguments_.includes("--init-only")) {
+      console.log("native TOON acceptance launcher passed");
+    } else {
+      runPm(project, ["install", packageRoot, "--project"], executable);
+      runPm(project, [
+        "vcs", "init",
+        "--record-path", ".agents/pm/**/*.toon",
+        "--set-field", "tags:set,notes:sequence,updated_at:timestamp",
+      ], executable);
+      runPm(project, ["create", "Task", "Native TOON acceptance", "--author", "acceptance"], executable);
+      runPm(project, ["vcs", "add"], executable);
+      console.log("native TOON acceptance passed");
+    }
+  } catch (error) {
+    console.error(errorMessage(error, "native TOON acceptance failed"));
+    status = 1;
   }
-}
-
-try {
-  run(["init", "toon-acceptance", "--yes", "--author", "acceptance", "--agent-guidance", "skip"]);
-  if (initOnly) {
-    console.log("native TOON acceptance launcher passed");
-  } else {
-    run(["install", packageRoot, "--project"]);
-    run([
-      "vcs", "init",
-      "--record-path", ".agents/pm/**/*.toon",
-      "--set-field", "tags:set,notes:sequence,updated_at:timestamp",
-    ]);
-    run(["create", "Task", "Native TOON acceptance", "--author", "acceptance"]);
-    run(["vcs", "add"]);
-    console.log("native TOON acceptance passed");
-  }
-} catch (error) {
-  console.error(error instanceof Error ? error.message : "native TOON acceptance failed");
-  process.exitCode = 1;
-} finally {
   rmSync(project, { recursive: true, force: true });
+  return status;
 }
+
+setExitCodeWhenMain(process.argv, import.meta.url, main, [process.argv.slice(2)]);
