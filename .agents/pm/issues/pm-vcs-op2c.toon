@@ -6,7 +6,7 @@ status: closed
 priority: 0
 tags[7]: coverage,docstrings,duplication,lint,quality,release-blocker,typescript
 created_at: "2026-08-07T13:01:18.790Z"
-updated_at: "2026-08-08T00:54:56.883Z"
+updated_at: "2026-08-08T01:00:28.708Z"
 closed_at: "2026-08-08T00:41:52.546Z"
 completed_at: "2026-08-08T00:41:52.546Z"
 claim_principal: "harness:codex"
@@ -35,10 +35,11 @@ component: quality/release
 customer_impact: A release could currently satisfy configured coverage while regressions in operational acceptance scripts or duplicated/forbidden code remain undetected
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-o3jj,discovered_from,"2026-08-07T13:01:47.549Z",codex,pm-audit,asserted
-notes[3]{created_at,author,text}:
+notes[4]{created_at,author,text}:
   "2026-08-08T00:41:47.815Z","harness:codex","The package remains intentionally unpublished: audit:identities still rejects exactly one known non-public historical address,independently of these clean code-quality gates."
   "2026-08-08T00:42:45.025Z","harness:codex",The default pm health --strict-exit reproduced the known unbraind/pm-cli#928 silent provider-refresh hang and was stopped after four minutes; CI now uses the documented --check-only mode and the read-only strict health gate completes promptly.
   "2026-08-08T00:54:56.864Z","harness:codex",PR #20 Windows Node 22 and 26 logs proved execFileSync cannot launch a bare pm name backed by npm pm.CMD. Discovery now returns the exact validated shim path and uses the Windows shell only at that validated boundary; POSIX remains direct execution.
+  "2026-08-08T01:00:28.691Z","harness:codex","Accepted all three remaining CodeRabbit findings on the first review head: parser failure is tracked independently of the thrown value; equal-content reconciliation no longer leaks copiedFrom across the selected FileId; and the real strace success path runs only on a Linux host with strace available. Added reversed-provenance behavior coverage."
 learnings[1]{created_at,author,text}:
   "2026-08-08T00:41:47.815Z","harness:codex",An explicit source allowlist can report perfect coverage while omitting operational scripts. c8 --all makes absence measurable; behavior-driven failure fixtures also exposed unreachable defensive branches that were better simplified.
 files[5]{path,scope,note}:

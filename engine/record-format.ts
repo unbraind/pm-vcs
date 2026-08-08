@@ -28,11 +28,13 @@ const PM_ITEM_FIELDS = ["id", "title", "description", "type", "status", "priorit
  */
 export function parseWorkingRecord(path: string, content: Buffer): RecordDocument {
   let toonError: unknown;
+  let toonParseFailed = false;
   if (path.endsWith(".toon")) {
     try {
       const item = parseItemDocument(content.toString("utf8"), { format: "toon" });
       return decodeRecord(Buffer.from(JSON.stringify({ ...item.metadata, body: item.body }), "utf8"));
     } catch (error) {
+      toonParseFailed = true;
       toonError = error;
       // A configured .toon path can be a legacy JSON record. Preserve that
       // compatibility by trying the generic record codec before failing closed.
@@ -44,7 +46,7 @@ export function parseWorkingRecord(path: string, content: Buffer): RecordDocumen
     throw new ObjectStoreError(
       "malformed_object",
       `Record path ${path} is neither a valid native PM TOON item nor a valid JSON object.`
-      + (toonError === undefined
+      + (!toonParseFailed
         ? ""
         : ` Native TOON parser: ${String(toonError).replace(/^[^:]+: /, "")}`),
     );

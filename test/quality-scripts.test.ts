@@ -100,7 +100,8 @@ test("stat-cache acceptance validates trace semantics, platform skip and real Li
     /cached status still opened large.bin.*openat large.bin/s,
   );
   assert.equal(statMain("darwin"), 0);
-  assert.equal(statMain("linux"), 0);
+  const straceAvailable = spawnSync("strace", ["--version"], { encoding: "utf8" }).status === 0;
+  if (process.platform === "linux" && straceAvailable) assert.equal(statMain("linux"), 0);
   assert.equal(statMain("linux", join(tmpdir(), "missing-pm-vcs-cli")), 1);
 
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-trace-failure-"));

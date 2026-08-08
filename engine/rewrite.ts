@@ -261,7 +261,8 @@ export function mergeTrees(
     }
     if (ourEntry && theirEntry && ourEntry.id === theirEntry.id && ourEntry.mode === theirEntry.mode) {
       files.set(path, {
-        ...ourEntry,
+        id: ourEntry.id,
+        mode: ourEntry.mode,
         ...reconcileIdentity(path, ourEntry, theirEntry),
       });
       continue;

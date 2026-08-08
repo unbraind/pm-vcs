@@ -166,6 +166,17 @@ test("record add-add and reversed identity ordering remain deterministic", () =>
     ]));
     const copied = mergeTrees(context, null, copiedOurTree, copiedTheirTree);
     assert.equal(flattenTree(repository.objects, copied.tree).get("file")?.copiedFrom, "c".repeat(32));
+
+    const higherCopiedTree = buildTree(repository.objects, new Map([
+      ["file", {
+        id: blob,
+        mode: "100644" as const,
+        fileId: "f".repeat(32),
+        copiedFrom: "c".repeat(32),
+      }],
+    ]));
+    const provenanceMustNotCrossIdentities = mergeTrees(context, null, higherCopiedTree, theirTree);
+    assert.equal(flattenTree(repository.objects, provenanceMustNotCrossIdentities.tree).get("file")?.copiedFrom, undefined);
   } finally {
     directory.cleanup();
   }
