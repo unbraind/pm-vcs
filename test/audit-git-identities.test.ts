@@ -56,6 +56,28 @@ test("identity audit accepts an allowlisted reachable history", async () => {
   await assert.doesNotReject(auditGitIdentities(root, allowlist));
 });
 
+test("identity audit fails closed on an unapproved identity even when an approved authoring identity is allowlisted", async () => {
+  // An allowlist that carries an approved public authoring identity must not
+  // become a rubber stamp: any address absent from the file is still rejected.
+  const { root } = repository();
+  const allowlist = join(root, "approved.txt");
+  writeFileSync(
+    allowlist,
+    [
+      "# approved public authoring identity",
+      "public@example.test",
+      "approved@authoring.identity",
+    ].join("\n"),
+  );
+  git(root, ["config", "user.email", "unapproved@example.test"]);
+  writeFileSync(join(root, "file"), "second");
+  git(root, ["commit", "-qam", "second"]);
+  await assert.rejects(
+    auditGitIdentities(root, allowlist),
+    /rejected 1 non-public address/,
+  );
+});
+
 test("identity audit accepts an initialized repository with no commits", async () => {
   dir = makeTempDir();
   git(dir.root, ["init", "-q"]);
