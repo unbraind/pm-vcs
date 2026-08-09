@@ -34,7 +34,6 @@
     "accept:self-host": "node scripts/self-host.ts",
     "self-host:write": "node scripts/self-host.ts --write",
     "pack:dry-run": "npm pack --dry-run",
-    "changelog": "pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --release-version-from-package --date 2026-07-30 --since-previous-tag --until-release-tag --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release",
     "changelog:full": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release",
     "changelog:check": "npm run changelog:full -- --check",
     "release:check": "npm run typecheck && npm run build && npm run lint && npm run duplicates && npm run docstring && npm run coverage && npm run accept:native-toon && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run changelog:check",
