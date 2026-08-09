@@ -6,7 +6,7 @@ status: closed
 priority: 1
 tags[4]: changelog,ci,docstrings,gate
 created_at: "2026-08-09T20:21:47.088Z"
-updated_at: "2026-08-09T20:22:18.661Z"
+updated_at: "2026-08-09T20:49:25.835Z"
 deadline: "2026-08-10T00:00:00.000Z"
 closed_at: "2026-08-09T20:22:18.647Z"
 completed_at: "2026-08-09T20:22:18.647Z"
@@ -17,7 +17,7 @@ resolution: fixed
 expected_result: "npm run docstring passes against the canonical analyzer, coverage stays at 100 percent, and npm run changelog:check exits 0"
 actual_result: "The gate reports 32 files and 146 declarations documented, coverage is 100 across statements branches functions and lines, and the changelog check reports up to date"
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
-  pm-vcs-pmc-s2bk,related,"2026-08-09T20:21:47.088Z",claude,"cli:create:dep",asserted
+  pm-vcs-yaks,related,"2026-08-09T20:49:25.792Z",claude,"cli:update:dep",asserted
 comments[1]{created_at,author,text}:
   "2026-08-09T20:21:47.088Z",claude,"A one-file scan-count difference during verification turned out to be the temporary copy of the old gate left in scripts,not a narrowing of the canonical analyzer"
 notes[1]{created_at,author,text}:
