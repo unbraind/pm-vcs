@@ -1,0 +1,34 @@
+id: pm-vcs-8bpi
+title: Retire the vendored docstring analyzer and converge the changelog on replace mode
+description: "pm-vcs carried a 529-line local fork of the docstring analyzer plus a 774-line test for it, while the fleet enforces the canonical analyzer published as pm-ops docstrings. The release workflow also still generated the changelog in prepend mode while the gate verified replace mode."
+type: Issue
+status: closed
+priority: 1
+tags[4]: changelog,ci,docstrings,gate
+created_at: "2026-08-09T20:21:47.088Z"
+updated_at: "2026-08-09T20:49:25.835Z"
+deadline: "2026-08-10T00:00:00.000Z"
+closed_at: "2026-08-09T20:22:18.647Z"
+completed_at: "2026-08-09T20:22:18.647Z"
+author: claude
+estimated_minutes: 90
+acceptance_criteria: "The docstring gate is a thin launcher importing pm-ops docstrings under an exact pin, the gate still passes, coverage stays at 100 percent, and the release workflow generates the changelog in the same mode the gate verifies"
+resolution: fixed
+expected_result: "npm run docstring passes against the canonical analyzer, coverage stays at 100 percent, and npm run changelog:check exits 0"
+actual_result: "The gate reports 32 files and 146 declarations documented, coverage is 100 across statements branches functions and lines, and the changelog check reports up to date"
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-yaks,related,"2026-08-09T20:49:25.792Z",claude,"cli:update:dep",asserted
+comments[1]{created_at,author,text}:
+  "2026-08-09T20:21:47.088Z",claude,"A one-file scan-count difference during verification turned out to be the temporary copy of the old gate left in scripts,not a narrowing of the canonical analyzer"
+notes[1]{created_at,author,text}:
+  "2026-08-09T20:21:47.088Z",claude,1303 lines of vendored analyzer and its test removed in favour of a 146-line launcher and a 174-line launcher test
+learnings[1]{created_at,author,text}:
+  "2026-08-09T20:21:47.088Z",claude,"Before replacing a strict local gate with a shared one,compare the number of files each actually scans,because a shared gate that silently scans fewer files reports a green check that proves less than the fork it replaced"
+files[1]{path,scope,note}:
+  .github/workflows/release.yml,project,changelog generation switched to replace mode
+tests[1]{command,scope,timeout_seconds}:
+  npm run docstring,project,300
+docs[1]{path,scope,note}:
+  scripts/docstring-gate.ts,project,thin launcher over the canonical analyzer
+close_reason: Replaced the vendored analyzer with the canonical pm-ops launcher under an exact pin and converged the release changelog on replace mode
+body: "The vendored fork and the canonical analyzer implement the same policy, but the canonical one is more thorough at 1273 lines against 529: both parse a real syntax tree, and both reject a docstring that merely restates its identifier via a novel-word floor after camelCase tokenization and filler stripping. Verified before swapping that the canonical analyzer scans the same 32 authored non-test files, so the gate did not narrow."

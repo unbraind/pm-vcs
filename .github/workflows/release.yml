@@ -106,8 +106,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --date ${{ steps.decide.outputs.release_iso_date }} --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary
-          npx pm-changelog --pm-root .agents/pm --mode prepend --output CHANGELOG.md --since-previous-tag --until-release-tag --release-version-from-package --date ${{ steps.decide.outputs.release_iso_date }} --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --check
+          npx pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date ${{ steps.decide.outputs.release_iso_date }} --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary
+          # Deliberately a DETERMINISM assertion, not a currency check. It runs
+          # against the file the line above just wrote, so it cannot prove the
+          # committed changelog was current - only that a second render of the
+          # same inputs is byte-identical, which is what makes the PR-time
+          # changelog:check trustworthy. Currency is gated in ci.yml, before the
+          # release; here there is nothing to be current against, because this
+          # job is what creates the new release section.
+          npx pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date ${{ steps.decide.outputs.release_iso_date }} --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --check
           npx pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date ${{ steps.decide.outputs.release_iso_date }} --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm > RELEASE_NOTES.md
 
       - name: Run release checks
