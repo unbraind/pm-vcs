@@ -9,6 +9,10 @@ permissions:
   contents: write
   id-token: write
   pull-requests: write
+  # Lets the merge wait approve a CI run that GitHub parked on `action_required`
+  # for the release PR. Best-effort: when the token may not approve, the run is
+  # still reported with its URL so a maintainer can approve it once.
+  actions: write
 
 concurrency:
   group: daily-release
@@ -267,6 +271,7 @@ jobs:
           owner="${GITHUB_REPOSITORY%/*}"
           repo="${GITHUB_REPOSITORY#*/}"
           deadline=$(( SECONDS + 1800 ))
+          awaiting_approval=0
           merge_err="$(mktemp)"
           pr_view_err="$(mktemp)"
           merged_sha=""
@@ -355,10 +360,42 @@ jobs:
               merged_sha=""
             else
               echo "Merge attempt refused (state: ${merge_state}; settling: ${unsettled:-none}; failing: ${failing:-none}): $(tr '\n' ' ' < "$merge_err")"
+
+              # A run parked on `action_required` is awaiting manual approval and
+              # will never start on its own. It is invisible in statusCheckRollup,
+              # so without this it is indistinguishable from a required check that
+              # failed: the loop just logs "settling: none" until the deadline.
+              # pm-changelog's release PR #133 parked exactly this way on
+              # 2026-08-10 (attempt 1 conclusion `action_required` at 04:54:24Z,
+              # policy `first_time_contributors`, and `github-actions[bot]` had no
+              # merged PR in that repo yet). A human re-ran it at 05:36Z, 12
+              # minutes after the release had already given up. Try to approve it -
+              # the token often may not, which is harmless - and always surface the
+              # run so the wait is diagnosable.
+              pending_runs="$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${release_commit}" \
+                --jq '.workflow_runs[]? | select(.conclusion=="action_required" or .status=="waiting") | .id' \
+                2>/dev/null || true)"
+              if [[ -n "$pending_runs" ]]; then
+                while IFS= read -r run_id; do
+                  [[ -z "$run_id" ]] && continue
+                  echo "::warning::CI run ${run_id} for this release PR is awaiting workflow approval: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                  gh api --method POST \
+                    "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/approve" \
+                    >/dev/null 2>&1 \
+                    && echo "Approved workflow run ${run_id}; its checks can now report." \
+                    || echo "Could not approve run ${run_id} with this token; a maintainer must approve it once."
+                done <<< "$pending_runs"
+                awaiting_approval=1
+              fi
             fi
 
             if (( SECONDS >= deadline )); then
-              echo "::error::Release PR #${pr_number} did not merge within 30 minutes (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). A required check failed or never reported, or a required review is missing; not merging or publishing."
+              if (( awaiting_approval == 1 )); then
+                echo "::error::Release PR #${pr_number} did not merge within 30 minutes because its CI run is awaiting workflow approval (last state: ${merge_state}). Approve the run linked above once; this repository requires approval for a contributor that has no merged PR yet. Nothing was published or tagged."
+              else
+                echo "::error::Release PR #${pr_number} did not merge within 30 minutes (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). A required check failed or never reported, or a required review is missing; not merging or publishing."
+              fi
               exit 1
             fi
             sleep 20

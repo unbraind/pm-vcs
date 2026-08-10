@@ -6,8 +6,9 @@ status: open
 priority: 2
 tags: []
 created_at: "2026-08-10T15:28:32.688Z"
-updated_at: "2026-08-10T15:28:36.550Z"
+updated_at: "2026-08-10T15:33:13.999Z"
 author: pi-agent
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-08-10T15:28:36.550Z",pi-agent,"Ported the pm-beads release.yml transformation: added pull-requests:write permission, base_sha decide output, Merge release metadata through protected PR step with merge-loop, Verify merged release step, and replaced Publish+Push-tag-and-main with Publish+Push-tag-only. dist/ is gitignored and not tracked in pm-vcs so it is NOT included in the verify diff list. Preserved the pinned action SHAs, the release_iso_date decide output and --date changelog flag, and the 8-attempt bun verify with npm registry fallback. No existing gate or if: guard was modified."
+  "2026-08-10T15:33:13.999Z",claude,"Greptile reported that creating the release pull request with GITHUB_TOKEN suppresses its pull_request event so CI never starts. Measured against pm-changelog, the event is not suppressed: a run was created at 04:54:24Z with event pull_request for branch release/2026.8.9. The real blocker is that attempt 1 concluded action_required, meaning GitHub parked the run awaiting workflow approval under the fork pull request contributor approval policy of first_time_contributors, because github-actions had no merged pull request in that repository yet. A parked run never appears in the status check rollup, so it is indistinguishable from a required check that failed. The merge wait now detects parked runs, reports the run URL, attempts approval using the actions write permission, and separates awaiting approval from a failed check in the deadline error."
 body: ""
