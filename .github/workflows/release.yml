@@ -516,6 +516,24 @@ jobs:
         run: |
           set -euo pipefail
           release_tag="$RELEASE_TAG"
+          # Consult the remote, not just the local tag database. The last tag
+          # fetch happened back in `Decide release`; if anything created this
+          # tag on origin since then, the local lookup misses it, `git tag`
+          # succeeds locally and the push below is rejected as non-fast-forward
+          # - after a successful publish, which is the npm-ahead-of-git state
+          # this workflow exists to prevent.
+          git fetch origin --force --tags
+          remote_tag_sha="$(git ls-remote --tags origin "refs/tags/${release_tag}" | cut -f1)"
+          current_sha="$(git rev-parse HEAD)"
+          if [[ -n "$remote_tag_sha" ]]; then
+            remote_commit="$(git rev-list -n 1 "$remote_tag_sha")"
+            if [[ "$remote_commit" != "$current_sha" ]]; then
+              echo "::error::${release_tag} already exists on origin at ${remote_commit}, not verified main ${current_sha}."
+              exit 1
+            fi
+            echo "::notice::${release_tag} is already on origin at the verified commit; nothing to push."
+            exit 0
+          fi
           if git rev-parse --verify --quiet "refs/tags/${release_tag}" > /dev/null; then
             existing_sha="$(git rev-list -n 1 "$release_tag")"
             current_sha="$(git rev-parse HEAD)"
