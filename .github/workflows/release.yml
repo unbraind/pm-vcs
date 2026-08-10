@@ -547,7 +547,7 @@ jobs:
           # - after a successful publish, which is the npm-ahead-of-git state
           # this workflow exists to prevent.
           git fetch origin --force --tags
-          remote_tag_sha="$(git ls-remote --tags origin "refs/tags/${release_tag}" | cut -f1)"
+          remote_tag_sha="$(git ls-remote --refs --tags origin "refs/tags/${release_tag}" | awk 'NR == 1 { print $1 }')"
           current_sha="$(git rev-parse HEAD)"
           if [[ -n "$remote_tag_sha" ]]; then
             remote_commit="$(git rev-list -n 1 "$remote_tag_sha")"
