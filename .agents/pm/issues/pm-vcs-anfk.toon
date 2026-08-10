@@ -1,0 +1,15 @@
+id: pm-vcs-anfk
+title: Propagate the docstring gate entry guard fix
+description: "The isMainInvocation entry guard swallowed realpathSync ENOENT and returned false, causing npm run docstring to exit 0 having scanned nothing — a mandatory release gate reporting success without doing its job. Propagate the throw instead so a broken environment fails loudly."
+type: Issue
+status: open
+priority: 2
+tags[2]: docstrings,gate
+created_at: "2026-08-10T05:58:13.845Z"
+updated_at: "2026-08-10T05:58:21.137Z"
+author: pi-agent
+notes[3]{created_at,author,text}:
+  "2026-08-10T05:58:19.605Z",pi-agent,"Defect: isMainInvocation caught realpathSync ENOENT and returned false, so the top-level selector called the no-op placeholder instead of main. npm run docstring exited 0 having scanned nothing — a mandatory release check reporting success without doing its job."
+  "2026-08-10T05:58:20.089Z",pi-agent,"Fix: removed the try/catch so realpathSync propagates. An unresolvable argv[1] means the environment is broken after Node already loaded this file, and a broken environment must not silently satisfy a gate. The JSDoc now documents @throws and corrects the inverted fails-closed language."
+  "2026-08-10T05:58:21.137Z",pi-agent,"Verification: npm test passes (540 tests), npm run docstring exits 0 (32 files, 146 declarations), npm run coverage meets thresholds (100%), and node --experimental-strip-types confirms isMainInvocation throws ENOENT on an unresolvable argv[1] instead of returning false."
+body: ""

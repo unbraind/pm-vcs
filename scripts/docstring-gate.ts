@@ -116,23 +116,30 @@ export function main(args: readonly string[]): void {
  * `import.meta.url` is already symlink-resolved, so `argv[1]` is resolved through
  * `realpathSync` and converted to a URL before comparison. A launcher reaching
  * this file through a symlink (an npm bin shim, a linked workspace) would
- * otherwise compare unequal and skip the gate silently - a release gate that
- * no-ops without erroring is worse than one that throws. `realpathSync` throws
- * on a path that does not exist, so the guard fails closed rather than
- * propagating.
+ * otherwise compare unequal and skip the gate silently.
+ *
+ * An unresolvable `argv[1]` **propagates** rather than returning false. The two
+ * outcomes are not equally safe: returning false means `npm run docstring`
+ * exits 0 having scanned nothing, which is a required release check reporting
+ * success without doing its job — the one failure this gate exists to prevent.
+ * Letting `realpathSync` throw turns that into a loud non-zero exit. The case
+ * requires `argv[1]` to stop resolving after Node has already loaded this file,
+ * so in practice it means the environment is broken, and a broken environment
+ * must not silently satisfy a gate.
+ *
+ * A genuinely different entry path still returns false, which is how a test
+ * importing this module declines to run the gate.
  *
  * @param argv - The process argv to inspect.
  * @param moduleUrl - The `import.meta.url` of the module that might be main.
- * @returns True when `argv[1]` resolves to this module's own URL.
+ * @returns True when `argv[1]` resolves to this module's own URL, false when it
+ *          resolves to something else.
+ * @throws Whatever `realpathSync` throws when `argv[1]` cannot be resolved.
  */
 export function isMainInvocation(argv: readonly string[], moduleUrl: string): boolean {
   const entry = argv[1];
   if (entry === undefined) return false;
-  try {
-    return pathToFileURL(realpathSync(entry)).href === moduleUrl;
-  } catch {
-    return false;
-  }
+  return pathToFileURL(realpathSync(entry)).href === moduleUrl;
 }
 
 // Run only when invoked directly, not when imported by the test suite. An

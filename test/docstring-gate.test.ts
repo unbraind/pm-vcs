@@ -166,9 +166,14 @@ test("docstring gate isMainInvocation resolves a symlinked entry path to the rea
   }
 });
 
-test("docstring gate isMainInvocation returns false rather than throwing when argv[1] cannot be resolved", () => {
+test("docstring gate isMainInvocation throws rather than skipping the gate when argv[1] cannot be resolved", () => {
   const gateUrl = pathToFileURL(resolve(packageRoot, "scripts", "docstring-gate.ts")).href;
-  // A release gate that crashes on an unresolvable argv is worse than one that
-  // declines to self-invoke: the guard must fail closed, not propagate ENOENT.
-  assert.equal(isMainInvocation(["node", resolve(packageRoot, "does-not-exist.ts")], gateUrl), false);
+  // Returning false here would leave `npm run docstring` exiting 0 having
+  // scanned nothing - a required release check reporting success without doing
+  // its job. Crashing is the safe outcome, so assert it is what happens.
+  assert.throws(
+    () => isMainInvocation(["node", resolve(packageRoot, "does-not-exist.ts")], gateUrl),
+    /ENOENT/,
+    "an unresolvable entry must propagate, not silently decline to run the gate",
+  );
 });
