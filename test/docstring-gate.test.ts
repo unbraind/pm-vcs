@@ -139,9 +139,9 @@ test("docstring gate main with an explicit root writes the failure stream and se
 test("docstring gate isMainInvocation recognizes a direct invocation and rejects a test import", () => {
   const gatePath = resolve(packageRoot, "scripts", "docstring-gate.ts");
   const gateUrl = pathToFileURL(gatePath).href;
-  assert.equal(isMainInvocation(["node", gatePath], gateUrl), true, "a direct invocation runs the gate");
-  assert.equal(isMainInvocation(["node", resolve(packageRoot, "package.json")], gateUrl), false, "another entry point does not");
-  assert.equal(isMainInvocation(["node"], gateUrl), false, "a missing argv[1] does not");
+  assert.equal(isMainInvocation([process.execPath, gatePath], gateUrl), true, "a direct invocation runs the gate");
+  assert.equal(isMainInvocation([process.execPath, resolve(packageRoot, "package.json")], gateUrl), false, "another entry point does not");
+  assert.equal(isMainInvocation([process.execPath], gateUrl), false, "a missing argv[1] does not");
 });
 
 test("docstring gate isMainInvocation resolves a symlinked entry path to the real module URL", () => {
@@ -157,7 +157,7 @@ test("docstring gate isMainInvocation resolves a symlinked entry path to the rea
   try {
     symlinkSync(gatePath, link);
     assert.equal(
-      isMainInvocation(["node", link], pathToFileURL(gatePath).href),
+      isMainInvocation([process.execPath, link], pathToFileURL(gatePath).href),
       true,
       "a symlinked entry path resolves to the real module and runs the gate",
     );
@@ -166,9 +166,39 @@ test("docstring gate isMainInvocation resolves a symlinked entry path to the rea
   }
 });
 
-test("docstring gate isMainInvocation returns false rather than throwing when argv[1] cannot be resolved", () => {
+test("docstring gate isMainInvocation canonicalizes a symlinked moduleUrl, as --preserve-symlinks produces", () => {
+  // The symlink test above passes argv[1] as the link and moduleUrl as the REAL
+  // path, which the old one-sided comparison also satisfied - so it could not
+  // tell the two implementations apart. This is the case that can: moduleUrl
+  // holds the SYMLINK, which is what Node records in import.meta.url under
+  // --preserve-symlinks / --preserve-symlinks-main.
+  //
+  // Old: pathToFileURL(realpathSync(link)).href === linkUrl -> false, so the
+  // selector calls the placeholder and the gate exits 0 without scanning.
+  // New: realpathSync(link) === realpathSync(fileURLToPath(linkUrl)) -> true.
+  const gatePath = resolve(packageRoot, "scripts", "docstring-gate.ts");
+  const linkDir = mkdtempSync(join(tmpdir(), "pm-vcs-docgate-preserve-"));
+  const link = join(linkDir, "docstring-gate.ts");
+  try {
+    symlinkSync(gatePath, link);
+    assert.equal(
+      isMainInvocation([process.execPath, link], pathToFileURL(link).href),
+      true,
+      "a symlinked moduleUrl must still resolve to a direct invocation",
+    );
+  } finally {
+    rmSync(linkDir, { recursive: true, force: true });
+  }
+});
+
+test("docstring gate isMainInvocation throws rather than skipping the gate when argv[1] cannot be resolved", () => {
   const gateUrl = pathToFileURL(resolve(packageRoot, "scripts", "docstring-gate.ts")).href;
-  // A release gate that crashes on an unresolvable argv is worse than one that
-  // declines to self-invoke: the guard must fail closed, not propagate ENOENT.
-  assert.equal(isMainInvocation(["node", resolve(packageRoot, "does-not-exist.ts")], gateUrl), false);
+  // Returning false here would leave `npm run docstring` exiting 0 having
+  // scanned nothing - a required release check reporting success without doing
+  // its job. Crashing is the safe outcome, so assert it is what happens.
+  assert.throws(
+    () => isMainInvocation([process.execPath, resolve(packageRoot, "does-not-exist.ts")], gateUrl),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
+    "an unresolvable entry must propagate, not silently decline to run the gate",
+  );
 });
