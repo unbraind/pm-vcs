@@ -383,7 +383,7 @@ jobs:
               # the token often may not, which is harmless - and always surface the
               # run so the wait is diagnosable.
               pending_runs="$(gh api \
-                "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${release_commit}" \
+                "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${release_commit}&per_page=100" \
                 --jq '.workflow_runs[]? | select(.conclusion=="action_required" or .status=="waiting") | .id' \
                 2>/dev/null || true)"
               if [[ -n "$pending_runs" ]]; then
