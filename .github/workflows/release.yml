@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
   id-token: write
+  pull-requests: write
+  # Lets the merge wait approve a CI run that GitHub parked on `action_required`
+  # for the release PR. Best-effort: when the token may not approve, the run is
+  # still reported with its URL so a maintainer can approve it once.
+  actions: write
 
 concurrency:
   group: daily-release
@@ -91,6 +96,7 @@ jobs:
           # not from the clock, so a release can never publish a version whose
           # changelog heading names a different day than the version itself.
           printf 'release_iso_date=%04d-%02d-%02d\n' "$((10#$year))" "$((10#$month))" "$((10#$day))" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Update release version
         if: steps.decide.outputs.should_release == 'true'
@@ -157,6 +163,316 @@ jobs:
             exit 1
           fi
 
+      # Persist validated release metadata through the repository's protected
+      # branch policy before publishing an immutable npm artifact. A stable
+      # branch name lets a failed run update/reuse its open release PR, while
+      # the exact remote SHA lease prevents overwriting another actor's work.
+      # Ported from pm-beads's release.yml: main must already contain the
+      # release commit before npm publish runs - the invariant the old
+      # publish-then-push ordering violated. pm-vcs published 2026.8.10 to
+      # npm, then `git push origin HEAD:main` was rejected with GH006 by the
+      # protected branch, and `set -e` killed the job before the tag push, so
+      # npm ended up ahead of git (main still at 2026.8.7, no v2026.08.10 tag).
+      #
+      # The merge wait below IMPROVES on pm-context. pm-context polls
+      # `gh pr view --json mergeStateStatus` and merges when it reads
+      # CLEAN/HAS_HOOKS/UNSTABLE. That deadlocked pm-changelog's release PR
+      # #133 for the full 30-minute deadline: it read `BLOCKED` with an empty
+      # `statusCheckRollup` ("settling: none; failing: none") even though
+      # `test (22)` and `test (26)` had both already succeeded on the PR's head
+      # commit - GitHub's computed mergeStateStatus lagged the real check
+      # state, so a "read a state, then decide" loop waited forever for a state
+      # that never updated. A human had to merge it by hand.
+      #
+      # This step replaces that state poll with "attempt the merge, let GitHub
+      # be the authority": before each attempt it resolves any unresolved
+      # review threads (required_conversation_resolution is on, so an advisory
+      # bot comment from Sourcery/cubic/CodeRabbit would otherwise block the
+      # release forever), then it simply calls the merge endpoint. A
+      # successful PUT is proof the branch-protection rules were satisfied - no
+      # inference needed; a failed PUT (405 = checks not ready, 409 = SHA
+      # moved) is proof they were not, and is retried until the deadline.
+      #
+      # The required-check list itself cannot be read here:
+      # /branches/main/protection/required_status_checks is
+      # administration-scoped, and the built-in GITHUB_TOKEN has no
+      # administration permission (there is no such key in the `permissions:`
+      # block, so it cannot be granted). It answers "Resource not accessible by
+      # integration" (HTTP 403) on every run, so deriving the wait from the
+      # exact required contexts is impossible from this workflow. The merge
+      # attempt sidesteps that entirely: GitHub evaluates the full protection
+      # rule set server-side and either accepts or refuses the merge.
+      #
+      # mergeStateStatus is still read, but only for two purposes:
+      #   - the two fatal, unrecoverable states DIRTY (conflict) and BEHIND
+      #     (stale base), which retrying cannot fix and so fail at once;
+      #   - the deadline-expiry message, so a doomed release names the checks
+      #     still settling or failing and stays diagnosable.
+      # The merge DECISION is never derived from mergeStateStatus - only the
+      # merge API call decides.
+      - name: Merge release metadata through protected PR
+        if: steps.decide.outputs.should_release == 'true'
+        id: release_pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BASE_SHA: ${{ steps.decide.outputs.base_sha }}
+          RELEASE_TAG: ${{ steps.decide.outputs.tag }}
+          NPM_VERSION: ${{ steps.decide.outputs.npm_version }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --force
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$current_main_sha" != "$RELEASE_BASE_SHA" ]]; then
+            echo "::error::main advanced from ${RELEASE_BASE_SHA} to ${current_main_sha} while preparing the release. Retry from the new main head."
+            exit 1
+          fi
+
+          release_branch="release/${RELEASE_TAG#v}"
+          release_commit="$(git rev-parse HEAD)"
+          if [[ "$release_commit" == "$current_main_sha" ]]; then
+            echo "Release metadata is already present on main; resuming the publish/tag transaction."
+            if git ls-remote --exit-code --heads origin "refs/heads/${release_branch}" > /dev/null 2>&1; then
+              git push origin --delete "$release_branch"
+            fi
+            {
+              echo "merged_sha=$current_main_sha"
+              echo "pr_number="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          remote_branch_sha="$(git ls-remote --heads origin "refs/heads/${release_branch}" | cut -f1)"
+          if [[ -n "$remote_branch_sha" ]]; then
+            git push \
+              --force-with-lease="refs/heads/${release_branch}:${remote_branch_sha}" \
+              origin "HEAD:refs/heads/${release_branch}"
+          else
+            git push origin "HEAD:refs/heads/${release_branch}"
+          fi
+
+          pr_number="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$release_branch" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [[ -z "$pr_number" ]]; then
+            pr_url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head "$release_branch" \
+              --title "Release pm-vcs ${RELEASE_TAG}" \
+              --body "Automated daily release metadata for \`${RELEASE_TAG}\`. The release gate passed before this PR was created; npm publication and tagging remain blocked until this protected PR is merged.")"
+            pr_number="${pr_url##*/}"
+          fi
+
+          owner="${GITHUB_REPOSITORY%/*}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          deadline=$(( SECONDS + 1800 ))
+          awaiting_approval=0
+          merge_err="$(mktemp)"
+          pr_view_err="$(mktemp)"
+          merged_sha=""
+          while :; do
+            # Read mergeStateStatus + statusCheckRollup only to detect the
+            # fatal DIRTY/BEHIND states and to keep the deadline message
+            # diagnosable. The merge decision is NOT derived from this state
+            # (see the step-level comment above): the merge API call is the
+            # authority. `set -e` is active, so an unguarded `gh pr view`
+            # would abort the whole step on a transient 5xx/rate limit - a
+            # failed read is not information about the PR, so it is treated as
+            # an unrecognised state and retried.
+            pr_state="$(gh pr view "$pr_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json mergeStateStatus,statusCheckRollup \
+              --jq '{merge_state: (.mergeStateStatus // "UNKNOWN"),
+                     unsettled: [.statusCheckRollup[]?
+                                 | {name: (.name // .context),
+                                    state: (.conclusion // .state // .status // "PENDING")}
+                                 | select((.state | IN("SUCCESS", "NEUTRAL", "SKIPPED",
+                                                       "FAILURE", "ERROR", "TIMED_OUT",
+                                                       "CANCELLED", "ACTION_REQUIRED",
+                                                       "STARTUP_FAILURE", "STALE")) | not)
+                                 | .name],
+                     failing: [.statusCheckRollup[]?
+                               | {name: (.name // .context),
+                                  state: (.conclusion // .state // .status // "PENDING")}
+                               | select(.state | IN("FAILURE", "ERROR", "TIMED_OUT",
+                                                    "CANCELLED", "ACTION_REQUIRED",
+                                                    "STARTUP_FAILURE", "STALE"))
+                               | .name]}' 2>"$pr_view_err")" || pr_state=""
+            if [[ -z "$pr_state" ]]; then
+              echo "Could not read PR #${pr_number} (retrying): $(tr '\n' ' ' < "$pr_view_err")"
+              merge_state="UNKNOWN"
+              unsettled="github api unavailable"
+              failing=""
+            else
+              merge_state="$(jq -r '.merge_state' <<< "$pr_state")"
+              unsettled="$(jq -r '.unsettled | join(", ")' <<< "$pr_state")"
+              failing="$(jq -r '.failing | join(", ")' <<< "$pr_state")"
+            fi
+
+            case "$merge_state" in
+              DIRTY | BEHIND)
+                echo "::error::Release PR #${pr_number} is ${merge_state}; it conflicts with main or its base moved. Retry the release from the new main head."
+                exit 1
+                ;;
+            esac
+
+            # required_conversation_resolution is enabled, so any unresolved
+            # review thread blocks the merge forever. Advisory bot reviewers
+            # (Sourcery, cubic, CodeRabbit) routinely open threads as a
+            # confidence signal; resolve every unresolved thread on this
+            # release PR before each attempt so a bot comment cannot dead-end
+            # the daily release. Only BOT-authored threads on this PR are
+            # resolved, and only when EVERY comment on the thread is bot-
+            # authored: a human reply on a bot-opened thread must keep
+            # blocking. Clearing a human reviewer's thread would remove the
+            # very protection required_conversation_resolution provides.
+            unresolved="$(gh api graphql \
+              -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:100){totalCount nodes{author{login __typename}}}}}}}}' \
+              -F o="$owner" -F r="$repo" -F n="$pr_number" \
+              --jq '.data.repository.pullRequest.reviewThreads.nodes[]?
+                    | select(.isResolved==false)
+                    | select(.comments.totalCount ==
+                             ([.comments.nodes[]?] | length))
+                    | select([.comments.nodes[]?.author.__typename]
+                             | length > 0 and all(. == "Bot"))
+                    | .id' 2>/dev/null || true)"
+            if [[ -n "$unresolved" ]]; then
+              while IFS= read -r thread_id; do
+                [[ -z "$thread_id" ]] && continue
+                gh api graphql \
+                  -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' \
+                  -F t="$thread_id" >/dev/null 2>&1 || true
+              done <<< "$unresolved"
+            fi
+
+            # Attempt the merge and let GitHub be the authority. A successful
+            # PUT is proof the branch-protection rules were satisfied; a
+            # failure (405 = checks not ready, 409 = SHA moved) is proof they
+            # were not. No state inference in between.
+            merge_out="$(gh api --method PUT \
+              "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/merge" \
+              -f merge_method=rebase \
+              -f sha="$release_commit" \
+              2>"$merge_err")" && merge_rc=0 || merge_rc=$?
+            if (( merge_rc == 0 )); then
+              merged_sha="$(jq -r '.sha // empty' <<< "$merge_out" 2>/dev/null || true)"
+              if [[ -n "$merged_sha" && "$merged_sha" != "null" ]]; then
+                echo "Merged release PR #${pr_number} via merge API (state was ${merge_state})."
+                break
+              fi
+              # Merge reported success but no sha - treat as transient, retry.
+              echo "Merge returned no sha; retrying: $(tr '\n' ' ' < "$merge_err")"
+              merged_sha=""
+            else
+              echo "Merge attempt refused (state: ${merge_state}; settling: ${unsettled:-none}; failing: ${failing:-none}): $(tr '\n' ' ' < "$merge_err")"
+
+              # A run parked on `action_required` is awaiting manual approval and
+              # will never start on its own. It is invisible in statusCheckRollup,
+              # so without this it is indistinguishable from a required check that
+              # failed: the loop just logs "settling: none" until the deadline.
+              # pm-changelog's release PR #133 parked exactly this way on
+              # 2026-08-10 (attempt 1 conclusion `action_required` at 04:54:24Z,
+              # policy `first_time_contributors`, and `github-actions[bot]` had no
+              # merged PR in that repo yet). A human re-ran it at 05:36Z, 12
+              # minutes after the release had already given up. Try to approve it -
+              # the token often may not, which is harmless - and always surface the
+              # run so the wait is diagnosable.
+              pending_runs="$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${release_commit}&per_page=100" \
+                --jq '.workflow_runs[]? | select(.conclusion=="action_required" or .status=="waiting") | .id' \
+                2>/dev/null || true)"
+              if [[ -n "$pending_runs" ]]; then
+                while IFS= read -r run_id; do
+                  [[ -z "$run_id" ]] && continue
+                  echo "::warning::CI run ${run_id} for this release PR is awaiting workflow approval: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                  gh api --method POST \
+                    "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/approve" \
+                    >/dev/null 2>&1 \
+                    && echo "Approved workflow run ${run_id}; its checks can now report." \
+                    || echo "Could not approve run ${run_id} with this token; a maintainer must approve it once."
+                done <<< "$pending_runs"
+                awaiting_approval=1
+              fi
+            fi
+
+            if (( SECONDS >= deadline )); then
+              if (( awaiting_approval == 1 )); then
+                echo "::error::Release PR #${pr_number} did not merge within 30 minutes because its CI run is awaiting workflow approval (last state: ${merge_state}). Approve the run linked above once; this repository requires approval for a contributor that has no merged PR yet. Nothing was published or tagged."
+              else
+                echo "::error::Release PR #${pr_number} did not merge within 30 minutes (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). A required check failed or never reported, or a required review is missing; not merging or publishing."
+              fi
+              exit 1
+            fi
+            sleep 20
+          done
+          rm -f "$merge_err" "$pr_view_err"
+
+          if [[ -z "$merged_sha" || "$merged_sha" == "null" ]]; then
+            echo "::error::GitHub did not return the merged main SHA for release PR #${pr_number}."
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --heads origin "refs/heads/${release_branch}" > /dev/null 2>&1; then
+            git push origin --delete "$release_branch"
+          fi
+          {
+            echo "merged_sha=$merged_sha"
+            echo "pr_number=$pr_number"
+          } >> "$GITHUB_OUTPUT"
+          echo "Merged release metadata PR #${pr_number} at ${merged_sha}." >> "$GITHUB_STEP_SUMMARY"
+
+      # The release PR can only contain the prepared release commit because the
+      # base SHA is checked immediately before creation. Re-check the exact
+      # merged main commit anyway so npm always receives byte-for-byte validated
+      # repository state, and fail safely before publication if main moved.
+      - name: Verify merged release
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        env:
+          MERGED_SHA: ${{ steps.release_pr.outputs.merged_sha }}
+          NPM_VERSION: ${{ steps.decide.outputs.npm_version }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --force
+          git checkout --detach origin/main
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ "$actual_sha" != "$MERGED_SHA" ]]; then
+            echo "::error::main advanced from merged release ${MERGED_SHA} to ${actual_sha} before publication. Retry to rebuild release metadata on the new head."
+            exit 1
+          fi
+
+          actual_version="$(npm pkg get version | tr -d '"')"
+          if [[ "$actual_version" != "$NPM_VERSION" ]]; then
+            echo "::error::Merged package version ${actual_version} does not match intended release ${NPM_VERSION}."
+            exit 1
+          fi
+
+          npm ci
+          npm run release:check
+          diff_paths=(package.json package-lock.json manifest.json CHANGELOG.md)
+          [[ -f index.ts ]] && diff_paths+=(index.ts)
+          [[ -d src ]] && diff_paths+=(src)
+          git diff --exit-code -- "${diff_paths[@]}"
+          # `git diff` above compares dist against itself - nothing
+          # rebuilds before this point, so it passes unconditionally and
+          # cannot see untracked or ignored artifacts. Rebuild from clean
+          # so a stale committed dist cannot ship.
+          if git ls-files --error-unmatch 'dist' > /dev/null 2>&1; then
+            rm -rf dist
+            npm run build
+            dist_status="$(git status --porcelain=v1 --untracked-files=all --ignored=matching -- 'dist/')"
+            if [[ -n "$dist_status" ]]; then
+              echo "::error::Merged dist/ does not match a clean rebuild:"
+              echo "$dist_status"
+              exit 1
+            fi
+          fi
+
       - name: Publish npm package
         if: steps.decide.outputs.should_release == 'true'
         shell: bash
@@ -166,6 +482,11 @@ jobs:
         run: |
           set -euo pipefail
           pkg_name="$(node -p "require('./package.json').name")"
+          # Idempotence guard: if the version already resolves on the registry,
+          # treat the publish as already done and exit 0. This is what lets an
+          # already-published release (e.g. 2026.8.10, which landed on npm while
+          # main was still at 2026.8.7) reconcile instead of failing with a 403
+          # when the workflow catches up and re-runs the transaction.
           if npm view "${pkg_name}@${NPM_VERSION}" version --json >/dev/null 2>&1; then
             echo "::notice::${pkg_name}@${NPM_VERSION} already published; skipping publish step."
             exit 0
@@ -204,18 +525,50 @@ jobs:
           echo "::error::Publish failed after retries and provenance fallback."
           exit 1
 
-      # Push tag + main AFTER a successful publish so a failed publish does not
-      # leave the repo tagged/skipped. The release ref (fast-forward of
-      # origin/main) was already verified in the "Check release ref" step before
-      # publishing, so here we only create the tag and advance main.
-      - name: Push release tag and main
+      # Tag the exact merged/verified main commit AFTER a successful publish.
+      # main is already advanced by the protected-PR merge above, so this step
+      # only creates and pushes the tag - it never pushes HEAD:main again (that
+      # push was what branch protection rejected with GH006, killing the job
+      # before the tag push in the old ordering). If publication fails, main
+      # retains the prepared metadata and the next run resumes the same version
+      # instead of inventing another release.
+      - name: Push release tag
         if: steps.decide.outputs.should_release == 'true'
         shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.decide.outputs.tag }}
         run: |
           set -euo pipefail
-          git tag "${{ steps.decide.outputs.tag }}"
-          git push origin HEAD:main
-          git push origin "${{ steps.decide.outputs.tag }}"
+          release_tag="$RELEASE_TAG"
+          # Consult the remote, not just the local tag database. The last tag
+          # fetch happened back in `Decide release`; if anything created this
+          # tag on origin since then, the local lookup misses it, `git tag`
+          # succeeds locally and the push below is rejected as non-fast-forward
+          # - after a successful publish, which is the npm-ahead-of-git state
+          # this workflow exists to prevent.
+          git fetch origin --force --tags
+          remote_tag_sha="$(git ls-remote --refs --tags origin "refs/tags/${release_tag}" | awk 'NR == 1 { print $1 }')"
+          current_sha="$(git rev-parse HEAD)"
+          if [[ -n "$remote_tag_sha" ]]; then
+            remote_commit="$(git rev-list -n 1 "$remote_tag_sha")"
+            if [[ "$remote_commit" != "$current_sha" ]]; then
+              echo "::error::${release_tag} already exists on origin at ${remote_commit}, not verified main ${current_sha}."
+              exit 1
+            fi
+            echo "::notice::${release_tag} is already on origin at the verified commit; nothing to push."
+            exit 0
+          fi
+          if git rev-parse --verify --quiet "refs/tags/${release_tag}" > /dev/null; then
+            existing_sha="$(git rev-list -n 1 "$release_tag")"
+            current_sha="$(git rev-parse HEAD)"
+            if [[ "$existing_sha" != "$current_sha" ]]; then
+              echo "::error::${release_tag} already points to ${existing_sha}, not verified main ${current_sha}."
+              exit 1
+            fi
+          else
+            git tag "$release_tag"
+          fi
+          git push origin "refs/tags/${release_tag}"
 
       - name: Verify bun install of published package
         if: steps.decide.outputs.should_release == 'true'
