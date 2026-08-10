@@ -24,7 +24,7 @@
 
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { analyzeDocstringCoverage } from "pm-ops/docstrings";
 
@@ -113,10 +113,18 @@ export function main(args: readonly string[]): void {
 /**
  * Whether this module is the process entry point rather than a test import.
  *
- * `import.meta.url` is already symlink-resolved, so `argv[1]` is resolved through
- * `realpathSync` and converted to a URL before comparison. A launcher reaching
- * this file through a symlink (an npm bin shim, a linked workspace) would
- * otherwise compare unequal and skip the gate silently.
+ * Both sides are canonicalised through `realpathSync` before comparison. A
+ * launcher reaching this file through a symlink (an npm bin shim, a linked
+ * workspace) would otherwise compare unequal and skip the gate silently.
+ *
+ * Resolving only `argv[1]` would be enough under Node's defaults, where the
+ * ESM loader realpaths a module before recording `import.meta.url`. It is not
+ * enough under `--preserve-symlinks`/`--preserve-symlinks-main`, which leave
+ * `moduleUrl` holding the symlink while `realpathSync(entry)` resolves it.
+ * The two would then compare unequal on a direct invocation and the gate would
+ * exit 0 without scanning — the exact silent skip this function exists to
+ * prevent, reintroduced by a runtime flag. Canonicalising both sides costs one
+ * syscall and removes the dependence on how Node was launched.
  *
  * An unresolvable `argv[1]` **propagates** rather than returning false. The two
  * outcomes are not equally safe: returning false means `npm run docstring`
@@ -132,14 +140,14 @@ export function main(args: readonly string[]): void {
  *
  * @param argv - The process argv to inspect.
  * @param moduleUrl - The `import.meta.url` of the module that might be main.
- * @returns True when `argv[1]` resolves to this module's own URL, false when it
- *          resolves to something else.
- * @throws Whatever `realpathSync` throws when `argv[1]` cannot be resolved.
+ * @returns True when `argv[1]` and `moduleUrl` canonicalise to the same path,
+ *          false when they canonicalise to different ones.
+ * @throws Whatever `realpathSync` throws when either path cannot be resolved.
  */
 export function isMainInvocation(argv: readonly string[], moduleUrl: string): boolean {
   const entry = argv[1];
   if (entry === undefined) return false;
-  return pathToFileURL(realpathSync(entry)).href === moduleUrl;
+  return realpathSync(entry) === realpathSync(fileURLToPath(moduleUrl));
 }
 
 // Run only when invoked directly, not when imported by the test suite. An

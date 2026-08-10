@@ -139,9 +139,9 @@ test("docstring gate main with an explicit root writes the failure stream and se
 test("docstring gate isMainInvocation recognizes a direct invocation and rejects a test import", () => {
   const gatePath = resolve(packageRoot, "scripts", "docstring-gate.ts");
   const gateUrl = pathToFileURL(gatePath).href;
-  assert.equal(isMainInvocation(["node", gatePath], gateUrl), true, "a direct invocation runs the gate");
-  assert.equal(isMainInvocation(["node", resolve(packageRoot, "package.json")], gateUrl), false, "another entry point does not");
-  assert.equal(isMainInvocation(["node"], gateUrl), false, "a missing argv[1] does not");
+  assert.equal(isMainInvocation([process.execPath, gatePath], gateUrl), true, "a direct invocation runs the gate");
+  assert.equal(isMainInvocation([process.execPath, resolve(packageRoot, "package.json")], gateUrl), false, "another entry point does not");
+  assert.equal(isMainInvocation([process.execPath], gateUrl), false, "a missing argv[1] does not");
 });
 
 test("docstring gate isMainInvocation resolves a symlinked entry path to the real module URL", () => {
@@ -157,7 +157,7 @@ test("docstring gate isMainInvocation resolves a symlinked entry path to the rea
   try {
     symlinkSync(gatePath, link);
     assert.equal(
-      isMainInvocation(["node", link], pathToFileURL(gatePath).href),
+      isMainInvocation([process.execPath, link], pathToFileURL(gatePath).href),
       true,
       "a symlinked entry path resolves to the real module and runs the gate",
     );
@@ -172,8 +172,8 @@ test("docstring gate isMainInvocation throws rather than skipping the gate when 
   // scanned nothing - a required release check reporting success without doing
   // its job. Crashing is the safe outcome, so assert it is what happens.
   assert.throws(
-    () => isMainInvocation(["node", resolve(packageRoot, "does-not-exist.ts")], gateUrl),
-    /ENOENT/,
+    () => isMainInvocation([process.execPath, resolve(packageRoot, "does-not-exist.ts")], gateUrl),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
     "an unresolvable entry must propagate, not silently decline to run the gate",
   );
 });
