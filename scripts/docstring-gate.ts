@@ -123,8 +123,8 @@ export function main(args: readonly string[]): void {
  * `moduleUrl` holding the symlink while `realpathSync(entry)` resolves it.
  * The two would then compare unequal on a direct invocation and the gate would
  * exit 0 without scanning — the exact silent skip this function exists to
- * prevent, reintroduced by a runtime flag. Canonicalising both sides costs one
- * syscall and removes the dependence on how Node was launched.
+ * prevent, reintroduced by a runtime flag. Canonicalising both sides adds a
+ * second `realpathSync` and removes the dependence on how Node was launched.
  *
  * An unresolvable `argv[1]` **propagates** rather than returning false. The two
  * outcomes are not equally safe: returning false means `npm run docstring`
