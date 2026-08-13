@@ -80,7 +80,7 @@
     "eslint": "^10.8.1",
     "jiti": "^2.7.0",
     "jscpd": "^5.0.14",
-    "pm-changelog": "^2026.8.7",
+    "pm-changelog": "^2026.8.9",
     "pm-ops": "2026.8.8",
     "typescript": "^7.0.2",
     "typescript5": "npm:typescript@^5.9.3"
