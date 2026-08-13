@@ -560,14 +560,21 @@ test("merge records a mode conflict and a delete/modify conflict", () => {
 });
 
 test("merge reports independently added identities without aborting", () => {
+  // Both branches add the same path with identical content but independent file
+  // ids, so the only disagreement is identity — an advisory conflict that keeps
+  // one side's content and does not put conflict markers into the tree. A merge
+  // whose only conflicts are advisory completes and records the merge commit;
+  // only a merge that leaves diff3 markers in a blob stops (see the regression
+  // tests for issue #26). Using identical content here isolates the identity
+  // case from the marker case so this test keeps exercising what its name says.
   const { root } = freshDir();
   const repo = Repository.init(root);
   repo.commit({ message: "empty base\n", author, allowEmpty: true }, new Date(0));
   repo.createBranch("feature", "HEAD", new Date(1));
   repo.switchTo("feature", new Date(2));
-  commitFile(repo, "same.txt", "feature", "feature add", new Date(3));
+  commitFile(repo, "same.txt", "same content", "feature add", new Date(3));
   repo.switchTo("main", new Date(4));
-  commitFile(repo, "same.txt", "main", "main add", new Date(5));
+  commitFile(repo, "same.txt", "same content", "main add", new Date(5));
   const added = repo.merge("feature", { message: "merge additions\n", author }, new Date(6));
   assert.equal(added.kind, "merged");
   assert.ok(added.conflicts.some((conflict) => conflict.reason === "identity"));

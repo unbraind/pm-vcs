@@ -631,16 +631,24 @@ export function registerVcsCommands(api: ExtensionApi): void {
   api.registerCommand({
     name: "vcs merge",
     description:
-      "Merge a revision into HEAD. Fast-forwards when there is nothing to reconcile; otherwise merges every path three-way against a correctly computed merge base, per field for record paths and by diff3 for everything else.",
-    arguments: [{ name: "revision", description: "Revision to merge into HEAD", required: true }],
+      "Merge a revision into HEAD. Fast-forwards when there is nothing to reconcile; otherwise merges every path three-way against a correctly computed merge base, per field for record paths and by diff3 for everything else. A merge that leaves conflict markers in any file does not commit: it writes the merged tree to the working tree, records in-progress merge state, and waits for `--continue` or `--abort`.",
+    arguments: [{ name: "revision", description: "Revision to merge into HEAD (omit with --continue / --abort)", required: false }],
     flags: [
       { long: "--message", value_name: "text", description: "Message for the merge commit", value_type: "string" },
       { long: "--fail-on-conflict", description: "Exit non-zero when the merge leaves any conflict", value_type: "boolean" },
+      { long: "--continue", description: "Complete an in-progress merge after resolving and staging the conflicted paths", value_type: "boolean" },
+      { long: "--abort", description: "Abandon an in-progress merge and restore the working tree to where HEAD was before it", value_type: "boolean" },
     ],
-    run(context: CommandHandlerContext): VcsEnvelope & { merge: MergeReport } {
+    run(context: CommandHandlerContext): VcsEnvelope & ({ merge: MergeReport } | { aborted: { ours: string; theirs: string; revision: string } }) {
       const repository = openRepository(context);
-      const revision = requiredArgument(context, 0, "revision", "Pass the branch or commit you intend to merge.");
       const now = new Date();
+      if (context.options?.abort === true) {
+        return { ok: true, aborted: repository.mergeAbort(now) };
+      }
+      if (context.options?.continue === true) {
+        return { ok: true, merge: repository.mergeContinue(now) };
+      }
+      const revision = requiredArgument(context, 0, "revision", "Pass the branch or commit you intend to merge, or use --continue / --abort to finish or abandon an in-progress merge.");
       const message = optionalString(context.options, "message") ?? `Merge ${revision}`;
       const merge = repository.merge(revision, {
         // `optionalString` trims and the default is a literal, so the message
@@ -648,9 +656,12 @@ export function registerVcsCommands(api: ExtensionApi): void {
         message: `${message}\n`,
         author: signatureFor(context, now),
       }, now);
-      // The merge itself has already been recorded, conflicts and all, so the
-      // gate throws only after the repository is in a consistent state — an
-      // agent can inspect and resolve exactly what a clean run would have left.
+      // A conflicted merge no longer commits: it leaves the merged tree in the
+      // working tree and persists merge state for `--continue` / `--abort`. The
+      // gate therefore throws after the repository is already in a safe,
+      // inspectable state, and its remediation points at the two commands that
+      // actually finish or abandon a stopped merge rather than at a plain commit
+      // that would now refuse.
       if (!merge.clean && context.options?.failOnConflict === true) {
         throw new VcsError(
           "merge_conflicts",
@@ -658,7 +669,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
           + merge.conflicts.map((conflict) => (
             conflict.fields ? `${conflict.path} (${conflict.fields.join(", ")})` : conflict.path
           )).join(", "),
-          "Resolve the listed paths, stage them, and commit; or run `pm vcs undo` to abandon the merge.",
+          "Resolve the listed paths, stage them with `pm vcs add`, and run `pm vcs merge --continue`; or run `pm vcs merge --abort` to abandon the merge.",
         );
       }
       return { ok: merge.clean, merge };

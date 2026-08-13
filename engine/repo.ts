@@ -112,10 +112,30 @@ export const REPOSITORY_FORMAT = "pmvcs-1";
 /** Branch a fresh repository starts on. */
 export const DEFAULT_BRANCH = "main";
 
+/**
+ * Matches a diff3 conflict-marker line anywhere in a file.
+ *
+ * `m` makes `^` match the start of every line, so a single test covers a whole
+ * blob. The `=======` separator is matched alone on its line (the merge engine
+ * emits it with nothing after it), while the labelled markers carry the
+ * caller-supplied `ours` / `base` / `theirs` text. A line of seven `=` with
+ * trailing content is not a separator, so a markdown underline that happens to
+ * be exactly seven equals is the one residual false positive — the same one
+ * `git diff --check` has, and the price of matching the markers the engine
+ * actually writes.
+ */
+const CONFLICT_MARKER = /^(?:<{7} |\|{7} |={7}$|>{7} )/m;
+
 /** Merge classification, resulting tip, bases, clean paths, and unresolved conflicts returned to callers. */
 export interface MergeReport {
-  /** What the merge did: nothing, a fast-forward, or a real merge commit. */
-  readonly kind: "up_to_date" | "fast_forward" | "merged";
+  /**
+   * What the merge did: nothing, a fast-forward, a completed merge commit, or a
+   * merge that stopped with conflict markers in the working tree. The last is
+   * distinct from `merged` because no commit was recorded — HEAD did not move —
+   * and the repository instead carries in-progress merge state for `--continue`
+   * or `--abort` to act on.
+   */
+  readonly kind: "up_to_date" | "fast_forward" | "merged" | "conflicted";
   /** Commit HEAD ended up at. */
   readonly head: ObjectId;
   /** Merge bases used. More than one means a virtual base was built. */
@@ -126,6 +146,40 @@ export interface MergeReport {
   readonly conflicts: readonly MergeConflict[];
   /** True when nothing conflicted. */
   readonly clean: boolean;
+}
+
+/**
+ * Durable record of a merge that stopped with conflict markers in the tree.
+ *
+ * Written under the control directory so a later, separate command can see that
+ * a resolution is owed: `status` reports it, `commit` refuses, and `merge
+ * --continue` / `--abort` act on it. The fields are exactly what `--continue`
+ * needs to build the merge commit the original merge refused to record — the
+ * parent commits, the merge bases, the commit message and author, and which
+ * paths conflicted — so completing the merge does not depend on the caller
+ * passing any of that again.
+ */
+export interface MergeState {
+  /** HEAD before the merge (the first parent of the would-be merge commit). */
+  readonly ours: ObjectId;
+  /** The commit being merged in (the second parent). */
+  readonly theirs: ObjectId;
+  /** The revision argument the caller passed, reused in messages and the oplog. */
+  readonly revision: string;
+  /** Merge bases the original merge computed, kept so `--continue` reports them. */
+  readonly bases: readonly ObjectId[];
+  /** Paths that merged cleanly before the conflict stopped the merge. */
+  readonly merged: readonly string[];
+  /** Paths left with conflicts, and what conflicted. */
+  readonly conflicts: readonly MergeConflict[];
+  /** Commit message for the would-be merge commit. */
+  readonly message: string;
+  /** Author signature for the would-be merge commit. */
+  readonly author: Signature;
+  /** Committer signature for the would-be merge commit. */
+  readonly committer: Signature;
+  /** Conflict-marker labels the original merge used, for consistent re-rendering. */
+  readonly labels?: ConflictLabels;
 }
 
 /** One entry of `log` output. */
@@ -252,6 +306,103 @@ export class Repository {
   /** Absolute path to the index file. */
   private get indexPath(): string {
     return join(this.controlDirectory, "index");
+  }
+
+  /**
+   * Absolute path to the in-progress merge state file.
+   *
+   * A merge that stops with conflict markers writes this; `--continue` and
+   * `--abort` remove it. Its presence is the single durable signal that a
+   * resolution is owed, so every command that would move HEAD or rewrite the
+   * working tree checks it before doing anything.
+   */
+  private get mergeStatePath(): string {
+    return join(this.controlDirectory, "MERGE_STATE");
+  }
+
+  /**
+   * Reads in-progress merge state, or null when no merge is underway.
+   *
+   * A malformed state file is a hard failure rather than a silent "no merge":
+   * the file is only ever written by this engine, so a corrupt one means the
+   * control directory was damaged mid-merge, and proceeding as if nothing were
+   * owed would let a broken merge commit slip into history — the exact defect
+   * the state exists to prevent.
+   *
+   * @returns The recorded merge state, or null.
+   * @throws ObjectStoreError When the state file is present but not valid JSON.
+   */
+  readMergeState(): MergeState | null {
+    let raw: string;
+    try {
+      raw = readFileSync(this.mergeStatePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    try {
+      return JSON.parse(raw) as MergeState;
+    } catch {
+      throw new ObjectStoreError(
+        "corrupt_merge_state",
+        `The in-progress merge state at ${this.mergeStatePath} is not valid JSON. `
+        + "Remove it only if you are certain no merge is being resolved, or run `pm vcs merge --abort` after inspecting it.",
+      );
+    }
+  }
+
+  /**
+   * Records in-progress merge state atomically.
+   *
+   * @param state - The merge state to persist.
+   */
+  private writeMergeState(state: MergeState): void {
+    writeFileSync(this.mergeStatePath, JSON.stringify(state));
+  }
+
+  /** Removes the in-progress merge state, completing or abandoning the merge. */
+  private clearMergeState(): void {
+    rmSync(this.mergeStatePath, { force: true });
+  }
+
+  /**
+   * Refuses any command that would move HEAD or rewrite the working tree while a
+   * merge is waiting to be resolved or abandoned.
+   *
+   * The merge state is the one signal a downstream agent checks, so letting a
+   * `commit`, `switch`, `reset` or `undo` run mid-merge would either commit the
+   * markers (the original defect) or desync the working tree from the recorded
+   * parents. `merge --continue` and `merge --abort` are the only ways past it.
+   *
+   * @throws ObjectStoreError When a merge is in progress.
+   */
+  private assertNoMergeInProgress(): void {
+    const state = this.readMergeState();
+    if (state === null) return;
+    throw new ObjectStoreError(
+      "merge_in_progress",
+      `A merge of ${state.revision} is in progress with unresolved conflicts: ${
+        state.conflicts.map((conflict) => conflict.path).join(", ")
+      }. Resolve the conflicted paths and run \`pm vcs merge --continue\`, or run \`pm vcs merge --abort\` to abandon the merge.`,
+    );
+  }
+
+  /**
+   * Whether a stored blob carries diff3 conflict markers.
+   *
+   * Only blob content conflicts render markers; record, mode, identity and
+   * delete/modify conflicts keep one side's content and report an advisory
+   * conflict, so they do not put unbuildable bytes into a tree. This is the
+   * precise distinction between a merge that must stop (markers would be
+   * committed) and one that may complete (the conflict is advisory).
+   *
+   * @param id - Object id to inspect.
+   * @returns True when the object is a blob whose text contains a marker line.
+   */
+  private blobHasConflictMarkers(id: ObjectId): boolean {
+    const object = this.objects.read(id);
+    if (object.type !== "blob") return false;
+    return CONFLICT_MARKER.test(object.payload.toString("utf8"));
   }
 
   /** Reads the exact index bytes and their decoded entries as one snapshot. */
@@ -435,8 +586,15 @@ export class Repository {
   /**
    * Compares HEAD, the index and the working tree.
    *
+   * When an in-progress merge is recorded, the worktree is by construction not
+   * clean — a resolution is owed — and the conflicted paths are surfaced on the
+   * report so a downstream agent that only reads `status` can see them. That is
+   * the signal that survives the merge command's own return value, which is the
+   * third defect the merge-state work fixes.
+   *
    * @param read - Working-file reader; injectable for race and cache tests.
-   * @returns What is staged, what is not, and what is untracked.
+   * @returns What is staged, what is not, what is untracked, and any in-progress
+   *   merge with its conflicted paths.
    */
   status(read: typeof readWorkingFile = readWorkingFile): StatusReport {
     const snapshot = this.readIndexSnapshot();
@@ -462,7 +620,20 @@ export class Repository {
         return stat === undefined ? entry : { ...entry, stat };
       }), snapshot.contents);
     }
-    return report;
+    const merge = this.readMergeState();
+    if (merge === null) return report;
+    // The merge state is authoritative for `clean`: even if HEAD, index and
+    // working tree momentarily agree, the repository is not in a settled state
+    // until the merge is completed or aborted.
+    return {
+      ...report,
+      clean: false,
+      merge: {
+        revision: merge.revision,
+        theirs: merge.theirs,
+        conflicts: merge.conflicts.map((conflict) => conflict.path),
+      },
+    };
   }
 
   /**
@@ -503,12 +674,21 @@ export class Repository {
   /**
    * Commits the index.
    *
+   * Refuses while an in-progress merge is recorded: the merge's conflicted paths
+   * must be resolved and completed with `merge --continue` (or abandoned with
+   * `--abort`), not committed as an ordinary single-parent commit. Letting a
+   * plain `commit` through would either record the markers as a normal commit or
+   * discard the second parent, in both cases losing the signal that the merge
+   * never finished.
+   *
    * @param options - Message, author, and whether an empty commit is allowed.
    * @param now - Timestamp for the operation log entry.
    * @returns The new commit's id.
-   * @throws ObjectStoreError When nothing is staged and `allowEmpty` is not set.
+   * @throws ObjectStoreError When a merge is in progress, or nothing is staged
+   *   and `allowEmpty` is not set.
    */
   commit(options: CommitOptions, now: Date): ObjectId {
+    this.assertNoMergeInProgress();
     const head = this.refs.readHead();
     const parent = head.target;
     const tree = buildTree(
@@ -677,6 +857,7 @@ export class Repository {
    * @throws ObjectStoreError When uncommitted or untracked work would be lost.
    */
   switchTo(revision: string, now: Date): ObjectId {
+    this.assertNoMergeInProgress();
     const target = this.resolve(revision);
     const targetTree = readCommit(this.objects, target).tree;
     const current = flattenTree(this.objects, this.headTree());
@@ -810,23 +991,29 @@ export class Repository {
   /**
    * Merges another revision into HEAD.
    *
-   * Three outcomes. If HEAD already contains the other side, nothing happens. If
-   * the other side contains HEAD, HEAD moves forward with no merge commit — there
+   * Four outcomes. If HEAD already contains the other side, nothing happens. If
+   * the other side contains HEAD, HEAD fast-forwards with no merge commit — there
    * is no third version to reconcile, so inventing a merge commit would only add
-   * a node that says nothing. Otherwise every path is merged three-way and a
-   * merge commit records both parents.
+   * a node that says nothing. If every path merges cleanly (or only with the
+   * advisory conflicts that keep one side's content — identity, mode, delete vs.
+   * modify), a merge commit records both parents. If any path's merged blob
+   * carries diff3 conflict markers, the merge stops: no commit is recorded, the
+   * merged tree is written into the working tree and index so the markers are
+   * visible, and in-progress merge state is persisted for `merge --continue` and
+   * `merge --abort` to act on. Stopping is what keeps an unbuildable revision out
+   * of history; the state is what lets a later command see that a resolution is
+   * owed.
    *
-   * Conflicts are written into the working tree and staged as they are, so the
-   * repository state after a conflicted merge is inspectable with the same
-   * commands as any other state.
+   * Refuses if a merge is already in progress, before the dirty-worktree check,
+   * so the message names the real problem rather than a symptom of it.
    *
    * @param revision - The revision to merge in.
    * @param options - Message and author for the merge commit.
    * @param now - Timestamp for the operation log entry.
    * @param labels - Names written into conflict markers.
    * @returns What the merge did and what conflicted.
-   * @throws ObjectStoreError When HEAD is unborn, the working tree is dirty, or
-   *   the two sides share no history.
+   * @throws ObjectStoreError When a merge is already in progress, HEAD is
+   *   unborn, the working tree is dirty, or the two sides share no history.
    */
   merge(revision: string, options: CommitOptions, now: Date, labels?: ConflictLabels): MergeReport {
     const head = this.refs.readHead();
@@ -834,6 +1021,10 @@ export class Repository {
     if (ours === null) {
       throw new ObjectStoreError("unborn_head", "HEAD has no commit yet, so there is nothing to merge into.");
     }
+    // A merge in progress is refused before the dirty check: the in-progress
+    // state makes the worktree dirty by design, so the dirty check would fire
+    // and report a symptom instead of the cause.
+    this.assertNoMergeInProgress();
     const theirs = this.resolve(revision);
     if (isAncestor(this.objects, theirs, ours)) {
       return { kind: "up_to_date", head: ours, bases: [theirs], merged: [], conflicts: [], clean: true };
@@ -872,6 +1063,32 @@ export class Repository {
       readCommit(this.objects, theirs).tree,
       labels,
     );
+    const markerConflicts = conflicts.filter((conflict) => {
+      const entry = flattenTree(this.objects, tree).get(conflict.path);
+      return entry === undefined ? false : this.blobHasConflictMarkers(entry.id);
+    });
+    if (markerConflicts.length > 0) {
+      // No commit: the merged tree carries conflict markers, and recording it
+      // would put an unbuildable revision into history. The working tree and
+      // index still receive the merged tree so the markers and the cleanly
+      // merged paths are visible and `add` can stage resolutions; the merge
+      // state persists everything `--continue` needs to finish the commit
+      // without the caller re-supplying it.
+      this.materialize(tree);
+      this.writeMergeState({
+        ours,
+        theirs,
+        revision,
+        bases,
+        merged,
+        conflicts,
+        message: options.message,
+        author: options.author,
+        committer: options.committer ?? options.author,
+        ...(labels === undefined ? {} : { labels }),
+      });
+      return { kind: "conflicted", head: ours, bases, merged, conflicts, clean: false };
+    }
     const draft = {
       tree,
       parents: [ours, theirs],
@@ -884,6 +1101,97 @@ export class Repository {
     this.advanceHead(head, ours, id, "merge", `Merged ${revision} as ${id.slice(0, 12)}.`, now);
     this.materialize(tree);
     return { kind: "merged", head: id, bases, merged, conflicts, clean: conflicts.length === 0 };
+  }
+
+  /**
+   * Completes a merge that stopped with conflict markers, after the caller has
+   * resolved and staged the paths.
+   *
+   * Builds the merge commit the original merge refused to record, using the
+   * parents, bases, message and author persisted in the merge state, so the
+   * caller does not re-supply any of it. The commit's tree is the current index:
+   * the user stages their resolution with `add`, and the cleanly merged paths are
+   * already staged from the stopped merge. Refuses while any staged blob still
+   * carries conflict markers — that is the one check that keeps an unbuildable
+   * revision out of history, and it is authoritative because the index is what
+   * gets committed.
+   *
+   * @param now - Timestamp for the operation log entry.
+   * @returns The completed merge report.
+   * @throws ObjectStoreError When no merge is in progress, or a staged path still
+   *   carries conflict markers.
+   */
+  mergeContinue(now: Date): MergeReport {
+    const state = this.readMergeState();
+    if (state === null) {
+      throw new ObjectStoreError(
+        "no_merge_in_progress",
+        "There is no merge in progress to continue. Run `pm vcs merge <revision>` to start one.",
+      );
+    }
+    const index = this.readIndex();
+    const marked = index
+      .filter((entry) => this.blobHasConflictMarkers(entry.id))
+      .map((entry) => entry.path)
+      .sort(compareByteOrder);
+    if (marked.length > 0) {
+      throw new ObjectStoreError(
+        "merge_conflicts_not_resolved",
+        `Cannot complete the merge: ${marked.join(", ")} still contain conflict markers. Edit the listed paths to remove the markers, stage them with \`pm vcs add\`, then run \`pm vcs merge --continue\` again.`,
+      );
+    }
+    const tree = buildTree(
+      this.objects,
+      new Map(index.map((entry) => [entry.path, {
+        id: entry.id,
+        mode: entry.mode as FileMode,
+        fileId: entry.fileId,
+        copiedFrom: entry.copiedFrom,
+      }])),
+    );
+    const draft = {
+      tree,
+      parents: [state.ours, state.theirs],
+      author: state.author,
+      committer: state.committer,
+      message: state.message,
+    };
+    const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
+    const head = this.refs.readHead();
+    // The merge state recorded `ours` as the expected HEAD; a concurrent move
+    // would have cleared or changed it, so the compare-and-swap in `advanceHead`
+    // refuses rather than committing over a moved branch.
+    this.advanceHead(head, state.ours, id, "merge", `Merged ${state.revision} as ${id.slice(0, 12)}.`, now);
+    this.clearMergeState();
+    return { kind: "merged", head: id, bases: state.bases, merged: state.merged, conflicts: [], clean: true };
+  }
+
+  /**
+   * Abandons an in-progress merge, restoring the working tree and index to the
+   * commit HEAD pointed at before the merge stopped.
+   *
+   * No ref moves — the stopped merge never moved one — and no operation-log entry
+   * is recorded, because there is nothing to undo: the merge left only working
+   * tree and merge state, both of which this removes. Objects written by the
+   * stopped merge remain in the store, unreferenced and harmless.
+   *
+   * @param now - Unused; kept for symmetry with the merge family so the command
+   *   handler does not special-case the call.
+   * @returns The abandoned merge's ours and theirs commits.
+   * @throws ObjectStoreError When no merge is in progress.
+   */
+  mergeAbort(now: Date): { ours: ObjectId; theirs: ObjectId; revision: string } {
+    void now;
+    const state = this.readMergeState();
+    if (state === null) {
+      throw new ObjectStoreError(
+        "no_merge_in_progress",
+        "There is no merge in progress to abort. Run `pm vcs merge <revision>` to start one.",
+      );
+    }
+    this.materialize(readCommit(this.objects, state.ours).tree);
+    this.clearMergeState();
+    return { ours: state.ours, theirs: state.theirs, revision: state.revision };
   }
 
   /**
@@ -924,6 +1232,7 @@ export class Repository {
    * @returns The undo operation that was recorded.
    */
   undo(sequence: number | null, now: Date): Operation {
+    this.assertNoMergeInProgress();
     const operation = this.operations.undo(this.refs, sequence, now);
     const head = this.refs.resolveHead();
     this.materialize(head === null ? null : readCommit(this.objects, head).tree);
@@ -1190,6 +1499,7 @@ export class Repository {
    * @returns The commit HEAD moves to.
    */
   reset(revision: string, mode: ResetMode, now: Date): ObjectId {
+    this.assertNoMergeInProgress();
     const head = this.refs.readHead();
     if (head.target === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to reset.");
     const target = this.resolve(revision);

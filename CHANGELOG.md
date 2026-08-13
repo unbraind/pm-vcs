@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- A conflicted merge must not commit and must leave durable unmerged state ([pm-vcs-ikyc](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ikyc.toon))
 - Retire the vendored docstring analyzer and converge the changelog on replace mode ([pm-vcs-8bpi](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8bpi.toon))
 - Release bot identity absent from the allowlist would break the audit on the first release ([pm-vcs-gehh](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-gehh.toon))
 - Public git history embeds a personal author email and blocks release approval ([pm-vcs-mhbz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-mhbz.toon))
