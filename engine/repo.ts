@@ -354,10 +354,23 @@ export class Repository {
   /**
    * Records in-progress merge state atomically.
    *
+   * The state is written to a temporary file in the control directory and renamed
+   * over the target, so an interrupted write leaves either the previous state or
+   * no state at all — never a truncated file. A truncated state is precisely
+   * what `readMergeState` rejects as `corrupt_merge_state`, and the only recovery
+   * path for that is `merge --abort`, so the write itself must not be able to
+   * produce the unrecoverable condition.
+   *
    * @param state - The merge state to persist.
    */
   private writeMergeState(state: MergeState): void {
-    writeFileSync(this.mergeStatePath, JSON.stringify(state));
+    const temporary = `${this.mergeStatePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify(state), { flag: "wx" });
+      renameSync(temporary, this.mergeStatePath);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
   }
 
   /** Removes the in-progress merge state, completing or abandoning the merge. */
@@ -1063,8 +1076,14 @@ export class Repository {
       readCommit(this.objects, theirs).tree,
       labels,
     );
+    // The merged tree is fixed for the whole conflict scan: `tree` is one
+    // content-addressed id computed before this loop, and the object store is
+    // not mutated during the filter, so flattening it once is behaviour-
+    // preserving with respect to re-walking it per conflict. Hoisting avoids n
+    // full tree walks and n re-reads of every entry from the object store.
+    const mergedTree = flattenTree(this.objects, tree);
     const markerConflicts = conflicts.filter((conflict) => {
-      const entry = flattenTree(this.objects, tree).get(conflict.path);
+      const entry = mergedTree.get(conflict.path);
       return entry === undefined ? false : this.blobHasConflictMarkers(entry.id);
     });
     if (markerConflicts.length > 0) {
@@ -1175,23 +1194,58 @@ export class Repository {
    * tree and merge state, both of which this removes. Objects written by the
    * stopped merge remain in the store, unreferenced and harmless.
    *
+   * A corrupt or unreadable merge state is the one condition `--abort` exists to
+   * recover from: `readMergeState` throws `corrupt_merge_state` for a malformed
+   * file (and rethrows any other read failure), and rethrowing that here would
+   * make the documented recovery path itself broken by the condition it is
+   * reporting — leaving the repository permanently stuck. So when the state file
+   * is present but unusable, this recovers instead: the stopped merge never moved
+   * HEAD, so HEAD still names the pre-merge commit to restore, and clearing the
+   * state is always safe. `theirs` and `revision` are only known from the state,
+   * so they are omitted from the return when it could not be read.
+   *
    * @param now - Unused; kept for symmetry with the merge family so the command
    *   handler does not special-case the call.
-   * @returns The abandoned merge's ours and theirs commits.
-   * @throws ObjectStoreError When no merge is in progress.
+   * @returns The abandoned merge's ours commit, and theirs and revision when the
+   *   state was readable.
+   * @throws ObjectStoreError When no merge is in progress (no state file at all).
    */
-  mergeAbort(now: Date): { ours: ObjectId; theirs: ObjectId; revision: string } {
+  mergeAbort(now: Date): { ours: ObjectId; theirs?: ObjectId; revision?: string } {
     void now;
-    const state = this.readMergeState();
-    if (state === null) {
+    let state: MergeState | null = null;
+    let unreadable = false;
+    try {
+      state = this.readMergeState();
+    } catch {
+      // `readMergeState` returns null only for ENOENT (no state file). Any throw
+      // means the file is present but damaged, which is exactly what `--abort`
+      // must be able to clear rather than propagate.
+      unreadable = true;
+    }
+    if (state === null && !unreadable) {
       throw new ObjectStoreError(
         "no_merge_in_progress",
         "There is no merge in progress to abort. Run `pm vcs merge <revision>` to start one.",
       );
     }
-    this.materialize(readCommit(this.objects, state.ours).tree);
+    // The stopped merge never moved HEAD, so even with a corrupt state HEAD
+    // still names the pre-merge commit to restore the working tree to.
+    const ours = state !== null ? state.ours : this.refs.resolveHead();
+    if (ours === null) {
+      // HEAD unborn with a present-but-unreadable state means the control
+      // directory is damaged beyond what abort can fully undo. Still clear the
+      // state so the repository is not permanently stuck, then report.
+      this.clearMergeState();
+      throw new ObjectStoreError(
+        "unborn_head",
+        "HEAD has no commit, so the aborted merge's pre-merge tree cannot be restored; the unreadable merge state was cleared.",
+      );
+    }
+    this.materialize(readCommit(this.objects, ours).tree);
     this.clearMergeState();
-    return { ours: state.ours, theirs: state.theirs, revision: state.revision };
+    return state !== null
+      ? { ours, theirs: state.theirs, revision: state.revision }
+      : { ours };
   }
 
   /**

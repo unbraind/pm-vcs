@@ -346,3 +346,129 @@ test("a conflicted merge persists custom conflict-marker labels for consistent r
   const state = repo.readMergeState();
   assert.deepEqual(state?.labels, labels);
 });
+
+/**
+ * Builds a repository whose merged tree is deep (seven nested directories) and
+ * whose merge of `b` into `main` produces exactly `n` genuine diff3 content
+ * conflicts, one per file at the bottom of that tree. The depth makes each
+ * `flattenTree` walk read eight tree objects, so walking the tree once per
+ * conflict is measurably more expensive than walking it once.
+ *
+ * @param root - A fresh repository root.
+ * @param n - Number of conflicting files to create.
+ * @returns The initialized repository, ready to merge `b` into `main`.
+ */
+function deepConflictedRepo(root: string, n: number): Repository {
+  const repo = Repository.init(root);
+  const dir = "a/b/c/d/e/f/g";
+  const paths: string[] = [];
+  for (let k = 1; k <= n; k += 1) paths.push(`${dir}/f${k}.txt`);
+  const writeAll = (content: string): void => {
+    for (const p of paths) {
+      mkdirSync(join(root, ...p.split("/").slice(0, -1)), { recursive: true });
+      const k = p.match(/f(\d)/)?.[1] ?? "1";
+      writeFileSync(join(root, p), content.replace("K", k));
+    }
+  };
+  const commitAll = (content: string, message: string, now: Date): string => {
+    writeAll(content);
+    repo.stage(paths);
+    return repo.commit({ message: `${message}\n`, author }, now);
+  };
+  commitAll("base\n", "base", new Date(0));
+  repo.createBranch("b", "HEAD", new Date(1));
+  repo.switchTo("b", new Date(2));
+  commitAll("from-b-K\n", "b edit", new Date(3));
+  repo.switchTo("main", new Date(4));
+  commitAll("from-main-K\n", "main edit", new Date(5));
+  return repo;
+}
+
+test("merge --abort recovers from a corrupt merge-state file rather than throwing", () => {
+  // Finding 1: readMergeState throws corrupt_merge_state for a malformed file,
+  // and mergeAbort used to call readMergeState first, so the same corrupt state
+  // that prompted the user to run `pm vcs merge --abort` made abort itself throw
+  // — the documented recovery path was broken by the condition it reported,
+  // leaving the repository permanently stuck. abort must instead clear the
+  // corrupt state and restore the pre-merge tree (the stopped merge never moved
+  // HEAD, so HEAD still names it), which is the whole point of abort.
+  const { root } = freshDir();
+  const { repo, mainTip } = conflictedRepo(root);
+  repo.merge("b", { message: "flagged merge\n", author }, new Date(6));
+  assert.ok(repo.readMergeState() !== null);
+  // Corrupt the state exactly as a truncated write would.
+  writeFileSync(join(root, CONTROL_DIRECTORY, "MERGE_STATE"), "{not valid json");
+
+  // abort must recover rather than throw corrupt_merge_state.
+  const aborted = repo.mergeAbort(new Date(7));
+  assert.equal(aborted.ours, mainTip);
+  // theirs and revision lived only in the unreadable state, so they are omitted.
+  assert.equal(aborted.theirs, undefined);
+  assert.equal(aborted.revision, undefined);
+  // The corrupt state is cleared and the working tree is restored to main.
+  assert.equal(repo.readMergeState(), null);
+  assert.equal(readFileSync(join(root, "f.txt"), "utf8"), "from-main\n");
+  assert.equal(repo.status().clean, true);
+});
+
+test("merge --abort clears a corrupt merge state even when HEAD is unborn", () => {
+  // The corrupt-state recovery falls back to HEAD for the pre-merge tree. When
+  // HEAD is unborn there is no tree to restore, but abort must still clear the
+  // corrupt state so the repository is not permanently stuck, then report —
+  // rather than throwing corrupt_merge_state (the pre-fix behaviour that left
+  // the repo unrecoverable through the documented path).
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  // HEAD is unborn (no commits), and the merge state is corrupt.
+  mkdirSync(join(root, CONTROL_DIRECTORY), { recursive: true });
+  writeFileSync(join(root, CONTROL_DIRECTORY, "MERGE_STATE"), "{not valid json");
+  assert.throws(
+    () => repo.mergeAbort(new Date(7)),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "unborn_head",
+  );
+  // The corrupt state was cleared despite HEAD being unborn.
+  assert.equal(repo.readMergeState(), null);
+});
+
+test("a conflicted merge walks the merged tree once for the marker scan, not once per conflict", () => {
+  // Finding 2: flattenTree used to be called inside the per-conflict marker
+  // filter, so the whole merged tree was walked once per conflict. With a deep
+  // merged tree (eight tree objects) and five conflicts that is four extra full
+  // tree walks — 4 * 8 = 32 extra object-store reads — versus walking it once.
+  // The flattened tree cannot change between iterations (`tree` is one fixed
+  // content-addressed id and the object store is not mutated during the scan),
+  // so hoisting is behaviour-preserving; this test pins the perf invariant by
+  // measuring the marginal object-store read cost of adding four conflicts.
+  const one = makeTempDir();
+  const repoOne = deepConflictedRepo(one.root, 1);
+  const originalOne = repoOne.objects.read.bind(repoOne.objects);
+  let readsOne = 0;
+  repoOne.objects.read = (id): ReturnType<typeof originalOne> => {
+    readsOne += 1;
+    return originalOne(id);
+  };
+  const reportOne = repoOne.merge("b", { message: "m\n", author }, new Date(6));
+  assert.equal(reportOne.conflicts.length, 1);
+  one.cleanup();
+
+  // Keep the second handle in the module-level `dir` so afterEach cleans it up.
+  dir = makeTempDir();
+  const repoFive = deepConflictedRepo(dir.root, 5);
+  const originalFive = repoFive.objects.read.bind(repoFive.objects);
+  let readsFive = 0;
+  repoFive.objects.read = (id): ReturnType<typeof originalFive> => {
+    readsFive += 1;
+    return originalFive(id);
+  };
+  const reportFive = repoFive.merge("b", { message: "m\n", author }, new Date(6));
+  assert.equal(reportFive.conflicts.length, 5);
+
+  // Adding four conflicts must add only the per-file blob processing, not four
+  // full merged-tree walks. Without the hoist the delta is ~52 (20 per-file plus
+  // 4*8 tree-walk reads); with the hoist it is ~20. The threshold sits between.
+  const marginalReads = readsFive - readsOne;
+  assert.ok(
+    marginalReads < 36,
+    `adding four conflicts added ${marginalReads} object-store reads; the merged tree must be walked once, not once per conflict`,
+  );
+});

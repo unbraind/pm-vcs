@@ -639,9 +639,20 @@ export function registerVcsCommands(api: ExtensionApi): void {
       { long: "--continue", description: "Complete an in-progress merge after resolving and staging the conflicted paths", value_type: "boolean" },
       { long: "--abort", description: "Abandon an in-progress merge and restore the working tree to where HEAD was before it", value_type: "boolean" },
     ],
-    run(context: CommandHandlerContext): VcsEnvelope & ({ merge: MergeReport } | { aborted: { ours: string; theirs: string; revision: string } }) {
+    run(context: CommandHandlerContext): VcsEnvelope & ({ merge: MergeReport } | { aborted: { ours: string; theirs?: string; revision?: string } }) {
       const repository = openRepository(context);
       const now = new Date();
+      // `--abort` is checked before `--continue` below, so passing both would
+      // silently abort and discard the resolutions the caller staged for the
+      // continue — data loss from a flag combination plausibly typed by mistake.
+      // Reject the combination before either branch runs, naming both flags.
+      if (context.options?.abort === true && context.options?.continue === true) {
+        throw new VcsError(
+          "conflicting_options",
+          "pm vcs merge cannot combine --continue and --abort.",
+          "Pass either --continue to complete the merge or --abort to abandon it, not both.",
+        );
+      }
       if (context.options?.abort === true) {
         return { ok: true, aborted: repository.mergeAbort(now) };
       }

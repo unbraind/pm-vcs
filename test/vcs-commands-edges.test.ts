@@ -389,3 +389,24 @@ test("vcs merge --continue and --abort refuse when no merge is in progress", asy
   assert.equal(ab.handled, false);
   assert.match(String(ab.errorMessage), /no merge in progress/);
 });
+
+test("vcs merge refuses --continue and --abort passed together", async () => {
+  // Finding 3: --abort is checked before --continue, so passing both used to
+  // silently abort — restoring the pre-merge working tree and discarding the
+  // resolutions the caller staged for the continue. That is data loss from a
+  // flag combination plausibly typed by mistake, so the combination is rejected
+  // before either branch runs, with an error naming both flags.
+  const { root, run } = await conflictedHarness();
+  // Start a merge and stage a resolution, so a silent abort would lose it.
+  await run("vcs merge", ["side"], { message: "merge side" });
+  writeFileSync(join(root, "a.txt"), "resolved\n");
+  await run("vcs add");
+
+  const refused = await run("vcs merge", [], { continue: true, abort: true });
+  assert.equal(refused.handled, false);
+  assert.match(String(refused.errorMessage), /cannot combine --continue and --abort/);
+  // The merge is still in progress and the staged resolution is intact, proving
+  // neither branch ran.
+  assert.ok(Repository.open(root).readMergeState() !== null);
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "resolved\n");
+});
