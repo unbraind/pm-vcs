@@ -60,7 +60,18 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          branch="dependency-refresh/$(date -u +%Y-%m-%d)"
+          # A same-day re-run must not collide with the branch an earlier run
+          # pushed: `git push -u origin "$branch"` would be rejected as a
+          # non-fast-forward against a branch this run never fetched. Reuse the
+          # date branch when it is free and fall back to a run-suffixed name
+          # when it is taken, so a manual re-run after the weekly schedule still
+          # produces a PR instead of failing at the push.
+          base="dependency-refresh/$(date -u +%Y-%m-%d)"
+          branch="$base"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            branch="$base-run-${GITHUB_RUN_ID}"
+            echo "Remote branch $base already exists; using $branch instead."
+          fi
           git checkout -b "$branch"
           git add package.json package-lock.json selfhost.bundle
           git commit -m "Refresh dependencies and regenerate self-host bundle

@@ -6,6 +6,7 @@ import { after, test } from "node:test";
 
 import {
   checkDriverExecutable,
+  fencedPatterns,
   checkGitattributesCommitted,
   checkUncommittedTrackerChanges,
   runPreflight,
@@ -365,4 +366,41 @@ test("uncommitted tracker changes warn without failing the preflight", () => {
   assert.equal(dirty.status, "warn");
   assert.match(dirty.detail, /uncommitted changes/);
   assert.match(dirty.remediation ?? "", /Commit or stash/);
+});
+
+test("fencedPatterns reads a v1 fence, a v2 fence, and refuses an unfenced body", () => {
+  const patterns = [
+    '".agents/pm/**/*.toon" merge=pm-item-toon',
+    '".agents/pm/**/*.json" merge=pm-json',
+  ];
+
+  // v2 is what a current `pm merge install` writes.
+  assert.deepEqual(
+    fencedPatterns(["# pm-cli:merge-drivers:v2:start", ...patterns, "# pm-cli:merge-drivers:v2:end"].join("\n")),
+    patterns,
+  );
+
+  // v1 is what a clone that installed from an older CLI still carries. Dropping
+  // this branch would make merge_fence_coverage fail on every such checkout,
+  // which is the regression the v2 support was added to avoid causing.
+  assert.deepEqual(
+    fencedPatterns(["# pm-cli:merge-drivers:start", ...patterns, "# pm-cli:merge-drivers:end"].join("\n")),
+    patterns,
+  );
+
+  // Blank lines inside the fence are structural, not patterns.
+  assert.deepEqual(
+    fencedPatterns(["# pm-cli:merge-drivers:v2:start", patterns[0], "", "# pm-cli:merge-drivers:v2:end"].join("\n")),
+    [patterns[0]],
+  );
+
+  // No fence, and a start without its end, are both "cannot tell" rather than
+  // "empty fence" — an empty array would read as a fence covering nothing.
+  assert.equal(fencedPatterns(patterns.join("\n")), null);
+  assert.equal(fencedPatterns(["# pm-cli:merge-drivers:v2:start", patterns[0]].join("\n")), null);
+  // A mismatched pair (v1 start, v2 end) is not a fence either.
+  assert.equal(
+    fencedPatterns(["# pm-cli:merge-drivers:start", patterns[0], "# pm-cli:merge-drivers:v2:end"].join("\n")),
+    null,
+  );
 });
