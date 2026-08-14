@@ -300,3 +300,113 @@ test("a record conflict names the fields that disagreed, not just the path", asy
   const resolved = JSON.parse(readFileSync(join(root, "item.rec"), "utf8")) as Record<string, string>;
   assert.equal(resolved.owner, "someone", "the field that did not conflict still merged");
 });
+
+/**
+ * Stands up a repository with a content conflict in a.txt and returns a bound
+ * command runner. Used by the `--continue` / `--abort` command-surface tests.
+ *
+ * @returns The repository root and a `run` bound to the activated harness.
+ */
+async function conflictedHarness(): Promise<{
+  root: string;
+  run: (command: string, args?: string[], options?: Record<string, unknown>) => Promise<{
+    handled: boolean;
+    result: unknown;
+    errorMessage?: string;
+  }>;
+}> {
+  const handle = makeTempDir();
+  sandboxes.push(handle);
+  const root = handle.root;
+  Repository.init(root);
+  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const run = async (command: string, args: string[] = [], options: Record<string, unknown> = {}) => (
+    await harness.runCommand({ command, args, options, global: { author: AUTHOR }, pmRoot: root })
+  ) as { handled: boolean; result: unknown; errorMessage?: string };
+  writeFileSync(join(root, "a.txt"), "base\n");
+  await run("vcs add");
+  await run("vcs commit", [], { message: "base" });
+  await run("vcs branch", ["side"]);
+  await run("vcs switch", ["side"]);
+  writeFileSync(join(root, "a.txt"), "side\n");
+  await run("vcs add");
+  await run("vcs commit", [], { message: "side" });
+  await run("vcs switch", ["main"]);
+  writeFileSync(join(root, "a.txt"), "main\n");
+  await run("vcs add");
+  await run("vcs commit", [], { message: "main" });
+  return { root, run };
+}
+
+test("vcs merge --continue completes a stopped merge through the command surface", async () => {
+  const { root, run } = await conflictedHarness();
+  const stopped = await run("vcs merge", ["side"], { message: "merge side" });
+  assert.equal((stopped.result as { merge: { kind: string } }).merge.kind, "conflicted");
+  assert.match(readFileSync(join(root, "a.txt"), "utf8"), /<<<<<<< ours/);
+
+  // Resolve and stage, then complete the merge through --continue.
+  writeFileSync(join(root, "a.txt"), "resolved\n");
+  await run("vcs add");
+  const completed = await run("vcs merge", [], { continue: true });
+  assert.equal(completed.handled, true);
+  assert.equal((completed.result as { merge: { kind: string; clean: boolean } }).merge.kind, "merged");
+  assert.equal((completed.result as { merge: { clean: boolean } }).merge.clean, true);
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "resolved\n");
+  // No merge state remains.
+  assert.equal(Repository.open(root).readMergeState(), null);
+});
+
+test("vcs merge --continue refuses through the command surface while markers remain", async () => {
+  const { run } = await conflictedHarness();
+  await run("vcs merge", ["side"], { message: "merge side" });
+  // Resolve nothing.
+  const refused = await run("vcs merge", [], { continue: true });
+  assert.equal(refused.handled, false);
+  assert.match(String(refused.errorMessage), /still contain conflict markers/);
+});
+
+test("vcs merge --abort abandons a stopped merge through the command surface", async () => {
+  const { root, run } = await conflictedHarness();
+  const before = Repository.open(root).refs.resolveHead() as string;
+  await run("vcs merge", ["side"], { message: "merge side" });
+  assert.match(readFileSync(join(root, "a.txt"), "utf8"), /<<<<<<< ours/);
+
+  const aborted = await run("vcs merge", [], { abort: true });
+  assert.equal(aborted.handled, true);
+  assert.equal((aborted.result as { aborted: { revision: string } }).aborted.revision, "side");
+  // Working tree restored to the pre-merge main commit; no merge state remains.
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "main\n");
+  assert.equal(Repository.open(root).refs.resolveHead(), before);
+  assert.equal(Repository.open(root).readMergeState(), null);
+});
+
+test("vcs merge --continue and --abort refuse when no merge is in progress", async () => {
+  const { run } = await conflictedHarness();
+  const cont = await run("vcs merge", [], { continue: true });
+  assert.equal(cont.handled, false);
+  assert.match(String(cont.errorMessage), /no merge in progress/);
+  const ab = await run("vcs merge", [], { abort: true });
+  assert.equal(ab.handled, false);
+  assert.match(String(ab.errorMessage), /no merge in progress/);
+});
+
+test("vcs merge refuses --continue and --abort passed together", async () => {
+  // Finding 3: --abort is checked before --continue, so passing both used to
+  // silently abort — restoring the pre-merge working tree and discarding the
+  // resolutions the caller staged for the continue. That is data loss from a
+  // flag combination plausibly typed by mistake, so the combination is rejected
+  // before either branch runs, with an error naming both flags.
+  const { root, run } = await conflictedHarness();
+  // Start a merge and stage a resolution, so a silent abort would lose it.
+  await run("vcs merge", ["side"], { message: "merge side" });
+  writeFileSync(join(root, "a.txt"), "resolved\n");
+  await run("vcs add");
+
+  const refused = await run("vcs merge", [], { continue: true, abort: true });
+  assert.equal(refused.handled, false);
+  assert.match(String(refused.errorMessage), /cannot combine --continue and --abort/);
+  // The merge is still in progress and the staged resolution is intact, proving
+  // neither branch ran.
+  assert.ok(Repository.open(root).readMergeState() !== null);
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "resolved\n");
+});

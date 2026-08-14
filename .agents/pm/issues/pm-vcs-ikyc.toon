@@ -1,0 +1,47 @@
+id: pm-vcs-ikyc
+title: A conflicted merge must not commit and must leave durable unmerged state
+description: ""
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-13T22:22:56.305Z"
+updated_at: "2026-08-13T23:54:08.323Z"
+closed_at: "2026-08-13T22:34:13.206Z"
+completed_at: "2026-08-13T22:34:13.206Z"
+claim_principal: pi-agent
+author: pi-agent
+files[7]{path,scope}:
+  engine/repo.ts,project
+  engine/worktree.ts,project
+  test/issue-26-regression.test.ts,project
+  test/merge-conflict.test.ts,project
+  test/repo.test.ts,project
+  test/vcs-commands-edges.test.ts,project
+  vcs-commands.ts,project
+tests[21]{command,path,scope,timeout_seconds,note}:
+  "PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='defect #1: a conflicted merge does not commit a tree containing conflict markers' test/issue-26-regression.test.ts",test/issue-26-regression.test.ts,project,30,"defect #1: a conflicted merge does not commit a tree containing conflict markers"
+  "PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='defect #2: --fail-on-conflict exits non-zero without having committed the merge' test/issue-26-regression.test.ts",test/issue-26-regression.test.ts,project,30,"defect #2: --fail-on-conflict exits non-zero without having committed the merge"
+  "PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='defect #3: status reports not clean after a conflicted merge' test/issue-26-regression.test.ts",test/issue-26-regression.test.ts,project,30,"defect #3: status reports not clean after a conflicted merge"
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='a clean merge still commits and reports no in-progress state' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,a clean merge still commits and reports no in-progress state
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='a conflicted merge persists custom conflict-marker labels for consistent re-rendering' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,a conflicted merge persists custom conflict-marker labels for consistent re-rendering
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='a conflicted merge reports kind conflicted and surfaces the in-progress merge on status' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,a conflicted merge reports kind conflicted and surfaces the in-progress merge on status
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='a merge state file is durable and round-trips through the control directory' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,a merge state file is durable and round-trips through the control directory
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='a second merge is refused while one is already in progress' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,a second merge is refused while one is already in progress
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='commit is refused while a merge is in progress' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,commit is refused while a merge is in progress
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='merge --abort restores the working tree and clears the in-progress state' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,merge --abort restores the working tree and clears the in-progress state
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='merge --continue and --abort refuse when no merge is in progress' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,merge --continue and --abort refuse when no merge is in progress
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='merge --continue completes the merge after the conflicts are resolved and staged' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,merge --continue completes the merge after the conflicts are resolved and staged
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='merge --continue refuses when a resolution is staged but another file still has markers' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,merge --continue refuses when a resolution is staged but another file still has markers
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='merge --continue refuses while a staged file still contains conflict markers' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,merge --continue refuses while a staged file still contains conflict markers
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='readMergeState rethrows a non-ENOENT read error' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,readMergeState rethrows a non-ENOENT read error
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='readMergeState throws a corrupt_merge_state error when the state file is not valid JSON' test/merge-conflict.test.ts,test/merge-conflict.test.ts,project,30,readMergeState throws a corrupt_merge_state error when the state file is not valid JSON
+  "PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='switch, reset and undo are refused while a merge is in progress' test/merge-conflict.test.ts",test/merge-conflict.test.ts,project,30,"switch, reset and undo are refused while a merge is in progress"
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='vcs merge --abort abandons a stopped merge through the command surface' test/vcs-commands-edges.test.ts,test/vcs-commands-edges.test.ts,project,30,vcs merge --abort abandons a stopped merge through the command surface
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='vcs merge --continue and --abort refuse when no merge is in progress' test/vcs-commands-edges.test.ts,test/vcs-commands-edges.test.ts,project,30,vcs merge --continue and --abort refuse when no merge is in progress
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='vcs merge --continue completes a stopped merge through the command surface' test/vcs-commands-edges.test.ts,test/vcs-commands-edges.test.ts,project,30,vcs merge --continue completes a stopped merge through the command surface
+  PM_PATH=$PWD/node_modules/@unbrained/pm-cli/dist PM_GLOBAL_PATH=$PWD/node_modules/@unbrained/pm-cli/dist node --test --test-name-pattern='vcs merge --continue refuses through the command surface while markers remain' test/vcs-commands-edges.test.ts,test/vcs-commands-edges.test.ts,project,30,vcs merge --continue refuses through the command surface while markers remain
+docs[1]{path,scope,note}:
+  "https://github.com/unbraind/pm-vcs/issues/26",project,"Upstream issue: a conflicted merge was committed into history with conflict markers in its tree, --fail-on-conflict fired only after committing, and status reported clean afterwards."
+close_reason: "Fixed: a merge whose merged tree carries diff3 conflict markers no longer commits. It now returns kind 'conflicted', writes the merged tree to the working tree and index so the markers and clean paths are visible, and persists in-progress merge state (parents, bases, message, author, conflicted paths) under the control directory. status reports clean=false and names the conflicted paths via a durable merge field. commit, switch, reset, undo, and a second merge all refuse while the state exists. merge --continue builds the merge commit from the resolved index and refuses while any staged blob still carries markers; merge --abort restores the working tree and clears the state. --fail-on-conflict now fires without having committed. Verified: full release:check passes (100/100/100/100 coverage); all three defect regression tests fail against the reverted source and pass with the fix; the eight new-behavior refusal tests fail when their guards are removed."
+body: ""

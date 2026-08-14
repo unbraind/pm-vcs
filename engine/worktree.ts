@@ -102,8 +102,22 @@ export interface StatusReport {
   readonly unstaged: readonly Change[];
   /** Paths in the working tree that the index does not carry. */
   readonly untracked: readonly string[];
-  /** True when all three states agree. */
+  /** True when all three states agree and no merge is awaiting resolution. */
   readonly clean: boolean;
+  /**
+   * In-progress merge state, present only when a merge stopped with conflict
+   * markers and has not been completed or aborted. The conflicted paths are the
+   * signal that survives the merge command's own return value, so a downstream
+   * agent that only reads `status` can see a resolution is owed.
+   */
+  readonly merge?: {
+    /** The revision argument the caller passed to `merge`. */
+    readonly revision: string;
+    /** The commit being merged in (the would-be second parent). */
+    readonly theirs: ObjectId;
+    /** Paths left with conflict markers. */
+    readonly conflicts: readonly string[];
+  };
 }
 
 /**
