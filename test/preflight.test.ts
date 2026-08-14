@@ -286,8 +286,8 @@ test("a fence carrying a pattern the schema no longer produces fails", async () 
   writeFileSync(
     fencePath,
     fence.replace(
-      "# pm-cli:merge-drivers:end",
-      '".agents/pm/retired/*.toon" merge=pm-item-toon\n# pm-cli:merge-drivers:end',
+      "# pm-cli:merge-drivers:v2:end",
+      '".agents/pm/retired/*.toon" merge=pm-item-toon\n# pm-cli:merge-drivers:v2:end',
     ),
   );
   sandbox.commit("Add a stale pattern to the fence");
