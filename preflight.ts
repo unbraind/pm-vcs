@@ -36,6 +36,8 @@ import { join, relative } from "node:path";
 import {
   PM_GITATTRIBUTES_END,
   PM_GITATTRIBUTES_START,
+  PM_GITATTRIBUTES_V2_END,
+  PM_GITATTRIBUTES_V2_START,
   auditMergeDriverConfiguration,
   buildMergeAttributePatterns,
   resolveProjectMergeTypeFolders,
@@ -274,10 +276,22 @@ export async function checkFenceCoverage(
  */
 export function fencedPatterns(body: string): string[] | null {
   const lines = body.split(/\r?\n/);
-  const start = lines.indexOf(PM_GITATTRIBUTES_START);
-  const end = lines.indexOf(PM_GITATTRIBUTES_END);
-  if (start === -1 || end === -1 || end < start) return null;
-  return lines.slice(start + 1, end).map((line) => line.trim()).filter((line) => line !== "");
+  // pm-cli introduced a v2 fence marker ("# pm-cli:merge-drivers:v2:start")
+  // while still supporting v1 ("# pm-cli:merge-drivers:start"). `pm merge
+  // install` writes v2 on new installs, so preflight must recognise both:
+  // a clone that installed from an older CLI carries v1, and one that installed
+  // from a current CLI carries v2. Try v2 first (the current default), then v1.
+  for (const [startMarker, endMarker] of [
+    [PM_GITATTRIBUTES_V2_START, PM_GITATTRIBUTES_V2_END],
+    [PM_GITATTRIBUTES_START, PM_GITATTRIBUTES_END],
+  ] as const) {
+    const start = lines.indexOf(startMarker);
+    const end = lines.indexOf(endMarker);
+    if (start !== -1 && end !== -1 && end > start) {
+      return lines.slice(start + 1, end).map((line) => line.trim()).filter((line) => line !== "");
+    }
+  }
+  return null;
 }
 
 /**

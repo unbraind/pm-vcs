@@ -1,0 +1,88 @@
+name: Dependency Refresh
+
+on:
+  schedule:
+    # Every Monday at 03:23 UTC — off the hour to spread GitHub Actions load.
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependency-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refresh dependencies
+        id: refresh
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm update --save
+          npm run build
+          npm run self-host:write
+          if git diff --quiet -- package.json package-lock.json selfhost.bundle; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No dependency changes detected; exiting successfully."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run release checks
+        if: steps.refresh.outputs.changed == 'true'
+        run: npm run release:check
+
+      - name: Create dependency refresh PR
+        if: steps.refresh.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # A same-day re-run must not collide with the branch an earlier run
+          # pushed: `git push -u origin "$branch"` would be rejected as a
+          # non-fast-forward against a branch this run never fetched. Reuse the
+          # date branch when it is free and fall back to a run-suffixed name
+          # when it is taken, so a manual re-run after the weekly schedule still
+          # produces a PR instead of failing at the push.
+          base="dependency-refresh/$(date -u +%Y-%m-%d)"
+          branch="$base"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            branch="$base-run-${GITHUB_RUN_ID}"
+            echo "Remote branch $base already exists; using $branch instead."
+          fi
+          git checkout -b "$branch"
+          git add package.json package-lock.json selfhost.bundle
+          git commit -m "Refresh dependencies and regenerate self-host bundle
+
+          Automated weekly dependency refresh. The lockfile and the
+          self-host bundle are updated together so the accept:self-host
+          gate stays green at this commit."
+          git push -u origin "$branch"
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$branch" \
+            --title "Refresh dependencies and regenerate self-host bundle" \
+            --body "Automated weekly dependency refresh. The lockfile and the regenerated \`selfhost.bundle\` are committed together so the \`accept:self-host\` gate stays green at this commit. The full \`release:check\` gate passed before this PR was created."

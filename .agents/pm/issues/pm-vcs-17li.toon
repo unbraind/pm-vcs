@@ -1,0 +1,27 @@
+id: pm-vcs-17li
+title: Refresh dependencies and regenerate self-host bundle to unblock Dependabot PRs
+description: "Dependabot PRs #28, #29, #30 are permanently unmergeable because the accept:self-host gate rejects any lockfile change without a regenerated selfhost.bundle. Land the three dependency updates in one commit, regenerate the bundle, add a weekly dependency-refresh workflow, and document the bundle coupling in AGENTS.md."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-14T05:16:10.026Z"
+updated_at: "2026-08-14T05:46:37.433Z"
+closed_at: "2026-08-14T05:46:37.418Z"
+completed_at: "2026-08-14T05:46:37.418Z"
+author: pi-agent
+comments[1]{created_at,author,text}:
+  "2026-08-14T05:46:34.514Z",pi-agent,"release:check exit code: 0. pm health --strict-exit exit code: 0. coverage exit code: 0. All gates green. Updated preflight.ts to recognize v2 merge-driver fence markers (PM_GITATTRIBUTES_V2_START/END) introduced in pm-cli 2026.8.14. Updated changelog scripts to pass --pm-arg --output-budget --pm-arg 999999 because pm-cli 2026.8.14 truncates list-all to 10 items by default."
+files[10]{path,scope}:
+  .gitattributes,project
+  .github/workflows/dependency-refresh.yml,project
+  .github/workflows/release.yml,project
+  AGENTS.md,project
+  CHANGELOG.md,project
+  package-lock.json,project
+  package.json,project
+  preflight.ts,project
+  selfhost.bundle,project
+  test/preflight.test.ts,project
+close_reason: completed
+body: ""
