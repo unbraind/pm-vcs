@@ -2,12 +2,13 @@ id: pm-vcs-0lec
 title: Add sparse lazy instances with a shared immutable object store
 description: "Materialize per-instance views over complete repository trees, fetch missing fragments lazily, and let independent working trees share immutable objects while retaining separate HEAD index view dirty state and operation logs."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:33.737Z"
-updated_at: "2026-08-16T03:33:27.951Z"
-assignee: pi-agent
+updated_at: "2026-08-16T03:49:21.507Z"
+closed_at: "2026-08-16T03:49:21.496Z"
+completed_at: "2026-08-16T03:49:21.496Z"
 claim_principal: pi-agent
 author: "harness:codex"
 estimated_minutes: 1800
@@ -17,4 +18,5 @@ risk: high
 comments[2]{created_at,author,text}:
   "2026-08-15T22:52:46.319Z",pi-agent,"Starting implementation. Design: sparse linked instances over the hub's shared immutable store. Per-instance control directory holds HEAD, index (v4 with a sparse flag, git skip-worktree style), oplog, view.json, dirty-hint file and merge state; the hub keeps objects, refs, config and remotes shared (refs protected by existing compare-and-swap locks). Sparse index entries keep out-of-view content in every committed tree so a view can never change tree identity and merges always evaluate complete trees. Missing objects surface as typed missing_fragment errors with fetch remediation. Dirty hints are hints only: they can force extra verification, never suppress it; the full scan rewrites them from filesystem truth."
   "2026-08-16T03:33:27.951Z",pi-agent,"Regression proofs: each mutation was applied to the shipped code, its covering test observed failing (exit non-zero), and the mutation reverted; the full suite re-ran green after each revert. (1) materialize() drops sparse index entries -> 'a sparse view never changes committed tree identity' FAILS. (2) merge materializes out-of-view conflicts instead of refusing (outOfView forced empty) -> 'an out-of-view conflict fails visibly' FAILS. (3) commit accepts staged out-of-view changes (guard disabled) -> 'committing a staged change outside the view is refused' FAILS. (4) SharedObjectStore rethrows object_not_found untranslated -> 'a missing fragment is a typed, actionable error' FAILS. (5) instances open private stores/refs instead of the hub's -> concurrency test FAILS (shared store missing). (6) RefStore ignores headRoot so instances share HEAD -> concurrency test FAILS (HEAD overwritten). (7) scan() returns hinted paths instead of verified ones -> 'a full scan reconciles lying hints' FAILS. (8) status() stops passing hints as forced content checks -> the racy-stat adversarial case inside 'a full scan reconciles lying hints' FAILS (the forged-stat edit reads clean without the hint)."
+close_reason: "Implemented sparse lazy instances over the shared immutable store: per-instance HEAD/index/view/oplog/hints, shared objects/refs/config, index v4 sparse entries preserving tree identity, visible out-of-view and attribution failures, typed missing_fragment errors, locked instance registry, filesystem-authoritative scan. All 8 regression mutations proven failing; release:check green with 594 tests at 100% coverage."
 body: ""
