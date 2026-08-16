@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -278,7 +278,7 @@ test("a missing fragment is a typed, actionable error naming how to fetch it", (
   );
 });
 
-test("a full scan reconciles lying hints against filesystem truth", () => {
+test("a full scan reconciles lying hints against filesystem truth", async () => {
   const parent = freshDir();
   const root = join(parent, "hub");
   const hub = Repository.init(root);
@@ -318,6 +318,41 @@ test("a full scan reconciles lying hints against filesystem truth", () => {
   hub2.commit({ message: "commit a\n", author }, new Date());
   hub2.materialize(hub2.headTree());
   assert.deepEqual(readHints(join(root, CONTROL_DIRECTORY)), []);
+
+  // The adversarial case a hint exists for: an edit whose recorded metadata
+  // claims nothing moved. A cached stat is only trusted once it is older than
+  // the two-second race window on both sides, so this waits the window out
+  // twice: once so the forged observation is cacheable, once so the later
+  // status read trusts it. Metadata alone then says clean — the lie a coarse
+  // or restored filesystem tells — and only a hint forces the content check
+  // that reveals the edit. That is why hints may add checks and never remove
+  // them, and why the scan, which never consults metadata, is the authority.
+  const committed = readFileSync(join(root, "a.txt"), "utf8");
+  const committedId = hashObject("blob", Buffer.from(committed));
+  writeFileSync(join(root, "a.txt"), "X" + committed.slice(1));
+  await new Promise((resolveWait) => setTimeout(resolveWait, 2_100));
+  const observed = statSync(join(root, "a.txt"), { bigint: true });
+  const observedAtNs = BigInt(Date.now()) * 1_000_000n;
+  writeFileSync(join(root, CONTROL_DIRECTORY, "index"), `${[
+    "pm-vcs-index 4",
+    JSON.stringify(["100644", committedId, "a.txt", "a".repeat(32), null, [
+      String(observed.size), String(observed.mtimeNs), String(observed.ctimeNs),
+      String(observed.dev), String(observed.ino), String(observedAtNs),
+    ], false]),
+    JSON.stringify(["100644", hub2.readIndex().find((entry) => entry.path === "b.txt")?.id, "b.txt", "b".repeat(32), null, null, false]),
+  ].join("\n")}\n`);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 2_100));
+  // Without a hint the forged metadata wins: status reads clean.
+  assert.equal(Repository.open(root).status().clean, true);
+  // With the hint the content check runs and the edit is visible.
+  writeHints(join(root, CONTROL_DIRECTORY), ["a.txt"]);
+  const racy = Repository.open(root).status();
+  assert.deepEqual(racy.unstaged.map((change) => change.path), ["a.txt"]);
+  // The scan needs no hint: it compares content regardless, and corrects the
+  // hint file itself while reporting what the filesystem proved.
+  const authority = Repository.open(root).scan();
+  assert.deepEqual(authority.dirty, ["a.txt"]);
+  assert.deepEqual(authority.corrections.filter((correction) => correction.hinted !== correction.actual), []);
 });
 
 test("concurrent instances share objects but never overwrite each other's state", async () => {
