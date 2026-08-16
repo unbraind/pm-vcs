@@ -1009,8 +1009,8 @@ export class Repository {
         `The directory ${instanceRoot} is not empty. Link an instance into an empty or absent directory, never over existing files.`,
       );
     }
-    const existing = this.refs.read(branchRef);
-    if (existing === null) {
+    let head = this.refs.read(branchRef);
+    if (head === null) {
       const target = this.refs.resolveHead();
       if (target === null) {
         throw new ObjectStoreError(
@@ -1019,8 +1019,9 @@ export class Repository {
         );
       }
       this.refs.compareAndSwap(branchRef, null, target);
+      // The swap just installed `target`, so it is the tip without a re-read.
+      head = target;
     }
-    const head = this.refs.read(branchRef);
     // The instance control directory is written before the registry entry, so
     // a half-created instance is an unregistered directory (harmless, reusable)
     // rather than a registry entry whose directory cannot be opened.
@@ -1061,7 +1062,7 @@ export class Repository {
           include: instance.view()?.include ?? [],
         };
       } catch (error) {
-        return { ...base, head: null, branch: null, include: [], broken: error instanceof Error ? error.message : String(error) };
+        return { ...base, head: null, branch: null, include: [], broken: (error as Error).message };
       }
     });
   }

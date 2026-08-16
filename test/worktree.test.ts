@@ -91,6 +91,13 @@ test("encodeIndex and decodeIndex round-trip cached metadata in path order", () 
   const backslashEntry = { path: "back\\slash", id: "1".repeat(64), mode: "100644" as const, fileId: "d".repeat(32) };
   const sparseEntry = { path: "gone.txt", id: "3".repeat(64), mode: "100644" as const, sparse: true };
   assert.deepEqual(decodeIndex(encodeIndex([sparseEntry])), [sparseEntry]);
+  // A sparse entry may also carry cached metadata; both survive together.
+  const sparseWithStat = {
+    ...sparseEntry,
+    fileId: "e".repeat(32),
+    stat: { size: 1n, mtimeNs: 2n, ctimeNs: 3n, dev: 4n, ino: 5n, observedAtNs: 6n },
+  };
+  assert.deepEqual(decodeIndex(encodeIndex([sparseWithStat])), [sparseWithStat]);
   if (sep !== "\\") assert.deepEqual(decodeIndex(encodeIndex([backslashEntry])), [backslashEntry]);
   assert.throws(
     () => encodeIndex([{ ...backslashEntry, path: "../outside" }]),

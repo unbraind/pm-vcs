@@ -418,18 +418,6 @@ function updateInstances(
   try {
     const before = readInstances(controlDirectory);
     const after = mutate(before);
-    const names = new Set<string>();
-    const paths = new Set<string>();
-    for (const entry of after) {
-      if (names.has(entry.name)) {
-        throw new ObjectStoreError("instance_exists", `Two registered instances cannot both be named ${entry.name}.`);
-      }
-      if (paths.has(entry.path)) {
-        throw new ObjectStoreError("instance_exists", `Two registered instances cannot share the path ${entry.path}.`);
-      }
-      names.add(entry.name);
-      paths.add(entry.path);
-    }
     if (after !== before) {
       writeControlFile(path, `${JSON.stringify({ instances: after }, null, 2)}\n`);
     }

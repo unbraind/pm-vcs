@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -23,7 +23,9 @@ import {
   parseView,
   readHints,
   readInstances,
+  SharedObjectStore,
   readView,
+  registerInstance,
   viewIncludes,
   writeHints,
 } from "../engine/instances.ts";
@@ -39,7 +41,7 @@ import { packageRoot } from "./helpers/sandbox.ts";
 const author: Signature = { name: "Instance", email: "instance@local", timestamp: 1_000, timezoneOffsetMinutes: 0 };
 const later: Signature = { name: "Instance", email: "instance@local", timestamp: 2_000, timezoneOffsetMinutes: 0 };
 
-let cleaner: { cleanup(): void } | null = null;
+let cleaner: { root: string; cleanup(): void } | null = null;
 
 /**
  * Creates a fresh directory tree and registers it for teardown.
@@ -704,6 +706,16 @@ test("the command surface links, lists, unlinks, views and scans instances", asy
     options: { include: "readme.txt" },
     pmRoot: root,
   });
+  // A second link with an explicit branch and the full view exercises the
+  // options the first omitted.
+  const bob = await harness.runCommand({
+    command: "vcs instance",
+    args: ["bob", "../bob-tree"],
+    options: { branch: "bob-branch" },
+    pmRoot: root,
+  });
+  assert.equal((bob.result as { linked: { branch: string; include: readonly string[] } }).linked.branch, "bob-branch");
+  assert.deepEqual((bob.result as { linked: { include: readonly string[] } }).linked.include, []);
   assert.equal(linked.errorMessage, undefined, String(linked.errorMessage));
   assert.equal((linked.result as { linked: { name: string; branch: string } }).linked.name, "alice");
   assert.equal(existsSync(join(parent, "alice-tree", "readme.txt")), true);
@@ -711,7 +723,7 @@ test("the command surface links, lists, unlinks, views and scans instances", asy
 
   const listed = await harness.runCommand({ command: "vcs instance", options: { list: true }, pmRoot: root });
   const instances = (listed.result as { instances: { name: string; include: readonly string[]; head: unknown }[] }).instances;
-  assert.deepEqual(instances.map((entry) => entry.name), ["alice"]);
+  assert.deepEqual(instances.map((entry) => entry.name), ["alice", "bob"]);
   assert.deepEqual(instances[0]?.include, ["readme.txt"]);
 
   // The instance answers view and scan through the same surface.
@@ -736,8 +748,195 @@ test("the command surface links, lists, unlinks, views and scans instances", asy
   const badPattern = await harness.runCommand({ command: "vcs view", args: ["../escape"], pmRoot: root });
   assert.match(String(badPattern.errorMessage), /is invalid/);
 
+  // A view query on a full-view repository reports the full view, and a
+  // failing link through the CLI carries the engine's typed reason.
+  const fullView = await harness.runCommand({ command: "vcs view", pmRoot: join(parent, "bob-tree") });
+  assert.deepEqual((fullView.result as { view: readonly string[] }).view, []);
+  const badLink = await harness.runCommand({
+    command: "vcs instance",
+    args: ["carol", "../carol-tree"],
+    options: { include: "../escape" },
+    pmRoot: root,
+  });
+  assert.match(String(badLink.errorMessage), /is invalid/);
+
   const removed = await harness.runCommand({ command: "vcs instance", args: ["alice"], options: { remove: true }, pmRoot: root });
   assert.equal((removed.result as { removed: string }).removed, "alice");
+  const removedBob = await harness.runCommand({ command: "vcs instance", args: ["bob"], options: { remove: true }, pmRoot: root });
+  assert.equal((removedBob.result as { removed: string }).removed, "bob");
   const empty = await harness.runCommand({ command: "vcs instance", options: { list: true }, pmRoot: root });
   assert.deepEqual((empty.result as { instances: unknown[] }).instances, []);
+});
+
+test("registry writes are locked, refuse duplicates under the lock, and survive busy lock files", () => {
+  const root = freshDir();
+  const hub = Repository.init(root);
+  commitFile(hub, "readme.txt", "base\n", "base");
+  const hubControl = join(root, CONTROL_DIRECTORY);
+
+  // registerInstance is the authoritative under-lock duplicate check; the
+  // pre-check in linkInstance exists to fail before any directory is touched.
+  registerInstance(hubControl, { name: "direct", path: "somewhere" });
+  assert.throws(() => registerInstance(hubControl, { name: "direct", path: "elsewhere" }), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    assert.match(error.message, /direct/);
+    return error.code === "instance_exists";
+  });
+  assert.throws(() => registerInstance(hubControl, { name: "other", path: "somewhere" }), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    return error.code === "instance_exists";
+  });
+
+  // A held lock refuses loudly rather than blocking or overwriting.
+  const lockPath = join(hubControl, `${INSTANCE_REGISTRY_FILE}.lock`);
+  writeFileSync(lockPath, "");
+  assert.throws(() => registerInstance(hubControl, { name: "next", path: "next" }), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    return error.code === "instance_registry_locked";
+  });
+  rmSync(lockPath);
+  registerInstance(hubControl, { name: "next", path: "next" });
+  assert.equal(readInstances(hubControl).length, 2);
+});
+
+test("a shared store passes corruption through and translates only absence", () => {
+  const root = freshDir();
+  mkdirSync(join(root, "objects"), { recursive: true });
+  const store = new SharedObjectStore(join(root, "objects"));
+  const id = store.write("blob", Buffer.from("intact\n"));
+  assert.equal(store.read(id).payload.toString(), "intact\n");
+  // A damaged object is a corruption, not an unfetched fragment: the error
+  // passes through untranslated so it names the real fault.
+  writeFileSync(objectFile(join(root, "objects"), id), Buffer.from("damaged bytes"));
+  assert.throws(() => store.read(id), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    return error.code !== "missing_fragment" && error.code !== "object_not_found";
+  });
+  // A plain absence in a shared store is the lazy-fetch case.
+  rmSync(objectFile(join(root, "objects"), id), { force: true });
+  assert.throws(() => store.read(id), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    return error.code === "missing_fragment" && /pm vcs fetch/.test(error.message);
+  });
+});
+
+test("control-file readers and writers fail loudly on real I/O faults", () => {
+  const root = freshDir();
+  const control = join(root, CONTROL_DIRECTORY);
+  mkdirSync(control, { recursive: true });
+  // A regular file where a directory belongs turns a read into ENOTDIR, which
+  // must surface rather than masquerade as "no such file".
+  const blocked = join(root, "blocked");
+  writeFileSync(blocked, "a file, not a directory");
+  for (const reader of [() => readView(blocked), () => readHints(blocked), () => readInstances(blocked)]) {
+    assert.throws(reader, (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOTDIR");
+  }
+  // An unwritable control directory refuses the atomic write and cleans up its
+  // temporary file.
+  chmodSync(control, 0o500);
+  assert.throws(() => writeHints(control, ["a.txt"]), (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES");
+  chmodSync(control, 0o700);
+  assert.deepEqual(readdirSync(control), []);
+  // A view file without an include key is the full view, and registry entries
+  // that are not objects are refused by shape.
+  writeFileSync(join(control, VIEW_FILE), "{}");
+  assert.deepEqual(readView(control), { include: [] });
+  writeFileSync(join(control, INSTANCE_REGISTRY_FILE), JSON.stringify({ instances: [42, "x", []] }));
+  assert.throws(() => readInstances(control), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    return error.code === "bad_instances";
+  });
+});
+
+test("linking from an instance registers against the same hub", () => {
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  const hub = Repository.init(root);
+  commitFile(hub, "readme.txt", "base\n", "base");
+
+  const aliceRoot = join(parent, "alice-tree");
+  hub.linkInstance("alice", aliceRoot, { include: ["readme.txt"] });
+  const bobRoot = join(parent, "bob-tree");
+  // Linked from inside alice: the hub, not the caller, owns the registry.
+  const summary = Repository.open(aliceRoot).linkInstance("bob", bobRoot);
+  assert.equal(summary.name, "bob");
+  assert.deepEqual(readInstances(join(root, CONTROL_DIRECTORY)).map((entry) => entry.name), ["alice", "bob"]);
+  // A full-view instance lists with an empty include, and a detached instance
+  // lists with no branch.
+  const bob = Repository.open(bobRoot);
+  bob.refs.setHeadDetached(bob.refs.resolveHead() as string);
+  const listing = Repository.open(aliceRoot).listInstances();
+  assert.equal(listing.find((entry) => entry.name === "bob")?.branch, null);
+  assert.deepEqual(listing.find((entry) => entry.name === "bob")?.include, []);
+  assert.deepEqual(listing.find((entry) => entry.name === "alice")?.include, ["readme.txt"]);
+  // Linking the hub's own directory is refused by name of the directory.
+  assert.throws(() => hub.linkInstance("self", root), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    return error.code === "instance_nested" && /own working tree/.test(error.message);
+  });
+});
+
+test("a view carries file identity and executable modes through narrowing and widening", () => {
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  const hub = Repository.init(root);
+  commitFile(hub, "readme.txt", "base\n", "base");
+  commitFile(hub, "run.sh", "#!/bin/sh\n", "script");
+  chmodSync(join(root, "run.sh"), 0o755);
+  hub.stage(["run.sh"]);
+  const withScript = hub.commit({ message: "mode\n", author }, new Date());
+  // A move keeps identity: stage the new name while the old disappears.
+  mkdirSync(join(root, "moved"));
+  renameSync(join(root, "readme.txt"), join(root, "moved", "readme.txt"));
+  hub.stage([]);
+  hub.commit({ message: "move\n", author }, new Date());
+  assert.notEqual(withScript, hub.refs.resolveHead());
+
+  const aliceRoot = join(parent, "alice-tree");
+  hub.linkInstance("alice", aliceRoot, { include: ["readme.txt"] });
+  const alice = Repository.open(aliceRoot);
+  // The out-of-view entries carry their committed identity into the instance
+  // index, including the moved file's lineage and the executable mode.
+  const entries = new Map(alice.readIndex().map((entry) => [entry.path, entry]));
+  assert.equal(entries.get("moved/readme.txt")?.sparse, true);
+  assert.notEqual(entries.get("moved/readme.txt")?.fileId, undefined);
+  assert.equal(entries.get("run.sh")?.mode, "100755");
+  // Widening restores the executable bit as committed.
+  alice.setView(["**"]);
+  assert.equal(existsSync(join(aliceRoot, "run.sh")), true);
+  assert.equal(statSync(join(aliceRoot, "run.sh")).mode & 0o111, 0o111);
+  // A non-empty directory sitting where a narrowed path's file belongs is a
+  // real fault the view change surfaces, not a silent skip.
+  rmSync(join(aliceRoot, "moved", "readme.txt"));
+  mkdirSync(join(aliceRoot, "moved", "readme.txt"));
+  writeFileSync(join(aliceRoot, "moved", "readme.txt", "surprise.txt"), "not going quietly\n");
+  assert.throws(() => alice.setView(["run.sh"]), (error: unknown) => (error as NodeJS.ErrnoException).code !== undefined);
+  rmSync(join(aliceRoot, "moved", "readme.txt"), { recursive: true, force: true });
+});
+
+test("scan sees executable mode, record paths and absent sparse paths", () => {
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  const hub = Repository.init(root, "main", { recordPaths: ["items/*.json"] });
+  writeFileSync(join(root, "run.sh"), "#!/bin/sh\n");
+  chmodSync(join(root, "run.sh"), 0o755);
+  hub.stage(["run.sh"]);
+  mkdirSync(join(root, "items"), { recursive: true });
+  writeFileSync(join(root, "items", "one.json"), JSON.stringify({ done: true }));
+  hub.stage(["items/one.json"]);
+  hub.commit({ message: "base\n", author }, new Date());
+
+  const aliceRoot = join(parent, "alice-tree");
+  hub.linkInstance("alice", aliceRoot, { include: ["run.sh"] });
+  const alice = Repository.open(aliceRoot);
+  const report = alice.scan();
+  // The sparse record path is absent by design and not dirty; the executable
+  // mode is compared, not just bytes; the record is hashed as a record.
+  assert.deepEqual(report.dirty, []);
+  assert.equal(report.checked, 2);
+  // Flipping the executable bit on disk is a dirty mode the scan finds.
+  chmodSync(join(aliceRoot, "run.sh"), 0o644);
+  const flipped = alice.scan();
+  assert.deepEqual(flipped.dirty, ["run.sh"]);
+  assert.deepEqual(flipped.corrections, [{ path: "run.sh", hinted: false, actual: true }]);
 });
