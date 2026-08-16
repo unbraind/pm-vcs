@@ -23,7 +23,7 @@ import { randomBytes } from "node:crypto";
 
 import { matchesGlob } from "./config.ts";
 import { compareByteOrder } from "./model.ts";
-import { ObjectStore, ObjectStoreError, type ObjectId, type StoredObject } from "./objects.ts";
+import { ObjectStore, ObjectStoreError, type ObjectId, type StoredObject, assertRegistryName, readControlJson } from "./objects.ts";
 
 /** File inside an instance's control directory naming the hub it belongs to. */
 export const INSTANCE_LINK_FILE = "link.json";
@@ -142,20 +142,8 @@ export function parseView(raw: unknown): ViewSpec {
  *   valid view.
  */
 export function readView(controlDirectory: string): ViewSpec | null {
-  let contents: string;
-  try {
-    contents = readFileSync(join(controlDirectory, VIEW_FILE), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(contents);
-  } catch {
-    throw new ObjectStoreError("bad_view", `The view file at ${join(controlDirectory, VIEW_FILE)} is not valid JSON.`);
-  }
-  return parseView(parsed);
+  const parsed = readControlJson(join(controlDirectory, VIEW_FILE), "bad_view", "view file");
+  return parsed === null ? null : parseView(parsed);
 }
 
 /**
@@ -212,19 +200,8 @@ export function parseInstanceLink(raw: unknown): string {
  * @throws ObjectStoreError When the file exists but is not a string array.
  */
 export function readHints(controlDirectory: string): readonly string[] {
-  let contents: string;
-  try {
-    contents = readFileSync(join(controlDirectory, HINTS_FILE), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return [];
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(contents);
-  } catch {
-    throw new ObjectStoreError("bad_hints", `The dirty-hints file at ${join(controlDirectory, HINTS_FILE)} is not valid JSON.`);
-  }
+  const parsed = readControlJson(join(controlDirectory, HINTS_FILE), "bad_hints", "dirty-hints file");
+  if (parsed === null) return [];
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)
     || !Array.isArray((parsed as Record<string, unknown>).dirty)
     || (parsed as { dirty: unknown[] }).dirty.some((entry) => typeof entry !== "string")) {
@@ -319,15 +296,7 @@ export class SharedObjectStore extends ObjectStore {
  *   separator, whitespace, a control character, or a character reserved in refs.
  */
 export function assertInstanceName(name: string): void {
-  const reject = (reason: string): never => {
-    throw new ObjectStoreError("invalid_instance_name", `Instance name "${name}" is invalid: ${reason}`);
-  };
-  if (name.length === 0) reject("it is empty");
-  if (name === "." || name === "..") reject("it is a relative path segment");
-  if (name.includes("/") || name.includes("\\")) reject("it contains a path separator");
-  if (/[\u0000-\u0020\u007f~^:?*[\]]/.test(name)) {
-    reject("it contains whitespace, a control character, or one of ~^:?*[]");
-  }
+  assertRegistryName(name, "invalid_instance_name", "Instance");
 }
 
 /**
@@ -361,22 +330,8 @@ function parseInstanceEntry(raw: unknown): InstanceEntry {
  *   instance list.
  */
 export function readInstances(controlDirectory: string): readonly InstanceEntry[] {
-  let contents: string;
-  try {
-    contents = readFileSync(join(controlDirectory, INSTANCE_REGISTRY_FILE), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return [];
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(contents);
-  } catch {
-    throw new ObjectStoreError(
-      "bad_instances",
-      `The instance registry at ${join(controlDirectory, INSTANCE_REGISTRY_FILE)} is not valid JSON.`,
-    );
-  }
+  const parsed = readControlJson(join(controlDirectory, INSTANCE_REGISTRY_FILE), "bad_instances", "instance registry");
+  if (parsed === null) return [];
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)
     || !Array.isArray((parsed as Record<string, unknown>).instances)) {
     throw new ObjectStoreError("bad_instances", "Instance registry must be an object holding an \"instances\" array.");
