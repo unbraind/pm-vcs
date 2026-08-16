@@ -24,7 +24,7 @@ import { type IgnoreRules, isIgnored, isPrunableDirectory } from "./ignore.ts";
 import { compareByteOrder, type FileId, type FileMode, isFileId, type TreeEntry, readTree, writeTree } from "./model.ts";
 import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError, type StoredObject } from "./objects.ts";
 
-const INDEX_HEADER = "pm-vcs-index 3";
+const INDEX_HEADER = "pm-vcs-index 4";
 /** Conservative upper bound for one coarse filesystem timestamp tick. */
 export const RACY_WINDOW_NS = 2_000_000_000n;
 
@@ -83,6 +83,15 @@ export interface IndexEntry {
   readonly copiedFrom?: FileId;
   /** Filesystem identity observed while the staged content was read. */
   readonly stat?: IndexStat;
+  /**
+   * True when this path belongs to the committed tree but sits outside this
+   * working tree's sparse view, so it is intentionally absent from disk while
+   * its committed content stays staged. Sparse entries are what keep a view
+   * from changing tree identity: a commit built from the index records them
+   * exactly as they are in HEAD, so a full checkout and a sparse one holding
+   * the same edits produce byte-identical trees. Absent in versions before 4.
+   */
+  readonly sparse?: boolean;
 }
 
 /** How a path differs across HEAD, the index and the working tree. */
@@ -184,6 +193,7 @@ export function encodeIndex(entries: readonly IndexEntry[]): string {
               entry.stat.ino.toString(),
               entry.stat.observedAtNs.toString(),
             ],
+        entry.sparse === true,
       ]);
     });
   return [INDEX_HEADER, ...lines].join("\n");
@@ -193,8 +203,9 @@ export function encodeIndex(entries: readonly IndexEntry[]): string {
  * Parses the index.
  *
  * @param contents - The index file's contents, or the empty string.
- * Legacy three-field lines remain readable and acquire cache metadata on their
- * next stage. A newer version is refused rather than guessed at.
+ * Legacy version 2 and version 3 lines remain readable and are upgraded by the
+ * next write; version 4 adds the sparse flag a linked instance's view needs.
+ * A newer version is refused rather than guessed at.
  *
  * @returns The staged entries.
  * @throws ObjectStoreError When a line is malformed or the version is newer
@@ -204,10 +215,10 @@ export function decodeIndex(contents: string): IndexEntry[] {
   if (contents.length === 0) return [];
   const lines = contents.split("\n");
   if (lines[0]?.startsWith("pm-vcs-index ")) {
-    if (lines[0] !== INDEX_HEADER && lines[0] !== "pm-vcs-index 2") {
+    if (lines[0] !== INDEX_HEADER && lines[0] !== "pm-vcs-index 3" && lines[0] !== "pm-vcs-index 2") {
       throw new ObjectStoreError(
         "unsupported_index_version",
-        `Index version ${lines[0].slice("pm-vcs-index ".length)} is newer than the supported version 3.`,
+        `Index version ${lines[0].slice("pm-vcs-index ".length)} is newer than the supported version 4.`,
       );
     }
     const entries: IndexEntry[] = [];
@@ -220,14 +231,16 @@ export function decodeIndex(contents: string): IndexEntry[] {
         throw new ObjectStoreError("corrupt_index", `Index line "${line}" is not valid JSON.`);
       }
       const versionTwo = lines[0] === "pm-vcs-index 2";
-      if (!Array.isArray(value) || value.length !== (versionTwo ? 4 : 6)) {
+      const versionFour = lines[0] === INDEX_HEADER;
+      if (!Array.isArray(value) || value.length !== (versionTwo ? 4 : versionFour ? 7 : 6)) {
         throw new ObjectStoreError("corrupt_index", `Index line "${line}" has the wrong field count.`);
       }
-      const [mode, id, path, encodedFileId, encodedCopiedFrom, encodedStat] = versionTwo
-        ? [value[0], value[1], value[2], null, null, value[3]]
+      const [mode, id, path, encodedFileId, encodedCopiedFrom, encodedStat, encodedSparse] = versionTwo
+        ? [value[0], value[1], value[2], null, null, value[3], false]
         : value;
       if ((mode !== "100644" && mode !== "100755") || typeof id !== "string" || !isObjectId(id)
         || typeof path !== "string" || !isCanonicalRepoPath(path)
+        || (versionFour && typeof encodedSparse !== "boolean")
         || (!versionTwo && (encodedFileId !== null && (typeof encodedFileId !== "string" || !isFileId(encodedFileId))
           || (encodedCopiedFrom !== null && (typeof encodedCopiedFrom !== "string" || !isFileId(encodedCopiedFrom)
             || encodedFileId === null || encodedCopiedFrom === encodedFileId))))) {
@@ -236,7 +249,8 @@ export function decodeIndex(contents: string): IndexEntry[] {
       if (encodedStat === null) {
         entries.push({ mode, id, path,
           ...(typeof encodedFileId === "string" ? { fileId: encodedFileId } : {}),
-          ...(typeof encodedCopiedFrom === "string" ? { copiedFrom: encodedCopiedFrom } : {}) });
+          ...(typeof encodedCopiedFrom === "string" ? { copiedFrom: encodedCopiedFrom } : {}),
+          ...(encodedSparse === true ? { sparse: true } : {}) });
         continue;
       }
       const statPatterns = [/^\d+$/, /^-?\d+$/, /^-?\d+$/, /^\d+$/, /^\d+$/, /^\d+$/] as const;
@@ -251,6 +265,7 @@ export function decodeIndex(contents: string): IndexEntry[] {
         path,
         ...(typeof encodedFileId === "string" ? { fileId: encodedFileId } : {}),
         ...(typeof encodedCopiedFrom === "string" ? { copiedFrom: encodedCopiedFrom } : {}),
+        ...(encodedSparse === true ? { sparse: true } : {}),
         stat: {
           size: BigInt(encodedStat[0]),
           mtimeNs: BigInt(encodedStat[1]),
@@ -487,7 +502,12 @@ export function buildTree(
  *   still cannot overwrite it.
  * @param render - Converts a stored object to its path-specific working-tree bytes.
  * @param removablePaths - Paths owned by the current index. Untracked paths are
- *   never removed merely because the target tree does not carry them.
+ *   never removed merely because the target tree does not carry them. A sparse
+ *   working tree passes only its non-sparse entries, so a view can never cause
+ *   the removal of a path it never materialized.
+ * @param visible - Which tree paths belong to this working tree's view. Paths
+ *   outside it are neither written nor read — their blobs are fetched lazily,
+ *   only when the view widens to include them.
  * @returns The index entries describing what was written.
  */
 export function materializeTree(
@@ -498,9 +518,10 @@ export function materializeTree(
   rules: IgnoreRules,
   render: (path: string, object: StoredObject) => Buffer = (_path, object) => object.payload,
   removablePaths: ReadonlySet<string> = new Set(),
+  visible: (path: string) => boolean = () => true,
 ): IndexEntry[] {
   const target = new Map(
-    [...flattenTree(store, treeIdentifier)].filter(([path]) => !isIgnored(path, rules)),
+    [...flattenTree(store, treeIdentifier)].filter(([path]) => visible(path) && !isIgnored(path, rules)),
   );
   for (const existing of listWorkingTree(root, controlDirectory, rules)) {
     if (!target.has(existing) && removablePaths.has(existing)) {
@@ -581,6 +602,10 @@ function pruneEmptyDirectories(root: string, directory: string, controlDirectory
  * @param read - Reads bytes plus a before-and-after filesystem observation.
  * @param onVerified - Receives aged metadata only after the bytes and mode have
  *   matched the index, so a caller may safely cache the observation.
+ * @param forceContent - Paths whose content must be compared even when cached
+ *   metadata says nothing changed. Dirty hints may only ever ADD paths here:
+ *   a hint can force extra verification, never suppress it, which is what
+ *   keeps a lying hint from hiding a real change.
  * @returns What is staged, what is not, and what is untracked.
  */
 export function computeStatus(
@@ -593,6 +618,7 @@ export function computeStatus(
   identify: (path: string, content: Buffer) => ObjectId = (_path, content) => hashObject("blob", content),
   read: typeof readWorkingFile = readWorkingFile,
   onVerified?: (path: string, stat: IndexStat) => void,
+  forceContent: ReadonlySet<string> = new Set(),
 ): StatusReport {
   const committed = flattenTree(store, headTree);
   const staged = new Map(index.map((entry) => [entry.path, entry]));
@@ -611,13 +637,18 @@ export function computeStatus(
   const present = new Set(listWorkingTree(root, controlDirectory, rules));
   const unstagedChanges: Change[] = [];
   for (const entry of index) {
+    // A sparse entry's path is intentionally absent from this working tree — it
+    // is outside the view — so absence is not a deletion. When the path *does*
+    // hold a file, the entry compares like any other, because a file that exists
+    // where the tree says nothing should be must never be invisible.
+    if (entry.sparse === true && !present.has(entry.path)) continue;
     if (!present.has(entry.path)) {
       unstagedChanges.push({ path: entry.path, kind: "deleted" });
       continue;
     }
     const observed = readWorkingStat(root, entry.path);
     const expectedMode = observed.executable ? "100755" : "100644";
-    if (expectedMode === entry.mode && sameIndexStat(entry.stat, observed.stat)) continue;
+    if (expectedMode === entry.mode && sameIndexStat(entry.stat, observed.stat) && !forceContent.has(entry.path)) continue;
     const { content, executable, stat } = read(root, entry.path);
     if ((executable ? "100755" : "100644") !== entry.mode || identify(entry.path, content) !== entry.id) {
       unstagedChanges.push({ path: entry.path, kind: "modified" });

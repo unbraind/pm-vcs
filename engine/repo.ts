@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 import {
   type Commit,
@@ -58,6 +58,25 @@ import {
 import { BRANCH_PREFIX, type HeadState, RefStore, TAG_PREFIX, assertRefName } from "./refs.ts";
 import { OperationLog, type Operation, type RefTransition } from "./oplog.ts";
 import { REMOTE_PREFIX, RemoteStore } from "./remotes.ts";
+import {
+  INSTANCE_LINK_FILE,
+  type InstanceEntry,
+  type ScanCorrection,
+  type ScanReport,
+  SharedObjectStore,
+  ViewSpec,
+  assertInstanceName,
+  isDirectoryOccupied,
+  parseInstanceLink,
+  readHints,
+  readInstances,
+  readView,
+  registerInstance,
+  unregisterInstance,
+  viewIncludes,
+  writeHints,
+  writeView,
+} from "./instances.ts";
 import {
   type IndexEntry,
   type StatusReport,
@@ -202,8 +221,55 @@ export interface CommitOptions {
   readonly items?: readonly string[];
 }
 
+/** A linked instance as `instance list` reports it. */
+export interface InstanceListing {
+  /** Caller-chosen instance name. */
+  readonly name: string;
+  /** Absolute instance working-tree root. */
+  readonly path: string;
+  /** The commit the instance's HEAD resolves to, or null while unborn. */
+  readonly head: ObjectId | null;
+  /** The branch HEAD is attached to, when it is attached to one. */
+  readonly branch: string | null;
+  /** The instance's view include patterns; empty means the full view. */
+  readonly include: readonly string[];
+  /** Present when the instance directory could not be opened, with the reason. */
+  readonly broken?: string;
+}
+
+/** A linked instance at creation, as `instance link` reports it. */
+export interface InstanceSummary {
+  /** Caller-chosen instance name. */
+  readonly name: string;
+  /** Absolute instance working-tree root. */
+  readonly path: string;
+  /** The branch HEAD is attached to. */
+  readonly branch: string;
+  /** The commit HEAD resolves to, or null while unborn. */
+  readonly head: ObjectId | null;
+  /** The instance's view include patterns; empty means the full view. */
+  readonly include: readonly string[];
+}
+
+/** What one view change did: which paths became visible, which stopped being so. */
+export interface ViewChange {
+  /** Paths newly inside the view, materialized from the shared store on demand. */
+  readonly widened: readonly string[];
+  /** Paths that left the view; their working-tree files were removed while their
+   * committed content stays staged as sparse index entries. */
+  readonly narrowed: readonly string[];
+}
+
 /**
  * One repository: object store, refs, index, working tree and operation log.
+ *
+ * A repository opened at a primary working tree owns everything: its control
+ * directory holds the shared object store, refs, configuration, remotes and its
+ * own HEAD, index, operation log and view. A repository opened at a **linked
+ * instance** shares the first group with its hub and keeps the second group for
+ * itself, which is the entire concurrency contract between instances: immutable
+ * objects and compare-and-swap protected refs are shared, while every file that
+ * describes one working tree's position or state is private to it.
  */
 export class Repository {
   /** Absolute path to the working tree root. */
@@ -211,6 +277,9 @@ export class Repository {
 
   /** Absolute path to the control directory. */
   readonly controlDirectory: string;
+
+  /** The hub this working tree is an instance of, or null when it is primary. */
+  readonly instanceLink: { readonly hubRoot: string; readonly controlDirectory: string } | null;
 
   /** Immutable content-addressed storage shared by every repository operation. */
   readonly objects: ObjectStore;
@@ -242,15 +311,69 @@ export class Repository {
   /**
    * @param root - Absolute path to the working tree root.
    * @param config - Settings to use. Defaults to whatever the repository stores.
+   * @throws ObjectStoreError When the directory holds an instance link whose hub
+   *   is missing — an instance without its shared store cannot answer anything.
    */
   constructor(root: string, config?: RepositoryConfig) {
     this.root = root;
     this.controlDirectory = join(root, CONTROL_DIRECTORY);
-    this.objects = new ObjectStore(join(this.controlDirectory, "objects"));
-    this.refs = new RefStore(this.controlDirectory);
+    this.instanceLink = Repository.resolveInstanceLink(this.controlDirectory, root);
+    const shared = this.instanceLink?.controlDirectory ?? this.controlDirectory;
+    this.objects = this.instanceLink === null
+      ? new ObjectStore(join(shared, "objects"))
+      : new SharedObjectStore(join(shared, "objects"));
+    this.refs = new RefStore(shared, this.controlDirectory);
     this.operations = new OperationLog(join(this.controlDirectory, "oplog.jsonl"));
-    this.remotes = new RemoteStore(join(this.controlDirectory, "remotes.json"));
-    this.config = config ?? readConfig(join(this.controlDirectory, "config.json"));
+    this.remotes = new RemoteStore(join(shared, "remotes.json"));
+    this.config = config ?? readConfig(join(shared, "config.json"));
+  }
+
+  /**
+   * Resolves an instance link file to the hub it names.
+   *
+   * The hub path is stored relative to the instance root and resolved against
+   * it, so moving the hub and its instances together leaves every link valid.
+   * The hub's format marker is required to exist: an instance pointing at a
+   * directory that is not a repository would otherwise fail later, at the first
+   * object or ref read, with errors that say nothing about the actual breakage.
+   *
+   * @param controlDirectory - The working tree's control directory.
+   * @param root - The working tree root the link is resolved against.
+   * @returns The hub's root and control directory, or null when there is no link.
+   * @throws ObjectStoreError When the link is malformed or its hub is absent.
+   */
+  private static resolveInstanceLink(
+    controlDirectory: string,
+    root: string,
+  ): { readonly hubRoot: string; readonly controlDirectory: string } | null {
+    let contents: string;
+    try {
+      contents = readFileSync(join(controlDirectory, INSTANCE_LINK_FILE), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents);
+    } catch {
+      throw new ObjectStoreError(
+        "broken_instance_link",
+        `The instance link at ${join(controlDirectory, INSTANCE_LINK_FILE)} is not valid JSON. `
+        + "Restore it from the hub's registry, or unlink and re-link this working tree.",
+      );
+    }
+    const hubRelative = parseInstanceLink(parsed).split("/").join(sep);
+    const hubRoot = resolve(root, hubRelative);
+    const hubControl = join(hubRoot, CONTROL_DIRECTORY);
+    if (!existsSync(join(hubControl, "format"))) {
+      throw new ObjectStoreError(
+        "broken_instance_link",
+        `This instance links to ${hubRoot}, which does not hold a pm-vcs repository. `
+        + "Move the hub back, repair the link file, or unlink and re-link this working tree.",
+      );
+    }
+    return { hubRoot, controlDirectory: hubControl };
   }
 
   /**
@@ -660,18 +783,84 @@ export class Repository {
     return object.type === "record" ? renderWorkingRecord(path, decodeRecord(object.payload)) : object.payload;
   }
 
-  /** Materializes a tree with record-aware working-tree serialization. */
-  private materialize(tree: ObjectId | null): void {
-    const removablePaths = new Set(this.readIndex().map((entry) => entry.path));
-    this.writeIndex(materializeTree(
+  /**
+   * This working tree's sparse view.
+   *
+   * Read on each use rather than cached, because `vcs view` can change it under
+   * a long-lived repository object — the same discipline `ignoreRules` follows.
+   *
+   * @returns The view, or null when this working tree materializes everything.
+   */
+  view(): ViewSpec | null {
+    return readView(this.controlDirectory);
+  }
+
+  /**
+   * Whether a path belongs to this working tree's view.
+   *
+   * @param path - Canonical repository-relative path.
+   * @returns True when a materialization may write the path.
+   */
+  isVisible(path: string): boolean {
+    const view = this.view();
+    return view === null || viewIncludes(view, path);
+  }
+
+  /**
+   * The index entries a tree implies, marking out-of-view paths sparse.
+   *
+   * @param tree - The tree to turn into index entries, or null for empty.
+   * @returns One index entry per file in the tree, sparse outside the view.
+   */
+  private indexEntriesForTree(tree: ObjectId | null): IndexEntry[] {
+    const view = this.view();
+    return [...flattenTree(this.objects, tree)].map(([path, value]) => ({
+      path,
+      id: value.id,
+      mode: value.mode === "100755" ? "100755" : "100644",
+      ...(value.fileId === undefined ? {} : { fileId: value.fileId }),
+      ...(value.copiedFrom === undefined ? {} : { copiedFrom: value.copiedFrom }),
+      ...(view !== null && !viewIncludes(view, path) ? { sparse: true } : {}),
+    }));
+  }
+
+  /**
+   * Materializes a tree with record-aware working-tree serialization.
+   *
+   * The view decides which paths are written and, transitively, which blobs are
+   * read: an out-of-view path's content is fetched from the shared store only
+   * when the view widens to include it. Every out-of-view path is still carried
+   * by the index as a sparse entry holding its committed content, which is what
+   * keeps the next commit's tree complete — and identical to the tree a full
+   * working tree would commit — whatever this working tree can see.
+   *
+   * @param tree - Tree to materialize, or null for an empty one.
+   */
+  materialize(tree: ObjectId | null): void {
+    const view = this.view();
+    const visible = view === null ? undefined : (path: string) => viewIncludes(view, path);
+    // Only non-sparse entries are removable: a path this working tree never
+    // materialized is not its content to delete, and an untracked file that
+    // happens to sit at a sparse path must survive every switch.
+    const removablePaths = new Set(this.readIndex().filter((entry) => entry.sparse !== true).map((entry) => entry.path));
+    const rules = this.ignoreRules();
+    const written = materializeTree(
       this.objects,
       this.root,
       tree,
       CONTROL_DIRECTORY,
-      this.ignoreRules(),
+      rules,
       (path, object) => this.workingContent(path, object),
       removablePaths,
-    ));
+      visible ?? (() => true),
+    );
+    // Out-of-view paths join the index as sparse entries holding their committed
+    // content — filtered by the same ignore rules as the write set, so an ignored
+    // path never becomes staged content merely by sitting outside the view.
+    this.writeIndex(visible === undefined ? written : [...written, ...this.indexEntriesForTree(tree)
+      .filter((entry) => entry.sparse === true && !isIgnored(entry.path, rules))]);
+    // The tree was just written, so no path can be dirty with respect to it.
+    writeHints(this.controlDirectory, []);
   }
 
   /**
