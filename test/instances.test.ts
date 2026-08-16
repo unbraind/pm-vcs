@@ -13,7 +13,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 
-import { ObjectStoreError } from "../engine/objects.ts";
+import { ObjectStoreError, hashObject } from "../engine/objects.ts";
 import {
   HINTS_FILE,
   INSTANCE_REGISTRY_FILE,
@@ -572,6 +572,25 @@ test("an instance registry that exists but is broken fails loudly", () => {
   assert.throws(() => readInstances(control), (error: unknown) => error instanceof ObjectStoreError);
 });
 
+test("an unreadable instance link fails at open with its own error", () => {
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  Repository.init(root);
+  commitFile(Repository.open(root), "a.txt", "x\n", "base");
+
+  const guarded = join(parent, "guarded-tree");
+  mkdirSync(join(guarded, CONTROL_DIRECTORY), { recursive: true });
+  writeFileSync(join(guarded, CONTROL_DIRECTORY, "link.json"), JSON.stringify({ hub: "../hub" }));
+  chmodSync(join(guarded, CONTROL_DIRECTORY), 0o000);
+  try {
+    // The permission fault is not translated: it is rethrown raw so the
+    // operator sees the real errno rather than a story about links.
+    assert.throws(() => Repository.open(guarded), (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES");
+  } finally {
+    chmodSync(join(guarded, CONTROL_DIRECTORY), 0o700);
+  }
+});
+
 test("an instance link pointing at a missing or malformed hub fails at open", () => {
   const root = freshDir();
   Repository.init(root);
@@ -593,6 +612,33 @@ test("an instance link pointing at a missing or malformed hub fails at open", ()
     assert.ok(error instanceof ObjectStoreError);
     return error.code === "broken_instance_link" && /does not hold a pm-vcs repository/.test(error.message);
   });
+});
+
+test("a tree whose entries carry no file identity still materializes under a view", () => {
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  const hub = Repository.init(root);
+  commitFile(hub, "readme.txt", "the hub\n", "base readme");
+  // A legacy version-2 index line carries no file identity — the shape every
+  // repository upgraded from an older build produces — and commits to a tree
+  // whose entry has no fileId, which the instance index must carry as-is.
+  writeFileSync(join(root, "plain.txt"), "no identity\n");
+  const plainId = hashObject("blob", Buffer.from("no identity\n"));
+  hub.objects.write("blob", Buffer.from("no identity\n"));
+  writeFileSync(join(root, CONTROL_DIRECTORY, "index"), `${[
+    "pm-vcs-index 2",
+    JSON.stringify(["100644", hub.readIndex().find((entry) => entry.path === "readme.txt")?.id, "readme.txt", null]),
+    JSON.stringify(["100644", plainId, "plain.txt", null]),
+  ].join("\n")}\n`);
+  hub.commit({ message: "plain\n", author }, new Date());
+
+  const aliceRoot = join(parent, "alice-tree");
+  hub.linkInstance("alice", aliceRoot, { include: ["readme.txt"] });
+  const alice = Repository.open(aliceRoot);
+  const plain = alice.readIndex().find((entry) => entry.path === "plain.txt");
+  assert.equal(plain?.sparse, true);
+  assert.equal(plain?.fileId, undefined);
+  assert.equal(alice.status().clean, true);
 });
 
 test("a view change refuses to overwrite an untracked file and clears cleanly", () => {
@@ -760,6 +806,27 @@ test("the command surface links, lists, unlinks, views and scans instances", asy
   });
   assert.match(String(badLink.errorMessage), /is invalid/);
 
+  // Filesystem faults reach the caller untranslated: an unwritable parent
+  // for the instance directory is an errno, not a story about the registry.
+  chmodSync(parent, 0o500);
+  const unwritable = await harness.runCommand({
+    command: "vcs instance",
+    args: ["carol", "../carol-tree"],
+    pmRoot: root,
+  });
+  chmodSync(parent, 0o700);
+  assert.match(String(unwritable.errorMessage), /EACCES/);
+  // A directory squatting where widened content belongs surfaces its errno
+  // through the view command too.
+  rmSync(join(root, "b.txt"));
+  await harness.runCommand({ command: "vcs view", args: ["readme.txt"], pmRoot: root });
+  mkdirSync(join(root, "b.txt"));
+  writeFileSync(join(root, "b.txt", "nested.txt"), "in the way\n");
+  const blocked = await harness.runCommand({ command: "vcs view", options: { clear: true }, pmRoot: root });
+  assert.ok(!String(blocked.errorMessage).includes("bad_view"));
+  rmSync(join(root, "b.txt"), { recursive: true, force: true });
+  await harness.runCommand({ command: "vcs view", options: { clear: true }, pmRoot: root });
+
   const removed = await harness.runCommand({ command: "vcs instance", args: ["alice"], options: { remove: true }, pmRoot: root });
   assert.equal((removed.result as { removed: string }).removed, "alice");
   const removedBob = await harness.runCommand({ command: "vcs instance", args: ["bob"], options: { remove: true }, pmRoot: root });
@@ -885,9 +952,14 @@ test("a view carries file identity and executable modes through narrowing and wi
   chmodSync(join(root, "run.sh"), 0o755);
   hub.stage(["run.sh"]);
   const withScript = hub.commit({ message: "mode\n", author }, new Date());
-  // A move keeps identity: stage the new name while the old disappears.
+  // A move keeps identity, and a copy records its lineage: the tree then
+  // carries fileId and copiedFrom, which the instance index must preserve.
   mkdirSync(join(root, "moved"));
   renameSync(join(root, "readme.txt"), join(root, "moved", "readme.txt"));
+  // A true copy keeps its source on disk, so the staged lineage records
+  // copiedFrom rather than inheriting the move's identity.
+  writeFileSync(join(root, "run-copy.sh"), "#!/bin/sh\n");
+  chmodSync(join(root, "run-copy.sh"), 0o755);
   hub.stage([]);
   hub.commit({ message: "move\n", author }, new Date());
   assert.notEqual(withScript, hub.refs.resolveHead());
@@ -900,6 +972,10 @@ test("a view carries file identity and executable modes through narrowing and wi
   const entries = new Map(alice.readIndex().map((entry) => [entry.path, entry]));
   assert.equal(entries.get("moved/readme.txt")?.sparse, true);
   assert.notEqual(entries.get("moved/readme.txt")?.fileId, undefined);
+  const copied = entries.get("run-copy.sh");
+  assert.equal(copied?.sparse, true);
+  assert.notEqual(copied?.fileId, undefined);
+  assert.notEqual(copied?.copiedFrom, undefined);
   assert.equal(entries.get("run.sh")?.mode, "100755");
   // Widening restores the executable bit as committed.
   alice.setView(["**"]);
@@ -917,7 +993,7 @@ test("a view carries file identity and executable modes through narrowing and wi
 test("scan sees executable mode, record paths and absent sparse paths", () => {
   const parent = freshDir();
   const root = join(parent, "hub");
-  const hub = Repository.init(root, "main", { recordPaths: ["items/*.json"] });
+  const hub = Repository.init(root, "main", { recordPaths: ["items/*.json"], recordPolicy: { fields: {} } });
   writeFileSync(join(root, "run.sh"), "#!/bin/sh\n");
   chmodSync(join(root, "run.sh"), 0o755);
   hub.stage(["run.sh"]);
@@ -939,4 +1015,16 @@ test("scan sees executable mode, record paths and absent sparse paths", () => {
   const flipped = alice.scan();
   assert.deepEqual(flipped.dirty, ["run.sh"]);
   assert.deepEqual(flipped.corrections, [{ path: "run.sh", hinted: false, actual: true }]);
+  // A materialized record is hashed through the record encoder, so a record
+  // edit reports dirty even when its bytes and mode both look unchanged.
+  chmodSync(join(aliceRoot, "run.sh"), 0o755);
+  alice.setView(["**"]);
+  writeFileSync(join(aliceRoot, "items", "one.json"), JSON.stringify({ done: true, extra: 1 }));
+  const edited = alice.scan();
+  assert.deepEqual(edited.dirty, ["items/one.json"]);
+  // A deleted non-sparse path reports as dirty alongside the still-edited
+  // record rather than vanishing.
+  rmSync(join(aliceRoot, "run.sh"));
+  const deleted = alice.scan();
+  assert.deepEqual(deleted.dirty, ["items/one.json", "run.sh"]);
 });

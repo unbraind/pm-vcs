@@ -1032,7 +1032,7 @@ export class Repository {
     if (include.length > 0) writeView(instanceControl, { include });
     const instance = new Repository(instanceRoot);
     instance.refs.setHeadToRef(branchRef);
-    instance.materialize(head === null ? null : readCommit(this.objects, head).tree);
+    instance.materialize(readCommit(this.objects, head).tree);
     registerInstance(this.sharedControlDirectory, { name, path: relative(this.hubRoot, instanceRoot).split(sep).join("/") });
     return { name, path: instanceRoot, branch, head, include };
   }
