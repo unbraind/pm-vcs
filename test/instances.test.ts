@@ -36,6 +36,7 @@ import { flattenTree } from "../engine/worktree.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 import extension from "../index.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { PmClient } from "@unbrained/pm-cli/sdk";
 import { packageRoot } from "./helpers/sandbox.ts";
 
 const author: Signature = { name: "Instance", email: "instance@local", timestamp: 1_000, timezoneOffsetMinutes: 0 };
@@ -769,6 +770,47 @@ test("a merge in progress keeps its conflicted paths inside the view", () => {
   });
   alice.mergeAbort(new Date());
   assert.equal(alice.status().clean, true);
+});
+
+test("committing with an unresolvable PM item fails visibly and commits nothing", async () => {
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  // A real tracker, so the item lookup is a real lookup and not an
+  // initialization failure: incomplete attribution must be refused by the
+  // item's absence, with the commit never recorded.
+  mkdirSync(root, { recursive: true });
+  const client = new PmClient({ pmRoot: root, cwd: root, noExtensions: true });
+  await client.init("test", { defaults: true, author: "test" });
+  await harness.runCommand({ command: "vcs init", pmRoot: root });
+  writeFileSync(join(root, "a.txt"), "content\n");
+  await harness.runCommand({ command: "vcs add", pmRoot: root });
+
+  // The SDK lookup rejects before the engine runs, so the failure escapes the
+  // command handler as an error — which the CLI turns into a non-zero exit.
+  // Either way the item is named and nothing is committed.
+  const refused = await harness.runCommand({
+    command: "vcs commit",
+    options: { message: "must not land", item: "pm-vcs-nosuchitem" },
+    global: { author: "A <a@b>" },
+    pmRoot: root,
+  }).then(
+    (result) => result,
+    (error: unknown) => ({ errorMessage: String((error as Error).message) }),
+  );
+  assert.match(String(refused.errorMessage), /pm-vcs-nosuchitem/);
+  assert.equal(Repository.open(root).refs.resolveHead(), null, "no commit may be recorded");
+
+  const real = (await client.create({ type: "Task", title: "Real work", author: "test" })).item.id;
+  const committed = await harness.runCommand({
+    command: "vcs commit",
+    options: { message: "lands", item: real },
+    global: { author: "A <a@b>" },
+    pmRoot: root,
+  });
+  assert.equal(committed.errorMessage, undefined, String(committed.errorMessage));
+  assert.deepEqual((committed.result as { items: string[] }).items, [real]);
+  assert.notEqual(Repository.open(root).refs.resolveHead(), null);
 });
 
 test("the command surface links, lists, unlinks, views and scans instances", async () => {
