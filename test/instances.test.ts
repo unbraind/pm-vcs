@@ -32,6 +32,8 @@ import { type Signature, decodeTree, readCommit } from "../engine/model.ts";
 import { isAncestor } from "../engine/merge.ts";
 import { flattenTree } from "../engine/worktree.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
+import extension from "../index.ts";
+import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { packageRoot } from "./helpers/sandbox.ts";
 
 const author: Signature = { name: "Instance", email: "instance@local", timestamp: 1_000, timezoneOffsetMinutes: 0 };
@@ -680,4 +682,62 @@ test("a merge in progress keeps its conflicted paths inside the view", () => {
   });
   alice.mergeAbort(new Date());
   assert.equal(alice.status().clean, true);
+});
+
+test("the command surface links, lists, unlinks, views and scans instances", async () => {
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const parent = freshDir();
+  const root = join(parent, "hub");
+
+  await harness.runCommand({ command: "vcs init", pmRoot: root });
+  writeFileSync(join(root, "readme.txt"), "the hub\n");
+  writeFileSync(join(root, "b.txt"), "bee\n");
+  await harness.runCommand({ command: "vcs add", pmRoot: root });
+  await harness.runCommand({ command: "vcs commit", options: { message: "base" }, global: { author: "A <a@b>" }, pmRoot: root });
+
+  // Link a sparse instance through the CLI, with a relative path resolved
+  // against the working root the way every other path argument is — so a
+  // sibling tree is named `../alice-tree`, never a child of the hub.
+  const linked = await harness.runCommand({
+    command: "vcs instance",
+    args: ["alice", "../alice-tree"],
+    options: { include: "readme.txt" },
+    pmRoot: root,
+  });
+  assert.equal(linked.errorMessage, undefined, String(linked.errorMessage));
+  assert.equal((linked.result as { linked: { name: string; branch: string } }).linked.name, "alice");
+  assert.equal(existsSync(join(parent, "alice-tree", "readme.txt")), true);
+  assert.equal(existsSync(join(parent, "alice-tree", "b.txt")), false);
+
+  const listed = await harness.runCommand({ command: "vcs instance", options: { list: true }, pmRoot: root });
+  const instances = (listed.result as { instances: { name: string; include: readonly string[]; head: unknown }[] }).instances;
+  assert.deepEqual(instances.map((entry) => entry.name), ["alice"]);
+  assert.deepEqual(instances[0]?.include, ["readme.txt"]);
+
+  // The instance answers view and scan through the same surface.
+  const shown = await harness.runCommand({ command: "vcs view", pmRoot: join(parent, "alice-tree") });
+  assert.deepEqual((shown.result as { view: readonly string[] }).view, ["readme.txt"]);
+  const scanned = await harness.runCommand({ command: "vcs scan", pmRoot: join(parent, "alice-tree") });
+  assert.equal((scanned.result as { scan: { checked: number; dirty: readonly string[] } }).scan.checked, 2);
+  const narrowed = await harness.runCommand({ command: "vcs view", args: ["readme.txt"], pmRoot: root });
+  assert.deepEqual((narrowed.result as { change: { narrowed: readonly string[] } }).change.narrowed, ["b.txt"]);
+  const cleared = await harness.runCommand({ command: "vcs view", options: { clear: true }, pmRoot: root });
+  assert.deepEqual((cleared.result as { change: { widened: readonly string[] } }).change.widened, ["b.txt"]);
+  assert.equal(existsSync(join(root, "b.txt")), true);
+
+  // Refusals stay visible: missing names, missing paths, conflicting options
+  // and invalid patterns each name their own reason.
+  const noName = await harness.runCommand({ command: "vcs instance", pmRoot: root });
+  assert.match(String(noName.errorMessage), /needs an instance name/);
+  const noPath = await harness.runCommand({ command: "vcs instance", args: ["bob"], pmRoot: root });
+  assert.match(String(noPath.errorMessage), /needs a directory/);
+  const conflict = await harness.runCommand({ command: "vcs view", args: ["a.txt"], options: { clear: true }, pmRoot: root });
+  assert.match(String(conflict.errorMessage), /cannot be combined/);
+  const badPattern = await harness.runCommand({ command: "vcs view", args: ["../escape"], pmRoot: root });
+  assert.match(String(badPattern.errorMessage), /is invalid/);
+
+  const removed = await harness.runCommand({ command: "vcs instance", args: ["alice"], options: { remove: true }, pmRoot: root });
+  assert.equal((removed.result as { removed: string }).removed, "alice");
+  const empty = await harness.runCommand({ command: "vcs instance", options: { list: true }, pmRoot: root });
+  assert.deepEqual((empty.result as { instances: unknown[] }).instances, []);
 });
