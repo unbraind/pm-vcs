@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add sparse lazy instances with a shared immutable object store ([pm-vcs-0lec](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-0lec.toon))
 - Bound the Myers trace to the reachable diagonal band ([pm-vcs-ze24](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ze24.toon))
 - Absorb pm 2026.8.7 merge and toolchain contracts ([pm-vcs-o3jj](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-o3jj.toon))
 - Add scripts/self-host.ts to coverageGate.sources and bring it to 100/100/100 ([pm-vcs-4t67](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-4t67.toon))

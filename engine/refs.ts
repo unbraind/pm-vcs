@@ -121,16 +121,30 @@ function writeAtomic(path: string, contents: string): void {
 
 /**
  * Branch, tag and HEAD storage for one repository.
+ *
+ * Refs live under `root` (the clone's shared control directory), while HEAD
+ * lives under `headRoot`, which is the same directory for a primary working
+ * tree and the instance's own control directory for a linked one. That split is
+ * what lets linked instances share every ref — one clone, one set of branches,
+ * compare-and-swap protected — while each keeps a private HEAD: two working
+ * trees may sit on two branches at once, but neither can overwrite the other's
+ * position because they never write the same file.
  */
 export class RefStore {
-  /** Absolute path to the repository's control directory. */
+  /** Absolute path to the control directory holding the refs. */
   private readonly root: string;
 
+  /** Absolute path to the control directory holding HEAD. */
+  private readonly headRoot: string;
+
   /**
-   * @param root - The control directory (`.pmvcs`). Created on demand.
+   * @param root - The control directory holding refs (`.pmvcs`). Created on demand.
+   * @param headRoot - Where HEAD lives. Defaults to `root`; a linked instance
+   *   passes its own control directory so its position stays private.
    */
-  constructor(root: string) {
+  constructor(root: string, headRoot: string = root) {
     this.root = root;
+    this.headRoot = headRoot;
   }
 
   /**
@@ -293,7 +307,7 @@ export class RefStore {
    * @throws ObjectStoreError When HEAD is absent.
    */
   rawHead(): string {
-    const raw = readTrimmed(join(this.root, "HEAD"));
+    const raw = readTrimmed(join(this.headRoot, "HEAD"));
     if (raw === null) {
       throw new ObjectStoreError("corrupt_head", "HEAD is missing. This directory is not an initialised repository.");
     }
@@ -331,7 +345,7 @@ export class RefStore {
    */
   setHeadToRef(ref: string): void {
     assertRefName(ref);
-    writeAtomic(join(this.root, "HEAD"), `ref: ${ref}`);
+    writeAtomic(join(this.headRoot, "HEAD"), `ref: ${ref}`);
   }
 
   /**
@@ -344,7 +358,7 @@ export class RefStore {
     if (!isObjectId(target)) {
       throw new ObjectStoreError("invalid_object_id", `"${target}" is not a valid object id.`);
     }
-    writeAtomic(join(this.root, "HEAD"), target);
+    writeAtomic(join(this.headRoot, "HEAD"), target);
   }
 
   /**

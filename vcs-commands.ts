@@ -31,15 +31,19 @@ import { FIELD_STRATEGIES, type FieldStrategy } from "./engine/records.ts";
 import {
   CONTROL_DIRECTORY,
   DEFAULT_BRANCH,
+  type InstanceListing,
+  type InstanceSummary,
   type MergeReport,
   type ResetMode,
   Repository,
+  type ViewChange,
 } from "./engine/repo.ts";
 import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./engine/refs.ts";
 import { REMOTE_PREFIX, type Remote } from "./engine/remotes.ts";
 import { type CloneReport, type FetchReport, type PushReport, cloneFrom, fetchFrom, pushTo } from "./engine/sync.ts";
 import { resolveRemoteLocation } from "./engine/transport.ts";
 import { type StatusReport, flattenTree } from "./engine/worktree.ts";
+import { type ScanReport } from "./engine/instances.ts";
 import type {
   CommandHandlerContext,
   ExtensionApi,
@@ -1080,6 +1084,111 @@ export function registerVcsCommands(api: ExtensionApi): void {
         );
       }
       return { ok: true, verified, corrupt };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs instance",
+    description:
+      "Link a second working tree to this repository's shared object store, list the linked instances, or unlink one. Each instance keeps its own HEAD, index, view, dirty hints and operation log while reading the same immutable objects, so two agents can work two trees without sharing any mutable file.",
+    arguments: [
+      { name: "name", description: "Instance to link or unlink; omit with --list to list", required: false },
+      { name: "path", description: "Empty or absent directory the instance works in; omit with --list or --remove", required: false },
+    ],
+    flags: [
+      { long: "--list", description: "List the linked instances instead of linking", value_type: "boolean" },
+      { long: "--remove", description: "Unlink the named instance; its directory is left untouched", value_type: "boolean" },
+      { long: "--branch", value_name: "name", description: "Branch the instance sits on (default: a new branch named after the instance)", value_type: "string" },
+      {
+        long: "--include",
+        value_name: "globs",
+        description: "Comma-separated glob patterns for the paths the instance materializes; omit for the full tree",
+        value_type: "string",
+      },
+    ],
+    run(context: CommandHandlerContext): VcsEnvelope & {
+      instances?: readonly InstanceListing[];
+      linked?: InstanceSummary;
+      removed?: string;
+    } {
+      const repository = openRepository(context);
+      if (context.options?.list === true) return { ok: true, instances: repository.listInstances() };
+      const name = context.args[0]?.trim();
+      if (name === undefined || name === "") {
+        throw new VcsError(
+          "missing_instance_name",
+          "pm vcs instance needs an instance name.",
+          "Pass a name and a path to link an instance, --list to list them, or --remove <name> to unlink one.",
+        );
+      }
+      if (context.options?.remove === true) {
+        repository.unlinkInstance(name);
+        return { ok: true, removed: name };
+      }
+      const path = context.args[1]?.trim();
+      if (path === undefined || path === "") {
+        throw new VcsError(
+          "missing_instance_path",
+          `Linking the instance ${name} needs a directory.`,
+          "Pass an empty or absent directory path as the second argument.",
+        );
+      }
+      const branch = optionalString(context.options, "branch");
+      const include = commaSeparated(context.options, "include");
+      try {
+        return { ok: true, linked: repository.linkInstance(name, resolve(sourceWorkingRoot(context), path), {
+          ...(branch === undefined ? {} : { branch }),
+          ...(include.length === 0 ? {} : { include }),
+        }) };
+      } catch (error) {
+        if (!(error instanceof ObjectStoreError)) throw error;
+        throw new VcsError(error.code, error.message, "Address what the message names, then retry the command.");
+      }
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs view",
+    description:
+      "Show, set or clear this working tree's sparse view. The view decides only which paths are materialized on disk; commits always record the complete tree, with out-of-view content carried by the index as sparse entries. Widening materializes newly visible paths from the shared store on demand.",
+    arguments: [{ name: "patterns", description: "Comma-separated include globs; omit to show, pass --clear to clear", required: false }],
+    flags: [
+      { long: "--clear", description: "Materialize the complete tree and remove the view", value_type: "boolean" },
+    ],
+    run(context: CommandHandlerContext): VcsEnvelope & {
+      view: readonly string[];
+      change?: ViewChange;
+    } {
+      const repository = openRepository(context);
+      const clear = context.options?.clear === true;
+      const patterns = context.args[0]?.trim() ?? "";
+      if (!clear && patterns === "") {
+        return { ok: true, view: repository.view()?.include ?? [] };
+      }
+      if (clear && patterns !== "") {
+        throw new VcsError(
+          "conflicting_options",
+          "--clear and an include pattern cannot be combined.",
+          "Pass either --clear or a comma-separated pattern list, not both.",
+        );
+      }
+      const include = clear ? null : patterns.split(",").map((pattern) => pattern.trim()).filter((pattern) => pattern.length > 0);
+      try {
+        return { ok: true, view: include ?? [], change: repository.setView(include) };
+      } catch (error) {
+        if (!(error instanceof ObjectStoreError)) throw error;
+        throw new VcsError(error.code, error.message, "Address what the message names, then retry the command.");
+      }
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs scan",
+    description:
+      "Re-read every tracked path's real bytes and rewrite the dirty hints from filesystem truth. Hints only ever accelerate a status by suggesting extra checks; this is the scan that reconciles them, so a lying hint is corrected here rather than believed anywhere.",
+    run(context: CommandHandlerContext): VcsEnvelope & { scan: ScanReport } {
+      const repository = openRepository(context);
+      return { ok: true, scan: repository.scan() };
     },
   });
 }

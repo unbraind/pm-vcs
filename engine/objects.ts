@@ -58,6 +58,61 @@ export class ObjectStoreError extends Error {
 }
 
 /**
+ * Reads one control-directory JSON file, returning null when it is absent.
+ *
+ * Every per-repository and per-instance control file — views, hints, instance
+ * registries, remotes — is read through this one shape: absent means "nothing
+ * recorded", a parse failure is a typed corruption of the named file, and any
+ * other I/O error (permissions, ENOTDIR) passes through raw so the operator
+ * sees the real errno instead of a story about the file's content.
+ *
+ * @param path - The file to read.
+ * @param code - Stable error code raised for a parse failure.
+ * @param what - What the file is called in messages, for example "view file".
+ * @returns The parsed JSON value, or null when the file does not exist.
+ * @throws ObjectStoreError When the file exists but is not valid JSON.
+ */
+export function readControlJson(path: string, code: string, what: string): unknown {
+  let contents: string;
+  try {
+    contents = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return null;
+  }
+  try {
+    return JSON.parse(contents);
+  } catch {
+    throw new ObjectStoreError(code, `The ${what} at ${path} is not valid JSON.`);
+  }
+}
+
+/**
+ * Validates a caller-chosen single-segment name a registry keys on.
+ *
+ * Instance names and remote names obey one rule set — never empty, never a
+ * relative path segment, never a path separator, whitespace, control
+ * character, or a character reserved in refs — because both become registry
+ * keys and both appear in command output where ambiguity is unaffordable.
+ *
+ * @param name - Candidate name.
+ * @param code - Stable error code raised on rejection.
+ * @param kind - What the name names, for example "Instance", in messages.
+ * @throws ObjectStoreError When the name breaks any rule above.
+ */
+export function assertRegistryName(name: string, code: string, kind: string): void {
+  const reject = (reason: string): never => {
+    throw new ObjectStoreError(code, `${kind} name "${name}" is invalid: ${reason}`);
+  };
+  if (name.length === 0) reject("it is empty");
+  if (name === "." || name === "..") reject("it is a relative path segment");
+  if (name.includes("/") || name.includes("\\")) reject("it contains a path separator");
+  if (/[\u0000-\u0020\u007f~^:?*[\]]/.test(name)) {
+    reject("it contains whitespace, a control character, or one of ~^:?*[]");
+  }
+}
+
+/**
  * Whether a string is well-formed as an object id.
  *
  * Callers use this to reject user input before it reaches the filesystem —

@@ -12,7 +12,7 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
-import { ObjectStoreError } from "./objects.ts";
+import { ObjectStoreError, assertRegistryName } from "./objects.ts";
 import { compareByteOrder } from "./model.ts";
 
 /** Prefix under which remote-tracking refs live. */
@@ -41,15 +41,7 @@ export interface Remote {
  *   separator, whitespace, or a character reserved in ref names.
  */
 export function assertRemoteName(name: string): void {
-  const reject = (reason: string): never => {
-    throw new ObjectStoreError("invalid_remote_name", `Remote name "${name}" is invalid: ${reason}`);
-  };
-  if (name.length === 0) reject("it is empty");
-  if (name === "." || name === "..") reject("it is a relative path segment");
-  if (name.includes("/") || name.includes("\\")) reject("it contains a path separator");
-  if (/[\u0000-\u0020\u007f~^:?*[\]]/.test(name)) {
-    reject("it contains whitespace, a control character, or one of ~^:?*[]");
-  }
+  assertRegistryName(name, "invalid_remote_name", "Remote");
 }
 
 /**
