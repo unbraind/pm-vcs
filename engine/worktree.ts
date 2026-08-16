@@ -564,7 +564,7 @@ export function materializeTree(
  * @param controlDirectory - Control directory name, never descended into.
  * @returns True when the directory is now empty of tracked content.
  */
-function pruneEmptyDirectories(root: string, directory: string, controlDirectory: string): boolean {
+export function pruneEmptyDirectories(root: string, directory: string, controlDirectory: string): boolean {
   let empty = true;
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (directory === root && entry.name === controlDirectory) {

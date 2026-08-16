@@ -83,12 +83,14 @@ test("encodeIndex and decodeIndex round-trip cached metadata in path order", () 
     { path: "a.txt", id: "2".repeat(64), mode: "100755", fileId: "b".repeat(32), copiedFrom: "c".repeat(32) },
   ];
   const encoded = encodeIndex(entries);
-  assert.equal(encoded.split("\n")[0], "pm-vcs-index 3");
+  assert.equal(encoded.split("\n")[0], "pm-vcs-index 4");
   // Sorted by path: a.txt (mode 100755, id 2s) before z.txt (mode 100644, id 1s).
   assert.deepEqual(encoded.split("\n").slice(1).map((line) => JSON.parse(line)[2]), ["a.txt", "z.txt"]);
   assert.deepEqual(decodeIndex(encoded), [...entries].sort((l, r) => (l.path < r.path ? -1 : 1)));
   assert.deepEqual(decodeIndex(""), []);
   const backslashEntry = { path: "back\\slash", id: "1".repeat(64), mode: "100644" as const, fileId: "d".repeat(32) };
+  const sparseEntry = { path: "gone.txt", id: "3".repeat(64), mode: "100644" as const, sparse: true };
+  assert.deepEqual(decodeIndex(encodeIndex([sparseEntry])), [sparseEntry]);
   if (sep !== "\\") assert.deepEqual(decodeIndex(encodeIndex([backslashEntry])), [backslashEntry]);
   assert.throws(
     () => encodeIndex([{ ...backslashEntry, path: "../outside" }]),
@@ -131,11 +133,23 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
     () => decodeIndex("garbage line"),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
+  assert.deepEqual(
+    decodeIndex(`pm-vcs-index 4\n${JSON.stringify(["100644", "1".repeat(64), "identity-pending", null, null, null, true])}`),
+    [{ path: "identity-pending", id: "1".repeat(64), mode: "100644", sparse: true }],
+  );
   assert.throws(
-    () => decodeIndex("pm-vcs-index 4"),
+    () => decodeIndex("pm-vcs-index 5"),
     (error: unknown) => error instanceof ObjectStoreError
       && error.code === "unsupported_index_version"
-      && /version 4/.test(error.message),
+      && /version 5/.test(error.message),
+  );
+  assert.throws(
+    () => decodeIndex(`pm-vcs-index 4\n${JSON.stringify(["100644", "1".repeat(64), "identity-pending", null, null, null])}`),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
+  );
+  assert.throws(
+    () => decodeIndex(`pm-vcs-index 4\n${JSON.stringify(["100644", "1".repeat(64), "identity-pending", null, null, null, "yes"])}`),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_index",
   );
   for (const invalidIdentity of [
     ["100644", "1".repeat(64), "missing-current", null, "a".repeat(32), null],
