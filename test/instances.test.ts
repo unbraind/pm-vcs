@@ -330,7 +330,9 @@ test("a full scan reconciles lying hints against filesystem truth", async () => 
   const committed = readFileSync(join(root, "a.txt"), "utf8");
   const committedId = hashObject("blob", Buffer.from(committed));
   writeFileSync(join(root, "a.txt"), "X" + committed.slice(1));
-  await new Promise((resolveWait) => setTimeout(resolveWait, 2_100));
+  await new Promise((resolveWait) => {
+    setTimeout(resolveWait, 2_100);
+  });
   const observed = statSync(join(root, "a.txt"), { bigint: true });
   const observedAtNs = BigInt(Date.now()) * 1_000_000n;
   writeFileSync(join(root, CONTROL_DIRECTORY, "index"), `${[
@@ -341,7 +343,9 @@ test("a full scan reconciles lying hints against filesystem truth", async () => 
     ], false]),
     JSON.stringify(["100644", hub2.readIndex().find((entry) => entry.path === "b.txt")?.id, "b.txt", "b".repeat(32), null, null, false]),
   ].join("\n")}\n`);
-  await new Promise((resolveWait) => setTimeout(resolveWait, 2_100));
+  await new Promise((resolveWait) => {
+    setTimeout(resolveWait, 2_100);
+  });
   // Without a hint the forged metadata wins: status reads clean.
   assert.equal(Repository.open(root).status().clean, true);
   // With the hint the content check runs and the edit is visible.
