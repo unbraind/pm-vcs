@@ -2,11 +2,13 @@ id: pm-vcs-0lec
 title: Add sparse lazy instances with a shared immutable object store
 description: "Materialize per-instance views over complete repository trees, fetch missing fragments lazily, and let independent working trees share immutable objects while retaining separate HEAD index view dirty state and operation logs."
 type: Feature
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:33.737Z"
-updated_at: "2026-08-15T22:52:46.319Z"
+updated_at: "2026-08-16T00:24:32.217Z"
+assignee: pi-agent
+claim_principal: pi-agent
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: A sparse view never changes committed tree identity and merges evaluate the complete tree; Out-of-view conflicts and incomplete PM attribution fail visibly rather than disappearing; Concurrent instances share immutable objects but cannot overwrite one another mutable state; A full scan reconciles dirty hints and filesystem state without trusting hints as authority
