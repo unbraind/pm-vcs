@@ -985,6 +985,24 @@ export class Repository {
         `The hub's working tree ${this.hubRoot} sits inside the instance path ${instanceRoot}. Link it outside, so the two working trees do not scan each other.`,
       );
     }
+    // The registry is the record of what already is an instance, so its word
+    // comes before the directory's: a registered path refuses as a duplicate
+    // even once its directory has files, while an unregistered occupied
+    // directory refuses as occupied. `registerInstance` re-checks under the
+    // registry lock, so a concurrent link cannot slip past this pre-check.
+    const registered = readInstances(this.sharedControlDirectory);
+    if (registered.some((existing) => existing.name === name)) {
+      throw new ObjectStoreError(
+        "instance_exists",
+        `An instance named ${name} is already registered. Unlink it first or choose another name.`,
+      );
+    }
+    if (registered.some((existing) => resolve(this.hubRoot, ...existing.path.split("/")) === instanceRoot)) {
+      throw new ObjectStoreError(
+        "instance_exists",
+        `An instance is already registered at ${instanceRoot}. Unlink it first or choose another path.`,
+      );
+    }
     if (isDirectoryOccupied(instanceRoot)) {
       throw new ObjectStoreError(
         "instance_path_occupied",
