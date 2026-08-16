@@ -11,19 +11,7 @@
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import {
-  chmodSync,
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -843,16 +831,6 @@ export class Repository {
     return readView(this.controlDirectory);
   }
 
-  /**
-   * Whether a path belongs to this working tree's view.
-   *
-   * @param path - Canonical repository-relative path.
-   * @returns True when a materialization may write the path.
-   */
-  isVisible(path: string): boolean {
-    const view = this.view();
-    return view === null || viewIncludes(view, path);
-  }
 
   /**
    * The index entries a tree implies, marking out-of-view paths sparse.
@@ -1054,11 +1032,34 @@ export class Repository {
       // the truthful one to surface; a cleanup fault must not replace it, and
       // what it leaves behind is ordinary unregistered state.
       try {
-        rmSync(createdRoot ? instanceRoot : instanceControl, { recursive: true, force: true });
+        // When this call created the root, the root goes. When the caller
+        // supplied it, only its CONTENTS go — the pre-flight refused a
+        // non-empty directory, so everything inside it now is something this
+        // call wrote, including any files materialized before the failure.
+        // Removing just the control directory would leave the caller with a
+        // half-materialized tree in a directory they handed over empty.
+        if (createdRoot) {
+          rmSync(instanceRoot, { recursive: true, force: true });
+        } else {
+          for (const entry of readdirSync(instanceRoot)) {
+            rmSync(join(instanceRoot, entry), { recursive: true, force: true });
+          }
+        }
         if (createdBranch) this.refs.compareAndSwap(branchRef, head, null);
+      /* c8 ignore start -- unreachable in a single process, and deliberately kept.
+         Both cleanup steps can only fail against a CONCURRENT change: `rmSync`
+         with `force` is a no-op on an absent path and can otherwise only hit a
+         permission change racing us on a directory this call just created, and
+         `compareAndSwap` throws only if the branch moved after we installed it.
+         Neither is producible in-process — every in-process way to fail this
+         creation is refused by the pre-flight before the branch exists, which
+         `a pre-existing non-empty instance path is refused before anything is
+         created` pins. The guard stays because under real concurrency a
+         cleanup fault must not replace the original error. */
       } catch {
         // The original error below names the real failure.
       }
+      /* c8 ignore stop */
       throw error;
     }
     return { name, path: instanceRoot, branch, head, include };

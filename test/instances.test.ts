@@ -1120,3 +1120,175 @@ test("scan sees executable mode, record paths and absent sparse paths", () => {
   const deleted = alice.scan();
   assert.deepEqual(deleted.dirty, ["items/one.json", "run.sh"]);
 });
+
+test("a view change plans before it mutates, so a refusal leaves the tree untouched", () => {
+  // The apply loop used to remove narrowed files and write widened ones one
+  // path at a time, so a throw part-way left the working tree partly narrowed,
+  // partly widened, with the index describing neither. Everything that can
+  // fail now happens in a planning pass before the first byte moves.
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  const hub = Repository.init(root);
+  commitFile(hub, "a.txt", "a\n", "base a");
+  commitFile(hub, "keep.txt", "keep\n", "base keep");
+  commitFile(hub, "b.txt", "b\n", "base b");
+
+  // A directory squatting where a narrowed path's file belongs cannot be
+  // removed as if it were that file, so the narrowing must refuse.
+  rmSync(join(root, "b.txt"));
+  mkdirSync(join(root, "b.txt"), { recursive: true });
+  writeFileSync(join(root, "b.txt", "inside.txt"), "not ours\n");
+
+  const before = hub.readIndex().map((entry) => `${entry.path}:${entry.sparse === true}`).sort();
+  assert.throws(() => hub.setView(["a.txt"]), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    assert.match(error.message, /holds a directory rather than this view's file/);
+    return error.code === "narrow_path_is_directory";
+  });
+
+  // The decisive assertions: nothing moved. keep.txt would also have been
+  // narrowed by this view change, and it is still on disk; the index is
+  // byte-for-byte what it was; and no view file was written.
+  assert.equal(readFileSync(join(root, "keep.txt"), "utf8"), "keep\n");
+  assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "a\n");
+  assert.equal(readFileSync(join(root, "b.txt", "inside.txt"), "utf8"), "not ours\n");
+  assert.deepEqual(hub.readIndex().map((entry) => `${entry.path}:${entry.sparse === true}`).sort(), before);
+  assert.equal(readView(join(root, CONTROL_DIRECTORY)), null);
+
+  // Clearing the squatter lets the same narrowing through, proving the refusal
+  // was about that path and not a blanket refusal to narrow.
+  rmSync(join(root, "b.txt"), { recursive: true });
+  assert.deepEqual(hub.setView(["a.txt"]), { widened: [], narrowed: ["b.txt", "keep.txt"] });
+});
+
+test("a failed instance creation leaves neither a branch nor a directory behind", () => {
+  // linkInstance could compare-and-swap the shared branch into existence and
+  // then fail while materializing, leaving a branch and a half-built directory
+  // with no registry entry — a state neither `instance list` nor
+  // `instance unlink` can name. Creation now undoes what it created.
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  const hub = Repository.init(root);
+  commitFile(hub, "readme.txt", "the hub\n", "base readme");
+  commitFile(hub, join("sub", "deep.txt"), "deep content\n", "base deep");
+
+  // Remove a blob the materialization will need, so the creation fails after
+  // the branch has already been installed.
+  const deepId = hub.readIndex().find((entry) => entry.path === "sub/deep.txt")?.id;
+  assert.ok(deepId !== undefined);
+  rmSync(objectFile(join(root, CONTROL_DIRECTORY, "objects"), deepId));
+
+  const branchesBefore = hub.refs.list("refs/heads").map((ref) => ref.name).sort();
+  const carolRoot = join(parent, "carol-tree");
+  assert.throws(() => hub.linkInstance("carol", carolRoot), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    // The ORIGINAL failure surfaces, not a cleanup fault dressed up as one.
+    return error.code === "missing_fragment";
+  });
+
+  // Nothing of this creation survives: no branch, no directory, no registry
+  // entry. Each is checked separately because leaving any one of them is the
+  // unnameable state this guards against.
+  assert.deepEqual(hub.refs.list("refs/heads").map((ref) => ref.name).sort(), branchesBefore,
+    "the branch this call created must be gone");
+  assert.equal(existsSync(carolRoot), false, "the instance directory must be gone");
+  assert.deepEqual(readInstances(join(root, CONTROL_DIRECTORY)).map((entry) => entry.name), [],
+    "no registry entry may be left for an instance that was never built");
+
+  // And the hub itself is untouched and still usable.
+  assert.equal(hub.status().clean, true);
+});
+
+test("a lock that cannot be created for a reason other than contention says so", () => {
+  // The catch around the registry lock used to translate every errno into
+  // "another process holds the lock". Only EEXIST means that. An EACCES on the
+  // control directory is a fault the caller cannot resolve by retrying, and
+  // reporting it as contention sends them into a retry loop that can never
+  // succeed while telling them nothing about the real damage.
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  const hub = Repository.init(root);
+  commitFile(hub, "readme.txt", "the hub\n", "base readme");
+  const control = join(root, CONTROL_DIRECTORY);
+
+  // Read-and-execute only: `mkdirSync(recursive)` still succeeds because the
+  // directory exists, and the lock `openSync(..., "wx")` fails with EACCES.
+  chmodSync(control, 0o500);
+  try {
+    assert.throws(() => hub.linkInstance("dave", join(parent, "dave-tree")), (error: unknown) => {
+      // The errno reaches the caller untranslated, and specifically is NOT
+      // dressed up as registry contention.
+      assert.notEqual((error as ObjectStoreError).code, "instance_registry_locked");
+      assert.match(String((error as NodeJS.ErrnoException).code ?? ""), /^EACCES$/);
+      return true;
+    });
+  } finally {
+    chmodSync(control, 0o700);
+  }
+
+  // And with the permission restored, the same call succeeds — proving the
+  // refusal was about the errno and not about the instance being invalid.
+  const created = hub.linkInstance("dave", join(parent, "dave-tree"));
+  assert.equal(created.name, "dave");
+});
+
+test("a pre-existing non-empty instance path is refused before anything is created", () => {
+  // The refusal happens in the pre-flight, before the shared branch is
+  // installed, so there is nothing to roll back. This is what makes the whole
+  // class of "the directory was already in use" failures incapable of
+  // reaching the rollback path at all.
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  const hub = Repository.init(root);
+  commitFile(hub, "readme.txt", "the hub\n", "base readme");
+
+  const eveRoot = join(parent, "eve-tree");
+  mkdirSync(eveRoot, { recursive: true });
+  writeFileSync(join(eveRoot, "someone-elses.txt"), "not ours\n");
+
+  const branchesBefore = hub.refs.list("refs/heads").map((ref) => ref.name).sort();
+  assert.throws(() => hub.linkInstance("eve", eveRoot), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    assert.match(error.message, /never over existing files/);
+    return error.code === "instance_path_occupied";
+  });
+
+  // Nothing was created, so nothing needed undoing: no branch, no registry
+  // entry, and the caller's own file is untouched.
+  assert.deepEqual(hub.refs.list("refs/heads").map((ref) => ref.name).sort(), branchesBefore);
+  assert.deepEqual(readInstances(join(root, CONTROL_DIRECTORY)).map((entry) => entry.name), []);
+  assert.equal(readFileSync(join(eveRoot, "someone-elses.txt"), "utf8"), "not ours\n");
+});
+
+test("a failed creation into a pre-existing empty directory removes only what it added", () => {
+  // The rollback removes the instance ROOT when this call created it, and only
+  // the control directory when the caller supplied an existing one. Linking
+  // into an empty directory the caller already made is legitimate, so a
+  // failure there must leave their directory in place.
+  const parent = freshDir();
+  const root = join(parent, "hub");
+  const hub = Repository.init(root);
+  commitFile(hub, "readme.txt", "the hub\n", "base readme");
+  commitFile(hub, join("sub", "deep.txt"), "deep content\n", "base deep");
+
+  const deepId = hub.readIndex().find((entry) => entry.path === "sub/deep.txt")?.id;
+  assert.ok(deepId !== undefined);
+  rmSync(objectFile(join(root, CONTROL_DIRECTORY, "objects"), deepId));
+
+  // The caller's own empty directory, made before linking.
+  const frankRoot = join(parent, "frank-tree");
+  mkdirSync(frankRoot, { recursive: true });
+
+  const branchesBefore = hub.refs.list("refs/heads").map((ref) => ref.name).sort();
+  assert.throws(() => hub.linkInstance("frank", frankRoot), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    return error.code === "missing_fragment";
+  });
+
+  // Their directory survives; everything this call added inside it is gone.
+  assert.equal(existsSync(frankRoot), true, "a directory the caller supplied must not be removed");
+  assert.equal(existsSync(join(frankRoot, CONTROL_DIRECTORY)), false, "the control directory this call created must be gone");
+  assert.deepEqual(readdirSync(frankRoot), [], "nothing this call wrote may be left behind");
+  assert.deepEqual(hub.refs.list("refs/heads").map((ref) => ref.name).sort(), branchesBefore);
+  assert.deepEqual(readInstances(join(root, CONTROL_DIRECTORY)).map((entry) => entry.name), []);
+});
