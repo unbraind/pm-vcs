@@ -857,7 +857,9 @@ test("the command surface links, lists, unlinks, views and scans instances", asy
   const shown = await harness.runCommand({ command: "vcs view", pmRoot: join(parent, "alice-tree") });
   assert.deepEqual((shown.result as { view: readonly string[] }).view, ["readme.txt"]);
   const scanned = await harness.runCommand({ command: "vcs scan", pmRoot: join(parent, "alice-tree") });
-  assert.equal((scanned.result as { scan: { checked: number; dirty: readonly string[] } }).scan.checked, 2);
+  // checked counts content-verified paths only: b.txt is sparse-absent in this
+  // instance's view, so the scan compared exactly one file's bytes.
+  assert.equal((scanned.result as { scan: { checked: number; dirty: readonly string[] } }).scan.checked, 1);
   const narrowed = await harness.runCommand({ command: "vcs view", args: ["readme.txt"], pmRoot: root });
   assert.deepEqual((narrowed.result as { change: { narrowed: readonly string[] } }).change.narrowed, ["b.txt"]);
   const cleared = await harness.runCommand({ command: "vcs view", options: { clear: true }, pmRoot: root });
@@ -889,13 +891,20 @@ test("the command surface links, lists, unlinks, views and scans instances", asy
 
   // Filesystem faults reach the caller untranslated: an unwritable parent
   // for the instance directory is an errno, not a story about the registry.
+  // Restored in `finally`: if the command rejects rather than returning an
+  // error result, an unrestored 0o500 leaves the temp directory unremovable
+  // and the failure surfaces later as an unrelated cleanup error.
   chmodSync(parent, 0o500);
-  const unwritable = await harness.runCommand({
-    command: "vcs instance",
-    args: ["carol", "../carol-tree"],
-    pmRoot: root,
-  });
-  chmodSync(parent, 0o700);
+  let unwritable;
+  try {
+    unwritable = await harness.runCommand({
+      command: "vcs instance",
+      args: ["carol", "../carol-tree"],
+      pmRoot: root,
+    });
+  } finally {
+    chmodSync(parent, 0o700);
+  }
   assert.match(String(unwritable.errorMessage), /EACCES/);
   // A directory squatting where widened content belongs surfaces its errno
   // through the view command too.
@@ -1089,8 +1098,10 @@ test("scan sees executable mode, record paths and absent sparse paths", () => {
   const report = alice.scan();
   // The sparse record path is absent by design and not dirty; the executable
   // mode is compared, not just bytes; the record is hashed as a record.
+  // checked counts content-verified paths: run.sh only, since items/one.json
+  // is outside this view and its bytes were never read.
   assert.deepEqual(report.dirty, []);
-  assert.equal(report.checked, 2);
+  assert.equal(report.checked, 1);
   // Flipping the executable bit on disk is a dirty mode the scan finds.
   chmodSync(join(aliceRoot, "run.sh"), 0o644);
   const flipped = alice.scan();

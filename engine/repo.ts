@@ -773,6 +773,7 @@ export class Repository {
    */
   status(read: typeof readWorkingFile = readWorkingFile): StatusReport {
     const snapshot = this.readIndexSnapshot();
+    const indexedPaths = new Set(snapshot.entries.map((entry) => entry.path));
     const refreshed = new Map<string, IndexEntry["stat"]>();
     // Dirty hints may only force content comparisons, never skip one, so they
     // are passed as the extra-check set: a hinted path is re-read even when its
@@ -792,7 +793,10 @@ export class Repository {
       ),
       read,
       (path, stat) => refreshed.set(path, stat),
-      new Set(readHints(this.controlDirectory).filter((path) => snapshot.entries.some((entry) => entry.path === path))),
+      // Hinted paths are intersected with the index through a set: hints may
+      // name paths the index no longer holds (stale after a switch), and a
+      // linear scan per hint made the filter quadratic in hints x entries.
+      new Set(readHints(this.controlDirectory).filter((path) => indexedPaths.has(path))),
     );
     if (refreshed.size > 0) {
       this.replaceIndex(snapshot.entries.map((entry) => {
@@ -1010,6 +1014,7 @@ export class Repository {
       );
     }
     let head = this.refs.read(branchRef);
+    let createdBranch = false;
     if (head === null) {
       const target = this.refs.resolveHead();
       if (target === null) {
@@ -1019,21 +1024,43 @@ export class Repository {
         );
       }
       this.refs.compareAndSwap(branchRef, null, target);
+      createdBranch = true;
       // The swap just installed `target`, so it is the tip without a re-read.
       head = target;
     }
+    // Everything from here to the registration is one creation that either
+    // completes or leaves no trace. A failure part-way — most commonly a
+    // missing fragment while materializing the view — would otherwise strand
+    // a shared branch and a half-built directory with no instance registered,
+    // which is exactly the state nothing else knows how to name or clean up.
     // The instance control directory is written before the registry entry, so
-    // a half-created instance is an unregistered directory (harmless, reusable)
-    // rather than a registry entry whose directory cannot be opened.
+    // a half-created instance is an unregistered directory rather than a
+    // registry entry whose directory cannot be opened.
     const instanceControl = join(instanceRoot, CONTROL_DIRECTORY);
-    mkdirSync(instanceControl, { recursive: true });
-    writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`);
-    writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`);
-    if (include.length > 0) writeView(instanceControl, { include });
-    const instance = new Repository(instanceRoot);
-    instance.refs.setHeadToRef(branchRef);
-    instance.materialize(readCommit(this.objects, head).tree);
-    registerInstance(this.sharedControlDirectory, { name, path: relative(this.hubRoot, instanceRoot).split(sep).join("/") });
+    const createdRoot = !existsSync(instanceRoot);
+    try {
+      mkdirSync(instanceControl, { recursive: true });
+      writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`);
+      writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`);
+      if (include.length > 0) writeView(instanceControl, { include });
+      const instance = new Repository(instanceRoot);
+      instance.refs.setHeadToRef(branchRef);
+      instance.materialize(readCommit(this.objects, head).tree);
+      registerInstance(this.sharedControlDirectory, { name, path: relative(this.hubRoot, instanceRoot).split(sep).join("/") });
+    } catch (error) {
+      // Undo only what this call did, and only while it is still ours to undo:
+      // the branch is deleted by compare-and-swap, so a concurrent move wins
+      // and is left alone. Cleanup is best-effort — the original failure is
+      // the truthful one to surface; a cleanup fault must not replace it, and
+      // what it leaves behind is ordinary unregistered state.
+      try {
+        rmSync(createdRoot ? instanceRoot : instanceControl, { recursive: true, force: true });
+        if (createdBranch) this.refs.compareAndSwap(branchRef, head, null);
+      } catch {
+        // The original error below names the real failure.
+      }
+      throw error;
+    }
     return { name, path: instanceRoot, branch, head, include };
   }
 
@@ -1121,6 +1148,30 @@ export class Repository {
         );
       }
     }
+    // Plan first, mutate second. Everything that can be decided or fetched
+    // without touching the working tree happens before the first byte moves:
+    // widened content is read from the store here (the dominant failure is a
+    // missing fragment, and failing there must leave the tree untouched), and
+    // narrowed paths are checked to hold a file rather than a directory (a
+    // directory cannot be removed as if it were this view's file). Only then
+    // does the apply loop run, so a refusal leaves the working tree, the index
+    // and the old view exactly as they were.
+    const materialized = new Map<string, Buffer>();
+    for (const entry of index) {
+      const wasVisible = entry.sparse !== true;
+      const nowVisible = entryVisible(entry.path);
+      if (wasVisible && !nowVisible) {
+        const absolute = join(this.root, ...entry.path.split("/"));
+        if (existsSync(absolute) && statSync(absolute).isDirectory()) {
+          throw new ObjectStoreError(
+            "narrow_path_is_directory",
+            `Narrowing the view would remove ${entry.path}, which holds a directory rather than this view's file. Move it aside or widen the view around it.`,
+          );
+        }
+        continue;
+      }
+      if (!wasVisible && nowVisible) materialized.set(entry.path, this.workingContent(entry.path, this.objects.read(entry.id)));
+    }
     for (const entry of index) {
       const wasVisible = entry.sparse !== true;
       const nowVisible = entryVisible(entry.path);
@@ -1137,8 +1188,7 @@ export class Repository {
         widened.push(entry.path);
         const absolute = join(this.root, ...entry.path.split("/"));
         mkdirSync(dirname(absolute), { recursive: true });
-        const content = this.workingContent(entry.path, this.objects.read(entry.id));
-        writeFileSync(absolute, content);
+        writeFileSync(absolute, materialized.get(entry.path) as Buffer);
         chmodSync(absolute, entry.mode === "100755" ? 0o755 : 0o644);
         // Materialized afresh from the object, so the staged identity carries
         // over but the sparse flag goes and no cached stat exists yet.
@@ -1178,12 +1228,14 @@ export class Repository {
     const index = this.readIndex();
     const hints = readHints(this.controlDirectory);
     const dirty = new Set<string>();
+    let checked = 0;
     for (const entry of index) {
       const absolute = join(this.root, ...entry.path.split("/"));
       if (!existsSync(absolute)) {
         if (entry.sparse !== true) dirty.add(entry.path);
         continue;
       }
+      checked += 1;
       const { content, executable } = read(this.root, entry.path);
       const mode = executable ? "100755" : "100644";
       const id = isRecordPath(entry.path, this.config)
@@ -1199,7 +1251,7 @@ export class Repository {
       if (hinted !== actual) corrections.push({ path, hinted, actual });
     }
     writeHints(this.controlDirectory, [...dirty]);
-    return { checked: index.length, dirty: [...dirty].sort(compareByteOrder), corrections };
+    return { checked, dirty: [...dirty].sort(compareByteOrder), corrections };
   }
 
   /**
@@ -1627,7 +1679,13 @@ export class Repository {
     // and `merge --continue` would record whatever the tree already held. The
     // refusal happens before anything is written, so the merge leaves no state
     // behind — unlike an in-view conflict, which deliberately stops with state.
-    const outOfView = markerConflicts.map((conflict) => conflict.path).filter((path) => !this.isVisible(path));
+    // The view is read once for the whole filter rather than once per path:
+    // `view()` deliberately reads view.json fresh on every call, which is right
+    // for a single question and wasteful for a scan over every conflict.
+    const conflictView = this.view();
+    const outOfView = markerConflicts
+      .map((conflict) => conflict.path)
+      .filter((path) => conflictView !== null && !viewIncludes(conflictView, path));
     if (outOfView.length > 0) {
       throw new ObjectStoreError(
         "conflict_out_of_view",

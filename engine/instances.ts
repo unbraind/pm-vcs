@@ -62,7 +62,12 @@ export interface InstanceEntry {
 
 /** A full-scan reconciliation of dirty hints against filesystem truth. */
 export interface ScanReport {
-  /** Index entries whose content was verified against the filesystem. */
+  /**
+   * Index entries whose bytes were read and compared against the index.
+   * Absent paths — sparse by view, or genuinely deleted — are excluded: the
+   * filesystem was consulted about them, but their content was not, and a
+   * deleted path still surfaces in `dirty` on its own.
+   */
   readonly checked: number;
   /** Paths whose working-tree bytes genuinely differ from the index. */
   readonly dirty: readonly string[];
@@ -202,7 +207,7 @@ export function parseInstanceLink(raw: unknown): string {
 export function readHints(controlDirectory: string): readonly string[] {
   const parsed = readControlJson(join(controlDirectory, HINTS_FILE), "bad_hints", "dirty-hints file");
   if (parsed === null) return [];
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)
+  if (typeof parsed !== "object" || Array.isArray(parsed)
     || !Array.isArray((parsed as Record<string, unknown>).dirty)
     || (parsed as { dirty: unknown[] }).dirty.some((entry) => typeof entry !== "string")) {
     throw new ObjectStoreError("bad_hints", "Dirty hints must be an object holding an array of paths under \"dirty\".");
@@ -332,7 +337,7 @@ function parseInstanceEntry(raw: unknown): InstanceEntry {
 export function readInstances(controlDirectory: string): readonly InstanceEntry[] {
   const parsed = readControlJson(join(controlDirectory, INSTANCE_REGISTRY_FILE), "bad_instances", "instance registry");
   if (parsed === null) return [];
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)
+  if (typeof parsed !== "object" || Array.isArray(parsed)
     || !Array.isArray((parsed as Record<string, unknown>).instances)) {
     throw new ObjectStoreError("bad_instances", "Instance registry must be an object holding an \"instances\" array.");
   }
@@ -364,7 +369,13 @@ function updateInstances(
   let descriptor: number;
   try {
     descriptor = openSync(lockPath, "wx");
-  } catch {
+  } catch (error) {
+    // `wx` fails with EEXIST only when the lock file is already there — another
+    // process holds the registry. Any other errno (EACCES, ENOSPC, ENOTDIR,
+    // EROFS, …) is a different fault about the directory itself, and reporting
+    // it as a busy lock would send the caller retrying a retry that can never
+    // succeed while telling them nothing about the real damage.
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     throw new ObjectStoreError(
       "instance_registry_locked",
       `The instance registry is locked by another process (${lockPath}); retry after that pm-vcs command completes.`,
