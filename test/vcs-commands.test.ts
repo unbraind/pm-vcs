@@ -185,8 +185,12 @@ test("pmClient builds a tracker-bound fallback for legacy host contexts", async 
 });
 
 test("linkedFiles normalizes omitted SDK linked projections", () => {
-  assert.deepEqual(linkedFiles({ item: {} }), []);
-  assert.deepEqual(linkedFiles({ item: {}, linked: { files: [], tests: [], docs: [] } }), []);
+  // The SDK projection contract retains the canonical item `id` on every
+  // depth and field projection, so a fabricated result carries it even when
+  // the linked-artifact group is the part under test.
+  const item = { id: "linked-files-item" };
+  assert.deepEqual(linkedFiles({ item }), []);
+  assert.deepEqual(linkedFiles({ item, linked: { files: [], tests: [], docs: [] } }), []);
 });
 
 test("findRepositoryRoot walks up to a control directory and returns null past the root", () => {

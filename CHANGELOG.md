@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Fix SDK GetItemProjection id drift breaking dependency-refresh release:check ([pm-vcs-1v6x](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-1v6x.toon))
 - Refresh dependencies and regenerate self-host bundle to unblock Dependabot PRs ([pm-vcs-17li](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-17li.toon))
 - Fix three PR \#27 review findings: merge --abort recovery, atomic merge-state write, hoist flattenTree, refuse --continue with --abort ([pm-vcs-8wbv](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8wbv.toon))
 - A conflicted merge must not commit and must leave durable unmerged state ([pm-vcs-ikyc](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ikyc.toon))
