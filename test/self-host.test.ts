@@ -116,7 +116,7 @@ test("loadConfig accepts the repository's own well-formed configuration", () => 
   const cfg: SelfHostConfig = loadConfig(join(import.meta.dirname, "..", "self-host.json"));
   assert.equal(cfg.bundle, "selfhost.bundle");
   assert.equal(cfg.ref, "refs/heads/self-host");
-  assert.deepEqual([...cfg.exclude], ["selfhost.bundle"]);
+  assert.deepEqual([...cfg.exclude], ["selfhost.bundle", "package.json", "package-lock.json"]);
 });
 
 // The config is the gate's only tunable, so a malformed one must fail loudly
@@ -716,6 +716,87 @@ test("main --check fails when the bundle does not match the source", () => {
     assert.equal(process.exitCode, 1);
     process.exitCode = origExit;
     assert.match(errs, /not byte-identical/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("main --check passes when only an excluded dependency manifest changes", () => {
+  // Regression for the dependabot red-CI defect (pm-vcs-8y72): the bundle
+  // versions pm-vcs source, not git-owned dependency manifests. A commit that
+  // touches only a manifest listed in `exclude` must pass the gate with no
+  // manual regeneration, while the next test proves real drift still fails.
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0" }, null, 2) + "\n");
+    writeFileSync(
+      join(f.root, "self-host.json"),
+      JSON.stringify({
+        bundle: "selfhost.bundle",
+        ref: "refs/heads/self-host",
+        exclude: ["selfhost.bundle", "package.json", "package-lock.json"],
+      }),
+    );
+    f.git(["add", "-A"]);
+    f.git(["commit", "-q", "-m", "track manifest and exclude it"]);
+    main(f.root, ["node", "self-host.ts", "--write"]);
+    f.git(["add", "-A"]);
+    f.git(["commit", "-q", "-m", "add bundle"]);
+    writeFileSync(
+      join(f.root, "package.json"),
+      JSON.stringify({ name: "fixture", version: "2.0.0" }, null, 2) + "\n",
+    );
+    f.git(["add", "-A"]);
+    f.git(["commit", "-q", "-m", "bump manifest only"]);
+    const origLog = console.log;
+    let logged = "";
+    console.log = (msg: string) => { logged += msg + "\n"; };
+    try {
+      main(f.root, ["node", "self-host.ts"]);
+    } finally {
+      console.log = origLog;
+    }
+    assert.equal(process.exitCode === undefined || process.exitCode === 0, true);
+    assert.match(logged, /byte-identical/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("main --check still fails when a non-excluded source file changes after an excluded manifest bump", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0" }, null, 2) + "\n");
+    writeFileSync(
+      join(f.root, "self-host.json"),
+      JSON.stringify({
+        bundle: "selfhost.bundle",
+        ref: "refs/heads/self-host",
+        exclude: ["selfhost.bundle", "package.json", "package-lock.json"],
+      }),
+    );
+    f.git(["add", "-A"]);
+    f.git(["commit", "-q", "-m", "track manifest and exclude it"]);
+    main(f.root, ["node", "self-host.ts", "--write"]);
+    f.git(["add", "-A"]);
+    f.git(["commit", "-q", "-m", "add bundle"]);
+    writeFileSync(join(f.root, "README.md"), "drifted\n");
+    f.git(["add", "-A"]);
+    f.git(["commit", "-q", "-m", "drift real source"]);
+    const origExit = process.exitCode;
+    process.exitCode = undefined;
+    const origErr = console.error;
+    let errs = "";
+    console.error = (msg: string) => { errs += msg + "\n"; };
+    try {
+      main(f.root, ["node", "self-host.ts"]);
+    } finally {
+      console.error = origErr;
+    }
+    assert.equal(process.exitCode, 1);
+    process.exitCode = origExit;
+    assert.match(errs, /not byte-identical/);
+    assert.match(errs, /README\.md/);
   } finally {
     f.cleanup();
   }

@@ -1,0 +1,29 @@
+id: pm-vcs-8y72
+title: "Self-host bundle gate cannot pass on dependency-manifest-only changes, so every dependabot PR is red"
+description: "All four open dependency-bump PRs (#34-#37) fail CI at accept:self-host since 2026-08-20: the committed selfhost.bundle tip tree no longer matches HEAD because package.json and package-lock.json changed, and only self-host:write can regenerate the bundle. Dependabot cannot run that step, so manifest-only branches can never go green. The bundle should version pm-vcs source, not git-owned dependency manifests; declare both manifests as excluded paths in self-host.json, regenerate the bundle once, and prove with a regression test that a manifest-only commit passes while real source drift still fails."
+type: Issue
+status: closed
+priority: 1
+tags[3]: ci,dependabot,self-host
+created_at: "2026-08-21T15:05:22.272Z"
+updated_at: "2026-08-21T15:24:22.855Z"
+closed_at: "2026-08-21T15:23:52.996Z"
+completed_at: "2026-08-21T15:23:52.996Z"
+claim_principal: ox-alpha
+author: ox-alpha
+acceptance_criteria: self-host.json excludes package.json and package-lock.json; the committed bundle is regenerated accordingly; a regression test proves a manifest-only commit passes while source drift still fails; full suite and coverage gates stay at exact 100/100/100
+severity: high
+resolution: "Dependency manifests are now declared exclusions of the self-host bundle; the regenerated bundle accepts manifest-only commits and still rejects source drift, proven by two new regression tests at exact 100/100/100 coverage."
+expected_result: "A commit that changes only package.json or package-lock.json passes accept:self-host with no manual bundle regeneration, while any non-excluded source change still fails the gate."
+actual_result: Every manifest-only branch fails at 'Prove the self-host bundle matches the committed source' with package.json/package-lock.json content diffs.
+component: scripts/self-host
+notes[1]{created_at,author,text}:
+  "2026-08-21T15:23:13.747Z",ox-alpha,"Root cause confirmed: accept:self-host compares the committed bundle tip against committed HEAD; only --write regenerates the bundle, and dependabot cannot run it, so any package.json/package-lock.json bump fails CI forever (runs 32430648887/32430655960/32430668596/32430673978). Fix is data-driven: declare both manifests in self-host.json exclude; no gate code change."
+files[2]{path,scope,note}:
+  self-host.json,project,exclusion set now declares both dependency manifests
+  test/self-host.test.ts,project,manifest-only pass and source-drift fail regression tests
+tests[2]{command,scope,timeout_seconds,note}:
+  npm run coverage,project,2400,"601/601 pass, exact 100/100/100 across all sources incl. scripts/self-host.ts"
+  "npm run accept:self-host",project,240,bundle tip byte-identical to committed source after final regeneration
+close_reason: "Excluded package.json and package-lock.json from the self-host bundle via self-host.json, regenerated the bundle, and added two regression tests: a manifest-only commit now passes accept:self-host while real source drift still fails with the offending path named. Full gate: typecheck, lint (0 warnings), duplicates, docstring (153 declarations), coverage exact 100/100/100 with 601/601 tests. Dependabot PRs #34-#37 can go green once rebased."
+body: ""
