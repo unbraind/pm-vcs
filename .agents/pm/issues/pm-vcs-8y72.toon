@@ -6,7 +6,7 @@ status: closed
 priority: 1
 tags[3]: ci,dependabot,self-host
 created_at: "2026-08-21T15:05:22.272Z"
-updated_at: "2026-08-21T15:24:22.855Z"
+updated_at: "2026-08-21T15:44:29.210Z"
 closed_at: "2026-08-21T15:23:52.996Z"
 completed_at: "2026-08-21T15:23:52.996Z"
 claim_principal: ox-alpha
@@ -17,8 +17,9 @@ resolution: "Dependency manifests are now declared exclusions of the self-host b
 expected_result: "A commit that changes only package.json or package-lock.json passes accept:self-host with no manual bundle regeneration, while any non-excluded source change still fails the gate."
 actual_result: Every manifest-only branch fails at 'Prove the self-host bundle matches the committed source' with package.json/package-lock.json content diffs.
 component: scripts/self-host
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-08-21T15:23:13.747Z",ox-alpha,"Root cause confirmed: accept:self-host compares the committed bundle tip against committed HEAD; only --write regenerates the bundle, and dependabot cannot run it, so any package.json/package-lock.json bump fails CI forever (runs 32430648887/32430655960/32430668596/32430673978). Fix is data-driven: declare both manifests in self-host.json exclude; no gate code change."
+  "2026-08-21T15:44:29.186Z",ox-alpha,"CodeRabbit review remediation: both new integration tests now isolate process.exitCode completely — capture the post-main value, restore the original in finally before assertions. Full gate re-run: 601/601 tests at exact 100/100/100."
 files[2]{path,scope,note}:
   self-host.json,project,exclusion set now declares both dependency manifests
   test/self-host.test.ts,project,manifest-only pass and source-drift fail regression tests

@@ -748,15 +748,17 @@ test("main --check passes when only an excluded dependency manifest changes", ()
     );
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "bump manifest only"]);
+    const origExit = process.exitCode;
     const origLog = console.log;
     let logged = "";
     console.log = (msg: string) => { logged += msg + "\n"; };
     try {
+      process.exitCode = undefined;
       main(f.root, ["node", "self-host.ts"]);
     } finally {
       console.log = origLog;
+      process.exitCode = origExit;
     }
-    assert.equal(process.exitCode === undefined || process.exitCode === 0, true);
     assert.match(logged, /byte-identical/);
   } finally {
     f.cleanup();
@@ -784,17 +786,19 @@ test("main --check still fails when a non-excluded source file changes after an 
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "drift real source"]);
     const origExit = process.exitCode;
-    process.exitCode = undefined;
+    let exitAfterMain: string | number | null | undefined;
     const origErr = console.error;
     let errs = "";
     console.error = (msg: string) => { errs += msg + "\n"; };
     try {
+      process.exitCode = undefined;
       main(f.root, ["node", "self-host.ts"]);
     } finally {
+      exitAfterMain = process.exitCode;
       console.error = origErr;
+      process.exitCode = origExit;
     }
-    assert.equal(process.exitCode, 1);
-    process.exitCode = origExit;
+    assert.equal(exitAfterMain, 1);
     assert.match(errs, /not byte-identical/);
     assert.match(errs, /README\.md/);
   } finally {
