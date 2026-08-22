@@ -223,3 +223,48 @@ test("a line one side deleted and the other changed is a conflict, not a silent 
   assert.ok(result.text.startsWith("a\n<<<<<<< ours"));
   assert.ok(result.text.endsWith("c\n"));
 });
+
+test("a wide duplicate-heavy merge is pinned and stable under the routed diff engine", () => {
+  // Above `linearSpaceDiffWidthThreshold` the divide-and-conquer engine serves
+  // `diffLines`, and on tie-heavy inputs it may emit a different - equally
+  // short - edit script than the banded engine would. This test pins what that
+  // means for merges: with changes confined to unambiguous regions, the merged
+  // text is exactly the base with both sides' edits applied, whatever the
+  // engines do with the duplicated middle. Width here (~11k combined lines per
+  // comparison) routes to the linear-space engine.
+  const duplicates = (count: number, marker: string): string[] =>
+    Array.from({ length: count }, (_, i) => `${marker}-${i % 7}`);
+  const baseLines = [
+    "header",
+    ...duplicates(2400, "alpha"),
+    "middle-1",
+    "middle-2",
+    ...duplicates(600, "beta"),
+    "footer",
+  ];
+  const oursLines = baseLines.map((line) => (line === "header" ? "header-ours" : line));
+  const theirsLines = baseLines.map((line) => (line === "footer" ? "footer-theirs" : line));
+
+  const result = mergeContent(
+    baseLines.join("\n"),
+    oursLines.join("\n"),
+    theirsLines.join("\n"),
+  );
+  assert.equal(result.clean, true);
+  assert.deepEqual(result.conflicts, []);
+  const expectedLines = [
+    "header-ours",
+    ...duplicates(2400, "alpha"),
+    "middle-1",
+    "middle-2",
+    ...duplicates(600, "beta"),
+    "footer-theirs",
+  ];
+  // Neither side terminates its last line, so the merged text records that
+  // rather than appending a byte neither side contributed.
+  assert.equal(result.text, expectedLines.join("\n"));
+  // And the behaviour is deterministic: a second merge of the same inputs
+  // produces byte-identical output.
+  const again = mergeContent(baseLines.join("\n"), oursLines.join("\n"), theirsLines.join("\n"));
+  assert.equal(again.text, result.text);
+});

@@ -379,13 +379,20 @@ test("the linear-space engine agrees with the banded engine over many random inp
       );
       const actual = diffLinesLinearWithStats(left, right);
       const expected = diffLinesWithStats(left, right);
-      assert.equal(
-        actual.distance,
-        expected.distance,
-        `trial ${trial}: ${JSON.stringify(left)} -> ${JSON.stringify(right)}`,
+      const input = `trial ${trial}: ${JSON.stringify(left)} -> ${JSON.stringify(right)}`;
+      assert.equal(actual.distance, expected.distance, input);
+      assert.equal(actual.edits.length, expected.edits.length, input);
+      // The script must rebuild BOTH sides: equal and delete edits replayed
+      // in order reconstruct the left side, so a wrong leftIndex or an
+      // out-of-order delete cannot hide behind a correct right-side replay.
+      assert.deepEqual(
+        actual.edits
+          .filter((edit) => edit.kind !== "insert")
+          .map((edit) => edit.text),
+        left,
+        input,
       );
-      assert.equal(actual.edits.length, expected.edits.length);
-      assert.deepEqual(applyEdits(actual.edits), right);
+      assert.deepEqual(applyEdits(actual.edits), right, input);
     }
   }
 });
@@ -452,13 +459,22 @@ test("a ten-thousand-line no-common-lines diff runs in the suite inside a fixed 
   // Measured peak: ~40k entries (~156 KB), about two full-width working arrays.
   // Eight widths of headroom keeps the assertion fixed while tolerating the
   // recursion's shallow stack; the point is that it does not scale with d.
-  assert.ok(result.peakLiveEntries <= 8 * (left.length + right.length));
-  assert.ok(peakBytes < 1_000_000);
+  assert.ok(
+    result.peakLiveEntries <= 8 * (left.length + right.length),
+    `peak ${result.peakLiveEntries} entries must stay within 8 widths (${8 * (left.length + right.length)})`,
+  );
+  assert.ok(peakBytes < 1_000_000, `peak ${peakBytes} bytes must stay under 1 MB`);
   // What the banded engine would have held for the same input, for contrast:
   // four orders of magnitude more, which is precisely why it is opt-in above.
   const bandedBudgetBytes = (result.distance + 1) ** 2 * Int32Array.BYTES_PER_ELEMENT;
-  assert.ok(bandedBudgetBytes > 1_000_000_000);
-  assert.ok(peakBytes * 1000 < bandedBudgetBytes);
+  assert.ok(
+    bandedBudgetBytes > 1_000_000_000,
+    `banded budget ${bandedBudgetBytes} bytes must exceed 1 GB for this input`,
+  );
+  assert.ok(
+    peakBytes * 1000 < bandedBudgetBytes,
+    `peak ${peakBytes} bytes must be three orders below the banded ${bandedBudgetBytes} bytes`,
+  );
   // Nothing is in common, so every edit is an insertion or a deletion.
   assert.ok(result.edits.every((edit) => edit.kind !== "equal"));
   assert.equal(result.edits.filter((edit) => edit.kind === "delete").length, size);

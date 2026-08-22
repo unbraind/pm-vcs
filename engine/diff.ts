@@ -1,14 +1,18 @@
 // Line diff, hunks, and tree diff.
 //
-// The line diff is Myers' O(ND) algorithm in its linear-space divide-and-
-// conquer form: a forward and a reverse furthest-reaching search locate the
-// middle snake, and the two halves around it are recursed into. That matters
-// over a naive longest-common-subsequence table because the cost scales with
-// how *different* the inputs are rather than with how large they are, and two
-// revisions of one file are usually almost the same — and it matters over the
-// banded trace form because the working memory is a fixed number of full-width
-// furthest arrays rather than one snapshot per edit distance, so peak memory
-// no longer grows with the edit distance at all.
+// The line diff is Myers' O(ND) algorithm. `diffLines` routes by combined
+// input width: at or below `linearSpaceDiffWidthThreshold` it runs the banded
+// single-pass engine, which covers most real inputs and preserves this
+// module's historical greedy tie-breaking byte for byte; wider inputs run the
+// linear-space divide-and-conquer form, in which a forward and a reverse
+// furthest-reaching search locate the middle snake and the two halves are
+// recursed into. Both matter over a naive longest-common-subsequence table
+// because the cost scales with how *different* the inputs are rather than
+// with how large they are, and two revisions of one file are usually almost
+// the same. The linear form matters over the banded trace because its working
+// memory is a fixed number of full-width furthest arrays rather than one
+// snapshot per edit distance, so peak memory no longer grows with the edit
+// distance at all - which is the only regime the banded trace cannot serve.
 
 /** How a line in an edit script relates to the two sides. */
 export type EditKind = "equal" | "insert" | "delete";
@@ -282,8 +286,13 @@ function allocateTrace(size: number, stats: LinearSpaceStats): Int32Array {
  * @param rightLength - Number of right lines in the subproblem.
  * @param stats - The statistics charged for the two working arrays.
  * @returns The middle snake, in absolute coordinates. Both ends share a
- * diagonal and the span between them carries one edit edge plus a common
- * diagonal run; an empty span (equal endpoints) is a valid result.
+ * diagonal and the span between them carries exactly one non-diagonal edit
+ * edge plus a common diagonal run. The span is never empty - both report
+ * sites include the edge that opened the snake, and the recursion depends on
+ * that: a span advancing by nothing would make the tail recursion repeat the
+ * identical subproblem forever. It cannot arise, because the even-delta check
+ * needs at least one completed reverse pass and the callers only enter this
+ * search with an edit distance of at least two.
  */
 function findMiddleSnake(
   left: readonly string[],

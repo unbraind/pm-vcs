@@ -265,13 +265,6 @@ test("publication is refused until the uploaded closure is complete, leaving no 
   assert.equal(receiver.refs.read(`${BRANCH_PREFIX}main`), tip);
 });
 
-/** Second repository root, distinct per call, for race scenarios. */
-let raceRootCounter = 0;
-function source_a(): string {
-  raceRootCounter += 1;
-  return tempRoot();
-}
-
 test("a lost publication race keeps the winner's tip and the loser's history, and is retryable", () => {
   // Two agents observed the same unborn branch and both prepared a push.
   const winnerSource = freshRepo();
@@ -300,7 +293,7 @@ test("a lost publication race keeps the winner's tip and the loser's history, an
   const winnerUpdate: PushUpdate = { ref: `${BRANCH_PREFIX}main`, expected: null, next: winnerTip };
   wire.publish([winnerUpdate], false, now);
 
-  // The loser still believes main holds baseTip. The publication must refuse
+  // The loser still believes main is unborn (it observed nothing there). The publication must refuse
   // as a retryable race, keep the winner's tip exactly where it landed, and
   // leave the loser's own repository untouched.
   const loserUpdate: PushUpdate = { ref: `${BRANCH_PREFIX}main`, expected: null, next: loserTip };
@@ -398,13 +391,20 @@ test("publication refuses refs it cannot own and moves that are not fast-forward
   // an error: the receiver answers with the receipt and moves nothing.
   const noOp = wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: tip }], false, now);
   assert.deepEqual(noOp.updated, [{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: tip }]);
+  // The no-op publication consumed nothing new, so its receipt is empty too -
+  // a stale accumulator here would name the divergent closure uploaded before
+  // the fast-forward refusal.
+  assert.deepEqual(noOp.added, []);
   assert.equal(receiver.refs.read(`${BRANCH_PREFIX}main`), tip);
-  // Force lifts the fast-forward refusal: the divergent tip replaces the
-  // receiver's history deliberately, and the operation log says "(forced)".
+  // Every publication attempt claims and clears the arrival accumulator at
+  // entry, refusals included, so retrying with force reports an empty added
+  // list rather than naming objects an earlier attempt delivered.
   const forced = wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: divergentTip }], true, now);
   assert.deepEqual(forced.updated, [{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: divergentTip }]);
+  assert.deepEqual(forced.added, []);
   assert.equal(receiver.refs.read(`${BRANCH_PREFIX}main`), divergentTip);
 });
+
 
 test("a transaction-level race is translated into a retryable publication failure", () => {
   const race = new ObjectStoreError(

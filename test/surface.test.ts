@@ -521,34 +521,61 @@ test("the release workflow publishes only after main carries the release commit"
   const pushCommands = [...executable.matchAll(/git push [^\n]*/g)].map((m) => m[0]);
   assert.ok(pushCommands.length > 0, "the workflow must contain its release pushes");
   for (const push of pushCommands) {
+    // Both refspec spellings name the same branch: `HEAD:refs/heads/main` is
+    // the explicit form and `HEAD:main` the shorthand git expands it to. The
+    // original GH006 was hit with the shorthand, so refusing only the long
+    // spelling would let the defect walk back in through the form people
+    // actually write.
     assert.ok(
-      !/(?:^|["' ])(?:HEAD|[^"' ]+):refs\/heads\/main\b/.test(push),
+      !/(?:^|["' ])(?:HEAD|[^"' ]+):(?:main|refs\/heads\/main)\b/.test(push),
       `the workflow must never push to main directly; found: ${JSON.stringify(push)}`,
     );
   }
 
-  const mergeStep = workflow.indexOf("Merge release metadata through protected PR");
+  // The step positions are searched in the executable content, not the raw
+  // file: a step's name label and its narration live outside any run block,
+  // so raw-text positions can satisfy these orderings while the commands they
+  // describe are reordered. The ordering of the pushes themselves is asserted
+  // from the commands' own positions below, which no label or comment can
+  // satisfy on a reordered step's behalf.
+  const mergeStep = executable.indexOf("Merge release metadata through protected PR");
   assert.ok(mergeStep >= 0, "the protected-PR merge step must exist");
-  const verifyStep = workflow.indexOf("Verify merged release");
+  const verifyStep = executable.indexOf("Verify merged release");
   assert.ok(verifyStep >= 0, "the merged-release verification step must exist");
-  const publishStep = workflow.indexOf("Publish npm package");
+  const publishStep = executable.indexOf("Publish npm package");
   assert.ok(publishStep >= 0, "the publish step must exist");
-  const tagStep = workflow.indexOf("Push release tag");
+  const tagStep = executable.indexOf("Push release tag");
   assert.ok(tagStep >= 0, "the tag step must exist");
 
   assert.ok(mergeStep < publishStep, "publication must wait for the protected-PR merge");
   assert.ok(verifyStep < publishStep, "publication must wait for merged-release verification");
   assert.ok(publishStep < tagStep, "the tag may only be pushed after a successful publish");
 
-  // After publication succeeds, the only ref the job may still move is the tag:
-  // main was already advanced server-side by the merge, so a branch push here
-  // would be the GH006 ordering again with the registry ahead of git on failure.
-  const tail = executable.slice(executable.indexOf("Publish npm package"));
-  for (const match of tail.matchAll(/git push [^\n]*/g)) {
-    assert.match(
-      match[0],
-      /refs\/tags\//,
-      `every push after publication must move a tag, found: ${JSON.stringify(match[0])}`,
+  // Every push in the workflow is classified by what it moves and where it
+  // sits relative to publication. Before publication the only permitted
+  // target is the temporary release branch (creating it is how the protected
+  // PR exists; deleting it is cleanup); after publication the only permitted
+  // target is the tag. Anything else — a main push in either spelling, a
+  // branch push after publication — is the GH006 ordering resurfacing.
+  for (const match of executable.matchAll(/git push [^\n]*/g)) {
+    const push = match[0];
+    const position = match.index ?? 0;
+    const movesReleaseBranch = /(refs\/heads\/[^"'\s]*release|release_branch|--delete)/.test(push);
+    const movesTag = /refs\/tags\//.test(push);
+    assert.ok(
+      movesReleaseBranch || movesTag,
+      `every push must move the release branch or the tag; found: ${JSON.stringify(push)}`,
     );
+    if (movesTag) {
+      assert.ok(
+        position > publishStep,
+        `the tag may only be pushed after a successful publish; found: ${JSON.stringify(push)}`,
+      );
+    } else {
+      assert.ok(
+        position < publishStep,
+        `the release branch may only be pushed before publication; found: ${JSON.stringify(push)}`,
+      );
+    }
   }
 });

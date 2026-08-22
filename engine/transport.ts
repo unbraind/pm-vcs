@@ -312,7 +312,7 @@ export class FileTransport implements Transport {
       head: head.kind === "branch" ? head.ref : null,
       config: repository.config,
       formatVersion: REPOSITORY_FORMAT,
-      capabilities: [...REQUIRED_TRANSPORT_CAPABILITIES],
+      capabilities: [...TRANSPORT_CAPABILITIES],
     };
   }
 
@@ -366,25 +366,27 @@ export class FileTransport implements Transport {
       expected: update.expected,
       next: update.next,
     })));
-    this.logPublication(`Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
+    this.logPublication(repository, `Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
     return { updated: updates, added };
   }
 
   /**
    * Logs a completed publication in the receiver's operation log.
    *
+   * @param repository - The receiver, opened once by the calling publication.
    * @param summary - Human-readable line describing the transfer.
    * @param updates - The ref moves that were published.
    * @param force - Whether the moves overrode fast-forward policy.
    * @param now - Timestamp recorded in the log.
    */
   private logPublication(
+    repository: Repository,
     summary: string,
     updates: readonly PushUpdate[],
     force: boolean,
     now: Date,
   ): void {
-    this.open().operations.append(
+    repository.operations.append(
       "push",
       summary,
       updates.map((update) => ({ ref: update.ref, before: update.expected, after: update.next })),
@@ -424,6 +426,12 @@ export class FileTransport implements Transport {
   /** Verify the uploaded closure, then publish every ref move as one compare-and-swap transaction. */
   publish(updates: readonly PushUpdate[], force: boolean, now: Date): PushReceipt {
     const repository = this.open();
+    // Claimed at entry and cleared on every attempt, refused ones included:
+    // an accumulator that survives a refusal would report this attempt's
+    // arrivals again on a later successful publication, naming objects under
+    // a receipt they did not belong to.
+    const added = [...this.acceptedThisConnection];
+    this.acceptedThisConnection.length = 0;
     for (const update of updates) {
       assertPushableRef(update);
       // Closure before policy: publication is what makes incomplete history
@@ -460,9 +468,7 @@ export class FileTransport implements Transport {
     } catch (caught) {
       throw translatePublicationRace(caught);
     }
-    this.logPublication(`Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
-    const added = [...this.acceptedThisConnection];
-    this.acceptedThisConnection.length = 0;
+    this.logPublication(repository, `Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
     return { updated: updates, added };
   }
 }
