@@ -493,3 +493,62 @@ test("the release version rewrite targets exactly the module's own version field
   // of the default-exported object — not a `version:` inside any nested string.
   assert.equal(matches[0]?.[0], `  version: "${extension.version}"`);
 });
+
+test("the release workflow publishes only after main carries the release commit", () => {
+  // pm-vcs 2026.8.10 reached npm while main was still at 2026.8.7: the job
+  // published first and had its `git push origin HEAD:main` rejected with GH006
+  // by the protected branch, and `set -e` killed the run before the tag push.
+  // The ordering is therefore the invariant under test, read from the workflow
+  // itself so a reorder cannot pass silently:
+  //
+  //   prepare -> merge through a PROTECTED PR (main advanced server-side)
+  //          -> verify the merged commit -> publish -> push ONLY the tag.
+  //
+  // A direct `HEAD:main` push after this point is the old defect resurfacing,
+  // whatever comment claims otherwise. The temporary `release/<tag>` branch is
+  // the one exception: pushing it is how the protected pull request exists at
+  // all, and the remote deletes it once the merge lands. The workflow's own
+  // comments narrate the old `git push origin HEAD:main` defect, so prose must
+  // never be scanned: only executable lines count, with comment-only lines
+  // dropped and backslash continuations joined so multi-line pushes stay whole.
+  const workflow = readFileSync(join(packageRoot, ".github", "workflows", "release.yml"), "utf8");
+  const executable = workflow
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n")
+    .replace(/\\\n/g, " ");
+
+  const pushCommands = [...executable.matchAll(/git push [^\n]*/g)].map((m) => m[0]);
+  assert.ok(pushCommands.length > 0, "the workflow must contain its release pushes");
+  for (const push of pushCommands) {
+    assert.ok(
+      !/(?:^|["' ])(?:HEAD|[^"' ]+):refs\/heads\/main\b/.test(push),
+      `the workflow must never push to main directly; found: ${JSON.stringify(push)}`,
+    );
+  }
+
+  const mergeStep = workflow.indexOf("Merge release metadata through protected PR");
+  assert.ok(mergeStep >= 0, "the protected-PR merge step must exist");
+  const verifyStep = workflow.indexOf("Verify merged release");
+  assert.ok(verifyStep >= 0, "the merged-release verification step must exist");
+  const publishStep = workflow.indexOf("Publish npm package");
+  assert.ok(publishStep >= 0, "the publish step must exist");
+  const tagStep = workflow.indexOf("Push release tag");
+  assert.ok(tagStep >= 0, "the tag step must exist");
+
+  assert.ok(mergeStep < publishStep, "publication must wait for the protected-PR merge");
+  assert.ok(verifyStep < publishStep, "publication must wait for merged-release verification");
+  assert.ok(publishStep < tagStep, "the tag may only be pushed after a successful publish");
+
+  // After publication succeeds, the only ref the job may still move is the tag:
+  // main was already advanced server-side by the merge, so a branch push here
+  // would be the GH006 ordering again with the registry ahead of git on failure.
+  const tail = executable.slice(executable.indexOf("Publish npm package"));
+  for (const match of tail.matchAll(/git push [^\n]*/g)) {
+    assert.match(
+      match[0],
+      /refs\/tags\//,
+      `every push after publication must move a tag, found: ${JSON.stringify(match[0])}`,
+    );
+  }
+});
