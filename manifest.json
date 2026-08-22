@@ -9,8 +9,5 @@
   "capabilities": [
     "commands",
     "schema"
-  ],
-  "pm": {
-    "compatibility": "v2"
-  }
+  ]
 }
