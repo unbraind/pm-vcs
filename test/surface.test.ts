@@ -551,30 +551,70 @@ test("the release workflow publishes only after main carries the release commit"
   assert.ok(verifyStep < publishStep, "publication must wait for merged-release verification");
   assert.ok(publishStep < tagStep, "the tag may only be pushed after a successful publish");
 
-  // Every push in the workflow is classified by what it moves and where it
-  // sits relative to publication. Before publication the only permitted
-  // target is the temporary release branch (creating it is how the protected
-  // PR exists; deleting it is cleanup); after publication the only permitted
-  // target is the tag. Anything else — a main push in either spelling, a
-  // branch push after publication — is the GH006 ordering resurfacing.
+  // Every push in the workflow is parsed, not pattern-matched: quoting is
+  // stripped, the remote and flags (including --delete and
+  // --force-with-lease=...) are dropped, and what remains is read as refspecs -
+  // either src:dst or a bare name, which names both ends. This closes the
+  // classification holes a regex chain grows: `--delete main` carries no colon
+  // refspec, so a flag-based classifier waves it through as a release-branch
+  // operation and permits deleting main outright.
   for (const match of executable.matchAll(/git push [^\n]*/g)) {
-    const push = match[0];
+    const command = match[0];
     const position = match.index ?? 0;
-    const movesReleaseBranch = /(refs\/heads\/[^"'\s]*release|release_branch|--delete)/.test(push);
-    const movesTag = /refs\/tags\//.test(push);
+    // Suffixed shell conditionals (`git push ... || true`) are part of the
+    // statement, not of the push: cut at the first operator so their words
+    // are not mistaken for refspecs.
+    const statement = command.split(/\s+(?:\|\||&&|;|\||>>>?|<<?)\s+/)[0]!;
+    const tokens = [...statement.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)]
+      .map((token) => token[1] ?? token[2] ?? token[3] ?? "")
+      .slice(2) // drop "git" and "push"
+      .filter((token) => !token.startsWith("--") && token !== "origin");
+    const targets = tokens.map((token) => (token.includes(":") ? token.slice(token.indexOf(":") + 1) : token));
+    assert.ok(targets.length > 0, `every push must name its target; found: ${JSON.stringify(command)}`);
+    for (const target of targets) {
+      // The protected branch has exactly one writer: the merge API. No push,
+      // delete, or shorthand form may name it.
+      assert.ok(
+        target !== "main" && target !== "refs/heads/main",
+        `no push may move or delete main directly; found: ${JSON.stringify(command)}`,
+      );
+    }
+    // A deletion may only target the temporary release branch: that branch's
+    // lifecycle is create-for-PR then delete-after-merge. Deleting anything
+    // else from a release job is out of scope by construction.
+    const deleting = /(^|\s)--delete(\s|$)/.test(command);
+    const kinds = targets.map((target) => {
+      if (target.startsWith("refs/tags/")) return "tag";
+      // The branch name is built at runtime (`release_branch="release/${...}"
+      // `), so the release-branch push appears as refs/heads/${release_branch}
+      // in the static text; the variable's own name is the identifiable part.
+      if (/release/i.test(target)) return "release-branch";
+      return "other";
+    });
+    if (deleting) {
+      assert.ok(
+        kinds.every((kind) => kind === "release-branch"),
+        `a deletion may only target the temporary release branch; found: ${JSON.stringify(command)}`,
+      );
+    } else {
+      assert.ok(
+        kinds.every((kind) => kind === "tag" || kind === "release-branch"),
+        `every push must move the temporary release branch or the tag; found: ${JSON.stringify(command)}`,
+      );
+    }
     assert.ok(
-      movesReleaseBranch || movesTag,
-      `every push must move the release branch or the tag; found: ${JSON.stringify(push)}`,
+      new Set(kinds).size === 1,
+      `each push moves one kind of ref; found mixed targets: ${JSON.stringify(command)}`,
     );
-    if (movesTag) {
+    if (kinds[0] === "tag") {
       assert.ok(
         position > publishStep,
-        `the tag may only be pushed after a successful publish; found: ${JSON.stringify(push)}`,
+        `the tag may only be pushed after a successful publish; found: ${JSON.stringify(command)}`,
       );
     } else {
       assert.ok(
         position < publishStep,
-        `the release branch may only be pushed before publication; found: ${JSON.stringify(push)}`,
+        `the release branch may only be pushed before publication; found: ${JSON.stringify(command)}`,
       );
     }
   }

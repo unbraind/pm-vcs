@@ -5,6 +5,7 @@ import { afterEach, test } from "node:test";
 import { type ObjectId, ObjectStore } from "../engine/objects.ts";
 import { type Commit, type Signature, writeCommit } from "../engine/model.ts";
 import { divergence, isAncestor, mergeBases, mergeContent, reachable } from "../engine/merge.ts";
+import { linearSpaceDiffWidthThreshold } from "../engine/diff.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 let dir: { root: string; cleanup(): void } | null = null;
@@ -230,8 +231,11 @@ test("a wide duplicate-heavy merge is pinned and stable under the routed diff en
   // short - edit script than the banded engine would. This test pins what that
   // means for merges: with changes confined to unambiguous regions, the merged
   // text is exactly the base with both sides' edits applied, whatever the
-  // engines do with the duplicated middle. Width here (~11k combined lines per
-  // comparison) routes to the linear-space engine.
+  // engines do with the duplicated middle. The base holds 3004 lines, so each
+  // side comparison inside alignThreeWay sees 6008 combined lines; the width
+  // assertion below is what keeps this test on the linear-space side of the
+  // routing threshold - shrink the fixture and it fails loudly instead of
+  // silently exercising the banded engine again.
   const duplicates = (count: number, marker: string): string[] =>
     Array.from({ length: count }, (_, i) => `${marker}-${i % 7}`);
   const baseLines = [
@@ -244,6 +248,13 @@ test("a wide duplicate-heavy merge is pinned and stable under the routed diff en
   ];
   const oursLines = baseLines.map((line) => (line === "header" ? "header-ours" : line));
   const theirsLines = baseLines.map((line) => (line === "footer" ? "footer-theirs" : line));
+  // Each diffLines call inside alignThreeWay compares base to one side: the
+  // combined width must exceed the routing threshold or this test stops
+  // exercising the engine it exists to pin.
+  assert.ok(
+    baseLines.length * 2 > linearSpaceDiffWidthThreshold,
+    `combined width ${baseLines.length * 2} must route past ${linearSpaceDiffWidthThreshold}`,
+  );
 
   const result = mergeContent(
     baseLines.join("\n"),

@@ -6,9 +6,9 @@ status: closed
 priority: 2
 tags[2]: docstrings,gate
 created_at: "2026-08-10T05:58:13.845Z"
-updated_at: "2026-08-22T09:19:43.542Z"
-closed_at: "2026-08-22T09:19:43.527Z"
-completed_at: "2026-08-22T09:19:43.527Z"
+updated_at: "2026-08-22T13:53:49.940Z"
+closed_at: "2026-08-22T13:53:49.929Z"
+completed_at: "2026-08-22T13:53:49.929Z"
 claim_principal: pi-agent
 author: pi-agent
 notes[5]{created_at,author,text}:
@@ -17,5 +17,5 @@ notes[5]{created_at,author,text}:
   "2026-08-10T05:58:21.137Z",pi-agent,"Verification: npm test passes (540 tests), npm run docstring exits 0 (32 files, 146 declarations), npm run coverage meets thresholds (100%), and node --experimental-strip-types confirms isMainInvocation throws ENOENT on an unresolvable argv[1] instead of returning false."
   "2026-08-10T06:49:13.929Z",pi-agent,"Greptile (P2 on pm-beads) and CodeRabbit (Major on pm-slack) independently flagged the one-sided comparison in isMainInvocation: pathToFileURL(realpathSync(entry)).href === moduleUrl resolves only argv[1], leaving moduleUrl holding the symlink under --preserve-symlinks. Canonicalising both sides through realpathSync fixes it. Verified by measurement: with moduleUrl holding the symlink path, both-sides (new) returns true while one-sided (old) returns false."
   "2026-08-10T07:26:20.894Z",pi-agent,"The previous symlink test (isMainInvocation resolves a symlinked entry path to the real module URL) passed argv[1] as the link and moduleUrl as the REAL path, which the old one-sided comparison pathToFileURL(realpathSync(entry)).href === moduleUrl also satisfied — it could not distinguish the fixed implementation from the broken one. Added a new test (canonicalizes a symlinked moduleUrl, as --preserve-symlinks produces) that puts the symlink in moduleUrl (pathToFileURL(link).href), which is what Node records in import.meta.url under --preserve-symlinks. Verified by measurement: reverting to the old one-sided comparison makes the new test fail (fail 1), restoring the canonicalization makes it pass (fail 0). The existing symlink test is retained because argv[1] arriving through an npm bin shim is a separate real case."
-close_reason: "Fix confirmed on HEAD and revert-proven: swallowing ENOENT fails the dedicated test, propagating it passes the full docstring-gate suite (10/10) and scans 33 files / 153 declarations with exit 0."
+close_reason: "Closed with verification evidence: fix confirmed on HEAD and revert-proven - swallowing ENOENT fails the dedicated test, propagating it passes the full docstring-gate suite (10/10) and scans 33 files / 153 declarations with exit 0."
 body: ""
