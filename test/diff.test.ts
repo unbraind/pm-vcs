@@ -5,8 +5,10 @@ import {
   applyEdits,
   buildHunks,
   diffLines,
+  diffLinesLinearWithStats,
   diffLinesWithStats,
   formatUnifiedDiff,
+  linearSpaceDiffWidthThreshold,
   splitLines,
   unifiedDiff,
   type Edit,
@@ -305,10 +307,12 @@ test("a pathological no-common-lines diff holds a trace bounded by the closed-fo
   // The band bound is a RELATIVE win, not an absolute ceiling: the trace is
   // still O(d^2), so at size 10000 it holds ~1.6 GiB of live Int32 storage
   // (400,040,001 entries) against the unbounded ~3.2 GiB. That is why the full
-  // pathological size is opt-in — a routine 577-test run must not depend on
-  // 1.6 GiB being free on the runner — and why the budget below is asserted in
-  // bytes rather than inferred from the test not crashing. An absolute ceiling
-  // needs the linear-space divide-and-conquer variant, tracked as pm-vcs-6ht8.
+  // pathological size is opt-in for the BANDED engine — a routine run must not
+  // depend on 1.6 GiB being free on the runner — and why the budget below is
+  // asserted in bytes rather than inferred from the test not crashing. The
+  // absolute ceiling itself is the linear-space divide-and-conquer engine of
+  // `pm-vcs-6ht8`, which `diffLines` routes wide inputs to; its test below runs
+  // the full pathological size in the default suite.
   const size = process.env.PM_VCS_DIFF_PATHOLOGICAL_SIZE === "10000" ? 10000 : 2000;
   const left = Array.from({ length: size }, (_, i) => `left-${i}`);
   const right = Array.from({ length: size }, (_, i) => `right-${i}`);
@@ -341,5 +345,123 @@ test("a pathological no-common-lines diff holds a trace bounded by the closed-fo
   assert.equal(result.edits.filter((edit) => edit.kind === "delete").length, size);
   assert.equal(result.edits.filter((edit) => edit.kind === "insert").length, size);
   // Replaying the script reproduces the right side exactly.
+  assert.deepEqual(applyEdits(result.edits), right);
+});
+
+/** The banded engine's script, read through the stats API it underlies. */
+function bandedEdits(left: readonly string[], right: readonly string[]): Edit[] {
+  return diffLinesWithStats(left, right).edits;
+}
+
+test("the linear-space engine agrees with the banded engine over many random inputs", () => {
+  // Differential equivalence of the two engines: both must be optimal, and an
+  // optimal script must be exactly as long. Byte-identity of the scripts is a
+  // stronger property that only holds while the shortest script is essentially
+  // unique — on tie-heavy degenerate alphabets the divide-and-conquer form may
+  // emit a different, equally short script, which is why `diffLines` keeps the
+  // banded engine below `linearSpaceDiffWidthThreshold`. Distance equality and
+  // validity, by contrast, hold for every input, so a seeded input space makes
+  // them a reproducible property.
+  const configs: Array<[alphabet: number, maxLength: number, trials: number, seed: number]> = [
+    [5, 12, 1500, 0x5eed],
+    [3, 10, 1500, 0xd1ff],
+    [2, 8, 1000, 0xbead],
+    [1, 6, 500, 7],
+  ];
+  for (const [alphabet, maxLength, trials, seed] of configs) {
+    const random = mulberry32(seed);
+    for (let trial = 0; trial < trials; trial += 1) {
+      const left = Array.from({ length: Math.floor(random() * (maxLength + 1)) }, () =>
+        String.fromCharCode(97 + Math.floor(random() * alphabet)),
+      );
+      const right = Array.from({ length: Math.floor(random() * (maxLength + 1)) }, () =>
+        String.fromCharCode(97 + Math.floor(random() * alphabet)),
+      );
+      const actual = diffLinesLinearWithStats(left, right);
+      const expected = diffLinesWithStats(left, right);
+      assert.equal(
+        actual.distance,
+        expected.distance,
+        `trial ${trial}: ${JSON.stringify(left)} -> ${JSON.stringify(right)}`,
+      );
+      assert.equal(actual.edits.length, expected.edits.length);
+      assert.deepEqual(applyEdits(actual.edits), right);
+    }
+  }
+});
+
+test("corpus-sized inputs keep the banded engine's byte-exact edit scripts", () => {
+  // `diffLines` routes by combined width: everything the existing randomized
+  // and edge-shaped corpus exercises fits far below `linearSpaceDiffWidthThreshold`,
+  // so its output there must remain byte-for-byte what the banded engine has
+  // always produced. A routing regression would surface here as a mismatch.
+  const random = mulberry32(0xfa110cc);
+  for (let trial = 0; trial < 1000; trial += 1) {
+    const left = randomLines(random, 12);
+    const right = randomLines(random, 12);
+    assert.ok(left.length + right.length <= linearSpaceDiffWidthThreshold);
+    assert.deepEqual(diffLines(left, right), bandedEdits(left, right));
+  }
+  const shapes: Array<[string[], string[]]> = [
+    [[], []],
+    [[], ["a"]],
+    [["a"], []],
+    [["a", "b", "c", "d", "e"], ["a", "X", "c", "Y", "e"]],
+    [["a", "a", "a", "a"], ["a", "a"]],
+  ];
+  for (const [left, right] of shapes) {
+    assert.deepEqual(diffLines(left, right), bandedEdits(left, right));
+  }
+});
+
+test("wide inputs route to the linear-space engine, whose scripts stay valid and optimal", () => {
+  // A width above the threshold must take the divide-and-conquer path. That is
+  // observable because the two engines disagree on this core's ties: padding a
+  // known divergence with unique common lines pushes the width over the
+  // threshold without touching the subproblem the engines actually solve, so if
+  // `diffLines` still answered with the banded script the assertion fails.
+  const coreLeft = ["a", "b", "c", "c"];
+  const coreRight = ["c", "a", "a", "a"];
+  assert.notDeepEqual(diffLinesLinearWithStats(coreLeft, coreRight).edits, bandedEdits(coreLeft, coreRight));
+  const prefix = Array.from({ length: 2100 }, (_, i) => `p${i}`);
+  const suffix = Array.from({ length: 2000 }, (_, i) => `s${i}`);
+  const left = [...prefix, ...coreLeft, ...suffix];
+  const right = [...prefix, ...coreRight, ...suffix];
+  assert.ok(left.length + right.length > linearSpaceDiffWidthThreshold);
+  const routed = diffLines(left, right);
+  assert.notDeepEqual(routed, bandedEdits(left, right));
+  // And the routed script is still a shortest one: same distance as the band,
+  // correct reconstruction, prefix and suffix preserved line for line.
+  assert.equal(routed.length, bandedEdits(left, right).length);
+  assert.deepEqual(applyEdits(routed), right);
+});
+
+test("a ten-thousand-line no-common-lines diff runs in the suite inside a fixed memory ceiling", () => {
+  // The case that motivated pm-vcs-6ht8: two files with no line in common have
+  // edit distance equal to their whole combined length, which is exactly where
+  // the banded trace's O(d^2) storage dies ((20001)^2 entries ≈ 1.6 GiB). The
+  // linear-space recursion must compute the script in the default suite — no
+  // opt-in environment variable — while holding peak live memory bounded by a
+  // constant multiple of the combined width, never growing with the distance.
+  const size = 10000;
+  const left = Array.from({ length: size }, (_, i) => `left-${i}`);
+  const right = Array.from({ length: size }, (_, i) => `right-${i}`);
+  const result = diffLinesLinearWithStats(left, right);
+  assert.equal(result.distance, 2 * size);
+  const peakBytes = result.peakLiveEntries * Int32Array.BYTES_PER_ELEMENT;
+  // Measured peak: ~40k entries (~156 KB), about two full-width working arrays.
+  // Eight widths of headroom keeps the assertion fixed while tolerating the
+  // recursion's shallow stack; the point is that it does not scale with d.
+  assert.ok(result.peakLiveEntries <= 8 * (left.length + right.length));
+  assert.ok(peakBytes < 1_000_000);
+  // What the banded engine would have held for the same input, for contrast:
+  // four orders of magnitude more, which is precisely why it is opt-in above.
+  const bandedBudgetBytes = (result.distance + 1) ** 2 * Int32Array.BYTES_PER_ELEMENT;
+  assert.ok(bandedBudgetBytes > 1_000_000_000);
+  assert.ok(peakBytes * 1000 < bandedBudgetBytes);
+  // Nothing is in common, so every edit is an insertion or a deletion.
+  assert.ok(result.edits.every((edit) => edit.kind !== "equal"));
+  assert.equal(result.edits.filter((edit) => edit.kind === "delete").length, size);
+  assert.equal(result.edits.filter((edit) => edit.kind === "insert").length, size);
   assert.deepEqual(applyEdits(result.edits), right);
 });
