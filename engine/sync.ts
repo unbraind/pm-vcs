@@ -16,7 +16,14 @@ import type { RefTransition } from "./oplog.ts";
 import { BRANCH_PREFIX, TAG_PREFIX } from "./refs.ts";
 import { REMOTE_PREFIX, trackingRef } from "./remotes.ts";
 import { DEFAULT_BRANCH, Repository } from "./repo.ts";
-import { FileTransport, type PushUpdate, type Transport, openTransport, resolveRemoteLocation } from "./transport.ts";
+import {
+  FileTransport,
+  assertCompatiblePeer,
+  type PushUpdate,
+  type Transport,
+  openTransport,
+  resolveRemoteLocation,
+} from "./transport.ts";
 
 /** Remote identity, tracking movements, tag conflicts, transferred objects, and no-op state from a fetch. */
 export interface FetchReport {
@@ -127,7 +134,10 @@ export function fetchFrom(
 ): FetchReport {
   const remote = repository.remotes.require(remoteName);
   const wire = transport ?? openTransport(remote.url, repository.root);
+  // The handshake runs before anything else: an incompatible peer must be
+  // refused while nothing has moved, not after a bundle has been transferred.
   const advertisement = wire.advertise();
+  assertCompatiblePeer(advertisement);
 
   const wanted: { remoteRef: string; localRef: string; target: ObjectId; before: ObjectId | null }[] = [];
   const conflictingTags: string[] = [];
@@ -217,7 +227,10 @@ export function pushTo(
     names = [head.ref.slice(BRANCH_PREFIX.length)];
   }
 
+  // Same handshake discipline as fetch: capabilities and format are agreed
+  // before any history is serialized for the wire.
   const advertisement = wire.advertise();
+  assertCompatiblePeer(advertisement);
   const remoteRefs = new Map(advertisement.refs.map((entry) => [entry.name, entry.target]));
   const updates: PushUpdate[] = [];
   for (const name of names) {
@@ -298,7 +311,10 @@ export function cloneFrom(
 ): CloneReport {
   const location = resolveRemoteLocation(url, base);
   const wire = transport ?? new FileTransport(url, location);
+  // Refusing an incompatible source here means before the destination
+  // directory is created, so a failed clone is still just a retry away.
   const advertisement = wire.advertise();
+  assertCompatiblePeer(advertisement);
   const branch = advertisement.head === null || !advertisement.head.startsWith(BRANCH_PREFIX)
     ? null
     : advertisement.head.slice(BRANCH_PREFIX.length);

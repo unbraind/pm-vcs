@@ -4,6 +4,8 @@
 
 ### Added
 
+- Resumable object transfer and peer capability negotiation, for the phase that has a wire ([pm-vcs-i4au](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-i4au.toon))
+- Linear-space divide-and-conquer diff, for an absolute memory ceiling the band bound cannot give ([pm-vcs-6ht8](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-6ht8.toon))
 - Add sparse lazy instances with a shared immutable object store ([pm-vcs-0lec](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-0lec.toon))
 - Bound the Myers trace to the reachable diagonal band ([pm-vcs-ze24](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ze24.toon))
 - Absorb pm 2026.8.7 merge and toolchain contracts ([pm-vcs-o3jj](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-o3jj.toon))
@@ -34,6 +36,8 @@
 
 ### Fixed
 
+- Propagate the docstring gate entry guard fix ([pm-vcs-anfk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-anfk.toon))
+- Fix release publish-before-protected-main-push ordering ([pm-vcs-m4xr](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m4xr.toon))
 - Self-host bundle gate cannot pass on dependency-manifest-only changes, so every dependabot PR is red ([pm-vcs-8y72](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8y72.toon))
 - Fix SDK GetItemProjection id drift breaking dependency-refresh release:check ([pm-vcs-1v6x](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-1v6x.toon))
 - Refresh dependencies and regenerate self-host bundle to unblock Dependabot PRs ([pm-vcs-17li](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-17li.toon))
