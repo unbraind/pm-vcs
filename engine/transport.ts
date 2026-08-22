@@ -16,10 +16,10 @@ import { isAbsolute, resolve } from "node:path";
 
 import { exportBundle, importBundleObjects, assertClosurePresent } from "./bundle.ts";
 import { isAncestor } from "./merge.ts";
-import { type ObjectId, ObjectStoreError } from "./objects.ts";
+import { type ObjectId, type ObjectType, ObjectStoreError, hashObject } from "./objects.ts";
 import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./refs.ts";
 import type { RepositoryConfig } from "./config.ts";
-import { Repository } from "./repo.ts";
+import { REPOSITORY_FORMAT, Repository } from "./repo.ts";
 
 /** What a remote repository says about itself when first contacted. */
 export interface Advertisement {
@@ -40,6 +40,56 @@ export interface Advertisement {
    * share commits but disagree about what those commits mean.
    */
   readonly config: RepositoryConfig;
+  /**
+   * The repository format the remote reads and writes.
+   *
+   * Exchanged before any data moves because two repositories that disagree about
+   * the object format cannot reason about each other's bytes at all: every id
+   * the one sends is meaningless to the other, and a transfer between them would
+   * corrupt both rather than fail cleanly.
+   */
+  readonly formatVersion: string;
+  /** What the remote's transport can do, from {@link TRANSPORT_CAPABILITIES}. */
+  readonly capabilities: readonly string[];
+}
+
+/** Capabilities this build's transports speak. */
+export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival"] as const;
+
+/** Capabilities a peer must offer before this build will transfer anything. */
+export const REQUIRED_TRANSPORT_CAPABILITIES: readonly string[] = ["fetch", "push", "resumable-upload", "verified-arrival"];
+
+/**
+ * Refuses a peer whose format version or capabilities this build cannot work with.
+ *
+ * The check belongs at the handshake, before a single byte of history moves:
+ * refusing after a transfer has begun would leave one side holding objects the
+ * other will never publish to, and refusing after refs have moved would leave
+ * the pair disagreeing about history that now exists on one side only.
+ *
+ * @param peer - What the remote said about itself in its advertisement.
+ * @returns True when the peer is compatible; otherwise it throws.
+ * @throws ObjectStoreError With code `incompatible_peer` when the peer's format
+ *   version differs from {@link REPOSITORY_FORMAT} or it lacks any capability
+ *   in {@link REQUIRED_TRANSPORT_CAPABILITIES}.
+ */
+export function assertCompatiblePeer(peer: Advertisement): boolean {
+  if (peer.formatVersion !== REPOSITORY_FORMAT) {
+    throw new ObjectStoreError(
+      "incompatible_peer",
+      `The peer speaks repository format "${peer.formatVersion}", this build speaks "${REPOSITORY_FORMAT}". `
+        + "Neither side can interpret the other's objects, so nothing was transferred and no ref moved.",
+    );
+  }
+  const missing = REQUIRED_TRANSPORT_CAPABILITIES.filter((capability) => !peer.capabilities.includes(capability));
+  if (missing.length > 0) {
+    throw new ObjectStoreError(
+      "incompatible_peer",
+      `The peer does not offer ${missing.join(", ")}, which this build requires before transferring history. `
+        + "Nothing was transferred and no ref moved.",
+    );
+  }
+  return true;
 }
 
 /** One ref a push asks the remote to move. */
@@ -58,6 +108,16 @@ export interface PushReceipt {
   readonly updated: readonly PushUpdate[];
   /** Objects the remote did not already hold and therefore stored. */
   readonly added: readonly ObjectId[];
+}
+
+/** One object crossing the wire during a resumable upload. */
+export interface TransferObject {
+  /** The id the sender claims the content hashes to. */
+  readonly id: ObjectId;
+  /** The object's kind. */
+  readonly type: ObjectType;
+  /** The object's raw content. */
+  readonly payload: Buffer;
 }
 
 /**
@@ -101,6 +161,101 @@ export interface Transport {
    *   false, or when another writer changed a ref between observation and write.
    */
   push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): PushReceipt;
+
+  /**
+   * Asks the receiver which of the offered objects it still lacks.
+   *
+   * This is what makes an interrupted upload resumable: the sender asks before
+   * sending and asks again after an interruption, and each answer names only
+   * what is still missing, so a resumed transfer never resends an object the
+   * receiver already verified and stored.
+   *
+   * @param ids - Object ids the sender intends to transfer.
+   * @returns The subset the receiver does not hold, in the order offered.
+   */
+  missingObjects(ids: readonly ObjectId[]): readonly ObjectId[];
+
+  /**
+   * Streams objects into the receiver's store, each verified on arrival.
+   *
+   * Verification is the receiver's job, not the sender's: a sender-side check
+   * is one a sender can skip. An object whose content does not hash to its
+   * claimed id is refused and not stored, so nothing can enter the store under
+   * a name that does not describe it.
+   *
+   * @param objects - The objects to transfer.
+   * @throws ObjectStoreError When any object's content does not hash to its id.
+   */
+  uploadObjects(objects: readonly TransferObject[]): void;
+
+  /**
+   * Publishes ref moves after an object upload, refusing until the closure is complete.
+   *
+   * Publication is the one step that must not happen partially: every ref move
+   * is a compare-and-swap against the value the sender observed, so a push that
+   * lost a race fails without moving anything, and the failure is retryable —
+   * re-read the advertisement and try again.
+   *
+   * @param updates - The ref moves being requested.
+   * @param force - Whether to allow a move that discards commits the remote has.
+   * @param now - Timestamp recorded in the remote's operation log.
+   * @returns What moved and what was stored.
+   * @throws ObjectStoreError With code `incomplete_closure` when the receiver
+   *   could not verify every object a moved ref would name; with code
+   *   `publication_race` when another writer moved a ref between the sender's
+   *   observation and this publication; with the {@link Transport.push} refusal
+   *   codes for non-fast-forward moves and unpushable refs.
+   */
+  publish(updates: readonly PushUpdate[], force: boolean, now: Date): PushReceipt;
+}
+
+/**
+ * Translates a refused publication transaction into the error the sender sees.
+ *
+ * The transaction's compare-and-swap is the authority on races between the
+ * pre-check in {@link FileTransport.publish} and the write itself: on a real
+ * wire another writer can move a ref in exactly that window. Losing the swap
+ * moves nothing anywhere — the winner's tip stands, the loser's history is
+ * untouched — which is precisely the state a retry starts from, so the failure
+ * is reported as the retryable `publication_race` rather than as a raw ref
+ * mismatch. Every other refusal passes through unchanged.
+ *
+ * @param error - What the transaction threw.
+ * @returns The error to propagate.
+ */
+export function translatePublicationRace(error: unknown): unknown {
+  if (error instanceof ObjectStoreError && error.code === "ref_changed") {
+    return new ObjectStoreError(
+      "publication_race",
+      `${error.message} Nothing was published by this attempt.`,
+    );
+  }
+  return error;
+}
+
+/**
+ * Refuses a publication or push that names a ref kind a push may not move.
+ *
+ * A push is defined over branches and tags. The ref name is otherwise only
+ * checked for well-formedness, so without this a sender could move a
+ * repository's `refs/remotes/other/main` — rewriting what it believes a third
+ * party published — and the receiver would log it as an ordinary push. The
+ * check belongs on the receiving side rather than in the caller for the same
+ * reason the fast-forward check does: a sender-side check is one a sender can
+ * skip, and `Transport` is a published interface that a privilege-crossing
+ * implementation would inherit.
+ *
+ * @param update - The ref move being requested.
+ * @throws ObjectStoreError When the ref is neither a branch nor a tag.
+ */
+function assertPushableRef(update: PushUpdate): void {
+  if (!update.ref.startsWith(BRANCH_PREFIX) && !update.ref.startsWith(TAG_PREFIX)) {
+    throw new ObjectStoreError(
+      "unpushable_ref",
+      `A push may only move branches and tags, and ${update.ref} is neither. `
+      + `Push a ${BRANCH_PREFIX} or ${TAG_PREFIX} name instead.`,
+    );
+  }
 }
 
 /**
@@ -112,6 +267,12 @@ export class FileTransport implements Transport {
 
   /** Absolute path to the remote repository's working tree root. */
   private readonly path: string;
+
+  /**
+   * Objects this connection verified on arrival that the receiver did not
+   * already hold, reported by {@link FileTransport.publish} and cleared with it.
+   */
+  private readonly acceptedThisConnection: ObjectId[] = [];
 
   /**
    * @param url - The location as configured, for error messages.
@@ -142,7 +303,7 @@ export class FileTransport implements Transport {
     }
   }
 
-  /** Read the receiver's public refs, attached branch, and history-shaping record configuration. */
+  /** Read the receiver's public refs, attached branch, history-shaping record configuration, and peer description. */
   advertise(): Advertisement {
     const repository = this.open();
     const head = repository.refs.readHead();
@@ -150,6 +311,8 @@ export class FileTransport implements Transport {
       refs: [...repository.refs.list(BRANCH_PREFIX), ...repository.refs.list(TAG_PREFIX)],
       head: head.kind === "branch" ? head.ref : null,
       config: repository.config,
+      formatVersion: REPOSITORY_FORMAT,
+      capabilities: [...REQUIRED_TRANSPORT_CAPABILITIES],
     };
   }
 
@@ -170,21 +333,7 @@ export class FileTransport implements Transport {
     const repository = this.open();
     const { added } = importBundleObjects(repository.objects, bundle);
     for (const update of updates) {
-      // A push is defined over branches and tags. The ref name is otherwise only
-      // checked for well-formedness, so without this a sender could move the
-      // receiver's `refs/remotes/other/main` — rewriting what this repository
-      // believes a third party published — and the receiver would log it as an
-      // ordinary push. The check belongs here rather than in the caller for the
-      // same reason the fast-forward check does: a sender-side check is one a
-      // sender can skip, and `Transport` is a published interface that a
-      // privilege-crossing implementation would inherit.
-      if (!update.ref.startsWith(BRANCH_PREFIX) && !update.ref.startsWith(TAG_PREFIX)) {
-        throw new ObjectStoreError(
-          "unpushable_ref",
-          `A push may only move branches and tags, and ${update.ref} is neither. `
-          + `Push a ${BRANCH_PREFIX} or ${TAG_PREFIX} name instead.`,
-        );
-      }
+      assertPushableRef(update);
       assertClosurePresent(repository.objects, update.ref, update.next);
       const current = repository.refs.read(update.ref);
       if (current === null || current === update.next) continue;
@@ -217,12 +366,103 @@ export class FileTransport implements Transport {
       expected: update.expected,
       next: update.next,
     })));
-    repository.operations.append(
+    this.logPublication(`Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
+    return { updated: updates, added };
+  }
+
+  /**
+   * Logs a completed publication in the receiver's operation log.
+   *
+   * @param summary - Human-readable line describing the transfer.
+   * @param updates - The ref moves that were published.
+   * @param force - Whether the moves overrode fast-forward policy.
+   * @param now - Timestamp recorded in the log.
+   */
+  private logPublication(
+    summary: string,
+    updates: readonly PushUpdate[],
+    force: boolean,
+    now: Date,
+  ): void {
+    this.open().operations.append(
       "push",
-      `Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`,
+      summary,
       updates.map((update) => ({ ref: update.ref, before: update.expected, after: update.next })),
       now,
     );
+  }
+
+  /** Report the offered ids the store does not hold yet, so a resume resends only those. */
+  missingObjects(ids: readonly ObjectId[]): readonly ObjectId[] {
+    const repository = this.open();
+    return ids.filter((id) => !repository.objects.has(id));
+  }
+
+  /** Store each arriving object after verifying its content hashes to the id the sender claimed. */
+  uploadObjects(objects: readonly TransferObject[]): void {
+    const repository = this.open();
+    for (const object of objects) {
+      // The claim is checked before anything is written. Storing first and
+      // hashing later would put tampered or corrupted bytes under an id that
+      // does not describe them, and every later identity check in the
+      // receiver's store would then reason about a lie.
+      const actual = hashObject(object.type, object.payload);
+      if (actual !== object.id) {
+        throw new ObjectStoreError(
+          "corrupt_object",
+          `Upload claimed ${object.id} but its content hashes to ${actual}. `
+            + "The object was refused and not stored.",
+        );
+      }
+      // Counted before the write, which no-ops on an existing object: the
+      // receipt names what this transfer delivered, not what the store holds.
+      if (!repository.objects.has(object.id)) this.acceptedThisConnection.push(object.id);
+      repository.objects.write(object.type, object.payload);
+    }
+  }
+
+  /** Verify the uploaded closure, then publish every ref move as one compare-and-swap transaction. */
+  publish(updates: readonly PushUpdate[], force: boolean, now: Date): PushReceipt {
+    const repository = this.open();
+    for (const update of updates) {
+      assertPushableRef(update);
+      // Closure before policy: publication is what makes incomplete history
+      // reachable, so it is refused until every object a moved ref names is
+      // present and hash-valid. The objects were verified on arrival, so what
+      // remains is presence of the whole closure — including any object this
+      // receiver already held before the upload began.
+      assertClosurePresent(repository.objects, update.ref, update.next);
+      const current = repository.refs.read(update.ref);
+      if (current === update.next) continue;
+      // The fast-forward question is only meaningful while this sender's
+      // observation is still current. When it is not, the compare-and-swap
+      // below is the authority: it refuses the stale publication and the
+      // refusal is translated into the retryable `publication_race`, which
+      // leaves the winner's tip and this sender's history exactly where they
+      // were.
+      if (
+        current === update.expected && !force && current !== null
+        && !isAncestor(repository.objects, current, update.next)
+      ) {
+        throw new ObjectStoreError(
+          "non_fast_forward",
+          `Publishing ${update.next.slice(0, 12)} to ${update.ref} would discard commits ${this.url} already has, `
+            + `because its current ${current.slice(0, 12)} is not an ancestor of it. Fetch first, or publish with force.`,
+        );
+      }
+    }
+    try {
+      repository.refs.transaction(updates.map((update) => ({
+        name: update.ref,
+        expected: update.expected,
+        next: update.next,
+      })));
+    } catch (caught) {
+      throw translatePublicationRace(caught);
+    }
+    this.logPublication(`Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
+    const added = [...this.acceptedThisConnection];
+    this.acceptedThisConnection.length = 0;
     return { updated: updates, added };
   }
 }

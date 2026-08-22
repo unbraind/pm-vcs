@@ -4,6 +4,7 @@
 
 ### Added
 
+- Resumable object transfer and peer capability negotiation, for the phase that has a wire ([pm-vcs-i4au](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-i4au.toon))
 - Linear-space divide-and-conquer diff, for an absolute memory ceiling the band bound cannot give ([pm-vcs-6ht8](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-6ht8.toon))
 - Add sparse lazy instances with a shared immutable object store ([pm-vcs-0lec](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-0lec.toon))
 - Bound the Myers trace to the reachable diagonal band ([pm-vcs-ze24](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ze24.toon))

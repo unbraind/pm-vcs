@@ -2,12 +2,18 @@ id: pm-vcs-i4au
 title: "Resumable object transfer and peer capability negotiation, for the phase that has a wire"
 description: "Two acceptance criteria carried on the Phase 3 epic describe a network protocol and were deferred with the rest of it. An interrupted transfer that resumes by sending only the objects the receiver still lacks and verifies, and peers agreeing on supported capabilities and repository format versions before any data moves, are both properties of a wire. The filesystem transport that Phase 3 ships has neither an interruption to resume from nor a peer to disagree with: a bundle is handed over in one call, and both sides read the same object store format from the same disk. Committing to either now would fix a serialization before the served phase has said what a repository exposes, which is the reason the transport is an interface rather than a protocol. Recorded here so the criteria live with the phase that can satisfy them rather than being quietly dropped from the one that cannot."
 type: Feature
-status: open
+status: closed
 priority: 2
 tags[3]: "area:vcs",distribution,phase-5
 created_at: "2026-08-03T02:37:06.738Z"
-updated_at: "2026-08-03T02:37:06.738Z"
+updated_at: "2026-08-22T12:15:05.568Z"
+closed_at: "2026-08-22T12:15:05.557Z"
+completed_at: "2026-08-22T12:15:05.557Z"
+claim_principal: pi-agent
 author: "harness:claude-code"
 acceptance_criteria: "An interrupted object upload resumes by transferring only the objects the receiver lacks, each verified on arrival; a receiver rejects publication until the uploaded closure is complete and hash-valid; peers exchange supported capabilities and repository format versions before transferring data and refuse an incompatible peer without changing any ref; a lost publication race leaves both local history and the winner's remote tip intact and reports a retryable failure"
 parent: pm-vcs-tr2a
+comments[1]{created_at,author,text}:
+  "2026-08-22T12:15:05.143Z",pi-agent,"All four acceptance criteria implemented and measured. (1) Resumable upload: Transport.missingObjects(ids) asks the receiver what it still lacks; FileTransport.uploadObjects streams objects, each verified on arrival (hashObject checked against the claimed id BEFORE storing - a tampered payload is refused as corrupt_object and never stored under an id that does not describe it). Test proves interruption + resume transfers exactly the still-missing subset. (2) Publication gate: publish() runs assertClosurePresent per ref before any ref moves, refusing incomplete history (existing incomplete_bundle refusal reused, no ref moved); arrival verification plus closure presence is the hash-valid requirement. (3) Handshake: Advertisement gains formatVersion (REPOSITORY_FORMAT) and capabilities (TRANSPORT_CAPABILITIES); assertCompatiblePeer refuses format drift either direction and missing required capabilities with incompatible_peer; fetchFrom/pushTo/cloneFrom call it immediately after advertise() - before any bundle is built, sent, or any ref moved (test counts transfers after refusal = 0). (4) Lost race: the ref transaction's compare-and-swap is the sole race authority; a stale publication is translated by translatePublicationRace into retryable publication_race, leaving the winner's remote tip and the loser's local history intact (test asserts both). Revert-proof verification: removing assertCompatiblePeer from pushTo fails the handshake test; disabling arrival hash verification fails the tamper test; disabling the race translation path fails the race test; stubbing missingObjects to empty fails the resume test - each restored and green. Gates: build ok, build:test ok, npm test 615/615, coverage 100/100/100/100 via c8 --all --100, docstring gate 33 files / 162 declarations, ./node_modules/.bin/pm health --strict-exit exit 0."
+close_reason: "Resumable verified-arrival object transfer (missingObjects/uploadObjects/publish), peer capability and format handshake refusing incompatible peers before any data or ref movement, and retryable publication-race semantics all shipped with revert-proof tests at 100/100/100/100."
 body: ""

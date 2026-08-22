@@ -537,6 +537,9 @@ test("a clone whose fetch fails leaves nothing behind for the retry to trip over
       throw new ObjectStoreError("unreachable_remote", "the source went away mid-clone");
     },
     push: reachable.push.bind(reachable),
+    missingObjects: reachable.missingObjects.bind(reachable),
+    uploadObjects: reachable.uploadObjects.bind(reachable),
+    publish: reachable.publish.bind(reachable),
   };
 
   const destination = join(tempRoot(), "clone");
@@ -560,6 +563,9 @@ test("a failed clone into a directory that already existed removes only what it 
       throw new ObjectStoreError("unreachable_remote", "the source went away mid-clone");
     },
     push: reachable.push.bind(reachable),
+    missingObjects: reachable.missingObjects.bind(reachable),
+    uploadObjects: reachable.uploadObjects.bind(reachable),
+    publish: reachable.publish.bind(reachable),
   };
 
   // A destination the agent had already put files in. Cleaning up must not take
