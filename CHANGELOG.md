@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Propagate the docstring gate entry guard fix ([pm-vcs-anfk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-anfk.toon))
 - Self-host bundle gate cannot pass on dependency-manifest-only changes, so every dependabot PR is red ([pm-vcs-8y72](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8y72.toon))
 - Fix SDK GetItemProjection id drift breaking dependency-refresh release:check ([pm-vcs-1v6x](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-1v6x.toon))
 - Refresh dependencies and regenerate self-host bundle to unblock Dependabot PRs ([pm-vcs-17li](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-17li.toon))
