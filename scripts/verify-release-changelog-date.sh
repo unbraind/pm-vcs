@@ -25,8 +25,13 @@ while IFS= read -r file; do
   else
     echo "ok - $file: $sites generator invocation(s), all flagged"
   fi
-done < <(git ls-files | xargs grep -l -- --release-version-from-package 2>/dev/null \
-         | grep -vE '\.toon$|\.jsonl$|^CHANGELOG')
+done < <(git ls-files -- package.json '.github/workflows/*.yml' '.github/workflows/*.yaml' \
+         | xargs grep -l -- --release-version-from-package 2>/dev/null)
+# Scope note: only files that EXECUTE the generator are in scope -- package.json
+# scripts and the workflows. Source, docs, dist and test fixtures may mention
+# the same flags while describing or exercising them, and holding those to an
+# "every mention is flagged" rule would be a false positive (it is, in
+# pm-changelog's own repository, which documents both spellings on purpose).
 
 # 2. Behavioural: the flag is what makes the date version-derived. A probe
 #    version deliberately unequal to today, so a clock-derived heading and a
@@ -34,8 +39,11 @@ done < <(git ls-files | xargs grep -l -- --release-version-from-package 2>/dev/n
 probe=2026.1.2
 expected="## ${probe} - 2026-01-02"
 today_heading="## ${probe} - $(date -u +%Y-%m-%d)"
-bin=./node_modules/.bin/pm-changelog
-[ -x "$bin" ] || bin="npx pm-changelog"
+# In pm-changelog's own repository the generator is the build output, not a
+# dependency, so resolve it in that order rather than assuming node_modules.
+if [ -x ./node_modules/.bin/pm-changelog ]; then bin="./node_modules/.bin/pm-changelog"
+elif [ -f ./dist/cli.js ]; then bin="node ./dist/cli.js"
+else bin="npx pm-changelog"; fi
 # The generator refuses a truncated workspace read rather than silently
 # omitting entries, so the unbounded controls the real scripts pass are
 # required here too.

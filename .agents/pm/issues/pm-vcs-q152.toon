@@ -6,10 +6,11 @@ status: open
 priority: 1
 tags[3]: changelog,gates,release
 created_at: "2026-08-24T09:40:36.672Z"
-updated_at: "2026-08-24T10:04:12.267Z"
+updated_at: "2026-08-24T10:06:22.881Z"
 author: "harness:claude-code"
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-08-24T10:04:12.267Z","harness:claude-code","CodeRabbit was right that the linked test only covered the package.json invocation and never reached the direct pm-changelog commands in the release workflow. Added an executable check that does both halves. The static half enumerates every tracked file containing a generator invocation and asserts each file's flagged count is not below its site count, which fails when any single site loses the flag; verified by removing the flag from one of two release.yml sites and watching it report one of two and exit non-zero. The behavioural half runs the generator twice on the same probe version 2026.1.2, deliberately chosen so its calendar date cannot coincide with today, and asserts the heading is 2026.1.2 - 2026-01-02 with the flag and 2026.1.2 - 2026-08-24 without it, so the test states the defect rather than merely asserting the fix."
+  "2026-08-24T10:06:22.881Z","harness:claude-code","CodeRabbit was right that the linked test only covered the package.json invocation and never reached the direct pm-changelog commands in the release workflow. Added an executable check that does both halves. The static half enumerates every tracked file containing a generator invocation and asserts each file's flagged count is not below its site count, which fails when any single site loses the flag; verified by removing the flag from one of two release.yml sites and watching it report one of two and exit non-zero. The behavioural half runs the generator twice on the same probe version 2026.1.2, deliberately chosen so its calendar date cannot coincide with today, and asserts the heading is 2026.1.2 - 2026-01-02 with the flag and 2026.1.2 - 2026-08-24 without it, so the test states the defect rather than merely asserting the fix."
 files[3]{path,scope,note}:
   package.json,project,every pm-changelog invocation here now derives the no-tag release date from the calendar version
   .github/workflows/release.yml,project,every pm-changelog invocation here now derives the no-tag release date from the calendar version
