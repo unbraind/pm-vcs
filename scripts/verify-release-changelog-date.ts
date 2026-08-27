@@ -98,6 +98,33 @@ export function expandArrays(line: string, arrays: Map<string, string>): string 
 }
 
 /**
+ * Drop an unquoted trailing comment from one command.
+ *
+ * A `#` inside quotes is an argument -- these invocations pass URLs containing
+ * one -- while an unquoted `#` starts a comment the shell never runs. Without
+ * this, a comment is part of the command as far as a substring check is
+ * concerned, and `... --release-version-from-package  # --date-from-version`
+ * satisfies the very check it is complaining about.
+ *
+ * @param command - One logical command.
+ * @returns The command with any unquoted trailing comment removed.
+ */
+export function stripComment(command: string): string {
+  let single = false;
+  let double = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (character === "\\") { index += 1; continue; }
+    if (character === "'" && !double) single = !single;
+    else if (character === '"' && !single) double = !double;
+    else if (character === "#" && !single && !double && (index === 0 || /\s/.test(command[index - 1]))) {
+      return command.slice(0, index);
+    }
+  }
+  return command;
+}
+
+/**
  * Find every generator invocation in one file's contents.
  *
  * An invocation is a logical command that runs the generator -- by binary name,
@@ -120,7 +147,8 @@ export function invocationsIn(source: SourceFile): Invocation[] {
     // several invocations -- a package.json script chaining two generator calls
     // with `&&` is the common case -- and judging the line as a whole lets a
     // flagged call cover for an unflagged one beside it.
-    for (const segment of expandArrays(raw, arrays).split(/\s(?:&&|\|\||;|\|)\s/)) {
+    for (const raw_segment of expandArrays(raw, arrays).split(/\s(?:&&|\|\||;|\|)\s/)) {
+      const segment = stripComment(raw_segment);
       if (!/pm-changelog|dist\/cli\.js/.test(segment)) continue;
       if (!VERSION_INPUTS.some((flag) => segment.includes(flag))) continue;
       found.push({ file: source.file, command: segment });

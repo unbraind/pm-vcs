@@ -18,6 +18,7 @@ import {
   auditHeadings,
   auditInvocations,
   bashArrays,
+  stripComment,
   expandArrays,
   invocationsIn,
   joinContinuations,
@@ -250,4 +251,21 @@ test("main verifies this checkout and reports through the process streams", () =
   assert.equal(process.exitCode, 0, written.join(""));
   assert.ok(written.some((line) => line.startsWith("ok - ")), "main must report what it checked");
   process.exitCode = savedExit;
+});
+
+test("an unquoted trailing comment cannot supply the flag the command is missing", () => {
+  // A substring check cannot tell a comment from an argument, so a comment
+  // mentioning the flag satisfies the very check it complains about.
+  const commented = `pm-changelog --release-version-from-package --stdout  # ${DATE_FLAG} belongs here`;
+  const result = auditInvocations([{ file: "package.json", text: commented }]);
+  assert.equal(result.failures.length, 1, "the comment must not stand in for the flag");
+
+  // A `#` inside quotes is an argument: these invocations pass URLs with one.
+  const quoted = `pm-changelog --release-version-from-package ${DATE_FLAG} --item-url-base "https://example.test/#anchor"`;
+  assert.deepEqual(auditInvocations([{ file: "package.json", text: quoted }]).failures, []);
+
+  assert.equal(stripComment('cmd --flag "a # b" # trailing'), 'cmd --flag "a # b" ');
+  assert.equal(stripComment("cmd --flag 'a # b'"), "cmd --flag 'a # b'");
+  assert.equal(stripComment("cmd --flag\\# not-a-comment"), "cmd --flag\\# not-a-comment");
+  assert.equal(stripComment("#leading"), "");
 });
