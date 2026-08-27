@@ -104,6 +104,9 @@ jobs:
       - name: Production dependency audit
         run: npm run audit:prod
 
+      - name: Audit commit identities against the approved list
+        run: npm run audit:identities
+
       - name: Verify npm package contents
         run: npm run pack:dry-run
 
