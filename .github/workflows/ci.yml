@@ -104,11 +104,17 @@ jobs:
       - name: Production dependency audit
         run: npm run audit:prod
 
+      - name: Audit commit identities against the approved list
+        run: npm run audit:identities
+
       - name: Verify npm package contents
         run: npm run pack:dry-run
 
       - name: Verify generated changelog
         run: npm run changelog:check
+
+      - name: Verify the changelog date is derived from the version
+        run: npm run verify:release-changelog-date
 
       - name: Verify Bun can install the package graph
         run: bun install --no-save

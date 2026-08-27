@@ -36,12 +36,13 @@
     "pack:dry-run": "npm pack --dry-run",
     "changelog:full": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999",
     "changelog:check": "npm run changelog:full -- --check",
-    "release:check": "npm run typecheck && npm run build && npm run lint && npm run duplicates && npm run docstring && npm run coverage && npm run accept:native-toon && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run changelog:check",
+    "release:check": "npm run typecheck && npm run build && npm run lint && npm run duplicates && npm run docstring && npm run coverage && npm run accept:native-toon && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run changelog:check && npm run verify:release-changelog-date",
     "prepublishOnly": "npm run release:check",
     "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date-from-version --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999 --github-step-summary",
     "prepare": "node scripts/prepare-merge-driver.ts",
     "merge:install": "pm merge install",
-    "coverage": "npm run build && npm run build:test && c8 --all --100 --reporter=text --reporter=lcov --include='*.ts' --include='engine/**/*.ts' --include='scripts/**/*.ts' --exclude='test/**' node --test --test-concurrency=1 test/*.test.ts"
+    "coverage": "npm run build && npm run build:test && c8 --all --100 --reporter=text --reporter=lcov --include='*.ts' --include='engine/**/*.ts' --include='scripts/**/*.ts' --exclude='test/**' node --test --test-concurrency=1 test/*.test.ts",
+    "verify:release-changelog-date": "node scripts/verify-release-changelog-date.ts"
   },
   "keywords": [
     "pm-cli",
