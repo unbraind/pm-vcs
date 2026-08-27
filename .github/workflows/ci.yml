@@ -113,6 +113,9 @@ jobs:
       - name: Verify generated changelog
         run: npm run changelog:check
 
+      - name: Verify the changelog date is derived from the version
+        run: npm run verify:release-changelog-date
+
       - name: Verify Bun can install the package graph
         run: bun install --no-save
 
