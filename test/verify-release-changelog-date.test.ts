@@ -8,10 +8,9 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
   DATE_FLAG,
@@ -161,10 +160,22 @@ test("a control that fails is a failure, not a note", () => {
   assert.match(result.failures[0], /so the comparison proves nothing/);
 });
 
-test("a control that is not clock-derived fails, because then it discriminates nothing", () => {
+test("a control identical to the flagged run fails, because then the flag discriminates nothing", () => {
   const result = auditHeadings("2026.1.2", "2026-08-27", () => ({ ok: true, text: "## 2026.1.2 - 2026-01-02" }));
   assert.equal(result.failures.length, 1);
-  assert.match(result.failures[0], /the control is not measuring the clock/);
+  assert.match(result.failures[0], /the flag is changing nothing/);
+});
+
+test("a control derived some other way still passes, because the contract is that the flag changes the heading", () => {
+  // Deliberately NOT today's date. Asserting the control equals today would pin
+  // the generator's current default -- a compatible dependency update that
+  // changed it would fail this gate with no defect -- and today's date is
+  // sampled once for two subprocess runs, so a run crossing UTC midnight would
+  // fail for no defect either.
+  const result = auditHeadings("2026.1.2", "2026-08-27", (flagged) =>
+    ({ ok: true, text: flagged ? "## 2026.1.2 - 2026-01-02" : "## 2026.1.2 - 2030-12-31" }));
+  assert.deepEqual(result.failures, []);
+  assert.match(result.notes[1], /derived some other way/);
 });
 
 test("a flagged run that fails, or that derives the wrong date, both fail", () => {
