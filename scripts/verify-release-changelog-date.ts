@@ -215,12 +215,22 @@ export function auditHeadings(
 
   const control = generate(false);
   if (!control.ok) failures.push(`without ${DATE_FLAG}, ${control.text}, so the comparison proves nothing`);
-  else if (control.text !== todayHeading) {
+  else if (control.text === flagged.text) {
     failures.push(
-      `without ${DATE_FLAG} expected the clock-derived '${todayHeading}', got '${control.text}'`
-      + " - the control is not measuring the clock",
+      `the heading is '${control.text}' with and without ${DATE_FLAG} - the flag is changing nothing, so`
+      + " nothing here proves the date is version-derived",
     );
-  } else notes.push(`ok - without the flag the heading is clock-derived: ${control.text} (this is the defect the flag removes)`);
+  } else {
+    // What must hold is that the flag CHANGES the outcome. Asserting the
+    // control equals today's date instead would pin the generator's current
+    // default, so a compatible dependency update that changed it would fail
+    // this gate for no defect; and today's date is sampled once for two
+    // subprocess runs, so a run crossing UTC midnight would fail for no defect
+    // either. Whether the control happens to be the clock is reported, not
+    // required.
+    const derivation = control.text === todayHeading ? "clock-derived" : "derived some other way";
+    notes.push(`ok - the flag changes the heading: '${flagged.text}' with it, '${control.text}' without (${derivation})`);
+  }
 
   return { failures, notes };
 }
