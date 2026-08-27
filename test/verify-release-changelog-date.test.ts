@@ -86,10 +86,23 @@ test("a backslash continuation is one logical command, not fragments", () => {
   assert.deepEqual(auditInvocations([{ file: "package.json", text }]).failures, []);
 });
 
-test("one line holding two invocations is judged per invocation", () => {
+test("one line holding two invocations is judged per invocation, spaced or not", () => {
   const unflagged = "pm-changelog --pm-root . --release-version-from-package";
-  const result = auditInvocations([{ file: "package.json", text: `${FLAGGED} && ${unflagged}` }]);
-  assert.equal(result.failures.length, 1, "the unflagged half must be reported even though the line carries the flag");
+  for (const separator of [" && ", "&&", " || ", "||", "; ", ";"]) {
+    const result = auditInvocations([{ file: "package.json", text: `${FLAGGED}${separator}${unflagged}` }]);
+    assert.equal(
+      result.failures.length,
+      1,
+      `the unflagged half must be reported across ${JSON.stringify(separator)}`,
+    );
+  }
+});
+
+test("an unspaced pipe is treated as part of an argument, not as a separator", () => {
+  // Splitting there would separate a version input from its own flag and
+  // report a defect that is not present.
+  const piped = `pm-changelog --release-version-from-package ${DATE_FLAG} --tag-pattern "^v(2026|2027)"`;
+  assert.deepEqual(auditInvocations([{ file: "package.json", text: piped }]).failures, []);
 });
 
 test("a mention of the flag on a non-invoking line cannot cover for an unflagged invocation", () => {

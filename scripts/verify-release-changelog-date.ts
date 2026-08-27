@@ -147,7 +147,15 @@ export function invocationsIn(source: SourceFile): Invocation[] {
     // several invocations -- a package.json script chaining two generator calls
     // with `&&` is the common case -- and judging the line as a whole lets a
     // flagged call cover for an unflagged one beside it.
-    for (const raw_segment of expandArrays(raw, arrays).split(/\s(?:&&|\|\||;|\|)\s/)) {
+    //
+    // `&&`, `||` and `;` need no surrounding whitespace to separate commands,
+    // and `flagged&&unflagged` is valid shell: requiring whitespace left the
+    // two calls in one segment where the first one's flag covered the second.
+    // A bare `|` is only treated as a separator when whitespace-delimited,
+    // because an unspaced pipe is far more likely to be inside an argument --
+    // an alternation in a regex, say -- and splitting there would separate a
+    // version input from its own flag and report a defect that is not present.
+    for (const raw_segment of expandArrays(raw, arrays).split(/\s*(?:&&|\|\||;)\s*|\s\|\s/)) {
       const segment = stripComment(raw_segment);
       if (!/pm-changelog|dist\/cli\.js/.test(segment)) continue;
       if (!VERSION_INPUTS.some((flag) => segment.includes(flag))) continue;
