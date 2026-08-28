@@ -1,0 +1,13 @@
+id: pm-vcs-hre2
+title: Publication refuses without a valid stable-FileId lock lease
+description: "Publication refuses without a valid stable-FileId lock lease: missing, expired, owned by another principal, or outside its branch scope. Four distinct refusals, each named in the message. Spec only — tracked as an open child for a future pass."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-08-28T13:43:14.894Z"
+updated_at: "2026-08-28T15:22:45.375Z"
+author: pi-agent
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-5h6j,parent,"2026-08-28T15:22:45.240Z",claude,"cli:update:dep",detected
+body: ""

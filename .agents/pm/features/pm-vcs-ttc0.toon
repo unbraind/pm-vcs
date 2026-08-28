@@ -1,0 +1,13 @@
+id: pm-vcs-ttc0
+title: Served repository over the Phase 3 transport
+description: "A served repository exposing refs, objects and the series over the Phase 3 transport in engine/transport.ts. Spec only — tracked as an open child for a future pass."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-08-28T13:43:10.824Z"
+updated_at: "2026-08-28T15:22:38.357Z"
+author: pi-agent
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-5h6j,parent,"2026-08-28T15:22:38.277Z",claude,"cli:update:dep",detected
+body: ""

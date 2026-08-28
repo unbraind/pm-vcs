@@ -356,6 +356,25 @@ function decodeSignature(line: string): Signature {
 }
 
 /**
+ * Splits one header line into its keyword and value at the first space.
+ *
+ * Shared by {@link decodeCommit} and {@link decodeSeries} so the header-parsing
+ * convention is defined once: the keyword is everything before the first space,
+ * and the value is everything after it. A line with no space is a keyword-only
+ * line with an empty value.
+ *
+ * @param line - One header line, without its trailing newline.
+ * @returns The keyword and the value.
+ */
+function splitHeader(line: string): { keyword: string; value: string } {
+  const space = line.indexOf(" ");
+  return {
+    keyword: space === -1 ? line : line.slice(0, space),
+    value: space === -1 ? "" : line.slice(space + 1),
+  };
+}
+
+/**
  * Encodes a commit.
  *
  * The change line, when present, is written immediately after the `tree` line
@@ -450,9 +469,7 @@ export function decodeCommit(payload: Buffer): Commit {
   let author: Signature | undefined;
   let committer: Signature | undefined;
   for (const line of text.slice(0, blankLine).split("\n")) {
-    const space = line.indexOf(" ");
-    const keyword = space === -1 ? line : line.slice(0, space);
-    const value = space === -1 ? "" : line.slice(space + 1);
+    const { keyword, value } = splitHeader(line);
     // Each singleton header may appear once. A second one would make the commit's
     // meaning depend on which occurrence a parser happened to keep — and two
     // parsers keeping different ones is how one commit becomes two truths.
@@ -632,4 +649,157 @@ export function readCommit(store: ObjectStore, id: ObjectId): Commit {
  */
 export function treeId(entries: readonly TreeEntry[]): ObjectId {
   return hashObject("tree", encodeTree(entries));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Patch series
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A patch series is a forge-independent artifact: an ordered collection of
+// commits produced from a range, with metadata, that can be transferred,
+// applied, and re-derived byte-identically. It is an object kind — not a text
+// convention — so "the same series" is an identity question with a content-addressed
+// answer rather than a diff comparison.
+//
+// The canonical encoding is line-oriented and sorted, so two agents producing
+// a series from the same commit range compute the same bytes and therefore the
+// same object id. Each patch references a commit by its id, and the commit
+// objects already carry the tree and parent information, so the series is a
+// stable, canonical pointer into history rather than a redundant copy of it.
+
+/** Format marker written as a series object's first line. */
+export const SERIES_FORMAT = "pm-vcs-series 1";
+
+/** One patch in a series: a commit id and its position in the ordered range. */
+export interface SeriesPatch {
+  /** The commit this patch represents. */
+  readonly commit: ObjectId;
+}
+
+/** A patch series: an ordered collection of commits with metadata. */
+export interface PatchSeries {
+  /** The commit the series builds on — the parent of the first patch. */
+  readonly base: ObjectId;
+  /** The ordered patches, oldest first. */
+  readonly patches: readonly SeriesPatch[];
+  /** Series description, verbatim. */
+  readonly description: string;
+  /** The identity under which the series was authored. */
+  readonly author: Signature;
+}
+
+/**
+ * Encodes a patch series as canonical bytes.
+ *
+ * The encoding is line-oriented and deterministic: the format marker, base,
+ * description, author, and then one `patch` line per patch in order. Given the
+ * same commit range and metadata, the same bytes result — which is what makes
+ * re-derivation byte-identical and the series id a function of the content alone.
+ *
+ * @param series - The series to encode.
+ * @returns Canonical series bytes.
+ * @throws ObjectStoreError When the description contains a line separator, or a
+ *   patch commit id is malformed — each of which would produce a series that
+ *   cannot be decoded back to this value.
+ */
+export function encodeSeries(series: PatchSeries): Buffer {
+  if (!isObjectId(series.base)) {
+    throw new ObjectStoreError("invalid_object_id", `Series base "${series.base}" is not a valid object id.`);
+  }
+  if (/[\r\n]/.test(series.description)) {
+    throw new ObjectStoreError("invalid_series", "A series description cannot contain a line separator.");
+  }
+  for (const patch of series.patches) {
+    if (!isObjectId(patch.commit)) {
+      throw new ObjectStoreError("invalid_object_id", `Series patch "${patch.commit}" is not a valid object id.`);
+    }
+  }
+  const lines = [
+    SERIES_FORMAT,
+    `base ${series.base}`,
+    `description ${series.description}`,
+    `author ${encodeSignature(series.author)}`,
+    ...series.patches.map((patch) => `patch ${patch.commit}`),
+  ];
+  return Buffer.from(`${lines.join("\n")}\n`, "utf8");
+}
+
+/**
+ * Decodes series bytes back into a {@link PatchSeries}.
+ *
+ * @param payload - Canonical series bytes.
+ * @returns The parsed series.
+ * @throws ObjectStoreError When the format marker is wrong, a required header is
+ *   absent or repeated, an id is malformed, or the payload is truncated.
+ */
+export function decodeSeries(payload: Buffer): PatchSeries {
+  const text = payload.toString("utf8");
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "" && lines.length > 1) lines.pop();
+  if (lines[0] !== SERIES_FORMAT) {
+    throw new ObjectStoreError("malformed_object", `Series does not start with the ${SERIES_FORMAT} marker.`);
+  }
+  let base: ObjectId | undefined;
+  let description: string | undefined;
+  let author: Signature | undefined;
+  const patches: SeriesPatch[] = [];
+  let cursor = 1;
+  while (cursor < lines.length) {
+    const line = lines[cursor]!;
+    const { keyword, value } = splitHeader(line);
+    if (keyword === "base") {
+      if (base !== undefined) throw new ObjectStoreError("malformed_object", "Series carries more than one base header.");
+      if (!isObjectId(value)) throw new ObjectStoreError("malformed_object", `Series base "${value}" is not an object id.`);
+      base = value;
+    } else if (keyword === "description") {
+      if (description !== undefined) throw new ObjectStoreError("malformed_object", "Series carries more than one description header.");
+      description = value;
+    } else if (keyword === "author") {
+      if (author !== undefined) throw new ObjectStoreError("malformed_object", "Series carries more than one author header.");
+      author = decodeSignature(value);
+    } else if (keyword === "patch") {
+      if (!isObjectId(value)) throw new ObjectStoreError("malformed_object", `Series patch "${value}" is not an object id.`);
+      patches.push({ commit: value });
+    } else {
+      throw new ObjectStoreError("malformed_object", `Series carries unknown header "${keyword}".`);
+    }
+    cursor += 1;
+  }
+  if (base === undefined || description === undefined || author === undefined) {
+    throw new ObjectStoreError("malformed_object", "Series is missing its base, description, or author header.");
+  }
+  return { base, patches, description, author };
+}
+
+/**
+ * Writes a patch series and returns its id.
+ *
+ * @param store - Destination object store.
+ * @param series - The series to write.
+ * @returns The stored series's id.
+ */
+export function writeSeries(store: ObjectStore, series: PatchSeries): ObjectId {
+  return store.write("series", encodeSeries(series));
+}
+
+/**
+ * Reads a patch series.
+ *
+ * @param store - Source object store.
+ * @param id - The series's id.
+ * @returns The parsed series.
+ * @throws ObjectStoreError When the object is absent, corrupt, or not a series.
+ */
+export function readSeries(store: ObjectStore, id: ObjectId): PatchSeries {
+  return decodeSeries(store.readTyped(id, "series"));
+}
+
+/**
+ * Computes the id a patch series would have without writing it.
+ *
+ * @param series - The series.
+ * @returns The id the series would be stored under.
+ */
+export function seriesId(series: PatchSeries): ObjectId {
+  return hashObject("series", encodeSeries(series));
 }
