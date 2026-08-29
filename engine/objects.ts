@@ -24,7 +24,7 @@ import {
 import { join } from "node:path";
 
 /** The kinds of object the store can hold. */
-export const OBJECT_TYPES = ["blob", "tree", "commit", "record"] as const;
+export const OBJECT_TYPES = ["blob", "tree", "commit", "record", "series"] as const;
 
 /** One of the four object kinds. */
 export type ObjectType = (typeof OBJECT_TYPES)[number];

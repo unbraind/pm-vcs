@@ -1,0 +1,29 @@
+id: pm-vcs-jrej
+title: Harden patch-series and review objects after PR 48 review
+description: "Address validated review findings in series bundle import, canonical decoding, review field construction, empty-series export, test cleanup, and immutable PM history."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-29T04:20:56.846Z"
+updated_at: "2026-08-29T04:21:16.701Z"
+closed_at: "2026-08-29T04:21:15.000Z"
+completed_at: "2026-08-29T04:21:15.000Z"
+author: pi-agent
+estimated_minutes: 90
+acceptance_criteria: All review findings are covered by regression tests; existing PM history bytes remain immutable; coverage remains 100 percent
+resolution: Fixed all six validated PR review findings with regression coverage and immutable-history restoration.
+expected_result: "Malformed series bundles and values are rejected, review required fields cannot be overridden, empty exports fail with a typed error, and tests clean every temp directory."
+actual_result: Targeted build and 37 series/review tests pass; pm validate reports history drift and storage integrity clean.
+comments[1]{created_at,author,text}:
+  "2026-08-29T04:21:11.115Z",pi-agent,"Validated all six CodeRabbit findings. Restored historical event prefixes and removed no-op repair records; added closure, round-trip, whitelist, empty-series, and temp-cleanup protections with tests."
+files[4]{path,scope,note}:
+  engine/bundle.ts,project,Validate standalone series closures during import
+  engine/model.ts,project,Reject non-round-trippable series values
+  engine/review.ts,project,Whitelist optional review fields
+  engine/series.ts,project,Reject empty series exports
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  npm test,project,1200,pi-agent,"2026-08-29T04:21:12.264Z",local_mutation,feat/patch-series-and-served-forge
+  npm run coverage,project,1200,pi-agent,"2026-08-29T04:21:12.264Z",local_mutation,feat/patch-series-and-served-forge
+close_reason: Implemented and targeted-tested all validated PR 48 review fixes.
+body: ""

@@ -13,7 +13,7 @@
 
 import { readFileSync } from "node:fs";
 
-import { compareByteOrder, decodeCommit, decodeTree, readCommit, readTree } from "./model.ts";
+import { compareByteOrder, decodeCommit, decodeSeries, decodeTree, readCommit, readTree } from "./model.ts";
 import {
   type ObjectId,
   type ObjectType,
@@ -136,7 +136,35 @@ export function assertClosurePresent(store: ObjectStore, name: string, target: O
     } else if (object.type === "tree") {
       for (const entry of decodeTree(object.payload)) pending.push(entry.id);
     }
+    // Series objects are never reachable from a commit's tree closure: they are
+    // standalone objects referenced by id from outside the commit graph, not
+    // tree entries. So the pending list never contains a series id during a
+    // closure walk, and no branch here would be reachable. A series object's
+    // own closure (base + patch commits) is collected by engine/series.ts when
+    // building a series bundle, not by this function.
   }
+}
+
+/**
+ * Serializes a bundle header and its objects into the canonical bundle format.
+ *
+ * Shared by {@link exportBundle} and the series export in `engine/series.ts` so the
+ * wire format is defined once rather than duplicated across every producer.
+ *
+ * @param store - Object store holding every object in the header's object list.
+ * @param header - The validated bundle header.
+ * @returns The bundle bytes.
+ */
+export function serializeBundle(store: ObjectStore, header: BundleContents): Buffer {
+  const objects = header.objects;
+  const lines = [BUNDLE_FORMAT, JSON.stringify(header)];
+  for (const id of objects) {
+    const object = store.read(id);
+    // base64 rather than raw bytes so the whole bundle stays a text file that
+    // survives being pasted, attached, or stored in a field that assumes UTF-8.
+    lines.push(`${object.type} ${id} ${object.payload.toString("base64")}`);
+  }
+  return Buffer.from(`${lines.join("\n")}\n`, "utf8");
 }
 
 /**
@@ -184,14 +212,7 @@ export function exportBundle(
     prerequisites: [...since].sort(compareByteOrder),
     objects,
   };
-  const lines = [BUNDLE_FORMAT, JSON.stringify(header)];
-  for (const id of objects) {
-    const object = store.read(id);
-    // base64 rather than raw bytes so the whole bundle stays a text file that
-    // survives being pasted, attached, or stored in a field that assumes UTF-8.
-    lines.push(`${object.type} ${id} ${object.payload.toString("base64")}`);
-  }
-  return Buffer.from(`${lines.join("\n")}\n`, "utf8");
+  return serializeBundle(store, header);
 }
 
 /**
@@ -306,6 +327,14 @@ export function importBundleObjects(store: ObjectStore, bytes: Buffer): ObjectIm
     }
     store.write(line.type, line.payload);
     added.push(line.id);
+  }
+  for (const line of lines) {
+    if (line.type !== "series") continue;
+    const series = decodeSeries(store.read(line.id).payload);
+    assertClosurePresent(store, `series ${line.id} base`, series.base);
+    for (const patch of series.patches) {
+      assertClosurePresent(store, `series ${line.id} patch`, patch.commit);
+    }
   }
   return { header, added, skipped };
 }

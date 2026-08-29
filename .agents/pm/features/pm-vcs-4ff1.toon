@@ -1,0 +1,15 @@
+id: pm-vcs-4ff1
+title: Cross-tenant denial without existence leakage
+description: "Every object and ref read, write, copy, list and update across tenants must be denied without leaking whether the object exists. Spec only — tracked as an open child for a future pass."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-08-28T13:43:14.362Z"
+updated_at: "2026-08-28T20:11:19.300Z"
+author: pi-agent
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-5h6j,parent,"2026-08-28T15:22:42.163Z",claude,"cli:update:dep",detected
+comments[1]{created_at,author,text}:
+  "2026-08-28T20:11:19.300Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no cross-tenant authorization implementation or passing acceptance evidence for this child, so it remains open with its written specification."
+body: ""

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Review state as a record that merges per field ([pm-vcs-dzz3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-dzz3.toon))
+- Patch series as an object kind ([pm-vcs-sph3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-sph3.toon))
 - Resumable object transfer and peer capability negotiation, for the phase that has a wire ([pm-vcs-i4au](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-i4au.toon))
 - Linear-space divide-and-conquer diff, for an absolute memory ceiling the band bound cannot give ([pm-vcs-6ht8](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-6ht8.toon))
 - Add sparse lazy instances with a shared immutable object store ([pm-vcs-0lec](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-0lec.toon))
@@ -36,6 +38,7 @@
 
 ### Fixed
 
+- Harden patch-series and review objects after PR 48 review ([pm-vcs-jrej](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-jrej.toon))
 - Regenerate the self-host bundle for PR 49 ([pm-vcs-m6j4](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m6j4.toon))
 - Propagate the docstring gate entry guard fix ([pm-vcs-anfk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-anfk.toon))
 - Fix release publish-before-protected-main-push ordering ([pm-vcs-m4xr](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m4xr.toon))
