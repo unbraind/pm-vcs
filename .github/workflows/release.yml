@@ -494,10 +494,6 @@ jobs:
           publish_with_provenance() {
             npm publish --access public --provenance --ignore-scripts
           }
-          publish_without_provenance() {
-            echo "::warning::Falling back to publish WITHOUT --provenance after repeated 404 from npm registry."
-            npm publish --access public --ignore-scripts
-          }
           attempt=0
           max_attempts=3
           while (( attempt < max_attempts )); do
@@ -513,16 +509,23 @@ jobs:
             echo "Publish attempt ${attempt}/${max_attempts} failed; sleeping 30s before retry..."
             sleep 30
           done
-          echo "::warning::All ${max_attempts} provenance publish attempts failed; trying once without provenance."
-          if publish_without_provenance; then
-            echo "Published without provenance."
-            exit 0
-          fi
+          # npm can accept a publish and still report an error, so read the
+          # registry once more before deciding this run failed. Nothing in this
+          # job can publish unattested any more, so a version that is present is
+          # one npm accepted from an attested attempt.
           if npm view "${pkg_name}@${NPM_VERSION}" version --json >/dev/null 2>&1; then
-            echo "::notice::Version landed during fallback; treating as success."
+            echo "::notice::Version landed despite the reported error; treating as success."
             exit 0
           fi
-          echo "::error::Publish failed after retries and provenance fallback."
+          # Deliberately no unattested fallback. Publishing without --provenance
+          # produces an artifact nobody can trace to this workflow, and it did so
+          # silently: the old path emitted a ::warning:: and exited 0, so a run
+          # that shipped an untraceable artifact looked exactly like a healthy
+          # release. An unattested artifact on the registry is worse than no
+          # release, because the release can be retried and a published version
+          # number cannot be reused.
+          echo "::error::All ${max_attempts} attested publish attempts failed, and refusing to publish without --provenance."
+          echo "::error::Nothing was published. Re-run once the registry accepts an attested publish."
           exit 1
 
       # Tag the exact merged/verified main commit AFTER a successful publish.
