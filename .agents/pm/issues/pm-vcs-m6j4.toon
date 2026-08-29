@@ -1,0 +1,20 @@
+id: pm-vcs-m6j4
+title: Regenerate the self-host bundle for PR 49
+description: Regenerate the committed self-host bundle after the release workflow fix so the self-host CI gate matches source.
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-29T03:48:32.507Z"
+updated_at: "2026-08-29T03:48:53.819Z"
+closed_at: "2026-08-29T03:48:53.403Z"
+completed_at: "2026-08-29T03:48:53.403Z"
+author: pi-agent
+comments[1]{created_at,author,text}:
+  "2026-08-29T03:48:52.497Z",pi-agent,Confirmed CI fails only because selfhost.bundle predates the committed workflow source. Regenerating in the required changelog then self-host order.
+files[1]{path,scope,note}:
+  selfhost.bundle,project,Regenerated committed self-host artifact
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  "npm run release:check",project,1200,pi-agent,"2026-08-29T03:48:52.914Z",local_mutation,fix/refuse-unattested-publish-fallback
+close_reason: Regenerated and validated the committed self-host bundle for the PR source.
+body: ""
