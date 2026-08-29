@@ -38,6 +38,7 @@
 
 ### Fixed
 
+- Harden patch-series and review objects after PR 48 review ([pm-vcs-jrej](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-jrej.toon))
 - Regenerate the self-host bundle for PR 49 ([pm-vcs-m6j4](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m6j4.toon))
 - Propagate the docstring gate entry guard fix ([pm-vcs-anfk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-anfk.toon))
 - Fix release publish-before-protected-main-push ordering ([pm-vcs-m4xr](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m4xr.toon))

@@ -347,11 +347,16 @@ function decodeSignature(line: string): Signature {
   if (!match) {
     throw new ObjectStoreError("malformed_object", `Commit signature "${line}" is not well-formed.`);
   }
+  const timestamp = Number(match[3]);
+  const timezoneOffsetMinutes = Number(match[4]);
+  if (!Number.isSafeInteger(timestamp) || !Number.isSafeInteger(timezoneOffsetMinutes)) {
+    throw new ObjectStoreError("malformed_object", `Commit signature "${line}" contains a number outside the safe-integer range.`);
+  }
   return {
     name: match[1],
     email: match[2],
-    timestamp: Number(match[3]),
-    timezoneOffsetMinutes: Number(match[4]),
+    timestamp,
+    timezoneOffsetMinutes,
   };
 }
 
@@ -753,6 +758,7 @@ export function decodeSeries(payload: Buffer): PatchSeries {
       base = value;
     } else if (keyword === "description") {
       if (description !== undefined) throw new ObjectStoreError("malformed_object", "Series carries more than one description header.");
+      if (/[\r\n]/.test(value)) throw new ObjectStoreError("malformed_object", "Series description contains a line separator.");
       description = value;
     } else if (keyword === "author") {
       if (author !== undefined) throw new ObjectStoreError("malformed_object", "Series carries more than one author header.");

@@ -24,13 +24,13 @@ import {
   seriesId,
 } from "../engine/model.ts";
 import { BRANCH_PREFIX, RefStore } from "../engine/refs.ts";
-import { importBundleObjects } from "../engine/bundle.ts";
+import { importBundleObjects, serializeBundle } from "../engine/bundle.ts";
 import { createSeries, rederiveSeries, exportSeriesBundle, applySeries, type SeriesOptions } from "../engine/series.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const signature: Signature = { name: "Series Author", email: "series@example.invalid", timestamp: 1_000, timezoneOffsetMinutes: 0 };
 
-let dir: { root: string; cleanup(): void } | null = null;
+const dirs: Array<{ root: string; cleanup(): void }> = [];
 
 /**
  * Creates a fresh object store and ref store in a temporary directory.
@@ -38,14 +38,14 @@ let dir: { root: string; cleanup(): void } | null = null;
  * @returns The store, refs and root path.
  */
 function fresh(): { store: ObjectStore; refs: RefStore; root: string } {
-  dir = makeTempDir();
+  const dir = makeTempDir();
+  dirs.push(dir);
   const root = join(dir.root, ".pmvcs");
   return { store: new ObjectStore(join(root, "objects")), refs: new RefStore(root), root };
 }
 
 afterEach(() => {
-  dir?.cleanup();
-  dir = null;
+  for (const dir of dirs.splice(0)) dir.cleanup();
 });
 
 /**
@@ -125,6 +125,19 @@ test("decodeSeries rejects an unknown header keyword", () => {
   );
 });
 
+test("decodeSeries rejects values that cannot round-trip through encodeSeries", () => {
+  assert.throws(
+    () => decodeSeries(Buffer.from(`pm-vcs-series 1\nbase ${validId}\ndescription test\r\nauthor A <a@b> 1 0\n`, "utf8")),
+    (error: unknown) => error instanceof ObjectStoreError && error.message.includes("line separator"),
+  );
+  for (const author of ["A <a@b> 9007199254740992 0", "A <a@b> 1 9007199254740992"]) {
+    assert.throws(
+      () => decodeSeries(Buffer.from(`pm-vcs-series 1\nbase ${validId}\ndescription test\nauthor ${author}\n`, "utf8")),
+      (error: unknown) => error instanceof ObjectStoreError && error.message.includes("safe-integer"),
+    );
+  }
+});
+
 test("decodeSeries rejects a series missing its base, description, or author", () => {
   // Missing base.
   assert.throws(
@@ -159,7 +172,7 @@ test("seriesId computes the id a series would have without writing it", () => {
   assert.equal(writtenId, expectedId, "seriesId must match the stored id");
 });
 
-test("applySeries rejects an empty series with no patches", () => {
+test("series operations reject an empty series with no patches", () => {
   const { store, refs } = fresh();
   // Write a series with zero patches directly.
   const emptySeries: PatchSeries = {
@@ -173,6 +186,30 @@ test("applySeries rejects an empty series with no patches", () => {
   assert.throws(
     () => applySeries(store, refs, emptyId, signature),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "empty_series",
+  );
+  assert.throws(
+    () => exportSeriesBundle(store, emptyId),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "empty_series",
+  );
+});
+
+test("bundle import validates the commit closure of standalone series objects", () => {
+  const source = fresh();
+  const target = fresh();
+  const base = makeCommit(target.store, [], "base\n", "base");
+  const missingPatch = "c".repeat(64);
+  const id = source.store.write("series", encodeSeries({
+    base,
+    patches: [{ commit: missingPatch }],
+    description: "incomplete",
+    author: signature,
+  }));
+  const bundle = serializeBundle(source.store, { refs: {}, prerequisites: [], objects: [id] });
+  assert.throws(
+    () => importBundleObjects(target.store, bundle),
+    (error: unknown) => error instanceof ObjectStoreError
+      && error.code === "incomplete_bundle"
+      && error.message.includes(missingPatch),
   );
 });
 

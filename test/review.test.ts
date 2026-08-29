@@ -248,6 +248,21 @@ test("createReviewRecord omits absent optional fields so they do not appear as d
   assert.equal(full.verdict, "pass");
 });
 
+test("createReviewRecord ignores dynamic keys that could override required fields", () => {
+  const dynamic = {
+    series: "attacker-series",
+    status: "rejected",
+    unknown: "unsupported",
+    reviewer: "reviewer-1",
+  } as unknown as NonNullable<Parameters<typeof createReviewRecord>[2]>;
+  const document = createReviewRecord("required-series", "pending", dynamic);
+  assert.deepEqual(document, {
+    series: "required-series",
+    status: "pending",
+    reviewer: "reviewer-1",
+  });
+});
+
 test("reviewField returns undefined for an absent field", () => {
   const doc = createReviewRecord("series-z", "pending");
   assert.equal(reviewField(doc, "series"), "series-z");

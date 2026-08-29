@@ -13,7 +13,7 @@
 
 import { readFileSync } from "node:fs";
 
-import { compareByteOrder, decodeCommit, decodeTree, readCommit, readTree } from "./model.ts";
+import { compareByteOrder, decodeCommit, decodeSeries, decodeTree, readCommit, readTree } from "./model.ts";
 import {
   type ObjectId,
   type ObjectType,
@@ -327,6 +327,14 @@ export function importBundleObjects(store: ObjectStore, bytes: Buffer): ObjectIm
     }
     store.write(line.type, line.payload);
     added.push(line.id);
+  }
+  for (const line of lines) {
+    if (line.type !== "series") continue;
+    const series = decodeSeries(store.read(line.id).payload);
+    assertClosurePresent(store, `series ${line.id} base`, series.base);
+    for (const patch of series.patches) {
+      assertClosurePresent(store, `series ${line.id} patch`, patch.commit);
+    }
   }
   return { header, added, skipped };
 }

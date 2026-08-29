@@ -186,6 +186,9 @@ export function rederiveSeries(
  */
 export function exportSeriesBundle(store: ObjectStore, seriesId: ObjectId): Buffer {
   const series = readSeries(store, seriesId);
+  if (series.patches.length === 0) {
+    throw new ObjectStoreError("empty_series", "Cannot export a patch series with no patches.");
+  }
   const tip = series.patches[series.patches.length - 1]!.commit;
   // Collect the full closure: every commit reachable from each patch, plus all
   // trees and leaves. The series object itself is included explicitly.

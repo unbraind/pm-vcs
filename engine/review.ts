@@ -83,10 +83,9 @@ export function createReviewRecord(
   fields?: Partial<Pick<RecordDocument, Exclude<ReviewField, "series" | "status">>>,
 ): RecordDocument {
   const document: Record<string, RecordValue> = { series, status };
-  if (fields !== undefined) {
-    for (const [field, value] of Object.entries(fields)) {
-      if (value !== undefined) document[field] = value as RecordValue;
-    }
+  for (const field of ["reviewer", "approved_at", "reviewers", "comments", "verdict"] as const) {
+    const value = fields?.[field];
+    if (value !== undefined) document[field] = value;
   }
   return document;
 }
