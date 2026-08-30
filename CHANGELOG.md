@@ -38,6 +38,7 @@
 
 ### Fixed
 
+- The release workflow falls back to an unattested npm publish and exits zero ([pm-vcs-4v28](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-4v28.toon))
 - Harden patch-series and review objects after PR 48 review ([pm-vcs-jrej](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-jrej.toon))
 - Regenerate the self-host bundle for PR 49 ([pm-vcs-m6j4](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m6j4.toon))
 - Propagate the docstring gate entry guard fix ([pm-vcs-anfk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-anfk.toon))
