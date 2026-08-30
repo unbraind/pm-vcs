@@ -621,9 +621,9 @@ function literalShellWord(raw: string): string {
   for (let index = 0; index < raw.length; index += 1) {
     const char = raw[index]!;
     if (char === "'") {
-      const close = raw.indexOf("'", index + 1);
-      value += raw.slice(index + 1, close);
-      index = close;
+      const literal = raw.slice(index + 1).split("'", 1)[0]!;
+      value += literal;
+      index += literal.length + 1;
       continue;
     }
     if (char === '"') {
