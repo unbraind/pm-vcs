@@ -1,0 +1,16 @@
+id: pm-vcs-zhlz
+title: "This repository has never produced a static analysis, because it runs no CodeQL workflow"
+description: "This repository ran no CodeQL workflow at all, so it had never produced a static analysis, and a repository nothing scans is indistinguishable from a repository with no findings in any dashboard that counts alerts. Sourcery found this while reviewing the dependabot grouping change on this branch: it pointed out that a codeql-action group is inert here because there are no github/codeql-action references for Dependabot to discover and combine. That was correct, and the grouping alone would have been a no-op. Measured 2026-08-31 across the fleet: nine repositories carrying this branch had no codeql workflow. Adds a weekly plus push and pull-request CodeQL analysis for javascript-typescript with build-mode none, pinned to the same codeql-action revision the group will keep in lockstep, on a cron minute and hour unique to this repository so the fleet does not fire every scan in the same minute."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-31T11:18:08.960Z"
+updated_at: "2026-08-31T11:18:10.354Z"
+closed_at: "2026-08-31T11:18:10.329Z"
+completed_at: "2026-08-31T11:18:10.329Z"
+author: claude-orchestrator
+files[1]{path,scope}:
+  .github/workflows/codeql.yml,project
+close_reason: "Resolved by adding a CodeQL workflow scanning javascript-typescript on push, pull request and a repository-unique weekly cron."
+body: ""

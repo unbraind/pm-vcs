@@ -38,6 +38,8 @@
 
 ### Fixed
 
+- This repository has never produced a static analysis, because it runs no CodeQL workflow ([pm-vcs-zhlz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-zhlz.toon))
+- Group codeql-action bumps into one pull request to end the split-PR deadlock ([pm-vcs-fois](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-fois.toon))
 - The release workflow falls back to an unattested npm publish and exits zero ([pm-vcs-4v28](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-4v28.toon))
 - Harden patch-series and review objects after PR 48 review ([pm-vcs-jrej](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-jrej.toon))
 - Regenerate the self-host bundle for PR 49 ([pm-vcs-m6j4](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m6j4.toon))
