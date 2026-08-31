@@ -69,6 +69,7 @@
 
 ### Other
 
+- Converge the pinned pm-cli on 2026.8.31 and repair history hashes ([pm-vcs-qys6](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-qys6.toon))
 - Port the parser-backed docstring gate into pm-vcs ([pm-vcs-yaks](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-yaks.toon))
 - Cover the Git identity release audit in the exact source gate ([pm-vcs-ol9m](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-ol9m.toon))
 - Upgrade upload-artifact to v7 without breaking the self-host gate ([pm-vcs-qzy7](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-qzy7.toon))
