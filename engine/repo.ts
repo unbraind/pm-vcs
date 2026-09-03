@@ -1631,12 +1631,11 @@ export class Repository {
     if (isAncestor(this.objects, theirs, ours)) {
       return { kind: "up_to_date", head: ours, bases: [theirs], merged: [], conflicts: [], clean: true };
     }
-    if (!this.status().clean) {
-      throw new ObjectStoreError(
-        "dirty_worktree",
-        "The working tree has changes that are not committed. Merging would mix them into the result.",
-      );
-    }
+    this.assertWorktreeAcceptsTree(
+      theirs,
+      "Merging would mix them into the result.",
+      "Merging would overwrite it.",
+    );
     if (isAncestor(this.objects, ours, theirs)) {
       const tree = readCommit(this.objects, theirs).tree;
       // Ref first, working tree second. `advanceHead` compare-and-swaps, so it can
@@ -1956,12 +1955,70 @@ export class Repository {
    * @throws ObjectStoreError When the working tree has uncommitted changes.
    */
   private assertCleanWorktree(): void {
-    if (!this.status().clean) {
+    const status = this.status();
+    if (status.staged.length > 0 || status.unstaged.length > 0) {
       throw new ObjectStoreError(
         "dirty_worktree",
-        "The working tree has changes that are not committed. Commit or undo them before rewriting history.",
+        "The working tree has tracked changes that are not committed. Commit or undo them before rewriting history.",
       );
     }
+  }
+
+  /**
+   * Refuse an operation that materializes `incoming` when the working tree
+   * cannot absorb it.
+   *
+   * Two refusals, for two different reasons, because conflating them reports
+   * the wrong cause. Uncommitted changes to **tracked** files are refused
+   * because the operation would mix work that is not in any tree into its
+   * result. An **untracked** file is refused only when the incoming tree holds
+   * that same path, because materializing it would destroy content no commit
+   * records — and, crucially, only then.
+   *
+   * The distinction matters more than it looks. Treating any untracked file as
+   * a dirty tree makes these operations unusable in a real project: every
+   * working tree carries build output, dependencies, editor state or a scratch
+   * file, none of which any merge could mix into anything. That rule also
+   * reports a cause that does not exist, sending the reader to look for
+   * uncommitted work that is not there. Git draws the line in exactly this
+   * place, and for the same reason.
+   *
+   * @param incoming - Commit whose tree the operation will materialize.
+   * @param mixReason - Sentence explaining what uncommitted tracked changes
+   *   would do, appended to the refusal.
+   * @param overwriteReason - Sentence explaining what materializing would do to
+   *   an untracked path, appended to the refusal.
+   * @throws ObjectStoreError When tracked changes are uncommitted, or when the
+   *   incoming tree names a path the working tree holds untracked.
+   */
+  private assertWorktreeAcceptsTree(
+    incoming: ObjectId,
+    mixReason: string,
+    overwriteReason: string,
+  ): void {
+    const status = this.status();
+    if (status.staged.length > 0 || status.unstaged.length > 0) {
+      throw new ObjectStoreError(
+        "dirty_worktree",
+        `The working tree has tracked changes that are not committed. ${mixReason}`,
+      );
+    }
+    if (status.untracked.length === 0) return;
+    const incomingPaths = flattenTree(this.objects, readCommit(this.objects, incoming).tree);
+    const untracked = new Set(status.untracked);
+    // Report every colliding path rather than the first, so one retry can clear
+    // them all; bound the list so a wholly untracked tree does not produce an
+    // unreadable error.
+    const collisions = [...incomingPaths.keys()].filter((path) => untracked.has(path)).sort();
+    if (collisions.length === 0) return;
+    const shown = collisions.slice(0, 10);
+    const suffix = collisions.length > shown.length ? ` (and ${collisions.length - shown.length} more)` : "";
+    throw new ObjectStoreError(
+      "untracked_would_be_overwritten",
+      `The working tree holds ${collisions.length} untracked path(s) the incoming revision also has, `
+        + `so ${overwriteReason.charAt(0).toLowerCase()}${overwriteReason.slice(1)} `
+        + `Commit, move or remove ${shown.join(", ")}${suffix}.`,
+    );
   }
 
   /**

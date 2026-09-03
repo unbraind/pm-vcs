@@ -694,6 +694,111 @@ test("merge refuses unrelated histories and an unborn or dirty tree", () => {
   );
 });
 
+test("merge runs with untracked files present, and refuses only when one would be overwritten", () => {
+  // Found by driving the engine end to end rather than through its tests. In a
+  // real project `vcs merge` refused with `dirty_worktree` while `vcs status`
+  // reported staged 0, unstaged 0, untracked 682 - every one of them a pm
+  // extension artifact or schema file the repository had never tracked, none of
+  // which any merge could mix into anything.
+  //
+  // The cause was one definition: `clean` folds untracked into cleanliness,
+  // which is right for "is this tree fully captured" and wrong as a merge
+  // precondition. The consequence is that merge is unusable in any real project,
+  // because every working tree carries build output, dependencies or editor
+  // state. Git draws the line where this now does: run with untracked files
+  // present, refuse only when the incoming tree names one of them.
+  const now = new Date(0);
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "base.txt", "base", "base", now);
+  repo.createBranch("other", "HEAD", new Date(1));
+  repo.switchTo("other", new Date(2));
+  commitFile(repo, "theirs.txt", "theirs", "theirs", new Date(3));
+  repo.switchTo("main", new Date(4));
+  commitFile(repo, "ours.txt", "ours", "ours", new Date(5));
+
+  // An untracked file the incoming tree does NOT name must not block anything.
+  writeFileSync(join(root, "build.log"), "untracked build output");
+  const merged = repo.merge("other", { message: "m\n", author }, new Date(6));
+  assert.equal(merged.kind, "merged");
+  assert.equal(merged.clean, true);
+  assert.equal(readFileSync(join(root, "theirs.txt"), "utf8"), "theirs");
+  // The untracked file survives the merge untouched.
+  assert.equal(readFileSync(join(root, "build.log"), "utf8"), "untracked build output");
+});
+
+test("merge refuses when the incoming tree would overwrite an untracked path, and names it", () => {
+  const now = new Date(0);
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "base.txt", "base", "base", now);
+  repo.createBranch("other", "HEAD", new Date(1));
+  repo.switchTo("other", new Date(2));
+  commitFile(repo, "collides.txt", "from the branch", "adds a file", new Date(3));
+  repo.switchTo("main", new Date(4));
+  commitFile(repo, "ours.txt", "ours", "ours", new Date(5));
+
+  // The same path exists untracked here. Materializing the merge would destroy
+  // content no commit records, which is the one case that must still refuse.
+  writeFileSync(join(root, "collides.txt"), "unversioned work");
+  assert.throws(
+    () => repo.merge("other", { message: "m\n", author }, new Date(6)),
+    (error: unknown) =>
+      error instanceof ObjectStoreError
+      && error.code === "untracked_would_be_overwritten"
+      // The message must name the path; a generic dirty-tree report sends the
+      // reader looking for uncommitted work that does not exist.
+      && error.message.includes("collides.txt"),
+  );
+  // The refusal left the unversioned content alone.
+  assert.equal(readFileSync(join(root, "collides.txt"), "utf8"), "unversioned work");
+});
+
+test("the overwrite refusal bounds how many colliding paths it lists", () => {
+  // A wholly untracked checkout of the incoming tree would otherwise produce an
+  // error naming every file in it. Listing them all is unreadable; listing only
+  // the first hides how much has to be cleared, so the count is stated and the
+  // list is capped.
+  const now = new Date(0);
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "base.txt", "base", "base", now);
+  repo.createBranch("other", "HEAD", new Date(1));
+  repo.switchTo("other", new Date(2));
+  for (let index = 0; index < 12; index += 1) {
+    commitFile(repo, `f${index}.txt`, `content ${index}`, `add f${index}`, new Date(3 + index));
+  }
+  repo.switchTo("main", new Date(20));
+  commitFile(repo, "ours.txt", "ours", "ours", new Date(21));
+  for (let index = 0; index < 12; index += 1) {
+    writeFileSync(join(root, `f${index}.txt`), "unversioned");
+  }
+  assert.throws(
+    () => repo.merge("other", { message: "m\n", author }, new Date(22)),
+    (error: unknown) =>
+      error instanceof ObjectStoreError
+      && error.code === "untracked_would_be_overwritten"
+      && error.message.includes("12 untracked path(s)")
+      && error.message.includes("(and 2 more)"),
+  );
+});
+
+test("merge still refuses when a tracked file has uncommitted changes", () => {
+  const now = new Date(0);
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "a.txt", "a", "a", now);
+  repo.createBranch("other", "HEAD", new Date(1));
+  repo.switchTo("other", new Date(2));
+  commitFile(repo, "a.txt", "b", "b", new Date(3));
+  repo.switchTo("main", new Date(4));
+  writeFileSync(join(root, "a.txt"), "uncommitted");
+  assert.throws(
+    () => repo.merge("other", { message: "m\n", author }, new Date(5)),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "dirty_worktree",
+  );
+});
+
 test("merge resolves record fields independently when record paths are configured", () => {
   const config: RepositoryConfig = { recordPaths: ["item.toon"], recordPolicy: { fields: { priority: "scalar", tags: "set" } } };
   const { root } = freshDir();
