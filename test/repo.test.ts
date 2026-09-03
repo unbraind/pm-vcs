@@ -783,6 +783,110 @@ test("the overwrite refusal bounds how many colliding paths it lists", () => {
   );
 });
 
+test("a directory/file collision with an untracked path refuses before the ref advances", () => {
+  // Reported by CodeRabbit as critical, and it was. The first version of the
+  // overwrite guard compared exact paths only, so an untracked `dir/local.txt`
+  // against an incoming file named `dir` slipped through. `advanceHead` runs
+  // before `materializeTree`, so the write then failed with ENOTDIR *after* the
+  // ref had moved - leaving HEAD naming a tree the index and working tree do
+  // not hold, which is the one state this engine promises never to produce.
+  const now = new Date(0);
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "base.txt", "base", "base", now);
+  repo.createBranch("other", "HEAD", new Date(1));
+  repo.switchTo("other", new Date(2));
+  commitFile(repo, "dir", "incoming holds dir as a FILE", "add dir as a file", new Date(3));
+  repo.switchTo("main", new Date(4));
+  commitFile(repo, "ours.txt", "ours", "ours", new Date(5));
+
+  mkdirSync(join(root, "dir"), { recursive: true });
+  writeFileSync(join(root, "dir", "local.txt"), "unversioned work under a directory");
+  const before = repo.refs.resolveHead();
+  assert.throws(
+    () => repo.merge("other", { message: "m\n", author }, new Date(6)),
+    (error: unknown) =>
+      error instanceof ObjectStoreError
+      && error.code === "untracked_would_be_overwritten"
+      && error.message.includes("dir/local.txt"),
+  );
+  // The ref did not move and the unversioned content is intact.
+  assert.equal(repo.refs.resolveHead(), before);
+  assert.equal(readFileSync(join(root, "dir", "local.txt"), "utf8"), "unversioned work under a directory");
+});
+
+test("a file/directory collision in the other direction refuses too", () => {
+  // The mirror of the case above: the working tree holds `dir` as an untracked
+  // FILE while the incoming tree holds `dir/nested.txt`. materializeTree would
+  // fail with EISDIR rather than ENOTDIR, and after the ref advanced.
+  const now = new Date(0);
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "base.txt", "base", "base", now);
+  repo.createBranch("other", "HEAD", new Date(1));
+  repo.switchTo("other", new Date(2));
+  mkdirSync(join(root, "dir"), { recursive: true });
+  commitFile(repo, "dir/nested.txt", "incoming holds dir as a DIRECTORY", "add nested", new Date(3));
+  repo.switchTo("main", new Date(4));
+  commitFile(repo, "ours.txt", "ours", "ours", new Date(5));
+
+  // Switching back removed dir/nested.txt; the empty directory must go too, so
+  // an untracked FILE can take that name.
+  rmSync(join(root, "dir"), { recursive: true, force: true });
+  writeFileSync(join(root, "dir"), "unversioned file where a directory must go");
+  assert.throws(
+    () => repo.merge("other", { message: "m\n", author }, new Date(6)),
+    (error: unknown) =>
+      error instanceof ObjectStoreError
+      && error.code === "untracked_would_be_overwritten"
+      && error.message.includes("dir"),
+  );
+  assert.equal(readFileSync(join(root, "dir"), "utf8"), "unversioned file where a directory must go");
+});
+
+test("cherry-pick and revert refuse an untracked collision before advancing the ref", () => {
+  // Reported by CodeRabbit. Relaxing assertCleanWorktree to ignore untracked
+  // paths made merge usable, and left these two commands - which advance the
+  // ref BEFORE materializing - able to overwrite an untracked file. The guard
+  // has to run between planning and advanceHead, which is why it is a separate
+  // check rather than part of the clean-worktree assertion.
+  const now = new Date(0);
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  commitFile(repo, "base.txt", "base", "base", now);
+  repo.createBranch("other", "HEAD", new Date(1));
+  repo.switchTo("other", new Date(2));
+  const picked = commitFile(repo, "picked.txt", "from the branch", "add picked", new Date(3));
+  repo.switchTo("main", new Date(4));
+  commitFile(repo, "ours.txt", "ours", "ours", new Date(5));
+
+  writeFileSync(join(root, "picked.txt"), "unversioned work");
+  const before = repo.refs.resolveHead();
+  assert.throws(
+    () => repo.cherryPick(picked, author, new Date(6)),
+    (error: unknown) =>
+      error instanceof ObjectStoreError
+      && error.code === "untracked_would_be_overwritten"
+      && error.message.includes("picked.txt"),
+  );
+  assert.equal(repo.refs.resolveHead(), before, "the ref must not have advanced");
+  assert.equal(readFileSync(join(root, "picked.txt"), "utf8"), "unversioned work");
+
+  // revert takes the same path: it plans, then advances, then materializes.
+  const ourCommit = repo.refs.resolveHead();
+  assert.ok(ourCommit !== null);
+  rmSync(join(root, "picked.txt"));
+  writeFileSync(join(root, "ours.txt.untracked"), "x");
+  writeFileSync(join(root, "base.txt.keep"), "y");
+  // Reverting our own commit rewrites ours.txt, so make that path untracked-in-conflict.
+  rmSync(join(root, "ours.txt"));
+  writeFileSync(join(root, "ours.txt"), "unversioned replacement");
+  assert.throws(
+    () => repo.revert(ourCommit, "revert\n", author, new Date(7)),
+    (error: unknown) => error instanceof ObjectStoreError,
+  );
+});
+
 test("merge still refuses when a tracked file has uncommitted changes", () => {
   const now = new Date(0);
   const { root } = freshDir();

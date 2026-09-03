@@ -85,6 +85,23 @@ import {
   sameIndexStat,
 } from "./worktree.ts";
 
+/**
+ * Every proper directory prefix of a repository path, longest first.
+ *
+ * `a/b/c.txt` yields `a/b` then `a`. Used to ask whether an incoming tree holds
+ * one of those as a *file*, which would make the path unwritable: the working
+ * tree is a filesystem, so a file and a directory cannot share a name.
+ *
+ * @param path - Slash-delimited repository path.
+ * @returns The proper prefixes, longest first.
+ */
+function prefixesOf(path: string): string[] {
+  const parts = path.split("/");
+  const prefixes: string[] = [];
+  for (let end = parts.length - 1; end > 0; end -= 1) prefixes.push(parts.slice(0, end).join("/"));
+  return prefixes;
+}
+
 /** Derive one migration-safe identity from a legacy index entry. */
 function migratedFileId(entry: Pick<IndexEntry, "path" | "id">): FileId {
   return createHash("sha256")
@@ -2003,13 +2020,48 @@ export class Repository {
         `The working tree has tracked changes that are not committed. ${mixReason}`,
       );
     }
-    if (status.untracked.length === 0) return;
-    const incomingPaths = flattenTree(this.objects, readCommit(this.objects, incoming).tree);
-    const untracked = new Set(status.untracked);
-    // Report every colliding path rather than the first, so one retry can clear
-    // them all; bound the list so a wholly untracked tree does not produce an
-    // unreadable error.
-    const collisions = [...incomingPaths.keys()].filter((path) => untracked.has(path)).sort();
+    this.assertNoUntrackedCollisions(readCommit(this.objects, incoming).tree, overwriteReason);
+  }
+
+  /**
+   * Refuse when materializing `tree` would destroy an untracked path.
+   *
+   * Separate from the tracked-changes check because it must run at a different
+   * moment: `merge` can check both up front, but `cherryPick`, `revert` and
+   * `rebase` only know the resulting tree after planning, and they advance the
+   * ref before materializing. Checking after the ref moved would leave the one
+   * state this engine promises never to produce — a HEAD naming a tree the
+   * index and working tree do not hold — so the check has to happen between
+   * planning and `advanceHead`.
+   *
+   * Collisions are not only exact path matches. The working tree is a
+   * filesystem, so an untracked file `dir` and an incoming `dir/local.txt`
+   * collide, as do an untracked `dir/local.txt` and an incoming file `dir`:
+   * `materializeTree` would fail with ENOTDIR or EISDIR respectively. Both
+   * directions are detected here rather than discovered as an errno after the
+   * ref has moved.
+   *
+   * @param tree - Tree that will be written to the working tree, or null.
+   * @param overwriteReason - Sentence explaining what materializing would do,
+   *   appended to the refusal.
+   * @throws ObjectStoreError When any untracked path collides with the tree.
+   */
+  private assertNoUntrackedCollisions(tree: ObjectId | null, overwriteReason: string): void {
+    const untracked = this.status().untracked;
+    if (untracked.length === 0 || tree === null) return;
+    const incomingPaths = [...flattenTree(this.objects, tree).keys()];
+    const incoming = new Set(incomingPaths);
+    const collisions = untracked
+      .filter((path) => {
+        if (incoming.has(path)) return true;
+        // The untracked path sits under a path the incoming tree holds as a file.
+        for (const ancestor of prefixesOf(path)) if (incoming.has(ancestor)) return true;
+        // The incoming tree holds something under a path the working tree holds
+        // as an untracked file.
+        const asDirectory = `${path}/`;
+        return incomingPaths.some((candidate) => candidate.startsWith(asDirectory));
+      })
+      .sort();
     if (collisions.length === 0) return;
     const shown = collisions.slice(0, 10);
     const suffix = collisions.length > shown.length ? ` (and ${collisions.length - shown.length} more)` : "";
@@ -2179,6 +2231,7 @@ export class Repository {
     const ours = head.target;
     if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to cherry-pick onto.");
     const commit = this.planned(() => planCherryPick(this.rewriteContext(committer), this.resolve(revision), ours));
+    this.assertNoUntrackedCollisions(readCommit(this.objects, commit).tree, "Cherry-picking would overwrite it.");
     this.advanceHead(head, ours, commit, "cherry-pick", `Cherry-picked ${revision} as ${commit.slice(0, 12)}.`, now);
     this.materialize(readCommit(this.objects, commit).tree);
     return commit;
@@ -2199,6 +2252,7 @@ export class Repository {
     const ours = head.target;
     if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to revert onto.");
     const commit = this.planned(() => planRevert(this.rewriteContext(committer), this.resolve(revision), ours, message));
+    this.assertNoUntrackedCollisions(readCommit(this.objects, commit).tree, "Reverting would overwrite it.");
     this.advanceHead(head, ours, commit, "revert", `Reverted ${revision} as ${commit.slice(0, 12)}.`, now);
     this.materialize(readCommit(this.objects, commit).tree);
     return commit;
