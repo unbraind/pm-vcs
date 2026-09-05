@@ -22,7 +22,7 @@ Lore VCS into pm-vcs. It is not about the kernel's email archive of the same nam
 
 ```bash
 npm install --save-dev pm-vcs     # or: bun add -d pm-vcs
-pm install pm-vcs
+pm package install pm-vcs
 pm vcs init
 ```
 

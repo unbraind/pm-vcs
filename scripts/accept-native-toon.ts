@@ -27,7 +27,7 @@ export function main(arguments_: readonly string[], executable = pmExecutable): 
     if (arguments_.includes("--init-only")) {
       console.log("native TOON acceptance launcher passed");
     } else {
-      runPm(project, ["install", packageRoot, "--project"], executable);
+      runPm(project, ["package", "install", packageRoot, "--project"], executable);
       runPm(project, [
         "vcs", "init",
         "--record-path", ".agents/pm/**/*.toon",
