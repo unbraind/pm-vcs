@@ -4,9 +4,26 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
+import { mergeItemDocuments } from "@unbrained/pm-cli/sdk/merge";
+
 import { VcsError } from "../git.ts";
 import { isTrackerPath, itemIdFromPath, previewMerge, streamResolution } from "../preview.ts";
 import { type Sandbox, createDivergedSandbox, createSandbox } from "./helpers/sandbox.ts";
+
+/**
+ * Priority the item-merge primitive retained for a conflicted scalar.
+ *
+ * @param merged - Result of `mergeItemDocuments`.
+ * @returns The retained priority.
+ */
+function retainedPriority(merged: ReturnType<typeof mergeItemDocuments>): number {
+  const decision = merged.conflict_decisions.find((entry) => entry.field === "priority");
+  assert.ok(decision, "priority must be a reported conflict");
+  if (typeof decision.retained !== "number") {
+    throw new Error(`priority is not a numeric scalar: ${JSON.stringify(decision.retained)}`);
+  }
+  return decision.retained;
+}
 
 const sandboxes: Sandbox[] = [];
 
@@ -75,11 +92,32 @@ test("preview predicts exactly what a real merge produces", () => {
     `git should mark the predicted path conflicted, got: ${conflicted}`,
   );
 
-  // And the field-aware outcome must match the prediction's detail: ours won the
-  // conflicted scalar, and both sides' notes survived the union.
+  // The field-aware outcome must match the git driver's primitive, not a pinned
+  // branch-direction winner. Since 2026.9.4 the driver uses recency
+  // (`latest_document_update`) rather than ours-wins (`preferred_side`). This
+  // fixture's two sides actually disagree under those policies; if they did not,
+  // matching the driver would not prove the override is load-bearing.
+  const driverMerge = mergeItemDocuments(
+    sandbox.git("show", `${report.base}:${item.path}`),
+    sandbox.git("show", `${report.ours}:${item.path}`),
+    sandbox.git("show", `${report.theirs}:${item.path}`),
+    { conflictResolution: "latest_document_update" },
+  );
+  const preferredMerge = mergeItemDocuments(
+    sandbox.git("show", `${report.base}:${item.path}`),
+    sandbox.git("show", `${report.ours}:${item.path}`),
+    sandbox.git("show", `${report.theirs}:${item.path}`),
+  );
+  const driverPriority = retainedPriority(driverMerge);
+  assert.notEqual(
+    driverPriority,
+    retainedPriority(preferredMerge),
+    "this fixture must distinguish recency from ours-wins, or the comparison proves nothing",
+  );
+
   const merged = sandbox.pm("get", itemId, "--json");
   const document = JSON.parse(merged) as { item: { priority: number; notes_count: number } };
-  assert.equal(document.item.priority, 1, "ours wins the conflicted scalar");
+  assert.equal(document.item.priority, driverPriority, "git merge retains the driver's recency pick");
   assert.equal(document.item.notes_count, 2, "both agents' notes survive");
 });
 

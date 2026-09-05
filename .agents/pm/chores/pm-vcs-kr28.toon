@@ -1,0 +1,30 @@
+id: pm-vcs-kr28
+title: Converge the pm toolchain on 2026.9.5 and match git merge recency
+description: "Pin @unbrained/pm-cli 2026.9.5, pm-changelog ^2026.9.2, and pm-ops 2026.9.5. Preview called mergeItemDocuments with the SDK default (ours-wins) while the git driver uses latest_document_update, so a conflicted scalar was predicted as ours=1 while git merge retained the later updated_at. Point preview at the driver's recency policy and assert the real merge against that primitive, not a pinned branch-direction winner. Acceptance scripts and README now use pm package install."
+type: Chore
+status: closed
+priority: 2
+tags: []
+created_at: "2026-09-05T18:24:14.141Z"
+updated_at: "2026-09-05T18:24:44.202Z"
+closed_at: "2026-09-05T18:24:44.186Z"
+completed_at: "2026-09-05T18:24:44.186Z"
+claim_principal: pi-agent
+author: pi-agent
+resolution: "Preview now calls mergeItemDocuments with conflictResolution=latest_document_update, matching runMergeDriver. The behavioral test compares the working-tree priority to that primitive and requires the fixture to distinguish recency from ours-wins."
+expected_result: "release:check and pm health --strict-exit both exit 0 on the pinned toolchain."
+actual_result: "Coverage 758/758 at 100%. Revert-proof of preview predicts exactly what a real merge produces: 1 fail against the ours-wins assertion (3 !== 1), 1 pass after the recency property."
+comments[1]{created_at,author,text}:
+  "2026-09-05T18:24:36.441Z",pi-agent,"Pinned @unbrained/pm-cli 2026.9.5, pm-changelog ^2026.9.2, pm-ops 2026.9.5. The git item merge driver now uses conflictResolution=latest_document_update; preview still called mergeItemDocuments with the SDK default preferred_side, so the suite asserted ours-wins priority 1 while git merge retained the later updated_at (priority 3). Preview now passes the driver override. The test asserts the real merge matches the driver primitive and that this fixture actually distinguishes recency from ours-wins. Revert-proof: old assertion failed 1/0 (3 !== 1), restored test passed 1/0. Acceptance scripts and README use pm package install because install is the deprecated alias."
+files[7]{path,scope}:
+  package-lock.json,project
+  package.json,project
+  preview.ts,project
+  README.md,project
+  scripts/accept-native-toon.ts,project
+  scripts/accept-stat-cache.ts,project
+  test/preview.test.ts,project
+tests[1]{command,path,scope,provenance{author,created_at,source_kind,source_ref},note}:
+  node --test --test-name-pattern preview predicts exactly what a real merge produces test/preview.test.ts,test/preview.test.ts,project,pi-agent,"2026-09-05T18:24:35.914Z",local_mutation,chore/converge-pm-toolchain-2026.9.5,preview predicts exactly what a real merge produces
+close_reason: Pinned the pm toolchain to 2026.9.5/2026.9.2/2026.9.5 and made preview use the git driver's recency policy so the real merge and the prediction agree.
+body: ""

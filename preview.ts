@@ -11,9 +11,12 @@
  * merge drivers' rules, it calls them. `mergeItemDocuments`,
  * `mergeHistoryStreams`, `mergeRelationshipEventStreams` and `mergeJsonDocuments`
  * are the exact functions `pm merge driver` runs, exported from
- * `@unbrained/pm-cli/sdk/merge`. Since both the preview and the real merge reduce
- * to the same call on the same three blobs, the preview cannot drift from the
- * outcome — a rule change in the CLI changes both at once.
+ * `@unbrained/pm-cli/sdk/merge`. Item merges also pass the driver's
+ * `conflictResolution: "latest_document_update"` override: the SDK default is
+ * `preferred_side` (ours wins), which is not what `git merge` does, so omitting
+ * it would make the preview retain ours while the real merge retained the later
+ * `updated_at`. With the same function, the same options and the same three
+ * blobs, a rule change in the CLI changes both at once.
  *
  * Nothing here writes to the working tree or the index. Blobs are read straight
  * out of the object database with `git show`, so a preview is safe to run with
@@ -315,7 +318,12 @@ export function predictPath(
   }
 
   if (artifact === "item") {
-    const merged = mergeItemDocuments(base, ours, theirs);
+    // `runMergeDriver` passes this override; the SDK default is preferred_side.
+    // Without it the preview retains ours while `git merge` retains the later
+    // updated_at, which is the drift this module exists to make impossible.
+    const merged = mergeItemDocuments(base, ours, theirs, {
+      conflictResolution: "latest_document_update",
+    });
     return {
       path,
       item_id: itemId,
