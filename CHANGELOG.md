@@ -68,6 +68,10 @@
 - Initialize pm-vcs at the source workspace outside Git ([pm-vcs-c590](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-c590.toon))
 - A VCS with no ignore mechanism can stage and then overwrite another VCS's control directory ([pm-vcs-aujy](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-aujy.toon))
 
+### Security
+
+- Consume the canonical attestation gate instead of carrying a copy of it ([pm-vcs-5m22](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-5m22.toon))
+
 ### Other
 
 - Converge the pm toolchain on 2026.9.5 and match git merge recency ([pm-vcs-kr28](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-kr28.toon))
