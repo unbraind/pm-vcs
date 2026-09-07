@@ -1,0 +1,16 @@
+id: pm-vcs-5m22
+title: Consume the canonical attestation gate instead of carrying a copy of it
+description: "This repository carried its own vendored copy of the publish-attestation scanner and verifier. That gate decides whether an artefact may reach the registry, so a false pass is the failure that matters, and a copy frozen at any point in the canonical implementation fix sequence still admits every construction closed after that point.\n\nMeasured with the fleet bypass corpus (scripts/attest-corpus/check.sh in the companion), run through this repository own verify() against a throwaway git repository, which is the level CI runs. AFTER is 7 of 38 - the same seven every converged repository reports, because they all run the same published code. Every one of the seven is open in the canonical implementation rather than here, and all are closed by unbraind/pm-ops#100, so they close here with an ordinary version bump.\n\nThat identity is the point, not the count. Before convergence this repository had a posture no pm-ops release could reach; after it, one release moves it along with every sibling.\n\nThe scanner is deleted, the verifier becomes a thin launcher over the published pm-ops/attestation export, and the suite no longer re-tests the shell model - that belongs with the implementation. It asserts instead that this repository is still a CONSUMER: no local scanner, the launcher re-exporting the package own functions BY REFERENCE so a wrapper cannot start a re-fork unnoticed, and the resolved gate still refusing an unattested publish."
+type: Chore
+status: closed
+priority: 1
+tags[2]: attestation,security
+created_at: "2026-09-07T11:08:59.091Z"
+updated_at: "2026-09-07T11:10:24.754Z"
+closed_at: "2026-09-07T11:10:24.743Z"
+completed_at: "2026-09-07T11:10:24.743Z"
+claim_principal: claude
+author: claude
+acceptance_criteria: "No local shell-command-scan.ts remains and the launcher imports pm-ops/attestation; The launcher re-exports the package's own functions by reference, asserted in the suite; The corpus reads the same seven cases as every other converged repository"
+close_reason: "Convergence complete. Corpus 11 wrong -> 7 wrong, the seven being the canonical implementation's own open cases, all closed by unbraind/pm-ops#100. Gates: typecheck pass, docstring pass, attestation gate pass, full suite pass, changelog up to date."
+body: ""
