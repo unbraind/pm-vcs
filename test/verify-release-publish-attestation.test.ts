@@ -97,88 +97,114 @@ test("the launcher runs only as the process entry point", () => {
   assert.equal(runIfMain(["node"], import.meta.url, root), false);
 });
 
-test("the launcher runs the gate and sets a failing exit code on an unattested publish when it is the entry point", () => {
-  // The positive branch: argv[1] and moduleUrl both resolve to the launcher's
-  // own path, so isMainInvocation answers true and runIfMain executes the gate
-  // for real — writing to process.stdout and setting process.exitCode. Against
-  // a fixture with an unattested publish, the gate must set exit code 1 and
-  // return true. A regression that removes the `process.exitCode = code`
-  // assignment from the launcher, or that makes isMainInvocation return false
-  // for a real invocation, leaves the gate silently exiting 0 on an unattested
-  // publish — exactly the failure this test's own comment warns about.
+/**
+ * Structurally different publishes, so output equality means the executed path
+ * agrees with the package across the SHAPE SPACE rather than on one string.
+ *
+ * A single fixture can be satisfied by a local verifier that hardcodes that one
+ * report. These cannot: each exercises a different decision in the auditor -
+ * whether a publish is recognised at all, whether an unresolved program is
+ * audited, whether a foreign publisher counts, and whether an attested publish
+ * is left alone. A local implementation that matched all of them across every
+ * decision would be a reimplementation of the auditor, which is the thing being
+ * ruled out.
+ */
+const ENTRY_PATH_FIXTURES: ReadonlyArray<{ name: string; publish: string; failing: boolean }> = [
+  { name: "a plain unattested publish", publish: "npm publish --access public", failing: true },
+  { name: "an unresolved program that cannot be proven not to publish", publish: "$(echo npm) publish", failing: true },
+  { name: "a foreign publisher", publish: "pnpm publish --access public", failing: true },
+  { name: "an attested publish, which must produce no failure", publish: "npm publish --provenance --access public", failing: false },
+];
+
+test("the entry path produces the package verifier's own report for every publish shape", () => {
+  // The positive branch of the entry-point guard: argv[1] and moduleUrl both
+  // resolve to the launcher's own path, so isMainInvocation answers true and
+  // runIfMain executes the gate for real - writing to process.stdout and
+  // setting process.exitCode.
+  //
+  // Re-export identity pins the IMPORTED binding, not the one runIfMain calls,
+  // so a future edit could divert the executed path alone and leave every other
+  // assertion green. Comparing what the entry path writes against the package's
+  // own report(verify(...)) binds the two.
+  //
+  // What this does NOT establish, stated so it is not over-read: ESM gives no
+  // way to observe the call target from outside the module, so this is agreement
+  // across a shape space, not call-site identity. It is why the space is varied
+  // rather than a single fixture.
   const launcherPath = resolve(root, "scripts/verify-release-publish-attestation.ts");
   const launcherUrl = pathToFileURL(launcherPath).href;
 
-  // A fixture repository with one unattested publish, tracked by git so
-  // verify(root) — which calls `git ls-files` — discovers it.
-  const fixture = mkdtempSync(resolve(tmpdir(), "pm-vcs-attestation-fixture-"));
-  try {
-    mkdirSync(resolve(fixture, ".github/workflows"), { recursive: true });
-    writeFileSync(
-      resolve(fixture, ".github/workflows/release.yml"),
-      ["jobs:", "  release:", "    steps:", "      - run: |", "          npm publish --access public"].join("\n") + "\n",
-    );
-    execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: fixture });
+  const capture = (run: () => void): string => {
+    const written: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+      written.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8"));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      run();
+    } finally {
+      process.stdout.write = original;
+    }
+    return written.join("");
+  };
+
+  for (const shape of ENTRY_PATH_FIXTURES) {
     // Staged is enough: the gate discovers files through `git ls-files`, which
     // reads the index. Committing would also make the fixture depend on ambient
     // git identity configuration for no gain.
-    execFileSync("git", ["add", ".github/workflows/release.yml"], { cwd: fixture });
-
-    // What the ENTRY PATH actually produces. Re-export identity pins the
-    // imported binding; it does not pin the one runIfMain calls, so a future
-    // edit could divert the executed path alone and keep every other assertion
-    // green. Capturing stdout and comparing it to the package's own
-    // report(verify(...)) binds the two: a local reimplementation would have to
-    // reproduce the canonical auditor's exact failure wording to pass, and
-    // reproducing it IS being it.
-    const capture = (run: () => void): string => {
-      const written: string[] = [];
-      const original = process.stdout.write.bind(process.stdout);
-      process.stdout.write = ((chunk: string | Uint8Array): boolean => {
-        written.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8"));
-        return true;
-      }) as typeof process.stdout.write;
-      try {
-        run();
-      } finally {
-        process.stdout.write = original;
-      }
-      return written.join("");
-    };
-
-    const savedExitCode = process.exitCode;
+    const fixture = mkdtempSync(resolve(tmpdir(), "pm-vcs-attestation-fixture-"));
     try {
-      let ran = false;
-      const launcherOutput = capture(() => {
-        ran = runIfMain(["node", launcherPath], launcherUrl, fixture);
-      });
-      assert.equal(ran, true, "the launcher must run the gate when it is the entry point");
-      assert.equal(process.exitCode, 1, "an unattested publish must set a failing exit code");
+      mkdirSync(resolve(fixture, ".github/workflows"), { recursive: true });
+      writeFileSync(
+        resolve(fixture, ".github/workflows/release.yml"),
+        ["jobs:", "  release:", "    steps:", "      - run: |", `          ${shape.publish}`].join("\n") + "\n",
+      );
+      execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: fixture });
+      execFileSync("git", ["add", ".github/workflows/release.yml"], { cwd: fixture });
 
-      process.exitCode = savedExitCode;
-      const packageOutput = capture(() => {
-        report(verify(fixture), (line) => process.stdout.write(`${line}\n`), (code) => { process.exitCode = code; });
-      });
-      assert.equal(
-        launcherOutput,
-        packageOutput,
-        "the entry path must produce the package verifier's own report, not a local equivalent",
-      );
-      // Name the file. `report` sets exit code 1 for ANY failure, so asserting
-      // only that one occurred would let an unrelated failure — a fixture that
-      // tracked nothing, say — stand in for the unattested publish this case
-      // exists to catch, and the byte comparison would still hold because both
-      // sides made the same mistake.
-      assert.match(
-        launcherOutput,
-        /FAIL - \.github\/workflows\/release\.yml/u,
-        "the failure must name the fixture's own workflow, not merely be some failure",
-      );
+      const savedExitCode = process.exitCode;
+      try {
+        let ran = false;
+        const launcherOutput = capture(() => {
+          ran = runIfMain(["node", launcherPath], launcherUrl, fixture);
+        });
+        assert.equal(ran, true, `${shape.name}: the launcher must run the gate when it is the entry point`);
+        assert.equal(
+          process.exitCode,
+          shape.failing ? 1 : savedExitCode,
+          `${shape.name}: the exit code must follow the verdict`,
+        );
+
+        process.exitCode = savedExitCode;
+        const packageOutput = capture(() => {
+          report(verify(fixture), (line) => process.stdout.write(`${line}\n`), (code) => { process.exitCode = code; });
+        });
+        assert.equal(
+          launcherOutput,
+          packageOutput,
+          `${shape.name}: the entry path must produce the package verifier's own report, not a local equivalent`,
+        );
+        if (shape.failing) {
+          // Name the file. `report` sets exit code 1 for ANY failure, so
+          // asserting only that one occurred would let an unrelated failure - a
+          // fixture that tracked nothing, say - stand in for the publish this
+          // case exists to catch, and the byte comparison would still hold
+          // because both sides made the same mistake.
+          assert.match(
+            launcherOutput,
+            /FAIL - \.github\/workflows\/release\.yml/u,
+            `${shape.name}: the failure must name the fixture's own workflow`,
+          );
+        } else {
+          assert.doesNotMatch(launcherOutput, /FAIL - /u, `${shape.name}: an attested publish must produce no failure`);
+        }
+      } finally {
+        process.exitCode = savedExitCode;
+      }
     } finally {
-      process.exitCode = savedExitCode;
+      rmSync(fixture, { recursive: true, force: true });
     }
-  } finally {
-    rmSync(fixture, { recursive: true, force: true });
   }
 });
 
