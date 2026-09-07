@@ -119,18 +119,52 @@ test("the launcher runs the gate and sets a failing exit code on an unattested p
       ["jobs:", "  release:", "    steps:", "      - run: |", "          npm publish --access public"].join("\n") + "\n",
     );
     execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: fixture });
+    // Staged is enough: the gate discovers files through `git ls-files`, which
+    // reads the index. Committing would also make the fixture depend on ambient
+    // git identity configuration for no gain.
     execFileSync("git", ["add", ".github/workflows/release.yml"], { cwd: fixture });
-    execFileSync(
-      "git",
-      ["-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-q", "-m", "fixture"],
-      { cwd: fixture },
-    );
+
+    // What the ENTRY PATH actually produces. Re-export identity pins the
+    // imported binding; it does not pin the one runIfMain calls, so a future
+    // edit could divert the executed path alone and keep every other assertion
+    // green. Capturing stdout and comparing it to the package's own
+    // report(verify(...)) binds the two: a local reimplementation would have to
+    // reproduce the canonical auditor's exact failure wording to pass, and
+    // reproducing it IS being it.
+    const capture = (run: () => void): string => {
+      const written: string[] = [];
+      const original = process.stdout.write.bind(process.stdout);
+      process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+        written.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8"));
+        return true;
+      }) as typeof process.stdout.write;
+      try {
+        run();
+      } finally {
+        process.stdout.write = original;
+      }
+      return written.join("");
+    };
 
     const savedExitCode = process.exitCode;
     try {
-      const ran = runIfMain(["node", launcherPath], launcherUrl, fixture);
+      let ran = false;
+      const launcherOutput = capture(() => {
+        ran = runIfMain(["node", launcherPath], launcherUrl, fixture);
+      });
       assert.equal(ran, true, "the launcher must run the gate when it is the entry point");
       assert.equal(process.exitCode, 1, "an unattested publish must set a failing exit code");
+
+      process.exitCode = savedExitCode;
+      const packageOutput = capture(() => {
+        report(verify(fixture), (line) => process.stdout.write(`${line}\n`), (code) => { process.exitCode = code; });
+      });
+      assert.equal(
+        launcherOutput,
+        packageOutput,
+        "the entry path must produce the package verifier's own report, not a local equivalent",
+      );
+      assert.match(launcherOutput, /FAIL - /u, "the fixture must actually produce a failure to compare");
     } finally {
       process.exitCode = savedExitCode;
     }
@@ -152,6 +186,11 @@ test("the launcher runs the gate and sets a failing exit code on an unattested p
  */
 test("only a shebang naming a shell interpreter pulls this file into the scan", () => {
   const body = readFileSync(resolve(root, "scripts/verify-release-publish-attestation.ts"), "utf8");
+  // The whole test turns on this file's prose naming the command it guards: that
+  // is what the auditor reads as an unattested publish once the body is treated
+  // as shell. If the prose stopped mentioning it, every case below would report
+  // "not shell input" and the test would pass for the wrong reason.
+  assert.match(body, /npm publish/u, "this file must mention the command it guards for the scan to have anything to find");
   const scannedAsShell = (shebang: string): boolean => {
     const dir = mkdtempSync(resolve(tmpdir(), "shebang-"));
     try {
@@ -169,6 +208,8 @@ test("only a shebang naming a shell interpreter pulls this file into the scan", 
   };
   assert.equal(scannedAsShell("#!/bin/bash\n"), true, "a bash shebang makes this file shell input");
   assert.equal(scannedAsShell("#!/usr/bin/env sh\n"), true, "an env sh shebang makes this file shell input");
+  assert.equal(scannedAsShell("#!/bin/sh\n"), true, "a plain sh shebang makes this file shell input");
   assert.equal(scannedAsShell("#!/usr/bin/env node\n"), false, "a node shebang does not make this file shell input");
+  assert.equal(scannedAsShell("#!/usr/bin/env python3\n"), false, "a non-shell interpreter does not make this file shell input");
   assert.equal(scannedAsShell(""), false, "with no shebang the file is not shell input, which is why it has none");
 });

@@ -6,11 +6,13 @@ status: closed
 priority: 1
 tags[2]: attestation,security
 created_at: "2026-09-07T11:08:59.091Z"
-updated_at: "2026-09-07T11:10:24.754Z"
+updated_at: "2026-09-07T12:02:09.691Z"
 closed_at: "2026-09-07T11:10:24.743Z"
 completed_at: "2026-09-07T11:10:24.743Z"
 claim_principal: claude
 author: claude
 acceptance_criteria: "No local shell-command-scan.ts remains and the launcher imports pm-ops/attestation; The launcher re-exports the package's own functions by reference, asserted in the suite; The corpus reads the same seven cases as every other converged repository"
+comments[1]{created_at,author,text}:
+  "2026-09-07T12:02:09.691Z",claude,"Review round: three findings, all real, all in the same class - the guard asserted less than its comment claimed.\n\nEvery reviewer on this wave (Greptile P2 on seven repositories, CodeRabbit Major on two, Sourcery on one) independently raised the same gap: re-export identity pins the IMPORTED binding, not the one runIfMain actually calls. A future edit could divert only the executed path and leave every other assertion green. The entry-point test now captures what runIfMain writes and asserts it equals the package's own report(verify(fixture)) byte for byte - a local reimplementation would have to reproduce the canonical auditor's exact failure wording to pass, and reproducing it is being it. Proven not vacuous: diverting only the executed path to a local verify makes the test fail while re-export identity and the exit code still pass.\n\nGreptile also called the shebang matrix too narrow. Widened to six states: #!/bin/bash, #!/bin/sh and #!/usr/bin/env sh must make the file shell input; #!/usr/bin/env node, #!/usr/bin/env python3 and no shebang must not.\n\nCodeRabbit found the shebang test could pass for the wrong reason: it depends on this file's prose naming the command it guards, and if the prose stopped mentioning it every case would read 'not shell input' and the test would go green having proved nothing. The precondition is now asserted.\n\nAlso on CodeRabbit's point, the fixture no longer commits: the gate discovers files through git ls-files, which reads the index, so staging is sufficient and committing made the fixture depend on ambient git identity configuration for no gain."
 close_reason: "Convergence complete. Corpus 11 wrong -> 7 wrong, the seven being the canonical implementation's own open cases, all closed by unbraind/pm-ops#100. Gates: typecheck pass, docstring pass, attestation gate pass, full suite pass, changelog up to date."
 body: ""
