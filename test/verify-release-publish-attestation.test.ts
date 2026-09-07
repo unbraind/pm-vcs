@@ -164,7 +164,16 @@ test("the launcher runs the gate and sets a failing exit code on an unattested p
         packageOutput,
         "the entry path must produce the package verifier's own report, not a local equivalent",
       );
-      assert.match(launcherOutput, /FAIL - /u, "the fixture must actually produce a failure to compare");
+      // Name the file. `report` sets exit code 1 for ANY failure, so asserting
+      // only that one occurred would let an unrelated failure — a fixture that
+      // tracked nothing, say — stand in for the unattested publish this case
+      // exists to catch, and the byte comparison would still hold because both
+      // sides made the same mistake.
+      assert.match(
+        launcherOutput,
+        /FAIL - \.github\/workflows\/release\.yml/u,
+        "the failure must name the fixture's own workflow, not merely be some failure",
+      );
     } finally {
       process.exitCode = savedExitCode;
     }
