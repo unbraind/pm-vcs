@@ -21,7 +21,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { auditPublishAttestation, report, verify } from "pm-ops/attestation";
@@ -98,6 +98,32 @@ test("the launcher runs only as the process entry point", () => {
 });
 
 /**
+ * A throwaway git repository containing one file, for the gate to discover.
+ *
+ * Staged rather than committed: the gate finds files through `git ls-files`,
+ * which reads the index, so a commit would add nothing except a dependency on
+ * ambient git identity configuration.
+ *
+ * @param prefix - Temp directory name prefix, for readable failures.
+ * @param file - Repository-relative path to write.
+ * @param contents - What to write there.
+ * @param use - Receives the repository root; the tree is removed afterwards.
+ * @returns Whatever `use` returned.
+ */
+function withTrackedFixture<T>(prefix: string, file: string, contents: string, use: (root: string) => T): T {
+  const fixture = mkdtempSync(resolve(tmpdir(), prefix));
+  try {
+    mkdirSync(resolve(fixture, dirname(file)), { recursive: true });
+    writeFileSync(resolve(fixture, file), contents);
+    execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: fixture });
+    execFileSync("git", ["add", file], { cwd: fixture });
+    return use(fixture);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+}
+
+/**
  * Structurally different publishes, so output equality means the executed path
  * agrees with the package across the SHAPE SPACE rather than on one string.
  *
@@ -153,16 +179,11 @@ test("the entry path produces the package verifier's own report for every publis
     // Staged is enough: the gate discovers files through `git ls-files`, which
     // reads the index. Committing would also make the fixture depend on ambient
     // git identity configuration for no gain.
-    const fixture = mkdtempSync(resolve(tmpdir(), "pm-vcs-attestation-fixture-"));
-    try {
-      mkdirSync(resolve(fixture, ".github/workflows"), { recursive: true });
-      writeFileSync(
-        resolve(fixture, ".github/workflows/release.yml"),
-        ["jobs:", "  release:", "    steps:", "      - run: |", `          ${shape.publish}`].join("\n") + "\n",
-      );
-      execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: fixture });
-      execFileSync("git", ["add", ".github/workflows/release.yml"], { cwd: fixture });
-
+    withTrackedFixture(
+      "pm-vcs-attestation-fixture-",
+      ".github/workflows/release.yml",
+      ["jobs:", "  release:", "    steps:", "      - run: |", `          ${shape.publish}`].join("\n") + "\n",
+      (fixture) => {
       const savedExitCode = process.exitCode;
       try {
         let ran = false;
@@ -202,9 +223,8 @@ test("the entry path produces the package verifier's own report for every publis
       } finally {
         process.exitCode = savedExitCode;
       }
-    } finally {
-      rmSync(fixture, { recursive: true, force: true });
-    }
+      },
+    );
   }
 });
 
@@ -226,21 +246,12 @@ test("only a shebang naming a shell interpreter pulls this file into the scan", 
   // as shell. If the prose stopped mentioning it, every case below would report
   // "not shell input" and the test would pass for the wrong reason.
   assert.match(body, /npm publish/u, "this file must mention the command it guards for the scan to have anything to find");
-  const scannedAsShell = (shebang: string): boolean => {
-    const dir = mkdtempSync(resolve(tmpdir(), "shebang-"));
-    try {
-      execFileSync("git", ["init", "-q"], { cwd: dir });
-      mkdirSync(resolve(dir, "scripts"), { recursive: true });
-      writeFileSync(resolve(dir, "scripts/verify-release-publish-attestation.ts"), shebang + body);
-      execFileSync("git", ["add", "-A"], { cwd: dir });
+  const scannedAsShell = (shebang: string): boolean =>
+    withTrackedFixture("shebang-", "scripts/verify-release-publish-attestation.ts", shebang + body, (dir) =>
       // The file is reported by name only when the auditor read its body as
       // shell; otherwise the only failure is that the throwaway repository
       // contains no publish at all.
-      return verify(dir).failures.some((failure) => failure.includes("scripts/verify-release-publish-attestation.ts"));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  };
+      verify(dir).failures.some((failure) => failure.includes("scripts/verify-release-publish-attestation.ts")));
   assert.equal(scannedAsShell("#!/bin/bash\n"), true, "a bash shebang makes this file shell input");
   assert.equal(scannedAsShell("#!/usr/bin/env sh\n"), true, "an env sh shebang makes this file shell input");
   assert.equal(scannedAsShell("#!/bin/sh\n"), true, "a plain sh shebang makes this file shell input");
