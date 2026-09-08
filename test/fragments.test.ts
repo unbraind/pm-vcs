@@ -21,6 +21,7 @@ import {
   type FragmentManifest,
   manifestId,
   readManifest,
+  writeManifest,
 } from "../engine/model.ts";
 import {
   DEFAULT_FRAGMENT_SIZE,
@@ -405,7 +406,7 @@ test("writing a file larger than any single buffer never holds more than a fragm
   // The source is 512x the fragment size (2 MiB), far larger than any single
   // buffer a streaming implementation allocates.
   const fragmentSize = 4096;
-  const fileMultiplier = 64;
+  const fileMultiplier = 128;
   const totalSize = fragmentSize * fileMultiplier;
   const sourcePath = join(root, "large.bin");
   // Write the source using streaming I/O so the test itself does not hold the
@@ -430,6 +431,12 @@ test("writing a file larger than any single buffer never holds more than a fragm
   // whole file into a Buffer would still be holding it at every fragment write,
   // so the in-flight sample would exceed totalSize; staying under totalSize / 4
   // proves only a fragment is resident at a time.
+  //
+  // The sample is absolute `arrayBuffers` minus a baseline, so it also carries
+  // unrelated allocation churn from the run — measured at ~64 KiB here, mostly
+  // Node's 8 KiB Buffer pool. The file is sized so that quarter sits well clear
+  // of that floor: at 64 fragments the bound landed exactly on the observed
+  // value and the test failed on `<`.
   const bound = totalSize / 4;
   assert.ok(
     observed < bound,
@@ -443,7 +450,7 @@ test("writing a file larger than any single buffer never holds more than a fragm
 test("reading a file larger than any single buffer to disk never holds more than a fragment in memory", () => {
   const { store, root } = freshStore();
   const fragmentSize = 4096;
-  const fileMultiplier = 64;
+  const fileMultiplier = 128;
   const totalSize = fragmentSize * fileMultiplier;
   const sourcePath = join(root, "large.bin");
   const fd = openSync(sourcePath, "w");
@@ -744,3 +751,35 @@ test("decodeManifest rejects a frag line missing the length", () => {
     (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object",
   );
 });
+// A manifest records each fragment's id AND its length, stored separately, so a
+// manifest naming a real blob of a different size is representable. Every read
+// path derives arithmetic from the recorded length, so an unchecked mismatch
+// corrupts silently: concat pads or truncates to totalLength, the streaming
+// write emits the wrong byte count, and a range slice reads from the wrong
+// offset. These assert the typed refusal instead, for a blob that is shorter
+// than declared and one that is longer.
+for (const [label, storedSize, declaredSize] of [
+  ["shorter than declared", 8, 16],
+  ["longer than declared", 24, 16],
+] as const) {
+  test(`a fragment blob ${label} is refused by every read path`, () => {
+    const { store, root } = freshStore();
+    const blobId = store.write("blob", Buffer.alloc(storedSize, 0xab));
+    const id = writeManifest(store, {
+      totalLength: declaredSize,
+      fragments: [{ id: blobId, length: declaredSize }],
+    });
+
+    const expected = (error: unknown): boolean => {
+      assert.ok(error instanceof ObjectStoreError);
+      assert.equal(error.code, "fragment_length_mismatch");
+      assert.match(error.message, new RegExp(`${storedSize} byte\\(s\\)`, "u"));
+      assert.match(error.message, new RegExp(`declares ${declaredSize}`, "u"));
+      return true;
+    };
+
+    assert.throws(() => readFragmented(store, id), expected);
+    assert.throws(() => readFragmentedToFile(store, id, join(root, "out.bin")), expected);
+    assert.throws(() => readFragmentRange(store, id, 0, declaredSize), expected);
+  });
+}

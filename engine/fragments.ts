@@ -169,6 +169,35 @@ export function writeFragmentedFile(
 }
 
 /**
+ * Read one fragment's blob, proving its length matches what the manifest claims.
+ *
+ * A manifest records each fragment's id **and** its length, and the two are
+ * stored separately. A manifest that names a real blob of a different size is
+ * therefore representable, and every read path derives its arithmetic from the
+ * recorded length: `readFragmented` concatenates to `totalLength`,
+ * `readFragmentedToFile` writes whatever bytes it gets, and `readFragmentRange`
+ * slices with `Math.min(fragment.length, ...)`. Left unchecked, a mismatch
+ * silently truncates, zero-fills, or returns bytes from the wrong offset —
+ * corruption that reads as success. Checking here makes it a typed error at the
+ * one place every path already goes through.
+ *
+ * @param store - Source object store.
+ * @param fragment - The manifest entry naming the blob and its expected length.
+ * @returns The blob's bytes.
+ * @throws ObjectStoreError When the stored blob's length differs from the manifest's.
+ */
+function readFragmentBlob(store: ObjectStore, fragment: FragmentEntry): Buffer {
+  const data = store.readTyped(fragment.id, "blob");
+  if (data.length !== fragment.length) {
+    throw new ObjectStoreError(
+      "fragment_length_mismatch",
+      `fragment ${fragment.id} stores ${data.length} byte(s) but its manifest entry declares ${fragment.length}`,
+    );
+  }
+  return data;
+}
+
+/**
  * Reads the full content of a fragmented file into a single buffer.
  *
  * This is the convenience path for small files. The streaming path for large
@@ -184,7 +213,7 @@ export function readFragmented(store: ObjectStore, id: ObjectId): Buffer {
   const manifest = readManifest(store, id);
   const parts: Buffer[] = [];
   for (const fragment of manifest.fragments) {
-    parts.push(store.readTyped(fragment.id, "blob"));
+    parts.push(readFragmentBlob(store, fragment));
   }
   return Buffer.concat(parts, manifest.totalLength);
 }
@@ -213,7 +242,7 @@ export function readFragmentedToFile(
   const fd = openSync(destinationPath, "wx");
   try {
     for (const fragment of manifest.fragments) {
-      const data = store.readTyped(fragment.id, "blob");
+      const data = readFragmentBlob(store, fragment);
       writeSync(fd, data);
     }
     fsyncSync(fd);
@@ -298,7 +327,7 @@ export function readFragmentRange(
   const overlapping = fragmentsInRange(manifest, start, end);
   const parts: Buffer[] = [];
   for (const { fragment, offset } of overlapping) {
-    const data = store.readTyped(fragment.id, "blob");
+    const data = readFragmentBlob(store, fragment);
     const sliceStart = Math.max(0, start - offset);
     const sliceEnd = Math.min(fragment.length, end - offset);
     parts.push(data.subarray(sliceStart, sliceEnd));
