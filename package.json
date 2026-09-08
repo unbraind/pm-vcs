@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsc",
     "build:test": "tsc -p tsconfig.test.json",
-    "test": "npm run build && npm run build:test && node --test test/*.test.ts",
+    "test": "npm run build && npm run build:test && node --expose-gc --test test/*.test.ts",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm run duplicates",
@@ -41,7 +41,7 @@
     "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date-from-version --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999 --github-step-summary",
     "prepare": "node scripts/prepare-merge-driver.ts",
     "merge:install": "pm merge install",
-    "coverage": "npm run build && npm run build:test && c8 --all --100 --reporter=text --reporter=lcov --include='*.ts' --include='engine/**/*.ts' --include='scripts/**/*.ts' --exclude='test/**' node --test --test-concurrency=1 test/*.test.ts",
+    "coverage": "npm run build && npm run build:test && c8 --all --100 --reporter=text --reporter=lcov --include='*.ts' --include='engine/**/*.ts' --include='scripts/**/*.ts' --exclude='test/**' node --expose-gc --test --test-concurrency=1 test/*.test.ts",
     "verify:release-changelog-date": "node scripts/verify-release-changelog-date.ts",
     "verify:release-publish-attestation": "node scripts/verify-release-publish-attestation.ts"
   },

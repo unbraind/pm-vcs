@@ -809,3 +809,204 @@ export function readSeries(store: ObjectStore, id: ObjectId): PatchSeries {
 export function seriesId(series: PatchSeries): ObjectId {
   return hashObject("series", encodeSeries(series));
 }
+
+// Fragment manifest
+// ─────────────────────────────────────────────────────────────────────────
+//
+// A fragment manifest is the object that lets a file be larger than memory.
+// Instead of storing one whole file as one blob, the content is split into
+// content-addressed fragments (each stored as an ordinary blob) and a manifest
+// records their ids and lengths in order. A reader asks for a byte range and
+// the manifest tells it exactly which fragments cover that range — so only
+// those fragments are read from disk, and the rest of the file never enters
+// memory.
+//
+// The manifest is itself content-addressed and canonical, so two agents that
+// fragment the same content produce the same manifest id. Deduplication is
+// automatic: fragments are ordinary blobs in the existing store, so writing
+// the same content twice stores each fragment exactly once.
+
+/** Format marker written as a manifest object's first line. */
+export const MANIFEST_FORMAT = "pm-vcs-manifest 1";
+
+/** One fragment in a manifest: the blob id of a content chunk and its byte length. */
+export interface FragmentEntry {
+  /** Object id of the blob holding this fragment's bytes. */
+  readonly id: ObjectId;
+  /** Byte length of this fragment. */
+  readonly length: number;
+}
+
+/** A fragment manifest: the total content length and the ordered fragments. */
+export interface FragmentManifest {
+  /** Total byte length of the logical content the fragments reconstruct. */
+  readonly totalLength: number;
+  /** Ordered fragments; concatenating their blobs yields the original content. */
+  readonly fragments: readonly FragmentEntry[];
+}
+
+/** Result of writing fragmented content: the manifest id and the manifest itself. */
+export interface FragmentWriteResult {
+  /** Object id of the stored manifest. */
+  readonly manifestId: ObjectId;
+  /** The manifest that was written. */
+  readonly manifest: FragmentManifest;
+}
+
+/**
+ * Encodes a fragment manifest as canonical bytes.
+ *
+ * The encoding is line-oriented and deterministic: the format marker, the
+ * total length, then one `frag` line per fragment in order. Given the same
+ * fragments and total length, the same bytes result — which is what makes the
+ * manifest id a function of the content alone, and what lets two agents that
+ * fragment the same file independently converge on one manifest id.
+ *
+ * @param manifest - The manifest to encode.
+ * @returns Canonical manifest bytes.
+ * @throws ObjectStoreError When the total length is negative, a fragment id is
+ *   malformed, a fragment length is not a positive integer, or the fragment
+ *   lengths do not sum to the total — each of which would produce a manifest
+ *   that cannot be decoded back to this value.
+ */
+export function encodeManifest(manifest: FragmentManifest): Buffer {
+  if (!Number.isInteger(manifest.totalLength) || manifest.totalLength < 0) {
+    throw new ObjectStoreError(
+      "invalid_manifest",
+      `Manifest total length ${manifest.totalLength} is not a non-negative integer.`,
+    );
+  }
+  let sum = 0;
+  for (const fragment of manifest.fragments) {
+    if (!isObjectId(fragment.id)) {
+      throw new ObjectStoreError("invalid_object_id", `Manifest fragment id "${fragment.id}" is not a valid object id.`);
+    }
+    if (!Number.isInteger(fragment.length) || fragment.length <= 0) {
+      throw new ObjectStoreError(
+        "invalid_manifest",
+        `Manifest fragment length ${fragment.length} is not a positive integer.`,
+      );
+    }
+    sum += fragment.length;
+  }
+  if (sum !== manifest.totalLength) {
+    throw new ObjectStoreError(
+      "invalid_manifest",
+      `Manifest fragment lengths sum to ${sum} but the total length is ${manifest.totalLength}.`,
+    );
+  }
+  const lines = [
+    MANIFEST_FORMAT,
+    `total ${manifest.totalLength}`,
+    ...manifest.fragments.map((fragment) => `frag ${fragment.id} ${fragment.length}`),
+  ];
+  return Buffer.from(`${lines.join("\n")}\n`, "utf8");
+}
+
+/**
+ * Decodes manifest bytes back into a {@link FragmentManifest}.
+ *
+ * @param payload - Canonical manifest bytes.
+ * @returns The parsed manifest.
+ * @throws ObjectStoreError When the format marker is wrong, the total header is
+ *   absent or repeated, a fragment line is malformed, an id is not an object id,
+ *   a length is not a positive integer, or the fragment lengths do not sum to
+ *   the total.
+ */
+export function decodeManifest(payload: Buffer): FragmentManifest {
+  const text = payload.toString("utf8");
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "" && lines.length > 1) lines.pop();
+  if (lines[0] !== MANIFEST_FORMAT) {
+    throw new ObjectStoreError("malformed_object", `Manifest does not start with the ${MANIFEST_FORMAT} marker.`);
+  }
+  let totalLength: number | undefined;
+  const fragments: FragmentEntry[] = [];
+  let cursor = 1;
+  while (cursor < lines.length) {
+    const line = lines[cursor]!;
+    if (line.length === 0) {
+      throw new ObjectStoreError("malformed_object", "Manifest carries an empty line.");
+    }
+    const space = line.indexOf(" ");
+    if (space === -1) {
+      throw new ObjectStoreError("malformed_object", `Manifest line "${line}" has no keyword.`);
+    }
+    const keyword = line.slice(0, space);
+    const value = line.slice(space + 1);
+    if (keyword === "total") {
+      if (totalLength !== undefined) {
+        throw new ObjectStoreError("malformed_object", "Manifest carries more than one total header.");
+      }
+      if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+        throw new ObjectStoreError("malformed_object", `Manifest total "${value}" is not a non-negative integer.`);
+      }
+      totalLength = Number(value);
+    } else if (keyword === "frag") {
+      const parts = value.split(" ");
+      if (parts.length !== 2) {
+        throw new ObjectStoreError("malformed_object", `Manifest fragment line "${line}" does not have id and length.`);
+      }
+      const [id, lengthStr] = parts;
+      if (id === undefined || !isObjectId(id)) {
+        throw new ObjectStoreError("malformed_object", `Manifest fragment id "${id}" is not a valid object id.`);
+      }
+      if (lengthStr === undefined || !/^(0|[1-9][0-9]*)$/.test(lengthStr)) {
+        throw new ObjectStoreError("malformed_object", `Manifest fragment length "${lengthStr}" is not a non-negative integer.`);
+      }
+      const length = Number(lengthStr);
+      if (length <= 0) {
+        throw new ObjectStoreError("malformed_object", `Manifest fragment length ${length} is not a positive integer.`);
+      }
+      fragments.push({ id, length });
+    } else {
+      throw new ObjectStoreError("malformed_object", `Manifest carries unknown header "${keyword}".`);
+    }
+    cursor += 1;
+  }
+  if (totalLength === undefined) {
+    throw new ObjectStoreError("malformed_object", "Manifest is missing its total header.");
+  }
+  let sum = 0;
+  for (const fragment of fragments) sum += fragment.length;
+  if (sum !== totalLength) {
+    throw new ObjectStoreError(
+      "malformed_object",
+      `Manifest fragment lengths sum to ${sum} but the total length is ${totalLength}.`,
+    );
+  }
+  return { totalLength, fragments };
+}
+
+/**
+ * Writes a fragment manifest and returns its id.
+ *
+ * @param store - Destination object store.
+ * @param manifest - The manifest to write.
+ * @returns The stored manifest's id.
+ */
+export function writeManifest(store: ObjectStore, manifest: FragmentManifest): ObjectId {
+  return store.write("manifest", encodeManifest(manifest));
+}
+
+/**
+ * Reads a fragment manifest.
+ *
+ * @param store - Source object store.
+ * @param id - The manifest's id.
+ * @returns The parsed manifest.
+ * @throws ObjectStoreError When the object is absent, corrupt, or not a manifest.
+ */
+export function readManifest(store: ObjectStore, id: ObjectId): FragmentManifest {
+  return decodeManifest(store.readTyped(id, "manifest"));
+}
+
+/**
+ * Computes the id a fragment manifest would have without writing it.
+ *
+ * @param manifest - The manifest.
+ * @returns The id the manifest would be stored under.
+ */
+export function manifestId(manifest: FragmentManifest): ObjectId {
+  return hashObject("manifest", encodeManifest(manifest));
+}

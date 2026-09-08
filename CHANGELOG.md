@@ -4,6 +4,7 @@
 
 ### Added
 
+- Stream arbitrary large files through fragment and range storage ([pm-vcs-vmmx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-vmmx.toon))
 - Review state as a record that merges per field ([pm-vcs-dzz3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-dzz3.toon))
 - Patch series as an object kind ([pm-vcs-sph3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-sph3.toon))
 - Resumable object transfer and peer capability negotiation, for the phase that has a wire ([pm-vcs-i4au](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-i4au.toon))

@@ -19,12 +19,13 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
 
 /** The kinds of object the store can hold. */
-export const OBJECT_TYPES = ["blob", "tree", "commit", "record", "series"] as const;
+export const OBJECT_TYPES = ["blob", "tree", "commit", "record", "series", "manifest"] as const;
 
 /** One of the four object kinds. */
 export type ObjectType = (typeof OBJECT_TYPES)[number];
@@ -149,7 +150,16 @@ export function frameObject(type: ObjectType, payload: Buffer): Buffer {
  * @returns The 64-character hex SHA-256 of the framed object.
  */
 export function hashObject(type: ObjectType, payload: Buffer): ObjectId {
-  return createHash("sha256").update(frameObject(type, payload)).digest("hex");
+  // Hashing incrementally over the header and payload avoids allocating a
+  // single concatenated frame buffer, which matters when many fragments are
+  // hashed in a tight loop: the concatenation would be one buffer per
+  // fragment, and V8 would not collect them until the loop ends. SHA-256 is
+  // additive, so `update(header).update(payload)` produces the same digest as
+  // `update(Buffer.concat([header, payload]))`.
+  const hash = createHash("sha256");
+  hash.update(`${type} ${payload.length}\0`, "utf8");
+  hash.update(payload);
+  return hash.digest("hex");
 }
 
 /**
@@ -227,8 +237,7 @@ export class ObjectStore {
   has(id: ObjectId): boolean {
     this.assertId(id);
     try {
-      readFileSync(this.pathFor(id));
-      return true;
+      return statSync(this.pathFor(id)).isFile();
     } catch {
       return false;
     }
