@@ -19,10 +19,11 @@
 
 import {
   closeSync,
+  fstatSync,
   fsyncSync,
   openSync,
   readSync,
-  fstatSync,
+  rmSync,
   writeSync,
 } from "node:fs";
 
@@ -81,6 +82,18 @@ export function writeFragmentsFromFd(
   fragmentSize: number,
   sourcePath: string,
 ): FragmentEntry[] {
+  // This helper is exported, so its callers are not only the two in this module
+  // that validate first. A fragmentSize of 0 makes `toRead` 0, the inner read
+  // loop exit immediately, and `remaining` never decrease — an infinite loop
+  // writing empty blobs, which is a worse failure than a rejected argument. A
+  // negative or non-integer totalLength is equally not a length.
+  assertFragmentSize(fragmentSize, "invalid_fragment_size");
+  if (!Number.isInteger(totalLength) || totalLength < 0) {
+    throw new ObjectStoreError(
+      "invalid_total_length",
+      `Total length ${totalLength} is not a non-negative integer.`,
+    );
+  }
   const fragments: FragmentEntry[] = [];
   const buffer = Buffer.allocUnsafe(fragmentSize);
   let remaining = totalLength;
@@ -254,6 +267,7 @@ export function readFragmentedToFile(
 ): void {
   const manifest = readManifest(store, id);
   const fd = openSync(destinationPath, "wx");
+  let complete = false;
   try {
     for (const fragment of manifest.fragments) {
       const data = readFragmentBlob(store, fragment);
@@ -267,8 +281,16 @@ export function readFragmentedToFile(
       }
     }
     fsyncSync(fd);
+    complete = true;
   } finally {
     closeSync(fd);
+    // A fragment read can throw partway through - a missing blob, or one whose
+    // length disagrees with its manifest entry - and the bytes written before
+    // that point are already on disk. Leaving them behind is worse than the
+    // failure itself: the file looks like a restore, and a caller retrying
+    // meets EEXIST from the exclusive open rather than a clean second attempt.
+    // The destination only survives a run that completed.
+    if (!complete) rmSync(destinationPath, { force: true });
   }
 }
 

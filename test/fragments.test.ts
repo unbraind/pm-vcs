@@ -10,7 +10,7 @@
 // exercised against the real object store, never a mock.
 
 import assert from "node:assert/strict";
-import { closeSync, openSync, readdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -822,4 +822,67 @@ test("writeFragmentedFile measures the descriptor it opened, not the path", () =
     3000,
   );
   assert.equal(readFragmented(store, writeFragmentedFile(store, sourcePath, 1024).manifestId).length, 3000);
+});
+
+test("a failed restore leaves no partial destination behind", () => {
+  // readFragmentBlob can throw partway through - a missing blob, or one whose
+  // length disagrees with its manifest entry - after earlier fragments are
+  // already on disk. Leaving those bytes behind is worse than the failure: the
+  // file looks like a restore, and a caller retrying meets EEXIST from the
+  // exclusive open rather than a clean second attempt.
+  const { store, root } = freshStore();
+  const good = store.write("blob", Buffer.alloc(64, 0x41));
+  const short = store.write("blob", Buffer.alloc(8, 0x42));
+  const id = writeManifest(store, {
+    totalLength: 128,
+    fragments: [
+      { id: good, length: 64 },
+      { id: short, length: 64 },
+    ],
+  });
+  const destinationPath = join(root, "restored.bin");
+  assert.throws(
+    () => readFragmentedToFile(store, id, destinationPath),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "fragment_length_mismatch",
+  );
+  assert.equal(existsSync(destinationPath), false, "the partial destination must not survive");
+});
+
+test("writeFragmentsFromFd validates its own arguments, because it is exported", () => {
+  // A fragmentSize of 0 makes toRead 0, the inner read loop exit immediately,
+  // and remaining never decrease - an infinite loop writing empty blobs. The
+  // two callers in this module validate first; a direct caller does not.
+  const { store, root } = freshStore();
+  const sourcePath = join(root, "src.bin");
+  writeFileSync(sourcePath, Buffer.alloc(16, 0x43));
+  const fd = openSync(sourcePath, "r");
+  try {
+    assert.throws(
+      () => writeFragmentsFromFd(store, fd, 16, 0, sourcePath),
+      (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_fragment_size",
+    );
+    assert.throws(
+      () => writeFragmentsFromFd(store, fd, -1, 8, sourcePath),
+      (error: unknown) => error instanceof ObjectStoreError && error.code === "invalid_total_length",
+    );
+  } finally {
+    closeSync(fd);
+  }
+});
+
+test("decodeManifest refuses a payload missing its canonical terminating newline", () => {
+  // ObjectStore hashes raw payload bytes, so accepting an unterminated payload
+  // would let one logical manifest exist under two ids.
+  const { store } = freshStore();
+  const blobId = store.write("blob", Buffer.from("abcd", "utf8"));
+  const canonical = encodeManifest({ totalLength: 4, fragments: [{ id: blobId, length: 4 }] });
+  const stripped = canonical.toString("utf8").replace(/\n$/u, "");
+  assert.throws(
+    () => decodeManifest(Buffer.from(stripped, "utf8")),
+    (error: unknown) =>
+      error instanceof ObjectStoreError &&
+      error.code === "malformed_object" &&
+      /canonical terminating newline/u.test(error.message),
+  );
+  assert.equal(decodeManifest(canonical).totalLength, 4);
 });

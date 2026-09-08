@@ -915,8 +915,19 @@ export function encodeManifest(manifest: FragmentManifest): Buffer {
  */
 export function decodeManifest(payload: Buffer): FragmentManifest {
   const text = payload.toString("utf8");
+  // encodeManifest terminates every manifest with a newline, and ObjectStore
+  // hashes raw payload bytes. Accepting a payload without it would let the same
+  // logical manifest exist under two ids, so an imported non-canonical payload
+  // would not match manifestId(readManifest(...)) for its own content. The
+  // terminator is part of the canonical form, like the header's position.
+  if (!text.endsWith("\n")) {
+    throw new ObjectStoreError(
+      "malformed_object",
+      "Manifest payload does not end with the canonical terminating newline.",
+    );
+  }
   const lines = text.split("\n");
-  if (lines[lines.length - 1] === "" && lines.length > 1) lines.pop();
+  lines.pop();
   if (lines[0] !== MANIFEST_FORMAT) {
     throw new ObjectStoreError("malformed_object", `Manifest does not start with the ${MANIFEST_FORMAT} marker.`);
   }
