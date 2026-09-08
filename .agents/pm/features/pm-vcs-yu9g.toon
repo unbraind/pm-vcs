@@ -1,0 +1,13 @@
+id: pm-vcs-yu9g
+title: Resume an interrupted fragment transfer without advancing a ref early
+description: "A transfer that dies partway leaves the destination holding some fragments and not others, and there is currently no way to continue rather than restart. Resumption needs the receiver to say which fragments it already has, and the sender to send only the remainder. The ordering constraint is the part that matters: no ref may advance until the remote has verified closure over the full fragment set, or a reader follows a ref to content that is not entirely present."
+type: Feature
+status: open
+priority: 2
+tags[2]: fragments,transport
+created_at: "2026-09-08T20:33:28.169Z"
+updated_at: "2026-09-08T20:33:28.169Z"
+author: claude-orchestrator
+acceptance_criteria: "An interrupted transfer resumes by sending only the missing fragments, asserted by counting what crosses the transport rather than by elapsed time; no ref advances before the remote verifies it holds every fragment the manifest names; a transfer interrupted after the last fragment but before verification does not leave a ref pointing at unverified content"
+parent: pm-vcs-b7cb
+body: ""

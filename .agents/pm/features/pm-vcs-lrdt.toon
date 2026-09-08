@@ -1,0 +1,13 @@
+id: pm-vcs-lrdt
+title: Reuse unaffected fragments across an edit with content-defined chunking
+description: "The fragment path chunks at a fixed size, so inserting bytes near the start of a file shifts every subsequent boundary and re-stores every fragment. Content-defined chunking picks boundaries from the content itself, so an edit re-stores only the fragments it actually touched. Both modes need to coexist: fixed chunks are what make a byte-range read cheap, because the fragment covering an offset is computable rather than searched."
+type: Feature
+status: open
+priority: 2
+tags[2]: fragments,scale
+created_at: "2026-09-08T20:33:27.584Z"
+updated_at: "2026-09-08T20:33:27.584Z"
+author: claude-orchestrator
+acceptance_criteria: "Inserting bytes into a large file re-stores only the fragments overlapping the edit, asserted by counting object files on disk before and after rather than by a reported statistic; fixed-size chunking remains available and range reads over it stay O(fragments in range); the chosen mode is recorded in the manifest so a reader does not have to infer it"
+parent: pm-vcs-b7cb
+body: ""

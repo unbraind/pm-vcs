@@ -1,0 +1,13 @@
+id: pm-vcs-vh7t
+title: Justify the fragment size and chunking thresholds with reproducible benchmarks
+description: "DEFAULT_FRAGMENT_SIZE is 1 MiB and the chunking thresholds are chosen rather than measured. A constant copied from another system encodes that system's workload, not this one. The number should follow from a benchmark that can be re-run when the storage layer changes."
+type: Chore
+status: open
+priority: 2
+tags[2]: benchmarks,fragments
+created_at: "2026-09-08T20:33:28.669Z"
+updated_at: "2026-09-08T20:33:28.669Z"
+author: claude-orchestrator
+acceptance_criteria: "A TypeScript benchmark in this repository measures store size, write throughput and range-read cost across candidate fragment sizes on a reproducible corpus; the chosen default follows from its output and the reasoning is recorded next to the constant; the benchmark is runnable from an npm script so a later change can re-derive the number rather than inherit it"
+parent: pm-vcs-b7cb
+body: ""
