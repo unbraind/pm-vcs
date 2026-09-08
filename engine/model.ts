@@ -938,6 +938,18 @@ export function decodeManifest(payload: Buffer): FragmentManifest {
       if (totalLength !== undefined) {
         throw new ObjectStoreError("malformed_object", "Manifest carries more than one total header.");
       }
+      // `total` is the second line, always. encodeManifest emits it there, so
+      // accepting it anywhere else would make two different byte sequences
+      // decode to the same manifest. In a content-addressed store that means
+      // one logical object with two ids, and a non-canonical encoding that
+      // round-trips as if it were the real thing. The position is part of the
+      // format, so it is enforced rather than tolerated.
+      if (cursor !== 1) {
+        throw new ObjectStoreError(
+          "malformed_object",
+          `Manifest total header is on line ${cursor + 1}; the canonical encoding places it on line 2.`,
+        );
+      }
       if (!/^(0|[1-9][0-9]*)$/.test(value)) {
         throw new ObjectStoreError("malformed_object", `Manifest total "${value}" is not a non-negative integer.`);
       }

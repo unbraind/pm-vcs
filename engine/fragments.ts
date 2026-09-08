@@ -22,7 +22,7 @@ import {
   fsyncSync,
   openSync,
   readSync,
-  statSync,
+  fstatSync,
   writeSync,
 } from "node:fs";
 
@@ -86,12 +86,21 @@ export function writeFragmentsFromFd(
   let remaining = totalLength;
   while (remaining > 0) {
     const toRead = Math.min(fragmentSize, remaining);
-    const bytesRead = readSync(fd, buffer, 0, toRead, null);
-    if (bytesRead !== toRead) {
-      throw new ObjectStoreError(
-        "short_read",
-        `Short read on ${sourcePath}: expected ${toRead} bytes, got ${bytesRead}.`,
-      );
+    // readSync may return fewer bytes than asked for without the file being
+    // truncated, so fill the fragment across as many reads as it takes. Only a
+    // read that returns 0 means there are no more bytes, and that is the one
+    // case where the file really is shorter than its recorded length. Treating
+    // any partial return as short_read reports corruption on a healthy file.
+    let filled = 0;
+    while (filled < toRead) {
+      const bytesRead = readSync(fd, buffer, filled, toRead - filled, null);
+      if (bytesRead === 0) {
+        throw new ObjectStoreError(
+          "short_read",
+          `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
+        );
+      }
+      filled += bytesRead;
     }
     const chunk = buffer.subarray(0, toRead);
     const id = store.write("blob", chunk);
@@ -156,9 +165,14 @@ export function writeFragmentedFile(
   fragmentSize: number = DEFAULT_FRAGMENT_SIZE,
 ): FragmentWriteResult {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
-  const totalLength = statSync(sourcePath).size;
   const fd = openSync(sourcePath, "r");
   try {
+    // fstat the DESCRIPTOR, not the path. Measuring with statSync and then
+    // opening leaves a window in which the path can be replaced, so the length
+    // recorded in the manifest would describe a different file from the one
+    // whose bytes are stored — a manifest that is internally consistent and
+    // wrong. The descriptor names one file for its whole lifetime.
+    const totalLength = fstatSync(fd).size;
     const fragments = writeFragmentsFromFd(store, fd, totalLength, fragmentSize, sourcePath);
     const manifest: FragmentManifest = { totalLength, fragments };
     const id = writeManifest(store, manifest);
@@ -243,7 +257,14 @@ export function readFragmentedToFile(
   try {
     for (const fragment of manifest.fragments) {
       const data = readFragmentBlob(store, fragment);
-      writeSync(fd, data);
+      // writeSync returns the bytes actually written and is not guaranteed to
+      // transfer the whole buffer in one call. Ignoring the return value
+      // truncates the output on a short write while reporting success, which
+      // for a restore path means silent corruption of the restored file.
+      let written = 0;
+      while (written < data.length) {
+        written += writeSync(fd, data, written, data.length - written);
+      }
     }
     fsyncSync(fd);
   } finally {

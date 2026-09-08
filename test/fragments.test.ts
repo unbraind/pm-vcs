@@ -783,3 +783,43 @@ for (const [label, storedSize, declaredSize] of [
     assert.throws(() => readFragmentRange(store, id, 0, declaredSize), expected);
   });
 }
+
+test("decodeManifest refuses a total header outside its canonical position", () => {
+  // encodeManifest always writes `total` on line 2. Accepting it elsewhere
+  // would let two different byte sequences decode to the same manifest, which
+  // in a content-addressed store means one logical object with two ids and a
+  // non-canonical encoding that round-trips as if it were real.
+  const { store } = freshStore();
+  const blobId = store.write("blob", Buffer.from("abcd", "utf8"));
+  const canonical = encodeManifest({ totalLength: 4, fragments: [{ id: blobId, length: 4 }] });
+  const lines = canonical.toString("utf8").split("\n");
+  const reordered = [lines[0], lines[2], lines[1], ...lines.slice(3)].join("\n");
+  assert.throws(
+    () => decodeManifest(Buffer.from(reordered, "utf8")),
+    (error: unknown) =>
+      error instanceof ObjectStoreError &&
+      error.code === "malformed_object" &&
+      /canonical encoding places it on line 2/u.test(error.message),
+  );
+  // The canonical ordering still decodes, so the guard is bound to position
+  // rather than to the presence of the header.
+  assert.equal(decodeManifest(canonical).totalLength, 4);
+});
+
+test("writeFragmentedFile measures the descriptor it opened, not the path", () => {
+  // statSync(path) followed by openSync(path) leaves a window in which the path
+  // can be replaced, so the recorded totalLength could describe a different file
+  // from the one whose bytes are stored. Measuring the descriptor closes it.
+  // Asserted through the observable consequence: the manifest's totalLength
+  // always equals the bytes actually fragmented.
+  const { store, root } = freshStore();
+  const sourcePath = join(root, "sized.bin");
+  writeFileSync(sourcePath, Buffer.alloc(3000, 0x21));
+  const { manifest } = writeFragmentedFile(store, sourcePath, 1024);
+  assert.equal(manifest.totalLength, 3000);
+  assert.equal(
+    manifest.fragments.reduce((sum, fragment) => sum + fragment.length, 0),
+    3000,
+  );
+  assert.equal(readFragmented(store, writeFragmentedFile(store, sourcePath, 1024).manifestId).length, 3000);
+});
