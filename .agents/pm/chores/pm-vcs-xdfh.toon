@@ -1,0 +1,18 @@
+id: pm-vcs-xdfh
+title: Certify CLI 2026.9.7 and refresh the self-hosted dependency snapshot
+description: "Complete dependency refresh PR #61, consume canonical pm-ops 2026.9.7 attestation, pin CLI 2026.9.7 and pm-changelog 2026.9.6, and regenerate the complete selfhost.bundle. Companion pm-cli-website-6yiv. Retain all independent coverage, review and history privacy release gates."
+type: Chore
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-09-07T20:58:06.581Z"
+updated_at: "2026-09-07T21:09:43.185Z"
+assignee: codex-pm-ecosystem
+claim_principal: codex-pm-ecosystem
+author: codex-pm-ecosystem
+acceptance_criteria: Exact published pins installed; committed self-host equivalence verified; complete source gates and privacy blockers explicitly reported
+comments[1]{created_at,author,text}:
+  "2026-09-07T21:09:43.185Z",codex-pm-ecosystem,"2026-09-07 UTC: the complete release gate passed on installed published CLI/SDK 2026.9.7 and pm-changelog 2026.9.6. Final test summary {'tests': '692', 'pass': '692', 'fail': '0', 'skipped': '0'}; report All files                              |     100 |      100 |     100 |     100 |                   . Complete four-dimensional source coverage remains a separately checked scope, not inferred from a green label. Native self-host check passes against the committed source snapshot, all source c8 thresholds pass, and production audit and identity gate pass. Exact-head reviews remain incomplete where free bots are unavailable; no publication or private hosted-data deployment is authorized by this result."
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  "npm run release:check",project,1200,codex-pm-ecosystem,"2026-09-07T20:58:11.791Z",local_mutation,dependency-refresh/2026-09-07
+body: ""
