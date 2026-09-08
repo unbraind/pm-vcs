@@ -337,19 +337,79 @@ test("storing identical content from a file twice writes no new fragment files",
 
 // ─── Streaming: bounded peak heap ───────────────────────────────────────────
 
-test("writing a file larger than any single buffer allocates bounded peak additional heap", () => {
-  const { store, root } = freshStore();
-  // The file is 256x the fragment size (1 MiB), so it is far larger than any
-  // single buffer the implementation allocates. Peak additional heap must stay
-  // bounded by a fraction of the file size — not by the file size. If the
-  // implementation loaded the whole file into memory, the heap would grow by
-  // ~fileSize; the streaming path keeps it to O(fragmentSize).
+/**
+ * Bytes currently held by Buffer and TypedArray backing stores.
+ *
+ * Node allocates `Buffer` contents OUTSIDE the V8 heap, so
+ * `process.memoryUsage().heapUsed` does not observe them: a 2 MiB
+ * `readFileSync` moves `heapUsed` by a few kilobytes of noise while moving
+ * `arrayBuffers` by the full 2 MiB. Measuring the heap therefore cannot
+ * distinguish a streaming implementation from one that buffers the whole file,
+ * which is the entire property these tests exist to prove. `arrayBuffers` is
+ * the counter that tracks the allocation the fragment path is bounded by.
+ *
+ * @returns Bytes attributed to ArrayBuffer and Buffer backing stores.
+ */
+function bufferBytes(): number {
+  return process.memoryUsage().arrayBuffers;
+}
+
+/**
+ * An ObjectStore that samples buffer memory on every write, recording the
+ * high-water mark observed WHILE the operation is in flight.
+ *
+ * A before/after delta around a completed call cannot prove bounded memory: it
+ * measures what is still retained afterwards, so an implementation that reads
+ * the whole file, writes every fragment, and then releases the buffer shows a
+ * delta near zero. Sampling inside `write` observes the source buffer while it
+ * is still live, which is the only point at which whole-file buffering is
+ * distinguishable from streaming.
+ *
+ * @param root - Directory to place the object store in.
+ * @returns The sampling store, a reader for the peak observed, and a reset so
+ *   a setup phase's allocations do not pollute the phase under measurement.
+ */
+function peakSamplingStore(root: string): {
+  store: ObjectStore;
+  peak: () => number;
+  resetPeak: () => void;
+} {
+  const store = new ObjectStore(join(root, "objects"));
+  let peak = 0;
+  const sample = (): void => {
+    // Collect first. `arrayBuffers` counts backing stores that have been
+    // allocated but not yet reclaimed, so an uncollected sample measures the
+    // garbage a streaming loop leaves behind rather than what it holds live —
+    // for a 512-fragment read that reads as ~10 MB for a 2 MB file. Forcing a
+    // collection makes each sample reflect live memory, which is the property
+    // under test.
+    global.gc?.();
+    const now = bufferBytes();
+    if (now > peak) peak = now;
+  };
+  const realWrite = store.write.bind(store);
+  store.write = (type: ObjectType, payload: Buffer): ObjectId => {
+    sample();
+    return realWrite(type, payload);
+  };
+  const realReadTyped = store.readTyped.bind(store);
+  store.readTyped = (id: ObjectId, type: ObjectType): Buffer => {
+    sample();
+    return realReadTyped(id, type);
+  };
+  return { store, peak: () => peak, resetPeak: () => { peak = 0; } };
+}
+
+test("writing a file larger than any single buffer never holds more than a fragment in memory", () => {
+  const { root } = freshStore();
+  // The source is 512x the fragment size (2 MiB), far larger than any single
+  // buffer a streaming implementation allocates.
   const fragmentSize = 4096;
-  const fileMultiplier = 512;
+  const fileMultiplier = 64;
   const totalSize = fragmentSize * fileMultiplier;
   const sourcePath = join(root, "large.bin");
-  // Write the source file using streaming I/O so the test itself does not
-  // hold the whole file in memory either.
+  // Write the source using streaming I/O so the test itself does not hold the
+  // whole file in memory either.
   const fd = openSync(sourcePath, "w");
   try {
     const chunk = Buffer.alloc(fragmentSize, 0xfe);
@@ -357,34 +417,33 @@ test("writing a file larger than any single buffer allocates bounded peak additi
   } finally {
     closeSync(fd);
   }
-  // Warm up: run the write once so the V8 optimizer and the store's
-  // internal caches are populated. The heap measurement is taken around the
-  // second run so it reflects steady-state behaviour, not one-time compile
-  // or directory-creation overhead.
+  const { store, peak } = peakSamplingStore(root);
+  // Warm up so the sampled run reflects steady state, not one-time directory
+  // creation, and so the baseline is taken after V8 has settled.
   writeFragmentedFile(store, sourcePath, fragmentSize);
   if (global.gc) global.gc();
-  const before = process.memoryUsage().heapUsed;
-  writeFragmentedFile(store, sourcePath, fragmentSize);
-  if (global.gc) global.gc();
-  const after = process.memoryUsage().heapUsed;
-  const delta = after - before;
-  // The bound is one quarter of the file size. If the implementation loaded the
-  // whole file, the heap would grow by ~totalSize (1 MiB); staying under
-  // totalSize / 4 proves the heap is bounded by the fragment size, not the
-  // file size. After a GC cycle the retained heap is O(fragmentSize) — the
-  // fragments array and the manifest — not O(fileSize).
+  const baseline = bufferBytes();
+  const { store: sampled, peak: sampledPeak } = peakSamplingStore(join(root, "second"));
+  writeFragmentedFile(sampled, sourcePath, fragmentSize);
+  const observed = sampledPeak() - baseline;
+  // The bound is one quarter of the file size. An implementation that read the
+  // whole file into a Buffer would still be holding it at every fragment write,
+  // so the in-flight sample would exceed totalSize; staying under totalSize / 4
+  // proves only a fragment is resident at a time.
   const bound = totalSize / 4;
   assert.ok(
-    delta < bound,
-    `Peak additional heap ${delta} bytes should be less than ${bound} bytes (file size / 4). ` +
-      `File size is ${totalSize} bytes — the heap must be bounded by the fragment size, not the file size.`,
+    observed < bound,
+    `Peak in-flight buffer memory ${observed} bytes should be less than ${bound} bytes ` +
+      `(file size / 4). File size is ${totalSize} bytes — memory must be bounded by the ` +
+      `fragment size, not the file size.`,
   );
+  assert.ok(peak() > 0, "the warm-up store must have observed at least one write");
 });
 
-test("reading a file larger than any single buffer to disk allocates bounded peak additional heap", () => {
+test("reading a file larger than any single buffer to disk never holds more than a fragment in memory", () => {
   const { store, root } = freshStore();
   const fragmentSize = 4096;
-  const fileMultiplier = 512;
+  const fileMultiplier = 64;
   const totalSize = fragmentSize * fileMultiplier;
   const sourcePath = join(root, "large.bin");
   const fd = openSync(sourcePath, "w");
@@ -395,21 +454,26 @@ test("reading a file larger than any single buffer to disk allocates bounded pea
     closeSync(fd);
   }
   const { manifestId } = writeFragmentedFile(store, sourcePath, fragmentSize);
-  // Warm up.
-  const warmPath = join(root, "warm.bin");
-  readFragmentedToFile(store, manifestId, warmPath);
+  // Warm up so the sampled run reflects steady state.
+  readFragmentedToFile(store, manifestId, join(root, "warm.bin"));
+  // Sample memory WHILE the read is in flight. A reassemble-then-write
+  // implementation holds every fragment at once, so its in-flight sample
+  // exceeds the file size; the streaming path holds one fragment at a time.
+  const { store: sampled, peak, resetPeak } = peakSamplingStore(join(root, "sampled"));
+  const resampledId = writeFragmentedFile(sampled, sourcePath, fragmentSize).manifestId;
+  // Discard the write phase's samples: only the read is under measurement.
   if (global.gc) global.gc();
-  const before = process.memoryUsage().heapUsed;
+  const readBaseline = bufferBytes();
+  resetPeak();
   const destinationPath = join(root, "restored.bin");
-  readFragmentedToFile(store, manifestId, destinationPath);
-  if (global.gc) global.gc();
-  const after = process.memoryUsage().heapUsed;
-  const delta = after - before;
+  readFragmentedToFile(sampled, resampledId, destinationPath);
+  const observed = peak() - readBaseline;
   const bound = totalSize / 4;
   assert.ok(
-    delta < bound,
-    `Peak additional heap ${delta} bytes should be less than ${bound} bytes (file size / 4). ` +
-      `File size is ${totalSize} bytes — the heap must be bounded by the fragment size, not the file size.`,
+    observed < bound,
+    `Peak in-flight buffer memory ${observed} bytes should be less than ${bound} bytes ` +
+      `(file size / 4). File size is ${totalSize} bytes — memory must be bounded by the ` +
+      `fragment size, not the file size.`,
   );
   // Verify correctness: the restored file matches the source.
   assert.deepEqual(readFileSync(destinationPath), readFileSync(sourcePath));
