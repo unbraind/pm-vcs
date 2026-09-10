@@ -4,6 +4,7 @@
 
 ### Added
 
+- Reuse unaffected fragments across an edit with content-defined chunking ([pm-vcs-lrdt](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-lrdt.toon))
 - Stream arbitrary large files through fragment and range storage ([pm-vcs-vmmx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-vmmx.toon))
 - Review state as a record that merges per field ([pm-vcs-dzz3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-dzz3.toon))
 - Patch series as an object kind ([pm-vcs-sph3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-sph3.toon))
@@ -75,6 +76,7 @@
 
 ### Other
 
+- Justify the fragment size and chunking thresholds with reproducible benchmarks ([pm-vcs-vh7t](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-vh7t.toon))
 - Converge the pm toolchain on 2026.9.5 and match git merge recency ([pm-vcs-kr28](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-kr28.toon))
 - Converge the pinned pm-cli on 2026.8.31 and repair history hashes ([pm-vcs-qys6](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-qys6.toon))
 - Port the parser-backed docstring gate into pm-vcs ([pm-vcs-yaks](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-yaks.toon))
