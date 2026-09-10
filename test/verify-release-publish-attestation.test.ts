@@ -74,6 +74,55 @@ test("the resolved gate still refuses an unattested publish", () => {
   assert.deepEqual(attested.recognition, { kind: "recognized", count: 1 });
 });
 
+/**
+ * Shell constructions that hand `npm publish` an unreadable `--provenance`
+ * binding, each of which a fail-open auditor accepts as attested.
+ *
+ * These seven were admitted by the canonical auditor at pm-ops 2026.9.7 — the
+ * version this repository's lockfile installed until 2026.9.9 — and are refused
+ * from 2026.9.9 on. They are reproduced here, at consumer level, because a
+ * dependency bump is not a guard: nothing in this repository failed while it was
+ * installing an auditor that accepted all seven, and nothing would fail again if
+ * a later lockfile change put one back. The property asserted is behavioural —
+ * *this* construction is refused by whichever auditor is installed — not a
+ * version comparison, which would still pass against a regressed release
+ * numbered above any floor.
+ */
+const FAIL_OPEN_CONSTRUCTIONS: ReadonlyArray<{ id: string; script: string }> = [
+  { id: "nonliteral-overwrite", script: "FLAG=--provenance\nFLAG=$OTHER\nnpm publish $FLAG --access public\n" },
+  { id: "nonliteral-overwrite-cmdsub", script: "FLAG=--provenance\nFLAG=$(cat /tmp/x)\nnpm publish $FLAG --access public\n" },
+  { id: "quoted-metachar-value", script: "FLAG=\"--provenance;\"\nnpm publish $FLAG --access public\n" },
+  { id: "single-quoted-metachar-value", script: "FLAG='--provenance;'\nnpm publish $FLAG --access public\n" },
+  { id: "multiword-unreadable-tail", script: "FLAG=--provenance\nNOOP=x FLAG=$(true)\nnpm publish $FLAG --access public\n" },
+  { id: "quoted-paren-in-substitution", script: "FLAG=--provenance\nFLAG=$(printf ') ' )\nnpm publish $FLAG --access public\n" },
+  { id: "unterminated-substitution", script: "FLAG=--provenance\nFLAG=$(unterminated\nnpm publish $FLAG --access public\n" },
+];
+
+test("the installed auditor refuses every known fail-open provenance handoff", () => {
+  for (const { id, script } of FAIL_OPEN_CONSTRUCTIONS) {
+    const audited = auditPublishAttestation([
+      { file: `.github/case-${id}.sh`, text: `#!/usr/bin/env bash\n${script}` },
+    ]);
+    assert.ok(
+      audited.failures.length > 0,
+      `the installed pm-ops auditor accepted the ${id} construction as attested; `
+      + "an unattested publish would reach the registry",
+    );
+  }
+});
+
+test("the fail-open guard still admits a genuinely attested publish", () => {
+  // Without this control the guard above passes against an auditor that refuses
+  // everything, which would be just as broken and far easier to ship.
+  const audited = auditPublishAttestation([
+    {
+      file: ".github/case-control.sh",
+      text: "#!/usr/bin/env bash\nFLAG=--provenance\nnpm publish $FLAG --access public\n",
+    },
+  ]);
+  assert.deepEqual(audited.failures, [], "a readable --provenance binding must still pass");
+});
+
 test("this repository's own workflows pass the gate", () => {
   // The gate pointed at this checkout, which is what CI runs. Reported through
   // captured streams rather than the process ones so a failure is readable.
