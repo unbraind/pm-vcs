@@ -837,12 +837,56 @@ export interface FragmentEntry {
   readonly length: number;
 }
 
-/** A fragment manifest: the total content length and the ordered fragments. */
+/**
+ * The chunking strategy that produced a manifest's fragments.
+ *
+ * `"fixed"` — fragments are fixed-size slices, so the fragment covering a byte
+ * offset is computable (`offset / fragmentSize`). This makes range reads
+ * O(fragments in range). The canonical encoding omits the mode line for this
+ * value, so existing fixed-size manifests (written before the mode field
+ * existed) remain byte-identical and keep their ids.
+ *
+ * `"cdc"` — fragment boundaries are chosen from a rolling hash of the content,
+ * so inserting bytes near the front perturbs only the fragments around the
+ * edit rather than every subsequent fragment. Range reads must scan the
+ * fragment list to find overlaps, but reuse under edit is the property this mode
+ * exists to hold.
+ */
+export type FragmentMode = "fixed" | "cdc";
+
+/** A fragment manifest: the total content length, the ordered fragments, and how they were chunked. */
 export interface FragmentManifest {
   /** Total byte length of the logical content the fragments reconstruct. */
   readonly totalLength: number;
   /** Ordered fragments; concatenating their blobs yields the original content. */
   readonly fragments: readonly FragmentEntry[];
+  /**
+   * The chunking strategy that produced the fragments. Omitted (treated as
+   * `"fixed"`) for backward compatibility with manifests written before the
+   * mode field existed. Set to `"cdc"` for content-defined chunking.
+   */
+  readonly mode?: FragmentMode;
+}
+
+/**
+ * Parameters that control content-defined chunking.
+ *
+ * minChunkSize is the minimum bytes that must accumulate before a
+ * content-defined boundary can be declared, which prevents a pathological
+ * rolling-hash sequence from creating thousands of tiny fragments.
+ * maxChunkSize is the hard cap: when a chunk reaches this size a boundary is
+ * forced regardless of the hash, which bounds both memory and the largest
+ * fragment. mask is the rolling-hash mask: a boundary is declared when
+ * (hash & mask) === 0, so an n-bit mask produces an average chunk size of
+ * approximately 2^n bytes.
+ */
+export interface CdcParams {
+  /** Minimum bytes before a content-defined boundary can be declared. */
+  readonly minChunkSize: number;
+  /** Hard cap on chunk size; a boundary is forced at this length. */
+  readonly maxChunkSize: number;
+  /** Rolling-hash mask; (hash & mask) === 0 declares a boundary. */
+  readonly mask: number;
 }
 
 /** Result of writing fragmented content: the manifest id and the manifest itself. */
@@ -865,15 +909,22 @@ export interface FragmentWriteResult {
  * @param manifest - The manifest to encode.
  * @returns Canonical manifest bytes.
  * @throws ObjectStoreError When the total length is negative, a fragment id is
- *   malformed, a fragment length is not a positive integer, or the fragment
- *   lengths do not sum to the total — each of which would produce a manifest
- *   that cannot be decoded back to this value.
+ *   malformed, a fragment length is not a positive integer, the fragment
+ *   lengths do not sum to the total, or the mode is neither `"fixed"` nor
+ *   `"cdc"` — each of which would produce a manifest that cannot be decoded
+ *   back to this value.
  */
 export function encodeManifest(manifest: FragmentManifest): Buffer {
   if (!Number.isInteger(manifest.totalLength) || manifest.totalLength < 0) {
     throw new ObjectStoreError(
       "invalid_manifest",
       `Manifest total length ${manifest.totalLength} is not a non-negative integer.`,
+    );
+  }
+  if (manifest.mode !== undefined && manifest.mode !== "fixed" && manifest.mode !== "cdc") {
+    throw new ObjectStoreError(
+      "invalid_manifest",
+      `Manifest mode "${manifest.mode}" is not "fixed" or "cdc".`,
     );
   }
   let sum = 0;
@@ -895,11 +946,18 @@ export function encodeManifest(manifest: FragmentManifest): Buffer {
       `Manifest fragment lengths sum to ${sum} but the total length is ${manifest.totalLength}.`,
     );
   }
+  // The canonical form omits the mode line for "fixed" (or absent) so that
+  // existing fixed-size manifests — written before the mode field existed —
+  // remain byte-identical and keep their content-addressed ids. Only "cdc"
+  // produces a mode line.
   const lines = [
     MANIFEST_FORMAT,
     `total ${manifest.totalLength}`,
-    ...manifest.fragments.map((fragment) => `frag ${fragment.id} ${fragment.length}`),
   ];
+  if (manifest.mode === "cdc") {
+    lines.push("mode cdc");
+  }
+  lines.push(...manifest.fragments.map((fragment) => `frag ${fragment.id} ${fragment.length}`));
   return Buffer.from(`${lines.join("\n")}\n`, "utf8");
 }
 
@@ -932,6 +990,7 @@ export function decodeManifest(payload: Buffer): FragmentManifest {
     throw new ObjectStoreError("malformed_object", `Manifest does not start with the ${MANIFEST_FORMAT} marker.`);
   }
   let totalLength: number | undefined;
+  let mode: FragmentMode | undefined;
   const fragments: FragmentEntry[] = [];
   let cursor = 1;
   while (cursor < lines.length) {
@@ -965,6 +1024,31 @@ export function decodeManifest(payload: Buffer): FragmentManifest {
         throw new ObjectStoreError("malformed_object", `Manifest total "${value}" is not a non-negative integer.`);
       }
       totalLength = Number(value);
+    } else if (keyword === "mode") {
+      if (mode !== undefined) {
+        throw new ObjectStoreError("malformed_object", "Manifest carries more than one mode header.");
+      }
+      // The canonical encoding places `mode` on line 3 (cursor 2), immediately
+      // after `total` and before any `frag` lines. Accepting it elsewhere would
+      // let two different byte sequences decode to the same manifest, which in
+      // a content-addressed store means one logical object with two ids.
+      if (cursor !== 2) {
+        throw new ObjectStoreError(
+          "malformed_object",
+          `Manifest mode header is on line ${cursor + 1}; the canonical encoding places it on line 3.`,
+        );
+      }
+      // Only `mode cdc` is canonical. `mode fixed` is never emitted — fixed
+      // manifests omit the line entirely for backward compatibility — so
+      // accepting it would let a non-canonical payload round-trip to a
+      // different id than the one it was stored under.
+      if (value !== "cdc") {
+        throw new ObjectStoreError(
+          "malformed_object",
+          `Manifest mode "${value}" is not "cdc"; the canonical encoding omits the line for fixed mode.`,
+        );
+      }
+      mode = "cdc";
     } else if (keyword === "frag") {
       const parts = value.split(" ");
       if (parts.length !== 2) {
@@ -998,7 +1082,9 @@ export function decodeManifest(payload: Buffer): FragmentManifest {
       `Manifest fragment lengths sum to ${sum} but the total length is ${totalLength}.`,
     );
   }
-  return { totalLength, fragments };
+  return mode !== undefined
+    ? { totalLength, fragments, mode }
+    : { totalLength, fragments };
 }
 
 /**

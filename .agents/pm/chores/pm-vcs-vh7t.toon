@@ -2,12 +2,28 @@ id: pm-vcs-vh7t
 title: Justify the fragment size and chunking thresholds with reproducible benchmarks
 description: "DEFAULT_FRAGMENT_SIZE is 1 MiB and the chunking thresholds are chosen rather than measured. A constant copied from another system encodes that system's workload, not this one. The number should follow from a benchmark that can be re-run when the storage layer changes."
 type: Chore
-status: open
+status: closed
 priority: 2
 tags[2]: benchmarks,fragments
 created_at: "2026-09-08T20:33:28.669Z"
-updated_at: "2026-09-08T20:33:28.669Z"
+updated_at: "2026-09-10T22:42:52.575Z"
+closed_at: "2026-09-10T22:27:29.868Z"
+completed_at: "2026-09-10T22:27:29.868Z"
 author: claude-orchestrator
 acceptance_criteria: "A TypeScript benchmark in this repository measures store size, write throughput and range-read cost across candidate fragment sizes on a reproducible corpus; the chosen default follows from its output and the reasoning is recorded next to the constant; the benchmark is runnable from an npm script so a later change can re-derive the number rather than inherit it"
 parent: pm-vcs-b7cb
+files[1]{path,scope}:
+  scripts/cdc-benchmark.ts,project
+tests[1]:
+  - command: node scripts/cdc-benchmark.ts
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: claude-orchestrator
+      created_at: "2026-09-10T22:42:52.554Z"
+      source_kind: local_mutation
+      source_ref: feat/content-defined-chunking-fragment-reuse
+    assert_stdout_contains[1]: DEFAULT_CDC_PARAMS
+    note: Reproduces the measurements that justify the chunking thresholds rather than asserting them from a docstring
+close_reason: "Benchmark script (scripts/cdc-benchmark.ts, npm run benchmark:cdc) measures reuse fraction, chunk size, and throughput across candidate parameters. Default CDC params (min=512, max=65536, mask=0x1fff) justified: 95% reuse with 20 fragments vs 98% at 50 fragments (12-bit) - the extra 3% not worth 2.5x manifest entries. Numbers recorded in the DEFAULT_CDC_PARAMS docstring."
 body: ""

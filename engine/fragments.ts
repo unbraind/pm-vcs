@@ -33,14 +33,8 @@ import {
   ObjectStoreError,
   type ObjectStore,
 } from "./objects.ts";
-import {
-  type FragmentEntry,
-  type FragmentManifest,
-  type FragmentWriteResult,
-  manifestId as computeManifestId,
-  readManifest,
-  writeManifest,
-} from "./model.ts";
+import type { CdcParams, FragmentEntry, FragmentManifest, FragmentWriteResult } from "./model.ts";
+import { manifestId as computeManifestId, readManifest, writeManifest } from "./model.ts";
 
 /** Default fragment size: 1 MiB. Large enough to amortise per-fragment overhead, small enough to bound memory. */
 export const DEFAULT_FRAGMENT_SIZE = 1 << 20;
@@ -400,4 +394,300 @@ export function fragmentedContentId(
     fragments.push({ id, length: end - offset });
   }
   return computeManifestId({ totalLength: content.length, fragments });
+}
+
+// ─── Content-defined chunking ──────────────────────────────────────────────
+//
+// Fixed-size chunking has the boundary-shift problem: insert one byte at the
+// front and every subsequent fixed-size chunk changes, so a one-byte edit
+// rewrites the whole object. Content-defined chunking (CDC) picks boundaries
+// from a rolling hash of the content, so an insertion perturbs only the chunks
+// around it. The rest of the fragments are byte-identical to the original and
+// are deduplicated automatically by the content-addressed store.
+//
+// Both modes coexist: fixed-size chunks make a byte-range read cheap because
+// the fragment covering an offset is computable, while CDC chunks make an edit
+// cheap because unaffected fragments are reused. The mode is recorded in the
+// manifest so a reader does not have to infer it.
+
+/**
+ * Deterministic Gear hash table for content-defined chunking.
+ *
+ * A Gear hash (as used in FastCDC) updates a single 32-bit state per byte:
+ * `hash = (hash << 1) + GEAR[byte]`. The table has 256 entries, one per byte
+ * value, and must be the same on every machine for chunk boundaries to be
+ * reproducible. It is generated from a fixed seed by a simple linear
+ * congruential generator — no crypto, just spread — so the table is deterministic
+ * across processes and the chunking of the same bytes always produces
+ * byte-identical boundaries.
+ */
+const GEAR_TABLE: Uint32Array = (() => {
+  const table = new Uint32Array(256);
+  let state = 0x243f6a88;
+  for (let i = 0; i < 256; i++) {
+    state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+    table[i] = state;
+  }
+  return table;
+})();
+
+/**
+ * Default CDC parameters, justified by scripts/cdc-benchmark.ts.
+ *
+ * The benchmark measures reuse fraction under front/middle/end insertion,
+ * store size, and write throughput across candidate parameters on a
+ * reproducible 256 KiB corpus of pseudo-random bytes with a 64-byte edit.
+ *
+ * Results (reuse = fraction of original fragment ids present in the edited
+ * manifest):
+ * - 11-bit mask (112 fragments, ~2.3 KiB avg): 99.1% reuse, max 11 KiB
+ * - 12-bit mask (50 fragments, ~5.2 KiB avg): 98.0% reuse, max 14 KiB
+ * - 13-bit mask (20 fragments, ~13 KiB avg): 95.0% reuse, max 55 KiB
+ * - 14-bit mask (11 fragments, ~24 KiB avg): 90.9% reuse, max 55 KiB
+ *
+ * Fixed-size control at 4 KiB: 0% reuse on front insertion (all fragments shift).
+ *
+ * The 13-bit mask gives the best reuse-vs-fragment-count tradeoff: 95% reuse
+ * with only 20 fragments, vs 98% at 50 fragments (12-bit) - the extra 3% reuse
+ * is not worth 2.5x the manifest entries. The 14-bit mask drops to 91% with
+ * only 11 fragments, so the reuse loss is too steep.
+ *
+ * - minChunkSize = 512: prevents tiny fragments from inflating the manifest.
+ *   Below 512, the 11-bit benchmark shows 112 fragments for 256 KiB - one entry
+ *   per 2.3 KiB, which is excessive for a multi-gigabyte file.
+ * - maxChunkSize = 65536 (64 KiB): bounds memory at one chunk per stream.
+ *   The benchmark shows the largest chunk at 54661 bytes (under the cap),
+ *   confirming the cap binds without being reached on normal content.
+ * - mask = 0x1fff (13 bits): average chunk ~8 KiB, which gives ~20 fragments
+ *   for 256 KiB and ~95% reuse on a front insertion.
+ *
+ * Run npm run benchmark:cdc to reproduce these numbers.
+ */
+export const DEFAULT_CDC_PARAMS: CdcParams = {
+  minChunkSize: 512,
+  maxChunkSize: 65536,
+  mask: 0x1fff,
+};
+
+/**
+ * Validates that CDC parameters are positive integers with min ≤ max and a
+ * non-negative mask.
+ *
+ * @param params - Candidate CDC parameters.
+ * @param code - Stable error code raised on rejection.
+ * @throws ObjectStoreError When any parameter is not a positive integer, min
+ *   exceeds max, or the mask is negative.
+ */
+function assertCdcParams(params: CdcParams, code: string): void {
+  const { minChunkSize, maxChunkSize, mask } = params;
+  if (!Number.isInteger(minChunkSize) || minChunkSize <= 0) {
+    throw new ObjectStoreError(code, `CDC minChunkSize ${minChunkSize} is not a positive integer.`);
+  }
+  if (!Number.isInteger(maxChunkSize) || maxChunkSize <= 0) {
+    throw new ObjectStoreError(code, `CDC maxChunkSize ${maxChunkSize} is not a positive integer.`);
+  }
+  if (minChunkSize > maxChunkSize) {
+    throw new ObjectStoreError(code, `CDC minChunkSize ${minChunkSize} exceeds maxChunkSize ${maxChunkSize}.`);
+  }
+  if (!Number.isInteger(mask) || mask < 0) {
+    throw new ObjectStoreError(code, `CDC mask ${mask} is not a non-negative integer.`);
+  }
+}
+
+/**
+ * Computes content-defined chunk boundaries for a buffer and returns the
+ * fragment entries, without writing them to a store.
+ *
+ * Extracted from {@link writeCdcFragmented} so the CDC write path from a file
+ * descriptor can share the boundary logic and so the pure computation can be
+ * tested without a store. The `writeChunk` callback lets the caller choose
+ * whether to write the blob to a store (for {@link writeCdcFragmented}) or only
+ * compute its hash (for {@link cdcFragmentedContentId}).
+ *
+ * @param content - The content to chunk.
+ * @param params - CDC parameters.
+ * @param writeChunk - Called for each chunk; returns the blob id.
+ * @returns The ordered fragment entries.
+ */
+function cdcBoundaries(
+  content: Buffer,
+  params: CdcParams,
+  writeChunk: (chunk: Buffer) => ObjectId,
+): FragmentEntry[] {
+  const { minChunkSize, maxChunkSize, mask } = params;
+  const fragments: FragmentEntry[] = [];
+  let chunkStart = 0;
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    hash = ((hash << 1) + GEAR_TABLE[content[i]!]!) | 0;
+    const chunkLen = i - chunkStart + 1;
+    if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
+      const chunk = content.subarray(chunkStart, i + 1);
+      const id = writeChunk(chunk);
+      fragments.push({ id, length: chunkLen });
+      chunkStart = i + 1;
+      hash = 0;
+    }
+  }
+  if (chunkStart < content.length) {
+    const chunk = content.subarray(chunkStart);
+    const id = writeChunk(chunk);
+    fragments.push({ id, length: content.length - chunkStart });
+  }
+  return fragments;
+}
+
+/**
+ * Reads content from an open file descriptor through a rolling hash and writes
+ * content-defined chunks as content-addressed blobs.
+ *
+ * The read buffer is allocated once and reused; the chunk accumulator is at
+ * most `maxChunkSize` bytes. Peak additional heap is bounded by `maxChunkSize`
+ * plus the read buffer, regardless of `totalLength`. Extracted from
+ * {@link writeCdcFragmentedFile} so the short-read path can be exercised
+ * directly with a file descriptor that has fewer bytes than declared.
+ *
+ * @param store - Destination object store.
+ * @param fd - Open file descriptor to read from.
+ * @param totalLength - Expected total content length in bytes.
+ * @param params - CDC parameters.
+ * @param sourcePath - Source path, used in error messages.
+ * @returns The ordered fragment entries.
+ * @throws ObjectStoreError When CDC parameters are invalid, or a short read is
+ *   encountered on the source file.
+ */
+export function writeCdcFragmentsFromFd(
+  store: ObjectStore,
+  fd: number,
+  totalLength: number,
+  params: CdcParams,
+  sourcePath: string,
+): FragmentEntry[] {
+  assertCdcParams(params, "invalid_cdc_params");
+  if (!Number.isInteger(totalLength) || totalLength < 0) {
+    throw new ObjectStoreError(
+      "invalid_total_length",
+      `Total length ${totalLength} is not a non-negative integer.`,
+    );
+  }
+  const { minChunkSize, maxChunkSize, mask } = params;
+  const readSize = Math.min(8192, maxChunkSize);
+  const readBuf = Buffer.allocUnsafe(readSize);
+  const chunkBuf = Buffer.allocUnsafe(maxChunkSize);
+  const fragments: FragmentEntry[] = [];
+  let chunkLen = 0;
+  let hash = 0;
+  let remaining = totalLength;
+
+  while (remaining > 0) {
+    const toRead = Math.min(readSize, remaining);
+    let filled = 0;
+    while (filled < toRead) {
+      const bytesRead = readSync(fd, readBuf, filled, toRead - filled, null);
+      if (bytesRead === 0) {
+        throw new ObjectStoreError(
+          "short_read",
+          `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
+        );
+      }
+      filled += bytesRead;
+    }
+
+    for (let i = 0; i < filled; i++) {
+      chunkBuf[chunkLen] = readBuf[i]!;
+      chunkLen++;
+      hash = ((hash << 1) + GEAR_TABLE[readBuf[i]!]!) | 0;
+      if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
+        const chunk = chunkBuf.subarray(0, chunkLen);
+        const id = store.write("blob", chunk);
+        fragments.push({ id, length: chunkLen });
+        chunkLen = 0;
+        hash = 0;
+      }
+    }
+    remaining -= filled;
+  }
+
+  if (chunkLen > 0) {
+    const chunk = chunkBuf.subarray(0, chunkLen);
+    const id = store.write("blob", chunk);
+    fragments.push({ id, length: chunkLen });
+  }
+  return fragments;
+}
+
+/**
+ * Splits a buffer into content-defined fragments and writes a manifest.
+ *
+ * This is the convenience path for content already in memory. The streaming
+ * path for large files is {@link writeCdcFragmentedFile}, which never holds more
+ * than one chunk in memory at a time.
+ *
+ * @param store - Destination object store.
+ * @param content - The content to chunk and store.
+ * @param params - CDC parameters. Defaults to {@link DEFAULT_CDC_PARAMS}.
+ * @returns The manifest id and the manifest.
+ * @throws ObjectStoreError When CDC parameters are invalid.
+ */
+export function writeCdcFragmented(
+  store: ObjectStore,
+  content: Buffer,
+  params: CdcParams = DEFAULT_CDC_PARAMS,
+): FragmentWriteResult {
+  assertCdcParams(params, "invalid_cdc_params");
+  const fragments = cdcBoundaries(content, params, (chunk) => store.write("blob", chunk));
+  const manifest: FragmentManifest = { totalLength: content.length, fragments, mode: "cdc" };
+  const id = writeManifest(store, manifest);
+  return { manifestId: id, manifest };
+}
+
+/**
+ * Streams a file from disk into content-defined fragments and writes a manifest.
+ *
+ * The source file is read through a file descriptor in small chunks, a rolling
+ * hash determines content-defined boundaries, and each chunk is written as a
+ * blob immediately. The chunk accumulator is at most `maxChunkSize` bytes, so
+ * peak additional heap is bounded regardless of the source file size.
+ *
+ * @param store - Destination object store.
+ * @param sourcePath - Absolute path to the file to read and chunk.
+ * @param params - CDC parameters. Defaults to {@link DEFAULT_CDC_PARAMS}.
+ * @returns The manifest id and the manifest.
+ * @throws ObjectStoreError When CDC parameters are invalid, or a short read is
+ *   encountered on the source file.
+ */
+export function writeCdcFragmentedFile(
+  store: ObjectStore,
+  sourcePath: string,
+  params: CdcParams = DEFAULT_CDC_PARAMS,
+): FragmentWriteResult {
+  assertCdcParams(params, "invalid_cdc_params");
+  const fd = openSync(sourcePath, "r");
+  try {
+    const totalLength = fstatSync(fd).size;
+    const fragments = writeCdcFragmentsFromFd(store, fd, totalLength, params, sourcePath);
+    const manifest: FragmentManifest = { totalLength, fragments, mode: "cdc" };
+    const id = writeManifest(store, manifest);
+    return { manifestId: id, manifest };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Computes the id a content-defined manifest would have for content chunked
+ * with the given parameters, without writing anything.
+ *
+ * @param content - The content that would be chunked.
+ * @param params - CDC parameters. Defaults to {@link DEFAULT_CDC_PARAMS}.
+ * @returns The manifest id the content would be stored under.
+ * @throws ObjectStoreError When CDC parameters are invalid.
+ */
+export function cdcFragmentedContentId(
+  content: Buffer,
+  params: CdcParams = DEFAULT_CDC_PARAMS,
+): ObjectId {
+  assertCdcParams(params, "invalid_cdc_params");
+  const fragments = cdcBoundaries(content, params, (chunk) => hashObject("blob", chunk));
+  return computeManifestId({ totalLength: content.length, fragments, mode: "cdc" });
 }
