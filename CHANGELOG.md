@@ -76,6 +76,7 @@
 
 ### Other
 
+- Certify pm CLI 2026.9.10 and pick up the canonical auditor fixes the lockfile was holding back ([pm-vcs-9ssn](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-9ssn.toon))
 - Justify the fragment size and chunking thresholds with reproducible benchmarks ([pm-vcs-vh7t](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-vh7t.toon))
 - Converge the pm toolchain on 2026.9.5 and match git merge recency ([pm-vcs-kr28](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-kr28.toon))
 - Converge the pinned pm-cli on 2026.8.31 and repair history hashes ([pm-vcs-qys6](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-qys6.toon))
