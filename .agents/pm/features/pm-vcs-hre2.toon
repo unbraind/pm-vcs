@@ -6,10 +6,11 @@ status: open
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:14.894Z"
-updated_at: "2026-08-28T20:11:19.721Z"
+updated_at: "2026-09-12T23:35:49.681Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:45.240Z",claude,"cli:update:dep",detected
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-08-28T20:11:19.721Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no publication lock-lease implementation or passing acceptance evidence for this child, so it remains open with its written specification."
+  "2026-09-12T23:35:49.681Z",pi-agent,"Audit 2026-09-13: EXISTS — nothing. The description says spec only. grep for lease/Lease/stable-FileId in engine/ returns no matches. No lock lease implementation exists. REMAINS — the full feature: publication refusal for missing, expired, wrong-principal, or out-of-scope lock leases, with four distinct named refusals."
 body: ""
