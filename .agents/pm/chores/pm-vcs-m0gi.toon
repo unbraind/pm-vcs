@@ -1,0 +1,22 @@
+id: pm-vcs-m0gi
+title: Certify pm CLI 2026.9.12 and the pm-ops 2026.9.11 auditor
+description: "CI runs the repository-pinned pm binary, so the pin decides what every gate exercises. On 2026-09-12 this repository pinned @unbrained/pm-cli 2026.9.10 while npm latest was 2026.9.12, which adds the multi-writer merge fixes (two branches creating the same item id now merge into one document, and merge receipt discovery is isolated from unrelated workspaces) and algorithm-named history digests. pm-ops 2026.9.11 publishes the canonical lifecycle policy contract. Companion tracking: pm-cli-website-mghj."
+type: Chore
+status: closed
+priority: 2
+tags: []
+created_at: "2026-09-12T21:25:59.378Z"
+updated_at: "2026-09-12T21:26:07.254Z"
+closed_at: "2026-09-12T21:26:07.171Z"
+completed_at: "2026-09-12T21:26:07.171Z"
+claim_principal: claude-orchestrator
+author: claude-orchestrator
+acceptance_criteria: "package.json pins @unbrained/pm-cli 2026.9.12 exactly and the lockfile resolves it; where pm-ops is consumed the lockfile resolves 2026.9.11; npm run release:check exits 0 on the new pins. CI is not an acceptance criterion of this item because the item is closed inside its own pull request; strict branch protection lets the closed item reach main only once every required check on that head has passed."
+resolution: Pins advanced and the full release gate passed on them
+expected_result: "release:check exits 0 on @unbrained/pm-cli 2026.9.12"
+actual_result: "release:check exited 0 on 2026.9.12: 784 of 784 tests pass"
+files[2]{path,scope,note}:
+  package-lock.json,project,certify pm CLI 2026.9.12
+  package.json,project,certify pm CLI 2026.9.12
+close_reason: "Pins advanced: @unbrained/pm-cli 2026.9.10 to 2026.9.12 (exact) and pm-ops 2026.9.9 to 2026.9.11 in the lockfile. npm run release:check exited 0 on the new pins with PM_FLEET_ROOT at the fleet root, running typecheck, build, lint, duplicates, docstring, coverage, accept:native-toon, accept:stat-cache, accept:self-host, audit:prod, audit:identities, pack:dry-run, changelog:check, verify:release-changelog-date, verify:release-publish-attestation; 784 of 784 tests pass."
+body: ""
