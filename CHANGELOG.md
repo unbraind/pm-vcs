@@ -4,6 +4,7 @@
 
 ### Added
 
+- Resume an interrupted fragment transfer without advancing a ref early ([pm-vcs-yu9g](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-yu9g.toon))
 - Reuse unaffected fragments across an edit with content-defined chunking ([pm-vcs-lrdt](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-lrdt.toon))
 - Stream arbitrary large files through fragment and range storage ([pm-vcs-vmmx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-vmmx.toon))
 - Review state as a record that merges per field ([pm-vcs-dzz3](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-dzz3.toon))
@@ -40,6 +41,7 @@
 
 ### Fixed
 
+- The changelog gate stamps an untagged version with the current date, so its verdict flips every midnight with no commit ([pm-vcs-q152](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-q152.toon))
 - Merge and rebase refuse to run when any untracked file exists, which is every real working tree ([pm-vcs-8rqk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8rqk.toon))
 - This repository has never produced a static analysis, because it runs no CodeQL workflow ([pm-vcs-zhlz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-zhlz.toon))
 - Group codeql-action bumps into one pull request to end the split-PR deadlock ([pm-vcs-fois](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-fois.toon))
@@ -76,6 +78,7 @@
 
 ### Other
 
+- pm-vcs becomes a version control system in its own right, not a helper around git ([pm-vcs-tr2a](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-tr2a.toon))
 - Certify pm CLI 2026.9.12 and the pm-ops 2026.9.11 auditor ([pm-vcs-m0gi](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-m0gi.toon))
 - Certify pm CLI 2026.9.10 and pick up the canonical auditor fixes the lockfile was holding back ([pm-vcs-9ssn](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-9ssn.toon))
 - Justify the fragment size and chunking thresholds with reproducible benchmarks ([pm-vcs-vh7t](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-vh7t.toon))

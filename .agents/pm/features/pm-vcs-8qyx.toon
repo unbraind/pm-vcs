@@ -6,8 +6,10 @@ status: open
 priority: 2
 tags[3]: fragments,memory,scale
 created_at: "2026-09-08T17:34:52.473Z"
-updated_at: "2026-09-08T17:34:52.473Z"
+updated_at: "2026-09-12T23:35:49.174Z"
 author: claude-orchestrator
 acceptance_criteria: "Peak metadata memory for a read and for a range read is bounded independently of totalLength, proven the same way the content proofs are: sample while the operation is in flight and fail against an implementation that materializes every entry; encode and decode do not require the whole manifest resident; existing manifests remain readable"
 parent: pm-vcs-b7cb
+comments[1]{created_at,author,text}:
+  "2026-09-12T23:35:49.174Z",pi-agent,"Audit 2026-09-13: EXISTS — content streaming is implemented (engine/fragments.ts: writeFragmentedFile reads the source in bounded chunks, peak heap bounded by fragmentSize). Range reads touch only overlapping fragments (test/fragments.test.ts). REMAINS — the manifest metadata path is NOT bounded independently of totalLength: writeFragmentedFile materializes the full manifest entry list (line 158: peak heap bounded by fragmentSize plus the manifest entry list), encodeManifest builds all lines into one buffer, and decodeManifest splits the full payload. No multi-level manifest exists (grep for multi-level/level manifest returns no matches). A 1 TiB file at 1 MiB fragments would produce about a million manifest entries, all resident. The acceptance criteria require peak metadata memory bounded independently of totalLength and encode/decode not requiring the whole manifest resident."
 body: ""
