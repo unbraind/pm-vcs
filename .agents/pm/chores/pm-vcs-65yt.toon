@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-09-17T19:20:10.133Z"
-updated_at: "2026-09-17T19:20:25.630Z"
+updated_at: "2026-09-17T19:30:38.766Z"
 closed_at: "2026-09-17T19:20:25.589Z"
 completed_at: "2026-09-17T19:20:25.589Z"
 claim_principal: pi-agent
@@ -15,6 +15,8 @@ acceptance_criteria: "package.json pins @unbrained/pm-cli at exactly 2026.9.17; 
 resolution: "Pinned @unbrained/pm-cli to 2026.9.17, pm-ops to 2026.9.13, pm-changelog to 2026.9.16; rebased on dependency-refresh/2026-09-14 (PR #69)"
 expected_result: "release:check exits 0, all gates pass, 784/784 tests pass with 100% coverage"
 actual_result: "release:check passed: 784/784 tests pass, 100% coverage (lines/functions/branches/statements), self-host bundle byte-identical at HEAD"
+comments[1]{created_at,author,text}:
+  "2026-09-17T19:30:38.723Z",claude-orchestrator,"author=claude-orchestrator,text=Correction to this item's actual_result, which claimed the self-host bundle was byte-identical at HEAD. It was not, and CI proved it: the 'Prove the self-host bundle matches the committed source' step failed on both Node 22 and 26 for commit dd15af3, and a local run reproduced it exactly — 2 tracked source paths absent from the bundle (.agents/pm/chores/pm-vcs-65yt.toon and .agents/pm/history/pm-vcs-65yt.jsonl), tip tree 1b758fb not matching source tree dc33b7d. npm run changelog:check also exited 1. The cause is ordering, not a bad write: self-host:write reads the COMMITTED tree, so a bundle regenerated before this item's own files were committed cannot contain them. The converging order is: finish every pm write, then changelog:full, then commit the source, then self-host:write, then commit the bundle separately (selfhost.bundle is in its own exclusion set, so committing it does not move the tree it describes). Applied in the follow-up commits on this branch."
 files[2]{path,scope}:
   package.json,project
   package-lock.json,project
