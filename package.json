@@ -75,7 +75,7 @@
   "homepage": "https://github.com/unbraind/pm-vcs#readme",
   "devDependencies": {
     "@babel/core": "^8.0.5",
-    "@babel/eslint-parser": "^8.0.5",
+    "@babel/eslint-parser": "^8.0.6",
     "@babel/plugin-syntax-typescript": "^8.0.3",
     "@types/node": "^26.5.1",
     "@unbrained/pm-cli": "2026.9.17",
