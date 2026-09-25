@@ -78,6 +78,7 @@
 
 ### Other
 
+- Certify pm CLI 2026.9.23 and adopt the guarded pm-ops merge-driver launcher ([pm-vcs-6smg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-6smg.toon))
 - Certify pm CLI 2026.9.17 ([pm-vcs-65yt](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-65yt.toon))
 - pm-vcs becomes a version control system in its own right, not a helper around git ([pm-vcs-tr2a](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-tr2a.toon))
 - Certify pm CLI 2026.9.12 and the pm-ops 2026.9.11 auditor ([pm-vcs-m0gi](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-m0gi.toon))

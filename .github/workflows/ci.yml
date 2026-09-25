@@ -59,7 +59,7 @@ jobs:
           #
           # `--strict-exit` is load-bearing: non-strict health may report findings while
           # still exiting successfully.
-          ./node_modules/.bin/pm health --check-only --strict-exit
+          ./node_modules/.bin/pm health --check-only --strict-exit --require-merge-drivers
 
       - name: Type check
         run: npm run typecheck

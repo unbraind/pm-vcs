@@ -24,11 +24,6 @@ import {
   runPm,
   setExitCodeWhenMain,
 } from "../scripts/pm-environment.ts";
-import {
-  isExecutableFile,
-  main as prepareMain,
-  pmOnPath,
-} from "../scripts/prepare-merge-driver.ts";
 
 /** Creates an executable Node fixture and returns its path. */
 function executableFixture(root: string, body: string, name = "fixture.ts"): string {
@@ -135,49 +130,6 @@ test("shared launcher detection invokes only a directly executed script and pres
     assert.equal(invoked, true);
   } finally {
     process.exitCode = before;
-  }
-});
-
-test("merge-driver preparation distinguishes absence, invalid candidates and an executable PM", () => {
-  const root = mkdtempSync(join(tmpdir(), "pm-vcs-prepare-"));
-  try {
-    const directory = join(root, "pm");
-    mkdirSync(directory);
-    assert.equal(isExecutableFile(directory, "linux"), false);
-    assert.equal(isExecutableFile(join(root, "absent"), "linux"), false);
-    const nonExecutable = executableFixture(root, "process.exit(0);", "not-pm");
-    chmodSync(nonExecutable, 0o644);
-    assert.equal(isExecutableFile(nonExecutable, "linux"), false);
-    assert.equal(isExecutableFile(nonExecutable, "win32"), true);
-    assert.equal(pmOnPath({ PATH: "" }, "win32"), null);
-    assert.equal(pmOnPath({}, "linux"), null);
-    assert.equal(pmOnPath({ PATH: '"' + root + '"', PATHEXT: ".CMD;.EXE" }, "win32"), null);
-    assert.equal(prepareMain({ PATH: "" }, "linux"), false);
-
-    rmSync(directory, { recursive: true });
-    const marker = join(root, "called");
-    executableFixture(root, `
-if (process.argv.slice(2).join(" ") !== "merge install") process.exit(8);
-require("node:fs").writeFileSync(${JSON.stringify(marker)}, "yes");`, "pm");
-    const fixturePath = `${root}:${dirname(process.execPath)}`;
-    assert.equal(pmOnPath({ PATH: fixturePath }, "linux"), join(root, "pm"));
-    assert.equal(prepareMain({ PATH: fixturePath }, "linux"), true);
-
-    const windowsShim = executableFixture(root, "process.exit(0);", "pm.CMD");
-    const windowsEnvironment = { PATH: `"${root}"`, PATHEXT: ".CMD;.EXE" };
-    assert.equal(
-      pmOnPath(windowsEnvironment, "win32"),
-      windowsShim,
-    );
-    let windowsShell = false;
-    assert.equal(prepareMain(windowsEnvironment, "win32", (executable, arguments_, options) => {
-      assert.equal(executable, windowsShim);
-      assert.deepEqual(arguments_, ["merge", "install"]);
-      windowsShell = options.shell;
-    }), true);
-    assert.equal(windowsShell, true);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
   }
 });
 
