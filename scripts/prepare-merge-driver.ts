@@ -1,73 +1,42 @@
 /**
- * Installs pm's field-aware Git merge drivers when the CLI is on `PATH`.
+ * npm `prepare` hook that registers pm's field-aware Git merge drivers.
  *
- * A missing CLI is a supported production-install state and skips cleanly. A
- * present but broken CLI fails loudly so package installation cannot pretend it
- * configured merge safety when it did not.
+ * Git never clones `.git/config`, so every clone must register the drivers
+ * `.gitattributes` declares. The installer lives in the devDependency pm-ops,
+ * which an `npm install --omit=dev` checkout does not have. This launcher
+ * therefore imports nothing from pm-ops: it resolves the installer entry from
+ * the package root and runs it in a child process. Only a missing pm-ops package skips, with one
+ * notice; any other resolution failure (for example a pm-ops too old to export
+ * the entry) and any installer failure fail the install.
+ *
+ * Canonical copy: `pm-ops/templates/prepare-merge-driver.ts`. Copy it
+ * unchanged to `scripts/prepare-merge-driver.ts`.
  */
 
-import { execFileSync } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 
-import { invokeWhenMain } from "./pm-environment.ts";
-
-/** Injectable process boundary used to verify Windows shim execution. */
-type MergeInstaller = (
-  executable: string,
-  arguments_: string[],
-  options: { stdio: "inherit"; env: NodeJS.ProcessEnv; shell: boolean },
-) => unknown;
-
-/** Returns true only for a regular executable path candidate. */
-export function isExecutableFile(path: string, platform: NodeJS.Platform): boolean {
+// npm runs `prepare` from the package root, so pm-ops is resolved from there.
+const resolver = createRequire(join(process.cwd(), "package.json"));
+let installer: string | undefined;
+try {
+  installer = resolver.resolve("pm-ops/merge-driver/prepare");
+} catch (error) {
+  // Only an absent pm-ops package may skip. Probing its package.json tells that
+  // apart from an installed pm-ops that cannot serve the entry (exports without
+  // it, no exports map, a missing file): those resolve or fail differently, and
+  // the original error is rethrown.
+  let packagePresent = true;
   try {
-    if (!statSync(path).isFile()) return false;
-    if (platform === "win32") return true;
-    accessSync(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
+    resolver.resolve("pm-ops/package.json");
+  } catch (probe) {
+    packagePresent = !(probe instanceof Error && "code" in probe && probe.code === "MODULE_NOT_FOUND");
   }
+  if (packagePresent) throw error;
 }
-
-/** Resolves the exact real `pm` launcher on the supplied process path. */
-export function pmOnPath(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | null {
-  const directories = (environment.PATH ?? "")
-    .split(platform === "win32" ? ";" : ":")
-    .map((entry) => platform === "win32" && entry.startsWith('"') && entry.endsWith('"')
-      ? entry.slice(1, -1)
-      : entry)
-    .map((entry) => entry === "" && platform !== "win32" ? "." : entry)
-    .filter((entry) => entry !== "");
-  const extensions = platform === "win32"
-    ? (environment.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((entry) => entry.trim()).filter(Boolean)
-    : [""];
-  for (const directory of directories) {
-    for (const extension of extensions) {
-      const candidate = join(directory, `pm${extension}`);
-      if (isExecutableFile(candidate, platform)) return candidate;
-    }
-  }
-  return null;
+if (installer === undefined) {
+  console.error("pm-ops is not installed (omit-dev install); skipping merge-driver install");
+} else {
+  process.exitCode = spawnSync(process.execPath, [installer], { stdio: "inherit" }).status ?? 1;
 }
-
-/** Installs merge drivers when available and reports whether installation ran. */
-export function main(
-  environment: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-  install: MergeInstaller = execFileSync,
-): boolean {
-  const executable = pmOnPath(environment, platform);
-  if (executable === null) return false;
-  install(executable, ["merge", "install"], {
-    stdio: "inherit",
-    env: environment,
-    // Node cannot launch .cmd shims through execFile on Windows. Discovery
-    // validated this exact path before it crosses the command-shell boundary.
-    shell: platform === "win32",
-  });
-  return true;
-}
-
-invokeWhenMain(process.argv, import.meta.url, main, [process.env, process.platform]);

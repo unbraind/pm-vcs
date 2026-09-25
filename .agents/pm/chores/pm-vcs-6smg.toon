@@ -1,0 +1,26 @@
+id: pm-vcs-6smg
+title: Certify pm CLI 2026.9.23 and adopt the guarded pm-ops merge-driver launcher
+description: "Fleet wave 2026-09-25 (companion epic pm-cli-website-5s6z, launcher rollout pm-cli-website-xy19). Pins the toolchain to 2026.9.23 and replaces the prepare hook with the launcher template pm-ops ships: it imports nothing from pm-ops, so a production install of a clone (npm ci --omit=dev) skips with one notice instead of failing, while a stale or broken pm-ops still fails the install. A test keeps the copy byte-identical to the pinned template, whose branches pm-ops covers with real fixtures."
+type: Chore
+status: closed
+priority: 1
+tags[4]: certify,merge-driver,multi-agent,pm-cli-2026.9.23
+created_at: "2026-09-25T08:41:48.359Z"
+updated_at: "2026-09-25T09:28:36.274Z"
+closed_at: "2026-09-25T09:28:35.450Z"
+completed_at: "2026-09-25T09:28:35.450Z"
+author: fleet-wave-script
+acceptance_criteria: "package.json and package-lock.json pin pm-cli 2026.9.23 and pm-ops 2026.9.23 (pm-changelog 2026.9.23 where used); scripts/prepare-merge-driver.ts is byte-identical to the pinned pm-ops template, enforced by a test; CI runs pm health --strict-exit --require-merge-drivers and release:check exits 0"
+resolution: Pinned the toolchain to 2026.9.23 and adopted the guarded pm-ops launcher
+expected_result: "release:check and the CI health gate pass on 2026.9.23 with the launcher byte-identical to the template"
+actual_result: "release:check exits 0; the launcher test and the CI health block pass"
+files[5]{path,scope}:
+  .github/workflows/ci.yml,project
+  package-lock.json,project
+  package.json,project
+  scripts/prepare-merge-driver.ts,project
+  test/prepare-merge-driver.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "npm run release:check",project,fleet-wave-script,"2026-09-25T08:42:38.214Z",local_mutation,certify-pm-cli-2026-9-23-and-roll-out-guarded-merge-driver-launcher
+close_reason: "Pins: @babel/core ^8.0.5 -> ^8.0.6, @babel/eslint-parser ^8.0.5 -> ^8.0.6, @types/node ^26.5.1 -> ^26.6.2, @unbrained/pm-cli 2026.9.17 -> 2026.9.23, jscpd ^5.2.0 -> ^5.3.1, pm-changelog ^2026.9.16 -> 2026.9.23, pm-ops ^2026.9.13 -> 2026.9.23 (package.json and package-lock.json). Launcher: pm-ops template copied unchanged; test/prepare-merge-driver.test.ts proves byte identity and exercises every launcher branch in isolated checkouts. Absorbs Dependabot #72-#77 (babel 8.0.6, @types/node 26.6.2, jscpd 5.3.1, pm-cli pin, and the codeql-action group, which cannot pass the self-host gate on its own). Removes the unit tests of the vendored launcher's internals from test/quality-scripts.test.ts (now tested in pm-ops), and regenerates selfhost.bundle last so the self-host gate proves the committed tree. The CI health block runs green with --require-merge-drivers; release:check exits 0."
+body: ""
