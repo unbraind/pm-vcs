@@ -30,15 +30,18 @@ try {
   // it, no exports map, a missing file): those resolve or fail differently, and
   // the original error is rethrown. A probe that finds no package.json is not
   // yet proof of absence: a broken install can leave `node_modules/pm-ops` (a
-  // directory or a dangling link) with no package.json, which fails the probe
-  // the same way, so an entry there also counts as present.
+  // directory or a dangling link) with no package.json in any ancestor Node
+  // searches. Such an entry also counts as present. Node returns null paths
+  // only for built-in modules; pm-ops/package.json is a package specifier.
   let packagePresent = true;
   try {
     resolver.resolve("pm-ops/package.json");
   } catch (probe) {
     packagePresent =
       !(probe instanceof Error && "code" in probe && probe.code === "MODULE_NOT_FOUND") ||
-      lstatSync(join(process.cwd(), "node_modules", "pm-ops"), { throwIfNoEntry: false }) !== undefined;
+      resolver.resolve.paths("pm-ops/package.json")!.some(
+        (directory) => lstatSync(join(directory, "pm-ops"), { throwIfNoEntry: false }) !== undefined,
+      );
   }
   if (packagePresent) throw error;
 }
