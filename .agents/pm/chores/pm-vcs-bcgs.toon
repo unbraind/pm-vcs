@@ -1,21 +1,25 @@
 id: pm-vcs-bcgs
-title: Refresh pm-vcs PM SDK toolchain to 2026.9.26
-description: "Pin the repository-local pm CLI/SDK, pm-ops, and pm-changelog to current published releases and regenerate the committed self-host bundle per AGENTS.md."
+title: Certify pm-vcs PM CLI SDK 2026.9.29 and committed self-host bundle
+description: Pin repository-local PM CLI/SDK to published 2026.9.29 while retaining pm-ops 2026.9.28 and pm-changelog 2026.9.25. Regenerate the committed self-host bundle after source and PM evidence are committed. Verify full release gates and packed npm/Bun behavior. The separate all-source CDC benchmark coverage gap remains pm-vcs-tj07.
 type: Chore
 status: in_progress
 priority: 2
 tags: []
 created_at: "2026-09-26T14:12:57.090Z"
-updated_at: "2026-09-28T06:30:49.415Z"
+updated_at: "2026-09-29T13:24:09.460Z"
 assignee: claude-hub
 claim_principal: claude-hub
 author: "harness:codex"
 estimated_minutes: 120
-acceptance_criteria: "Installed repository-local pm CLI/SDK equals 2026.9.26; pm-changelog equals 2026.9.25 and pm-ops equals 2026.9.28; Committed selfhost.bundle matches source and full release:check passes with measured coverage"
+acceptance_criteria: "Installed repository-local PM CLI/SDK equals published 2026.9.29; pm-changelog remains 2026.9.25 and pm-ops remains 2026.9.28; the committed selfhost.bundle tip tree matches the committed source and full release:check passes at the exact candidate head; packed npm/Bun functional VCS acceptance and strict tracker health pass; review, all-source coverage, and full forge/scale limits are stated independently."
 comments[1]{created_at,author,text}:
   "2026-09-28T06:20:17.332Z",claude-hub,"2026-09-28: pinned pm-ops 2026.9.28 and re-copied its templates/prepare-merge-driver.ts (pm-ops#124: the omit-dev skip now checks every Node resolution path for an incomplete hoisted pm-ops, so a broken ancestor install fails instead of silently skipping the merge drivers). release:check and changelog:check pass on this branch."
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-09-26T14:24:18.713Z","harness:codex","author=codex,text=Installed @unbrained/pm-cli 2026.9.26, pm-changelog 2026.9.25, pm-ops 2026.9.26. Copied the exact pm-ops canonical prepare launcher; regenerated committed selfhost.bundle. Full release:check passed 789/789 tests, 0 skipped, c8 100/100/100/100, native TOON and strace acceptance, self-host source identity, zero production audit findings, npm pack dry run, changelog and attestation gates. Strict PM health passed with an existing advisory provenance warning."
+  "2026-09-29T13:24:09.460Z",codex,"Fresh npm/npx and Bun/bunx projects installed packed pm-vcs 2026.7.30 with published CLI 2026.9.29. Both package installs reported copy.complete=true and activated the extension; each initialized native pm-vcs, staged and committed a real text file, then passed strict PM health with zero warnings. This was on the code-identical artifact before the local pin edit; exact new-head full gate and committed self-host bundle revalidation follow."
 tests[1]{command,path,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   "npm run release:check",.,project,900,"harness:codex","2026-09-26T14:24:18.713Z",local_mutation,chore/pm-vcs-cli-sdk-refresh-2026-9-26
+docs[2]{path,scope,note}:
+  "https://github.com/unbraind/pm-cli/releases/tag/v2026.9.29",global,Published CLI SDK used by this candidate
+  "https://github.com/unbraind/pm-vcs/pull/79",global,Candidate PR for toolchain and self-host bundle
 body: ""
