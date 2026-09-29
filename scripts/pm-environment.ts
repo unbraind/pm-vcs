@@ -57,11 +57,16 @@ export function runPm(project: string, arguments_: readonly string[], executable
   }
 }
 
+/** Chooses the npm launcher that child processes can execute on this platform. */
+export function npmPackExecutable(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "npm.cmd" : "npm";
+}
+
 /** Packs the current built extension and installs its complete archive into a disposable tracker. */
 export function installPackedExtension(
   project: string,
   executable = pmExecutable,
-  packExecutable = process.platform === "win32" ? "npm.cmd" : "npm",
+  packExecutable = npmPackExecutable(process.platform),
 ): void {
   const archiveRoot = mkdtempSync(join(tmpdir(), "pm-vcs-pack-"));
   try {

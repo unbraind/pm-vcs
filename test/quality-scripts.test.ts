@@ -20,6 +20,7 @@ import {
   installPackedExtension,
   isMainInvocation,
   invokeWhenMain,
+  npmPackExecutable,
   pmExecutable,
   processFailure,
   runPm,
@@ -74,6 +75,11 @@ console.log("fixture passed");`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("packed installer selects the executable npm launcher for both platform families", () => {
+  assert.equal(npmPackExecutable("win32"), "npm.cmd");
+  assert.equal(npmPackExecutable("linux"), "npm");
 });
 
 test("packed extension installation refuses a failed pack and an invalid archive receipt", { skip: process.platform === "win32" }, () => {
