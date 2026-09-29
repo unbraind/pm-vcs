@@ -1,4 +1,6 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -52,6 +54,31 @@ export function runPm(project: string, arguments_: readonly string[], executable
   });
   if (result.status !== 0) {
     throw new Error(processFailure(result, `pm ${arguments_.join(" ")} failed`, "."));
+  }
+}
+
+/** Packs the current built extension and installs its complete archive into a disposable tracker. */
+export function installPackedExtension(
+  project: string,
+  executable = pmExecutable,
+  packExecutable = process.platform === "win32" ? "npm.cmd" : "npm",
+): void {
+  const archiveRoot = mkdtempSync(join(tmpdir(), "pm-vcs-pack-"));
+  try {
+    const packed = spawnSync(packExecutable, ["pack", "--silent", "--pack-destination", archiveRoot], {
+      cwd: packageRoot,
+      encoding: "utf8",
+      env: withoutPmContext(process.env),
+      timeout: 120_000,
+    });
+    if (packed.status !== 0) throw new Error(processFailure(packed, "npm pack failed", "."));
+    const archive = packed.stdout.trim().split(/\r?\n/).at(-1);
+    if (archive === undefined || !/^pm-vcs-[^/\\]+\.tgz$/.test(archive)) {
+      throw new Error("npm pack did not return a pm-vcs archive filename");
+    }
+    runPm(project, ["package", "install", join(archiveRoot, archive), "--project"], executable);
+  } finally {
+    rmSync(archiveRoot, { recursive: true, force: true });
   }
 }
 

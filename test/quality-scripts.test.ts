@@ -17,6 +17,7 @@ import {
 } from "../scripts/accept-stat-cache.ts";
 import {
   errorMessage,
+  installPackedExtension,
   isMainInvocation,
   invokeWhenMain,
   pmExecutable,
@@ -70,6 +71,23 @@ console.log("fixture passed");`);
     assert.equal(processFailure(silent, "silent failed", "."), "silent failed.");
     assert.equal(errorMessage(new Error("specific"), "fallback"), "specific");
     assert.equal(errorMessage("not an error", "fallback"), "fallback");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("packed extension installation refuses a failed pack and an invalid archive receipt", { skip: process.platform === "win32" }, () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-quality-pack-"));
+  try {
+    assert.throws(
+      () => installPackedExtension(root, pmExecutable, join(root, "missing-npm")),
+      /npm pack failed/,
+    );
+    const malformed = executableFixture(root, 'console.log("not-an-archive");', "bad-pack.ts");
+    assert.throws(
+      () => installPackedExtension(root, pmExecutable, malformed),
+      /npm pack did not return a pm-vcs archive filename/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

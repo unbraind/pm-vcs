@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { errorMessage, packageRoot, pmExecutable, runPm, setExitCodeWhenMain } from "./pm-environment.ts";
+import { errorMessage, installPackedExtension, pmExecutable, runPm, setExitCodeWhenMain } from "./pm-environment.ts";
 
 /** Runs the installed-CLI workflow and returns a process-compatible status. */
 export function main(arguments_: readonly string[], executable = pmExecutable): number {
@@ -27,7 +27,7 @@ export function main(arguments_: readonly string[], executable = pmExecutable): 
     if (arguments_.includes("--init-only")) {
       console.log("native TOON acceptance launcher passed");
     } else {
-      runPm(project, ["package", "install", packageRoot, "--project"], executable);
+      installPackedExtension(project, executable);
       runPm(project, [
         "vcs", "init",
         "--record-path", ".agents/pm/**/*.toon",

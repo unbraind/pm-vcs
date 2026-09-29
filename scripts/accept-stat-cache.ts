@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { RACY_WINDOW_NS } from "../engine/worktree.ts";
 import {
   errorMessage,
-  packageRoot,
+  installPackedExtension,
   pmExecutable,
   processFailure,
   runPm,
@@ -76,7 +76,7 @@ export function main(platform: NodeJS.Platform, executable = pmExecutable, trace
       console.log("stat-cache strace acceptance skipped: Linux is required");
     } else {
       runPm(project, ["init", "stat-cache-acceptance", "--yes", "--author", "acceptance", "--agent-guidance", "skip"], executable);
-      runPm(project, ["package", "install", packageRoot, "--project"], executable);
+      installPackedExtension(project, executable);
       runPm(project, ["vcs", "init"], executable);
       writeFileSync(join(project, "large.bin"), Buffer.alloc(4 * 1024 * 1024, 7));
       runPm(project, ["vcs", "add", "large.bin"], executable);
