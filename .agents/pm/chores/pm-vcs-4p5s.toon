@@ -1,0 +1,21 @@
+id: pm-vcs-4p5s
+title: Verify weekly dependency refresh PR #80
+description: "Review unbraind/pm-vcs#80 dependency refresh at current main, run unchanged full CI gate and self-host HEAD equality, record configured review limitations. No merge, release, publish or tracker closure."
+type: Chore
+status: blocked
+priority: 2
+tags: []
+created_at: "2026-10-02T21:55:17.527Z"
+updated_at: "2026-10-02T21:55:50.774Z"
+author: codex-sol
+comments[1]{created_at,author,text}:
+  "2026-10-02T21:55:45.245Z",codex-sol,"Previous 5442c5c is pushed and clean; all required GitHub CI checks now pass following prior run approvals. Rebase origin/main is current. Sourcery approves, while CodeRabbit skipped the github-actions authored PR; that skip was already replied to and negatively reacted, and will not be duplicated. self-host.json explicitly excludes package/lock, explaining the byte-identical bundle for this dependency-only diff."
+files[3]{path,scope}:
+  package-lock.json,project
+  package.json,project
+  selfhost.bundle,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/prepare-merge-driver.test.ts,project,codex-sol,"2026-10-02T21:55:47.445Z",local_mutation,dependency-refresh/2026-09-28
+docs[1]{path,scope}:
+  AGENTS.md,project
+body: ""
