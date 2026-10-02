@@ -1,7 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** PM context variables that must not leak into disposable acceptance projects. */
@@ -59,7 +59,30 @@ export function runPm(project: string, arguments_: readonly string[], executable
 
 /** Chooses the npm launcher that child processes can execute on this platform. */
 export function npmPackExecutable(platform: NodeJS.Platform): string {
-  return platform === "win32" ? "npm.cmd" : "npm";
+  return platform === "win32" ? process.execPath : "npm";
+}
+
+/**
+ * Builds shell-free pack arguments, invoking npm's JavaScript entrypoint on Windows.
+ * npm scripts expose their entrypoint through npm_execpath; direct Node calls
+ * use the npm installation bundled beside node.exe by setup-node.
+ *
+ * @param platform - Platform selecting the native Node launcher on Windows.
+ * @param archiveRoot - Destination kept as one argument even with shell characters.
+ * @param environment - npm entrypoint supplied by the parent npm invocation.
+ * @returns Arguments for the executable selected by npmPackExecutable.
+ */
+export function npmPackArguments(
+  platform: NodeJS.Platform,
+  archiveRoot: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const arguments_ = ["pack", "--silent", "--pack-destination", archiveRoot];
+  if (platform === "win32") {
+    const entrypoint = environment.npm_execpath ?? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+    arguments_.unshift(entrypoint);
+  }
+  return arguments_;
 }
 
 /** Packs the current built extension and installs its complete archive into a disposable tracker. */
@@ -70,7 +93,7 @@ export function installPackedExtension(
 ): void {
   const archiveRoot = mkdtempSync(join(tmpdir(), "pm-vcs-pack-"));
   try {
-    const packed = spawnSync(packExecutable, ["pack", "--silent", "--pack-destination", archiveRoot], {
+    const packed = spawnSync(packExecutable, npmPackArguments(process.platform, archiveRoot), {
       cwd: packageRoot,
       encoding: "utf8",
       env: withoutPmContext(process.env),

@@ -2,18 +2,18 @@ id: pm-vcs-bcgs
 title: Certify pm-vcs PM CLI SDK 2026.9.29 and committed self-host bundle
 description: Pin repository-local PM CLI/SDK to published 2026.9.29 while retaining pm-ops 2026.9.28 and pm-changelog 2026.9.25. Regenerate the committed self-host bundle after source and PM evidence are committed. Verify full release gates and packed npm/Bun behavior. The separate all-source CDC benchmark coverage gap remains pm-vcs-tj07.
 type: Chore
-status: in_progress
+status: blocked
 priority: 2
 tags: []
 created_at: "2026-09-26T14:12:57.090Z"
-updated_at: "2026-09-29T13:47:21.109Z"
-assignee: claude-hub
-claim_principal: claude-hub
+updated_at: "2026-10-02T21:44:57.232Z"
 author: "harness:codex"
 estimated_minutes: 120
 acceptance_criteria: "Installed repository-local PM CLI/SDK equals published 2026.9.29; pm-changelog remains 2026.9.25 and pm-ops remains 2026.9.28; the committed selfhost.bundle tip tree matches the committed source and full release:check passes at the exact candidate head; packed npm/Bun functional VCS acceptance and strict tracker health pass; review, all-source coverage, and full forge/scale limits are stated independently."
-comments[1]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-09-28T06:20:17.332Z",claude-hub,"2026-09-28: pinned pm-ops 2026.9.28 and re-copied its templates/prepare-merge-driver.ts (pm-ops#124: the omit-dev skip now checks every Node resolution path for an incomplete hoisted pm-ops, so a broken ancestor install fails instead of silently skipping the merge drivers). release:check and changelog:check pass on this branch."
+  "2026-10-02T21:43:20.112Z",codex-sol,"Restart audit validates CodeRabbit 4169919316: npm.cmd is not executable via shell-free spawnSync. Add red Windows launch assertion and real Node CLI argv fixture, then pack through npm JS entrypoint on Windows. Preserve shell-free arguments and self-host bundle/HEAD equality."
+  "2026-10-02T21:44:53.397Z",codex-sol,Windows launcher assertion fails against npm.cmd and passes using process.execPath. Added real shell-free Node subprocess fixture verifying a spaced npm entrypoint and destination containing ampersand/percent remain literal argv; fallback entrypoint and POSIX args are covered. Focused PM-linked tests pass. Full locked release gate follows at committed self-host head; all-source CDC scope remains pm-vcs-tj07.
 notes[5]{created_at,author,text}:
   "2026-09-26T14:24:18.713Z","harness:codex","author=codex,text=Installed @unbrained/pm-cli 2026.9.26, pm-changelog 2026.9.25, pm-ops 2026.9.26. Copied the exact pm-ops canonical prepare launcher; regenerated committed selfhost.bundle. Full release:check passed 789/789 tests, 0 skipped, c8 100/100/100/100, native TOON and strace acceptance, self-host source identity, zero production audit findings, npm pack dry run, changelog and attestation gates. Strict PM health passed with an existing advisory provenance warning."
   "2026-09-29T13:24:09.460Z",codex,"Fresh npm/npx and Bun/bunx projects installed packed pm-vcs 2026.7.30 with published CLI 2026.9.29. Both package installs reported copy.complete=true and activated the extension; each initialized native pm-vcs, staged and committed a real text file, then passed strict PM health with zero warnings. This was on the code-identical artifact before the local pin edit; exact new-head full gate and committed self-host bundle revalidation follow."
@@ -26,7 +26,7 @@ files[5]{path,scope,note}:
   scripts/pm-environment.ts,project,Shared packed archive installation for installed CLI acceptance
   test/prepare-merge-driver.test.ts,project,CodeRabbit missing package metadata fixture
   test/quality-scripts.test.ts,project,Pack failure and acceptance behavior
-tests[2]:
+tests[3]:
   - command: "npm run release:check"
     path: .
     scope: project
@@ -48,7 +48,20 @@ tests[2]:
       source_kind: local_mutation
       source_ref: chore/pm-vcs-cli-sdk-refresh-2026-9-26
     note: Real launcher and packed installed-CLI acceptance
-docs[2]{path,scope,note}:
-  "https://github.com/unbraind/pm-cli/releases/tag/v2026.9.29",global,Published CLI SDK used by this candidate
-  "https://github.com/unbraind/pm-vcs/pull/79",global,Candidate PR for toolchain and self-host bundle
+  - command: "node --test --test-name-pattern=\"packed installer selects|Windows pack\" test/quality-scripts.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-02T21:44:29.215Z"
+      source_kind: local_mutation
+      source_ref: land/pm-vcs-79
+docs[3]:
+  - path: "https://github.com/unbraind/pm-cli/releases/tag/v2026.9.29"
+    scope: global
+    note: Published CLI SDK used by this candidate
+  - path: "https://github.com/unbraind/pm-vcs/pull/79"
+    scope: global
+    note: Candidate PR for toolchain and self-host bundle
+  - path: AGENTS.md
+    scope: project
 body: ""
