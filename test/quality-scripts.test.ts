@@ -17,8 +17,11 @@ import {
 } from "../scripts/accept-stat-cache.ts";
 import {
   errorMessage,
+  installPackedExtension,
   isMainInvocation,
   invokeWhenMain,
+  npmPackExecutable,
+  npmPackArguments,
   pmExecutable,
   processFailure,
   runPm,
@@ -70,6 +73,43 @@ console.log("fixture passed");`);
     assert.equal(processFailure(silent, "silent failed", "."), "silent failed.");
     assert.equal(errorMessage(new Error("specific"), "fallback"), "specific");
     assert.equal(errorMessage("not an error", "fallback"), "fallback");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("packed installer selects the executable npm launcher for both platform families", () => {
+  assert.equal(npmPackExecutable("win32"), process.execPath);
+  assert.equal(npmPackExecutable("linux"), "npm");
+});
+
+test("Windows pack executes the npm JavaScript entrypoint without shell argument parsing", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs npm argv-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const cli = executableFixture(root, "console.log(JSON.stringify(process.argv.slice(2)));", "npm cli.js");
+  const destination = join(root, "archive & literal %PATH%");
+  const expected = ["pack", "--silent", "--pack-destination", destination];
+  const result = spawnSync(npmPackExecutable("win32"), npmPackArguments("win32", destination, { npm_execpath: cli }), { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), expected);
+  assert.deepEqual(npmPackArguments("linux", destination, {}), expected);
+  assert.deepEqual(npmPackArguments("win32", destination, {}), [
+    join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), ...expected,
+  ]);
+});
+
+test("packed extension installation refuses a failed pack and an invalid archive receipt", { skip: process.platform === "win32" }, () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-quality-pack-"));
+  try {
+    assert.throws(
+      () => installPackedExtension(root, pmExecutable, join(root, "missing-npm")),
+      /npm pack failed/,
+    );
+    const malformed = executableFixture(root, 'console.log("not-an-archive");', "bad-pack.ts");
+    assert.throws(
+      () => installPackedExtension(root, pmExecutable, malformed),
+      /npm pack did not return a pm-vcs archive filename/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

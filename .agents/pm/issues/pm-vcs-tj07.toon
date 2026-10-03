@@ -1,0 +1,25 @@
+id: pm-vcs-tj07
+title: Include CDC benchmark source in the 100/100/100/100 coverage contract
+description: "The pm-vcs coverage script explicitly excludes scripts/cdc-benchmark.ts. The full release gate is green and measures 39 source files, while the docstring gate sees 40; the benchmark is executable authored TypeScript and therefore the package cannot claim all-source 100/100/100/100 coverage under the current fleet requirement."
+type: Issue
+status: open
+priority: 1
+tags: []
+created_at: "2026-09-29T13:15:34.304Z"
+updated_at: "2026-09-29T13:24:20.991Z"
+author: codex
+acceptance_criteria: "Inventory every authored executable TypeScript source file and reconcile the coverage and docstring scopes; include scripts/cdc-benchmark.ts or refactor its executable logic into measured source with real deterministic benchmark acceptance; measure statements, lines, branches and functions at 100% with no excludes, threshold reductions, skips or synthetic-only assertion; run the full release gate and real benchmark on the exact pushed head, then update the coverage evidence and PM links."
+expected_result: "Every executable authored TypeScript source is measured at 100% across statements, lines, branches and functions, and the benchmark still runs against real file/object-store I/O."
+actual_result: The c8 invocation uses --exclude=scripts/cdc-benchmark.ts. Its LCOV lists 39 source files at 100% lines/branches/functions; docstring gate reports 40 source files. The benchmark script is not part of the measured gate.
+affected_version: 2026.7.30
+component: quality
+notes[2]{created_at,author,text}:
+  "2026-09-29T13:16:01.214Z",codex,"At current code head 21e8ed1, direct npm run release:check passed, including c8 --all --100, real native TOON/stat-cache/self-host acceptance, zero production audit and changelog check. The measured LCOV has 39 sources and 16030/16030 lines, 3351/3351 branches, 468/468 functions; scripts/cdc-benchmark.ts is explicitly excluded. This issue records the all-executable-source coverage gap without overstating those percentages."
+  "2026-09-29T13:24:20.991Z",codex,"The real CDC benchmark completed on a temporary object store: for the declared 256 KiB corpus and 64-byte front insertion, object-count reuse was 95.00% with CDC default and 0.00% with fixed 4K; middle/end and throughput rows also emitted. Fresh npm and Bun packed projects with CLI 2026.9.29 committed a real file through pm-vcs and passed strict health. Neither result measures scripts/cdc-benchmark.ts under c8, so this issue remains open."
+files[2]{path,scope,note}:
+  package.json,project,Current c8 scope and explicit benchmark exclusion
+  scripts/cdc-benchmark.ts,project,Executable authored benchmark source outside coverage scope
+docs[2]{path,scope,note}:
+  "https://github.com/unbraind/pm-vcs/pull/79",global,Current package certification candidate carrying this owner issue
+  .agents/pm/features/pm-vcs-lrdt.toon,project,Prior feature decision that accepted the benchmark exclusion
+body: ""
