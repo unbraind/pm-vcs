@@ -57,7 +57,14 @@ entries, and showed the scratch marker in the diff. npm exported 159754 bytes;
 native Bun exported 163426 bytes. All commands exited 0. Scratch was deleted.
 
 The self-host bundle is regenerated from staged working-tree paths and committed
-with the dependency lockfile, as required by AGENTS.md. The full release gate
-and final committed-bundle verification are recorded after execution. Existing
+with the dependency lockfile, as required by AGENTS.md. The full PM-linked release gate passed 797/797 tests, zero skips, and 100%
+statements/branches/functions/lines across the unchanged c8 inventory. It also
+passed native TOON, stat-cache, committed self-host, production audit, identity,
+pack, changelog/date and publish-attestation gates. Exact runner: `npx pm test
+pm-vcs-bcgs --run --only-index 4 --progress --pm-context tracker
+--override-linked-pm-context`, executing `flock
+/tmp/claude-1000/heavy-gate.lock npm run release:check`. CI's locked
+`bun install --no-save` also passed. Final PM evidence is bundled again before
+the final committed self-host verification. Existing
 coverage excludes the benchmark script; that separate source-inventory boundary
 remains tracked by pm-vcs-tj07.
