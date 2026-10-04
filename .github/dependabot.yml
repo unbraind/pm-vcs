@@ -3,8 +3,29 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     open-pull-requests-limit: 5
+    groups:
+      # The pm CLI, its SDK-bearing packages and the fleet gates move together
+      # in one pull request per day; dependabot-auto-merge.yml merges it as soon
+      # as the required checks pass, so a release bump needs no manual work.
+      # No update-types filter: pm uses calendar versions, so a year rollover
+      # (2026.x -> 2027.x) is a semver major that must still land unattended.
+      pm-toolchain:
+        patterns:
+          - "@unbrained/pm-cli"
+          - "pm-*"
+      dependencies:
+        # Every other npm dependency, disjoint from pm-toolchain, so a pm
+        # package can never be bumped here (and capped by update-types).
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@unbrained/pm-cli"
+          - "pm-*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"

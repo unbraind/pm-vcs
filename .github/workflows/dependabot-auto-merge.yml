@@ -1,0 +1,33 @@
+name: dependabot-auto-merge
+
+# Version bumps are mechanical: every non-major Dependabot pull request gets
+# GitHub auto-merge, so it lands the moment the required checks pass. Branch
+# protection still gates the merge; a failing bump stays open as a defect.
+on: pull_request
+
+permissions: {}
+
+jobs:
+  enable-auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository_owner == 'unbraind'
+    runs-on: ubuntu-latest
+    # `gh pr merge --auto` needs pull-requests: write to enable auto-merge
+    # and contents: write for the squash merge GitHub performs once the
+    # required checks pass. Nothing is checked out or executed from the PR.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      # pm-toolchain is calendar-versioned (a new year reads as semver-major),
+      # so it always auto-merges. Anything else must be classified minor or
+      # patch; a major or unclassified update waits for a person.
+      - if: >-
+          steps.metadata.outputs.dependency-group == 'pm-toolchain' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
