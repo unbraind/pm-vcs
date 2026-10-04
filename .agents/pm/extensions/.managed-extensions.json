@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "updated_at": "2026-10-04T12:06:23.330Z",
+  "entries": [
+    {
+      "name": "pm-github",
+      "directory": "pm-github",
+      "scope": "project",
+      "manifest_version": "2026.10.4",
+      "manifest_entry": "./dist/index.js",
+      "capabilities": [
+        "commands",
+        "hooks",
+        "importers",
+        "preflight",
+        "schema",
+        "search"
+      ],
+      "contributions": {
+        "schema_version": 1,
+        "commands": [
+          "gh-issues import",
+          "github export",
+          "github import",
+          "github project fields",
+          "github project import",
+          "github project list",
+          "github project sync",
+          "github sync",
+          "github validate"
+        ],
+        "command_overrides": [],
+        "command_handlers": [
+          "gh-issues import",
+          "github export",
+          "github import",
+          "github project fields",
+          "github project import",
+          "github project list",
+          "github project sync",
+          "github sync",
+          "github validate"
+        ],
+        "hooks": [
+          "after_command"
+        ],
+        "flag_commands": [
+          "gh-issues import",
+          "github export",
+          "github import",
+          "github project fields",
+          "github project import",
+          "github project list",
+          "github project sync",
+          "github sync",
+          "github validate"
+        ],
+        "item_types": [],
+        "item_fields": [
+          "github_author",
+          "github_created_at",
+          "github_number",
+          "github_state",
+          "github_updated_at",
+          "github_url"
+        ],
+        "migrations": [],
+        "profiles": [],
+        "importers": [
+          "github"
+        ],
+        "exporters": [
+          "github"
+        ],
+        "search_providers": [
+          "github"
+        ],
+        "vector_store_adapters": [],
+        "parser_overrides": [],
+        "service_overrides": [],
+        "renderer_overrides": [],
+        "preflight_overrides": 1,
+        "preflight_ownership": [
+          {
+            "commands": [
+              "github sync",
+              "github export",
+              "github import",
+              "gh-issues import",
+              "github project import",
+              "github project sync"
+            ]
+          }
+        ]
+      },
+      "installed_at": "2026-10-04T12:06:23.202Z",
+      "updated_at": "2026-10-04T12:06:23.202Z",
+      "source": {
+        "kind": "npm",
+        "input": "npm:pm-github@2026.10.4",
+        "location": "package",
+        "package": "pm-github",
+        "version": "2026.10.4"
+      }
+    }
+  ]
+}
