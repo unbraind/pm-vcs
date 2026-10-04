@@ -75,3 +75,14 @@ the linked release gate creates the parent of the mandatory shared lock before
 acquisition. Sourcery weekly and Cubic monthly quota notices are missing
 substantive review evidence; Gemini/Copilot have not replied. These tracker
 corrections preserve all runtime behavior, thresholds and publishing gates.
+
+**NOT READY: automated required PR checks remain unresolved.** The requested
+GITHUB_TOKEN dispatch executes CI on the exact branch and preserves all four
+job names, but [GitHub Docs](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)
+exclude workflow_dispatch job checks from required PR status-check evaluation.
+CodeRabbit correctly identified this boundary. Removing the explicitly requested
+dispatch or introducing an owner credential was refused in this certification
+scope; the finding stays unresolved.
+[pm-vcs-dispatch104](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-dispatch104.toon)
+tracks the owner's eligible-event decision. Green normal pull_request CI on this
+certification PR does not prove the automatic refresh path clears branch rules.

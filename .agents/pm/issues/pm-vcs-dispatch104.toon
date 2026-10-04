@@ -1,0 +1,19 @@
+id: pm-vcs-dispatch104
+title: Make automated dependency refresh satisfy required PR checks through an eligible event
+description: "Validated CodeRabbit #89 finding: GitHub Docs state workflow_dispatch job checks on a PR head are not evaluated as required PR status checks. The certification task explicitly requires dispatching ci.yml with GITHUB_TOKEN after creation; that execution repair is implemented and tested, but it cannot by itself clear branch-rule checks. Preserve the requested dispatch and owner publishing gates. Owner must select an eligible PR/push event path, such as an appropriately scoped GitHub App token for PR creation, or the documented approval-required GITHUB_TOKEN PR workflow path. No credentials or repository rules were changed."
+type: Issue
+status: open
+priority: 1
+tags: []
+created_at: "2026-10-04T12:35:56.132Z"
+updated_at: "2026-10-04T12:35:56.132Z"
+author: codex-sol
+repro_steps: Read official Troubleshooting required status checks section Checks from some workflow jobs are not evaluated; compare dependency-refresh.yml final gh workflow run command and ci.yml workflow_dispatch trigger. Do not run dependency-refresh or publish to reproduce.
+expected_result: "An automation-created refresh PR has all four required check names evaluated at its exact head through an eligible workflow event, with owner publishing gates unchanged."
+actual_result: "Explicit dispatch executes CI, but GitHub Docs exclude workflow_dispatch job checks from required PR status checks. The requested dispatch and name-preservation tests pass; automatic branch-rule satisfaction is unresolved."
+files[2]{path,scope,note}:
+  .github/workflows/dependency-refresh.yml,project,Requested dispatch and remaining event boundary
+  .github/workflows/ci.yml,project,Four required matrix check names
+docs[1]{path,scope,note}:
+  "https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks",project,Official required-check event restriction
+body: ""
