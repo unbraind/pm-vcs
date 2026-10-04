@@ -16,8 +16,10 @@ updates:
           - "@unbrained/pm-cli"
           - "pm-*"
       dependencies:
-        # Disjoint from pm-toolchain, so a pm package can never be bumped
-        # here (and capped by this group's update-types) instead.
+        # Every other npm dependency, disjoint from pm-toolchain, so a pm
+        # package can never be bumped here (and capped by update-types).
+        patterns:
+          - "*"
         exclude-patterns:
           - "@unbrained/pm-cli"
           - "pm-*"

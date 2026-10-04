@@ -6,15 +6,16 @@ status: closed
 priority: 2
 tags[3]: automation,ci,dependencies
 created_at: "2026-10-04T16:56:30.469Z"
-updated_at: "2026-10-04T16:58:44.394Z"
+updated_at: "2026-10-04T17:20:41.560Z"
 deadline: "2026-10-06T00:00:00.000Z"
 closed_at: "2026-10-04T16:58:38.512Z"
 completed_at: "2026-10-04T16:58:38.512Z"
 author: claude-orchestrator
 estimated_minutes: 15
-acceptance_criteria: dependabot.yml checks npm daily with pm-toolchain and dependencies groups; dependabot-auto-merge.yml enables squash auto-merge only for Dependabot non-major updates with least-privilege permissions; repository allows auto-merge; required checks still gate every merge
-comments[1]{created_at,author,text}:
+acceptance_criteria: "dependabot.yml checks npm daily with disjoint pm-toolchain and dependencies groups; dependabot-auto-merge.yml enables squash auto-merge for the calendar-versioned pm-toolchain group (year rollovers read as semver-major) and otherwise only for updates classified minor or patch, with documented least-privilege permissions; repository allows auto-merge; required checks still gate every merge"
+comments[2]{created_at,author,text}:
   "2026-10-04T16:56:30.469Z",claude-orchestrator,Rolled out from the reviewed pilot unbraind/pm-presets#118.
+  "2026-10-04T17:20:41.560Z",claude-orchestrator,"Review round 2 (Greptile/CodeRabbit across the fleet rollout): explicit minor/patch allow-list so an unclassified update never auto-merges; documented why the job needs write permissions; explicit patterns for the dependencies group; acceptance criteria now name the pm-toolchain calendar-version exception. Refused: switching to pull_request_target (GitHub keeps Dependabot-authored runs read-only there too; the pull_request + permissions pattern is proven by pm-presets#119) and removing the pm-toolchain exception (owner rule pm-cli-website-6d05: pm bumps land unattended; required checks gate them)."
 files[2]{path,scope}:
   .github/dependabot.yml,project
   .github/workflows/dependabot-auto-merge.yml,project
