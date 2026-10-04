@@ -129,3 +129,12 @@ test("an installer killed by a signal fails the install instead of reporting suc
   const result = prepare(checkout("killed", "pinned"), stubPm("killed", 0, "kill -9 $PPID"));
   assert.equal(result.status, 1, result.stderr);
 });
+
+test("a malformed lookup path preserves the original installer failure", () => {
+  const directory = checkout("malformed-lookup", "absent");
+  writeFileSync(join(directory, "node_modules"), "not a directory\n");
+  const result = prepare(directory, hostPath);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /MODULE_NOT_FOUND/);
+  assert.doesNotMatch(result.stderr, /ENOTDIR|skipping merge-driver install/);
+});

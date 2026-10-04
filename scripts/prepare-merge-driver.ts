@@ -31,8 +31,12 @@ try {
   // the original error is rethrown. A probe that finds no package.json is not
   // yet proof of absence: a broken install can leave `node_modules/pm-ops` (a
   // directory or a dangling link) with no package.json in any ancestor Node
-  // searches. Such an entry also counts as present. Node returns null paths
-  // only for built-in modules; pm-ops/package.json is a package specifier.
+  // searches. Such an entry also counts as present. Keep Node's global paths
+  // too: the installer resolution above can use them, so an absent local
+  // package alone cannot prove absence. An unreadable or malformed lookup path
+  // leaves presence uncertain and must fail closed with the original error.
+  // Node returns null paths only for built-in modules; pm-ops/package.json is
+  // a package specifier.
   let packagePresent = true;
   try {
     resolver.resolve("pm-ops/package.json");
@@ -40,7 +44,16 @@ try {
     packagePresent =
       !(probe instanceof Error && "code" in probe && probe.code === "MODULE_NOT_FOUND") ||
       resolver.resolve.paths("pm-ops/package.json")!.some(
-        (directory) => lstatSync(join(directory, "pm-ops"), { throwIfNoEntry: false }) !== undefined,
+        (directory) => {
+          try {
+            return lstatSync(join(directory, "pm-ops"), { throwIfNoEntry: false }) !== undefined;
+          } catch {
+            // throwIfNoEntry:false only suppresses ENOENT, not EACCES, EPERM,
+            // ENOTDIR, or ELOOP. Do not replace the installer diagnostic or
+            // treat an inconclusive presence check as an omit-dev install.
+            return true;
+          }
+        },
       );
   }
   if (packagePresent) throw error;

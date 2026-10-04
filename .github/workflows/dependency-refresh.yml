@@ -9,6 +9,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # GITHUB_TOKEN-created PRs need an explicit workflow_dispatch to run CI.
+  actions: write
 
 concurrency:
   group: dependency-refresh
@@ -81,8 +83,12 @@ jobs:
           gate stays green at this commit."
           git push -u origin "$branch"
           gh pr create \
-            --repo "$GITHUB_REPOSITORY" \
+            -R "$GITHUB_REPOSITORY" \
             --base main \
             --head "$branch" \
             --title "Refresh dependencies and regenerate self-host bundle" \
             --body "Automated weekly dependency refresh. The lockfile and the regenerated \`selfhost.bundle\` are committed together so the \`accept:self-host\` gate stays green at this commit. The full \`release:check\` gate passed before this PR was created."
+          # PR events emitted by GITHUB_TOKEN do not start pull_request CI.
+          # workflow_dispatch is allowed: dispatch the CI workflow on the same
+          # head we just pushed, including a collision-safe run suffix.
+          gh workflow run ci.yml -R "$GITHUB_REPOSITORY" --ref "$branch"

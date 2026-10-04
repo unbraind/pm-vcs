@@ -15,7 +15,8 @@ dist-test/
 .agents/pm/locks/
 .agents/pm/runtime/
 .agents/pm/search/
-.agents/pm/extensions/
+.agents/pm/extensions/*
+!.agents/pm/extensions/.managed-extensions.json
 coverage/
 
 # pm-cli:runtime-cache:start
