@@ -78,6 +78,7 @@
 
 ### Other
 
+- Auto-merge green Dependabot updates and group the pm toolchain into one daily PR ([pm-vcs-0bur](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-0bur.toon))
 - Certify pm CLI 2026.9.23 and adopt the guarded pm-ops merge-driver launcher ([pm-vcs-6smg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-6smg.toon))
 - Certify pm CLI 2026.9.17 ([pm-vcs-65yt](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-65yt.toon))
 - pm-vcs becomes a version control system in its own right, not a helper around git ([pm-vcs-tr2a](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-tr2a.toon))
