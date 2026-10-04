@@ -68,3 +68,10 @@ pm-vcs-bcgs --run --only-index 4 --progress --pm-context tracker
 the final committed self-host verification. Existing
 coverage excludes the benchmark script; that separate source-inventory boundary
 remains tracked by pm-vcs-tj07.
+
+Initial exact-head PR CI passed Node 22/26, both Windows launcher checks and
+CodeQL at c88f1cf. Reused acceptance criteria now name all three 2026.10.4 pins;
+the linked release gate creates the parent of the mandatory shared lock before
+acquisition. Sourcery weekly and Cubic monthly quota notices are missing
+substantive review evidence; Gemini/Copilot have not replied. These tracker
+corrections preserve all runtime behavior, thresholds and publishing gates.

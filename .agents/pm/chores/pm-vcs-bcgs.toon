@@ -6,12 +6,12 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-09-26T14:12:57.090Z"
-updated_at: "2026-10-04T12:22:37.802Z"
+updated_at: "2026-10-04T12:32:06.268Z"
 author: "harness:codex"
 estimated_minutes: 120
-acceptance_criteria: "Installed repository-local PM CLI/SDK equals published 2026.9.29; pm-changelog remains 2026.9.25 and pm-ops remains 2026.9.28; the committed selfhost.bundle tip tree matches the committed source and full release:check passes at the exact candidate head; packed npm/Bun functional VCS acceptance and strict tracker health pass; review, all-source coverage, and full forge/scale limits are stated independently."
+acceptance_criteria: "Installed repository-local PM CLI/SDK, pm-changelog and pm-ops equal published 2026.10.4; the committed selfhost.bundle tip tree matches the committed source and full release:check passes at the exact candidate head; packed npm/Bun functional VCS acceptance and strict tracker health pass; review, all-source coverage, and full forge/scale limits are stated independently."
 actual_result: "CLI/SDK, pm-ops and pm-changelog 2026.10.4 exact pins. Required PR-head workflow dispatch passes 3 regressions; canonical launcher byte identity and 8 tests pass. Full PM-linked locked release:check PASS 797/797 zero skips, configured c8 100/100/100/100; all native/stat-cache/self-host/audit/identity/pack/changelog/attestation checks pass. Both npm audits zero vulnerabilities; Bun graph install passed. Packed real tracker npm/native-Bun dogfood PASS two commits, clean status, history, marker diff, bundle export 159754/163426 bytes; scratch deleted. Managed pm-github read-only preview 1/0/0 and strict health PASS. CI/reviews pending; owner publishing gates untouched."
-comments[8]{created_at,author,text}:
+comments[9]{created_at,author,text}:
   "2026-09-28T06:20:17.332Z",claude-hub,"2026-09-28: pinned pm-ops 2026.9.28 and re-copied its templates/prepare-merge-driver.ts (pm-ops#124: the omit-dev skip now checks every Node resolution path for an incomplete hoisted pm-ops, so a broken ancestor install fails instead of silently skipping the merge drivers). release:check and changelog:check pass on this branch."
   "2026-10-02T21:43:20.112Z",codex-sol,"Restart audit validates CodeRabbit 4169919316: npm.cmd is not executable via shell-free spawnSync. Add red Windows launch assertion and real Node CLI argv fixture, then pack through npm JS entrypoint on Windows. Preserve shell-free arguments and self-host bundle/HEAD equality."
   "2026-10-02T21:44:53.397Z",codex-sol,Windows launcher assertion fails against npm.cmd and passes using process.execPath. Added real shell-free Node subprocess fixture verifying a spaced npm entrypoint and destination containing ampersand/percent remain literal argv; fallback entrypoint and POSIX args are covered. Focused PM-linked tests pass. Full locked release gate follows at committed self-host head; all-source CDC scope remains pm-vcs-tj07.
@@ -20,6 +20,7 @@ comments[8]{created_at,author,text}:
   "2026-10-04T12:10:27.020Z",codex-sol,"Behavioral workflow regression failed before repair (only PR create called; actions permission absent), then passed 3/3: CI dispatch on collision-safe head, no dispatch after failed PR create, and exact test (22/26) plus windows-acceptance-launcher (22/26) names. Canonical launcher byte-identity failed before published template copy; refreshed suite passes 8/8 including original diagnostic through malformed lookup. Both production and full npm audits are clean. Managed pm-github 2026.10.4 installed; atomic dry-run proposes 1 import/0 updates/0 skips, no writes; strict health passes. Publishing remains owner-gated and untouched."
   "2026-10-04T12:14:37.335Z",codex-sol,"Real tracker packed dogfood passed npm npx and native bunx --bun on CLI 2026.10.4: init, stage the actual Chore/history pair, two commits linked to pm-vcs-bcgs, clean status, log limit 2, diff includes scratch marker, and bundle export (159754/163426 bytes). Every command exited 0 and scratch was deleted. Exact commands and receipt sizes are in docs/certification-2026.10.4.md."
   "2026-10-04T12:22:35.726Z",codex-sol,"Full PM-linked gate passed: npx pm test pm-vcs-bcgs --run --only-index 4 --progress --pm-context tracker --override-linked-pm-context, executing flock /tmp/claude-1000/heavy-gate.lock npm run release:check. 797/797 tests, zero skips; c8 100% statements/branches/functions/lines in the unchanged configured inventory. Native TOON, stat-cache, committed self-host, production audit, identities, pack, changelog/date/publish-attestation all pass. Both npm audits clean; CI Bun install --no-save passed. Final review and remote CI remain separate."
+  "2026-10-04T12:32:05.281Z",codex-sol,"Initial PR #89 Node 22/26 release CI, both Windows launcher checks and CodeQL passed at c88f1cf. Correct stale reused acceptance pins to 2026.10.4 and make linked gate create the mandatory lock parent, following the same valid tracker review correction in pm-ts-starter. Preserve existing whole-source benchmark boundary pm-vcs-tj07. Sourcery weekly and Cubic monthly quota receipts are missing substantive reviews; Gemini/Copilot absent, CodeRabbit running, Greptile pending. Regenerate bundle with evidence and verify committed equality before final push."
 notes[5]{created_at,author,text}:
   "2026-09-26T14:24:18.713Z","harness:codex","author=codex,text=Installed @unbrained/pm-cli 2026.9.26, pm-changelog 2026.9.25, pm-ops 2026.9.26. Copied the exact pm-ops canonical prepare launcher; regenerated committed selfhost.bundle. Full release:check passed 789/789 tests, 0 skipped, c8 100/100/100/100, native TOON and strace acceptance, self-host source identity, zero production audit findings, npm pack dry run, changelog and attestation gates. Strict PM health passed with an existing advisory provenance warning."
   "2026-09-29T13:24:09.460Z",codex,"Fresh npm/npx and Bun/bunx projects installed packed pm-vcs 2026.7.30 with published CLI 2026.9.29. Both package installs reported copy.complete=true and activated the extension; each initialized native pm-vcs, staged and committed a real text file, then passed strict PM health with zero warnings. This was on the code-identical artifact before the local pin edit; exact new-head full gate and committed self-host bundle revalidation follow."
@@ -63,12 +64,13 @@ tests[4]:
       created_at: "2026-10-02T21:44:29.215Z"
       source_kind: local_mutation
       source_ref: land/pm-vcs-79
-  - command: "flock /tmp/claude-1000/heavy-gate.lock npm run release:check"
+  - command: "mkdir -p /tmp/claude-1000 && flock /tmp/claude-1000/heavy-gate.lock npm run release:check"
     scope: project
     timeout_seconds: 2400
+    pm_context_mode: tracker
     provenance:
       author: codex-sol
-      created_at: "2026-10-04T12:04:19.270Z"
+      created_at: "2026-10-04T12:32:04.116Z"
       source_kind: local_mutation
       source_ref: chore/pm-vcs-pm-cli-2026-10-4
 docs[4]:
