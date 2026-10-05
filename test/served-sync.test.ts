@@ -95,9 +95,9 @@ interface Served {
  * @returns The running server and its repository.
  */
 async function serveSeededRepo(): Promise<Served> {
-  const repository = freshRepo();
+  const root = tempRoot();
+  const repository = Repository.init(join(root, "repo"));
   commitFile(repository, "a.txt", "one");
-  const root = join(repository.root, "..");
   const server = await startRepositoryServer({ root, host: "127.0.0.1", port: 0, grants: null });
   servers.push(server);
   const name = repository.root.slice(root.length + 1);

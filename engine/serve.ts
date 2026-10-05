@@ -9,13 +9,14 @@
 // `pm vcs push` runs against a directory.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import { parseBundle } from "./bundle.ts";
 import { ObjectStoreError } from "./objects.ts";
 import { FileTransport } from "./transport.ts";
+import { isServableRepositoryDirectory, ServedRepositoryDirectories } from "./served-repositories.ts";
 import {
   ADVERTISE_ENDPOINT,
   BAD_REQUEST_STATUS,
@@ -292,8 +293,8 @@ class ServedRepository {
  * Starts serving the repositories under one root.
  *
  * The server is the transport, not a second implementation of it: every
- * repository operation is delegated to a `FileTransport` opened on the joined
- * path, so the fast-forward rules, the compare-and-swap publication and the
+ * repository operation is delegated to a `FileTransport` opened on a discovered
+ * catalogue directory, so the fast-forward rules, compare-and-swap publication and
  * verified arrival of objects are the receiving side's own code — the same code
  * that answers a local push.
  *
@@ -325,9 +326,10 @@ export function startRepositoryServer(options: ServeOptions): Promise<ServeHandl
     if (!Number.isSafeInteger(value) || value < 1) throw new ObjectStoreError("bad_limits", "Server limits must be positive safe integers.");
   }
   const grants = options.grants ?? null;
+  const directories = new ServedRepositoryDirectories(root);
   const repositories = new Map<string, ServedRepository>();
   const server = createServer((request, response) => {
-    void handleServedRequest(request, response, { root, grants, limits, repositories });
+    void handleServedRequest(request, response, { directories, grants, limits, repositories });
   });
   return new Promise((resolveListen, rejectListen) => {
     server.once("error", (error) => rejectListen(error));
@@ -364,8 +366,8 @@ async function closeServer(server: Server, repositories: Map<string, ServedRepos
 
 /** Everything one request needs, shared between the server and its handlers. */
 interface ServeContext {
-  /** The served root, already resolved absolute. */
-  readonly root: string;
+  /** Repository paths discovered independently of all request names. */
+  readonly directories: ServedRepositoryDirectories;
   /** Token grants, or null when serving without authorization. */
   readonly grants: TokenGrants | null;
   /** Bounds in force. */
@@ -470,35 +472,22 @@ function denial(): ServedResponse {
 /**
  * Opens the served repository a request addressed.
  *
- * The repository is opened lazily per request by the transport, so a directory
- * that appears after the server started is served without a restart, and one
- * that is not a repository is reported by the transport as unreachable — the
- * same answer a configured path that holds none produces locally.
+ * Request text is only a catalogue key. Unknown names may cause a rate-limited
+ * scan, whose filesystem paths are independent of that key. Revalidation uses
+ * the catalogue value and refuses stores replaced by aliases after discovery.
  *
  * @param context - The server's shared state.
  * @param repository - The validated repository name.
- * @returns The repository holder.
+ * @returns The repository holder, or null for the fixed denial response.
  */
 function openServedRepository(context: ServeContext, repository: string): ServedRepository | null {
-  // Reject filesystem aliases before opening: a tenant name must own its store,
-  // rather than reach another tenant through a symlink or an instance hub link.
-  let path = context.root;
-  try {
-    for (const segment of [...(repository === "" ? [] : repository.split("/")), ".pmvcs"]) {
-      path = join(path, segment);
-      const entry = lstatSync(path);
-      if (entry.isSymbolicLink() || !entry.isDirectory()) return null;
-    }
-    if (existsSync(join(path, "link.json"))) return null;
-    for (const entry of ["format", "config.json", "HEAD", "objects", "refs"]) {
-      if (lstatSync(join(path, entry)).isSymbolicLink()) return null;
-    }
-  } catch {
+  const path = context.directories.lookup(repository);
+  if (path === undefined || !isServableRepositoryDirectory(path)) {
+    context.repositories.delete(repository);
     return null;
   }
   const existing = context.repositories.get(repository);
   if (existing !== undefined) return existing;
-  path = join(context.root, ...repository.split("/"));
   const served = new ServedRepository(`http://served/${repository}`, path);
   context.repositories.set(repository, served);
   return served;

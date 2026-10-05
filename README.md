@@ -328,7 +328,14 @@ pm vcs serve --root project --listen 127.0.0.1:0 --auth tokens.json
 
 The command reports the chosen ephemeral port and runs until stopped. A repository passed
 as `--root` is available at the base URL. A parent root exposes its repositories by relative
-name, including nested names such as `tenant/project`. The tokens file is a JSON array:
+name, including nested names such as `tenant/project`. At startup the server enumerates
+repository directories into a catalogue of canonical names and real paths. Requests resolve
+only by exact catalogue lookup; request text is never joined into a filesystem path. An
+authorized lookup of an unknown name triggers at most one rescan per second. Each scan
+examines at most 10,000 directory entries and descends at most 32 levels; repositories beyond
+those bounds receive the same denial as unknown names. Use a narrower root for larger trees.
+Symlink aliases, escaping symlinks and linked instances are refused, including aliases
+introduced after discovery. The tokens file is a JSON array:
 
 ```json
 [

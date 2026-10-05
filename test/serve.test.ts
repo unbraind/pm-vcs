@@ -8,7 +8,7 @@
 // server, and what they can and cannot tell apart.
 
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connect } from "node:net";
 import { exportBundle } from "../engine/bundle.ts";
@@ -91,9 +91,9 @@ function commitFile(repository: Repository, path: string, text: string): string 
 async function serveRoot(
   options: { grants?: TokenGrants | null; limits?: Parameters<typeof startRepositoryServer>[0]["limits"] } = {},
 ): Promise<{ server: ServeHandle; root: string; repository: Repository }> {
-  const repository = freshRepo();
+  const root = tempRoot();
+  const repository = Repository.init(join(root, "repo"));
   commitFile(repository, "a.txt", "one");
-  const root = join(repository.root, "..");
   const server = await startRepositoryServer({
     root,
     host: "127.0.0.1",
@@ -197,7 +197,7 @@ test("a bearer header accepts exactly one spelling", () => {
   assert.equal(bearerToken("Bearer secret extra"), null);
 });
 
-test("repository names join onto the root or are refused before anything is joined", () => {
+test("repository names are canonical catalogue keys or are refused", () => {
   assert.equal(isServedRepositoryName("repo"), true);
   assert.equal(isServedRepositoryName("tenant/repo"), true);
   assert.equal(isServedRepositoryName("repo-1.2_3"), true);
@@ -232,11 +232,11 @@ test("a served path names a repository and an endpoint, or nothing", () => {
 test("every refusal a caller may not learn from answers with the same bytes", async () => {
   // Two tenants: the served root holds tenant-a's repository and tenant-b's,
   // and each token reaches exactly one.
-  const tenantA = freshRepo();
+  const root = tempRoot();
+  const tenantA = Repository.init(join(root, "tenant-a"));
   commitFile(tenantA, "a.txt", "one");
-  const tenantB = freshRepo();
+  const tenantB = Repository.init(join(root, "tenant-b"));
   commitFile(tenantB, "b.txt", "one");
-  const root = join(tenantA.root, "..");
   const nameA = tenantA.root.slice(root.length + 1);
   const nameB = tenantB.root.slice(root.length + 1);
   const grants = new TokenGrants(parseTokenText(JSON.stringify([
@@ -263,6 +263,11 @@ test("every refusal a caller may not learn from answers with the same bytes", as
     ["raw dot-dot traversal", "/../outside/advertise", { authorization: "Bearer secret-a" }],
     ["mid-path traversal", `/${nameA}/../outside/advertise`, { authorization: "Bearer secret-a" }],
     ["encoded traversal", "/%2e%2e/outside/advertise", { authorization: "Bearer secret-a" }],
+    ["encoded slash traversal", "/%2e%2e%2foutside/advertise", { authorization: "Bearer secret-a" }],
+    ["absolute target", "http://example.invalid/tenant-a/advertise", { authorization: "Bearer secret-a" }],
+    ["absolute filesystem path", "/%2foutside/advertise", { authorization: "Bearer secret-a" }],
+    ["encoded NUL", "/tenant-a%00/advertise", { authorization: "Bearer secret-a" }],
+    ["encoded backslash", "/tenant-a%5coutside/advertise", { authorization: "Bearer secret-a" }],
     ["double slash", `//${nameA}/advertise`, { authorization: "Bearer secret-a" }],
     ["backslash name", "/a\\b/advertise", { authorization: "Bearer secret-a" }],
     ["get method", `/${nameA}/advertise`, { method: "GET", authorization: "Bearer secret-a" }],
@@ -287,9 +292,9 @@ test("every refusal a caller may not learn from answers with the same bytes", as
 });
 
 test("a read grant may fetch but not write, and the refusal names the token not the repository", async () => {
-  const tenantA = freshRepo();
+  const root = tempRoot();
+  const tenantA = Repository.init(join(root, "tenant-a"));
   commitFile(tenantA, "a.txt", "one");
-  const root = join(tenantA.root, "..");
   const name = tenantA.root.slice(root.length + 1);
   const grants = new TokenGrants(parseTokenText(JSON.stringify([
     { token: "reader", repository: name, access: "read" },
@@ -474,6 +479,26 @@ test("filesystem aliases cannot make one tenant serve another tenant's repositor
   const owned = await rawRequest(server, "/local/advertise");
   assert.equal(owned.status, 200);
   assert.equal(local.refs.read("refs/heads/main"), null);
+});
+
+test("new nested repositories are discovered on a bounded miss and replaced paths stay denied", async () => {
+  const root = tempRoot();
+  const server = await startRepositoryServer({ root, host: "127.0.0.1", port: 0 });
+  servers.push(server);
+  Repository.init(join(root, "tenant", "new"));
+  const absent = await rawRequest(server, "/unknown/advertise");
+  assert.equal((await rawRequest(server, "/tenant/new/advertise")).wire.toString(), absent.wire.toString());
+  await new Promise<void>((resolve) => { setTimeout(resolve, 1_100); });
+  assert.equal((await rawRequest(server, "/tenant/new/advertise")).status, 200);
+  renameSync(join(root, "tenant"), join(root, "saved"));
+  const outside = freshRepo();
+  const privateRepository = Repository.init(join(outside.root, "new"));
+  const privateTip = commitFile(privateRepository, "private.txt", "private");
+  symlinkSync(outside.root, join(root, "tenant"), "junction");
+  const replaced = await rawRequest(server, "/tenant/new/advertise");
+  assert.equal(replaced.status, absent.status);
+  assert.ok(replaced.body.equals(absent.body));
+  assert.equal(privateRepository.refs.read("refs/heads/main"), privateTip);
 });
 
 test("all operation envelopes and object counts are bounded before publication", async () => {
