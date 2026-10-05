@@ -9,9 +9,11 @@
 // `pm vcs push` runs against a directory.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 
+import { parseBundle } from "./bundle.ts";
 import { ObjectStoreError } from "./objects.ts";
 import { FileTransport } from "./transport.ts";
 import {
@@ -39,6 +41,7 @@ import {
   isWriteEndpoint,
   JSON_CONTENT_TYPE,
   MISSING_ENDPOINT,
+  OBJECT_FETCH_ENDPOINT,
   PUBLISH_ENDPOINT,
   PUSH_ENDPOINT,
   type ServeLimits,
@@ -169,8 +172,8 @@ export function parseTokenText(text: string): readonly StoredToken[] | null {
     const token = record.token;
     const repository = record.repository;
     const access = record.access;
-    if (typeof token !== "string" || token.length === 0 || token.includes(" ")) return null;
-    if (typeof repository !== "string" || !isServedRepositoryName(repository)) return null;
+    if (typeof token !== "string" || !/^[!-~]+$/.test(token)) return null;
+    if (typeof repository !== "string" || (repository !== "" && !isServedRepositoryName(repository))) return null;
     if (access !== "read" && access !== "write") return null;
     tokens.push({ token, repository, access });
   }
@@ -190,7 +193,7 @@ export function parseTokenText(text: string): readonly StoredToken[] | null {
 export function bearerToken(header: string | undefined): string | null {
   if (header === undefined) return null;
   const match = /^Bearer ([^ ]+)$/.exec(header);
-  return match === null ? null : match[1] ?? null;
+  return match === null ? null : match[1];
 }
 
 /** A running served repository root. */
@@ -205,7 +208,7 @@ export interface ServeHandle {
 
 /** Everything `startRepositoryServer` needs to serve one root. */
 export interface ServeOptions {
-  /** Directory whose immediate and nested subdirectories are the repositories. */
+  /** Repository directory, or a parent holding immediate and nested repositories. */
   readonly root: string;
   /** Host to bind. */
   readonly host: string;
@@ -277,9 +280,7 @@ class ServedRepository {
       return existing;
     }
     while (this.sessions.size >= maxSessions) {
-      const oldest = this.sessions.keys().next();
-      if (oldest.done === true) break;
-      this.sessions.delete(oldest.value);
+      this.sessions.delete(this.sessions.keys().next().value as string);
     }
     const fresh = new FileTransport(this.main.url, this.path);
     this.sessions.set(session, fresh);
@@ -301,7 +302,7 @@ class ServedRepository {
  * @throws ObjectStoreError When the root is not a directory.
  */
 export function startRepositoryServer(options: ServeOptions): Promise<ServeHandle> {
-  const root = resolve(options.root);
+  let root = resolve(options.root);
   try {
     if (!statSync(root).isDirectory()) {
       throw new ObjectStoreError(
@@ -318,7 +319,11 @@ export function startRepositoryServer(options: ServeOptions): Promise<ServeHandl
       `${root} cannot be read as a directory, so no repository can be served under it. Pass a directory with --root.`,
     );
   }
+  root = realpathSync(root);
   const limits = options.limits ?? DEFAULT_SERVE_LIMITS;
+  for (const value of Object.values(limits)) {
+    if (!Number.isSafeInteger(value) || value < 1) throw new ObjectStoreError("bad_limits", "Server limits must be positive safe integers.");
+  }
   const grants = options.grants ?? null;
   const repositories = new Map<string, ServedRepository>();
   const server = createServer((request, response) => {
@@ -327,8 +332,8 @@ export function startRepositoryServer(options: ServeOptions): Promise<ServeHandl
   return new Promise((resolveListen, rejectListen) => {
     server.once("error", (error) => rejectListen(error));
     server.listen(options.port, options.host, () => {
-      const address = server.address();
-      const port = typeof address === "object" && address !== null ? address.port : options.port;
+      // A successful TCP listen callback always carries the bound TCP address.
+      const port = (server.address() as AddressInfo).port;
       resolveListen({
         host: options.host,
         port,
@@ -416,6 +421,8 @@ async function handleServedRequest(
         contentType: JSON_CONTENT_TYPE,
       };
   }
+  response.sendDate = false;
+  response.setHeader("connection", "close");
   response.statusCode = outcome.status;
   response.setHeader("content-type", outcome.contentType);
   response.setHeader("content-length", String(outcome.body.length));
@@ -433,8 +440,8 @@ async function handleServedRequest(
  * @returns The status, body and content type to answer with.
  */
 async function routeServedRequest(request: IncomingMessage, context: ServeContext): Promise<ServedResponse> {
-  const parsed = request.url === undefined ? null : splitServedPath(request.url.split("?")[0] ?? "");
-  if (request.method !== "POST" || parsed === null || !isServedRepositoryName(parsed.repository)) {
+  const parsed = splitServedPath((request.url as string).split("?")[0]);
+  if (request.method !== "POST" || parsed === null || (parsed.repository !== "" && !isServedRepositoryName(parsed.repository))) {
     return denial();
   }
   const repository = parsed.repository;
@@ -442,10 +449,11 @@ async function routeServedRequest(request: IncomingMessage, context: ServeContex
     ? "write" as TokenAccess
     : context.grants.scope(bearerToken(request.headers.authorization) ?? "", repository);
   if (access === null) return denial();
+  const served = openServedRepository(context, repository);
+  if (served === null) return denial();
   if (isWriteEndpoint(parsed.endpoint) && access !== "write") {
     return { status: FORBIDDEN_STATUS, body: FORBIDDEN_BODY, contentType: JSON_CONTENT_TYPE };
   }
-  const served = openServedRepository(context, repository);
   const body = await readBoundedBody(request, context.limits.maxBodyBytes);
   return dispatchServedRequest(served, parsed.endpoint, body, context);
 }
@@ -471,10 +479,26 @@ function denial(): ServedResponse {
  * @param repository - The validated repository name.
  * @returns The repository holder.
  */
-function openServedRepository(context: ServeContext, repository: string): ServedRepository {
+function openServedRepository(context: ServeContext, repository: string): ServedRepository | null {
+  // Reject filesystem aliases before opening: a tenant name must own its store,
+  // rather than reach another tenant through a symlink or an instance hub link.
+  let path = context.root;
+  try {
+    for (const segment of [...(repository === "" ? [] : repository.split("/")), ".pmvcs"]) {
+      path = join(path, segment);
+      const entry = lstatSync(path);
+      if (entry.isSymbolicLink() || !entry.isDirectory()) return null;
+    }
+    if (existsSync(join(path, "link.json"))) return null;
+    for (const entry of ["format", "config.json", "HEAD", "objects", "refs"]) {
+      if (lstatSync(join(path, entry)).isSymbolicLink()) return null;
+    }
+  } catch {
+    return null;
+  }
   const existing = context.repositories.get(repository);
   if (existing !== undefined) return existing;
-  const path = join(context.root, ...repository.split("/"));
+  path = join(context.root, ...repository.split("/"));
   const served = new ServedRepository(`http://served/${repository}`, path);
   context.repositories.set(repository, served);
   return served;
@@ -543,10 +567,15 @@ async function dispatchServedRequest(
     const advertisement = await served.transport().advertise();
     return { status: 200, body: Buffer.from(`${JSON.stringify(advertisement)}\n`, "utf8"), contentType: JSON_CONTENT_TYPE };
   }
-  if (endpoint === MISSING_ENDPOINT) {
+  if (endpoint === MISSING_ENDPOINT || endpoint === OBJECT_FETCH_ENDPOINT) {
     const request = decodeWireObject(body);
     const ids = request === null ? null : decodeMissingRequest(request);
     if (ids === null) throw new ObjectStoreError("bad_request", "The request does not hold a well-formed object list.");
+    if (ids.length > limits.maxUploadObjects) throw limitExceeded(`An object query may name at most ${limits.maxUploadObjects} objects.`);
+    if (endpoint === OBJECT_FETCH_ENDPOINT) {
+      const bundle = await served.transport().fetchObjects(ids);
+      return { status: 200, body: bundle, contentType: BUNDLE_CONTENT_TYPE };
+    }
     const missing = await served.transport().missingObjects(ids);
     return { status: 200, body: Buffer.from(encodeMissingResponse(missing), "utf8"), contentType: JSON_CONTENT_TYPE };
   }
@@ -573,10 +602,8 @@ async function dispatchServedRequest(
     const bundle = await served.transport().fetch(fetchRequest.refs, fetchRequest.haves);
     return { status: 200, body: bundle, contentType: BUNDLE_CONTENT_TYPE };
   }
-  if (endpoint === PUSH_ENDPOINT || endpoint === PUBLISH_ENDPOINT) {
-    return await dispatchRefMoves(served, endpoint, request, context);
-  }
-  throw new ObjectStoreError("bad_request", `The server does not serve the endpoint ${endpoint}.`);
+  // The path splitter admits only known endpoints; the remaining two move refs.
+  return await dispatchRefMoves(served, endpoint, request, context);
 }
 
 /**
@@ -610,7 +637,9 @@ async function dispatchRefMoves(
   if (endpoint === PUSH_ENDPOINT) {
     const encoded = request.bundle;
     if (typeof encoded !== "string") throw new ObjectStoreError("bad_request", "The push request does not carry a bundle.");
-    const receipt = await served.transport().push(Buffer.from(encoded, "base64"), updates, force, now);
+    const bundle = Buffer.from(encoded, "base64");
+    if (parseBundle(bundle).header.objects.length > context.limits.maxUploadObjects) throw limitExceeded(`A push may carry at most ${context.limits.maxUploadObjects} objects.`);
+    const receipt = await served.transport().push(bundle, updates, force, now);
     return { status: 200, body: Buffer.from(encodePushReceipt(receipt), "utf8"), contentType: JSON_CONTENT_TYPE };
   }
   const session = typeof request.session === "string" ? request.session : "";

@@ -249,8 +249,9 @@ function readServeGrants(authPath: string | undefined, workingRoot: string): Tok
   try {
     grants = readTokenFile(resolve(workingRoot, authPath));
   } catch (error) {
-    if (!(error instanceof ObjectStoreError)) throw error;
-    throw new VcsError(error.code, error.message, "Serve with a readable, well-formed tokens file, or without --auth.");
+    // readTokenFile normalizes both filesystem and parser failures.
+    const failure = error as ObjectStoreError;
+    throw new VcsError(failure.code, failure.message, "Serve with a readable, well-formed tokens file, or without --auth.");
   }
   if (grants.isEmpty()) {
     throw new VcsError(
@@ -818,18 +819,19 @@ export function registerVcsCommands(api: ExtensionApi): void {
       "List the repositories this one exchanges history with, add one, or remove one. A remote is local knowledge, not part of the history, so adding one changes nothing another clone will ever see.",
     arguments: [
       { name: "name", description: "Remote to add or remove; omit to list", required: false },
-      { name: "url", description: "Where it lives: a filesystem path or a file: URL", required: false },
+      { name: "url", description: "Where it lives: a filesystem path, file: URL or HTTP(S) URL", required: false, variadic: true },
     ],
     flags: [{ long: "--remove", description: "Remove the named remote instead of adding one", value_type: "boolean" }],
     run(context: CommandHandlerContext): VcsEnvelope & { remotes?: readonly Remote[]; added?: Remote; removed?: string } {
       const repository = openRepository(context);
-      const name = context.args[0]?.trim();
+      const remoteArgs = context.args[0] === "add" ? context.args.slice(1) : context.args;
+      const name = remoteArgs[0]?.trim();
       if (name === undefined || name === "") return { ok: true, remotes: repository.remotes.list() };
       if (context.options?.remove === true) {
         repository.remotes.remove(name);
         return { ok: true, removed: name };
       }
-      const url = context.args[1]?.trim();
+      const url = remoteArgs[1]?.trim();
       if (url === undefined || url === "") {
         throw new VcsError(
           "missing_remote_url",
@@ -920,7 +922,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       "Serve the repositories under one root over HTTP, so clone, fetch and push reach them exactly as they reach a file remote: same capability negotiation, same fast-forward rules, same compare-and-swap publication. The command keeps running until its process is stopped; pass --auth with a tokens file to scope bearer tokens to repositories, and embed a token in a remote's URL as http://token@host:port/repository.",
     flags: [
       { long: "--listen", value_name: "host:port", description: "Address to bind (default 127.0.0.1:0, an ephemeral loopback port)", value_type: "string" },
-      { long: "--root", value_name: "dir", description: "Directory whose subdirectories are the repositories to serve (default the working root)", value_type: "string" },
+      { long: "--root", value_name: "dir", description: "Repository directory or parent of repositories (default the working root)", value_type: "string" },
       { long: "--auth", value_name: "tokens-file", description: "JSON array of {token, repository, access} bearer grants; omit to serve every repository readable and writable", value_type: "string" },
     ],
     async run(context: CommandHandlerContext): Promise<VcsEnvelope & { serve: { host: string; port: number; root: string; requiresAuth: boolean } }> {

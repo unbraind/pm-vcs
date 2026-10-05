@@ -8,9 +8,10 @@
 // server, and what they can and cannot tell apart.
 
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { request as httpRequest } from "node:http";
+import { connect } from "node:net";
+import { exportBundle } from "../engine/bundle.ts";
 import { afterEach, test } from "node:test";
 
 import { ObjectStoreError } from "../engine/objects.ts";
@@ -23,6 +24,7 @@ import {
   type ServeHandle,
 } from "../engine/serve.ts";
 import {
+  DEFAULT_SERVE_LIMITS,
   DENIED_BODY,
   DENIED_STATUS,
   FORBIDDEN_BODY,
@@ -124,33 +126,31 @@ function rawRequest(
     chunked?: readonly string[];
     headers?: Record<string, string>;
   } = {},
-): Promise<{ status: number; body: Buffer }> {
-  // `node:http` rather than `fetch`, because `fetch` normalizes `..` out of the
-  // path before the socket sees it: the traversal spellings this suite sends
-  // are the ones a hostile client writes raw.
+): Promise<{ status: number; body: Buffer; wire: Buffer }> {
+  // Raw TCP preserves hostile request-target bytes under both Node and Bun.
   return new Promise((resolveRequest, rejectRequest) => {
-    const request_ = httpRequest(
-      { host: server.host, port: server.port, path, method: options.method ?? "POST" },
-      (response) => {
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk: Buffer) => chunks.push(chunk));
-        response.on("end", () => resolveRequest({ status: response.statusCode ?? 0, body: Buffer.concat(chunks) }));
-      },
-    );
-    request_.on("error", rejectRequest);
-    // One request per socket: a test that stops the server must not have a
-    // keep-alive connection holding it open.
-    request_.setHeader("connection", "close");
-    for (const [name, value] of Object.entries(options.headers ?? {})) request_.setHeader(name, value);
-    if (options.authorization !== undefined) request_.setHeader("authorization", options.authorization);
-    if (options.chunked === undefined) {
-      request_.end(options.body ?? "");
-    } else {
-      // No content-length, so the body arrives in chunks and the server's
-      // running bound is the one that has to catch it.
-      for (const chunk of options.chunked) request_.write(chunk);
-      request_.end();
-    }
+    const socket = connect({ host: server.host, port: server.port });
+    const chunks: Buffer[] = [];
+    socket.on("error", rejectRequest);
+    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    socket.on("end", () => {
+      const wire = Buffer.concat(chunks);
+      const separator = wire.indexOf("\r\n\r\n");
+      resolveRequest({ status: Number(wire.toString("utf8", 0, separator).split(" ")[1]), body: wire.subarray(separator + 4), wire });
+    });
+    socket.on("connect", () => {
+      const headers: Record<string, string> = { host: "127.0.0.1", connection: "close", ...options.headers };
+      if (options.authorization !== undefined) headers.authorization = options.authorization;
+      let body: string;
+      if (options.chunked === undefined) {
+        body = options.body ?? "";
+        headers["content-length"] = String(Buffer.byteLength(body));
+      } else {
+        headers["transfer-encoding"] = "chunked";
+        body = options.chunked.map((chunk) => `${Buffer.byteLength(chunk).toString(16)}\r\n${chunk}\r\n`).join("") + "0\r\n\r\n";
+      }
+      socket.write(`${options.method ?? "POST"} ${path} HTTP/1.1\r\n${Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("")}\r\n${body}`);
+    });
   });
 }
 
@@ -242,6 +242,7 @@ test("every refusal a caller may not learn from answers with the same bytes", as
   const grants = new TokenGrants(parseTokenText(JSON.stringify([
     { token: "secret-a", repository: nameA, access: "write" },
     { token: "secret-b", repository: nameB, access: "read" },
+    { token: "secret-a", repository: "absent-scoped", access: "read" },
   ])) ?? []);
   const server = await startRepositoryServer({ root, host: "127.0.0.1", port: 0, grants });
   servers.push(server);
@@ -256,6 +257,8 @@ test("every refusal a caller may not learn from answers with the same bytes", as
     ["malformed header", `/${nameA}/advertise`, { authorization: "Bearer" }],
     ["unknown token", `/${nameA}/advertise`, { authorization: "Bearer not-a-token" }],
     ["wrong tenant", `/${nameB}/advertise`, { authorization: "Bearer secret-a" }],
+    ["absent scoped repository", "/absent-scoped/advertise", { authorization: "Bearer secret-a" }],
+    ["absent scoped write", "/absent-scoped/push", { authorization: "Bearer secret-a" }],
     ["missing repository", "/no-such-repo/advertise", { authorization: "Bearer secret-a" }],
     ["raw dot-dot traversal", "/../outside/advertise", { authorization: "Bearer secret-a" }],
     ["mid-path traversal", `/${nameA}/../outside/advertise`, { authorization: "Bearer secret-a" }],
@@ -266,10 +269,14 @@ test("every refusal a caller may not learn from answers with the same bytes", as
     ["unknown endpoint", `/${nameA}/not-an-endpoint`, { authorization: "Bearer secret-a" }],
     ["no path", "/", { authorization: "Bearer secret-a" }],
   ];
+  for (const endpoint of ["fetch", "push", "objects/missing", "objects/upload", "objects/fetch", "publish"]) {
+    cases.push([`wrong tenant ${endpoint}`, `/${nameB}/${endpoint}`, { authorization: "Bearer secret-a", body: "invalid" }]);
+  }
   const answers = await Promise.all(cases.map(([, path, options]) => rawRequest(server, path, options)));
   for (const [index, [label]] of cases.entries()) {
     assert.equal(answers[index]?.status, DENIED_STATUS, `${label}: wrong status`);
     assert.ok(answers[index]?.body.equals(DENIED_BODY), `${label}: wrong body bytes`);
+    assert.deepEqual(answers[index]?.wire, answers[0]?.wire, `${label}: unequal response bytes`);
   }
 
   // The traversal attempts reached nothing outside the served root: the
@@ -441,4 +448,67 @@ test("closing a served root stops it, and closing twice reports the double stop"
     () => rawRequest(server, `/${name}/advertise`),
     (error: unknown) => (error as NodeJS.ErrnoException).code === "ECONNREFUSED",
   );
+});
+test("filesystem aliases cannot make one tenant serve another tenant's repository", async () => {
+  const root = tempRoot();
+  const outside = freshRepo();
+  commitFile(outside, "private.txt", "private");
+  symlinkSync(outside.root, join(root, "alias"), "junction");
+  const local = Repository.init(join(root, "local"));
+  symlinkSync(outside.controlDirectory, join(root, "control"), "junction");
+  mkdirSync(join(root, "linked"));
+  symlinkSync(outside.controlDirectory, join(root, "linked", ".pmvcs"), "junction");
+  const instance = join(root, "instance");
+  outside.linkInstance("served", instance);
+  const server = await startRepositoryServer({ root, host: "127.0.0.1", port: 0 });
+  servers.push(server);
+  for (const name of ["alias", "linked", "instance", "absent"]) {
+    const answer = await rawRequest(server, `/${name}/advertise`);
+    assert.ok(answer.body.equals(DENIED_BODY));
+  }
+  rmSync(join(local.controlDirectory, "HEAD"));
+  symlinkSync(join(outside.controlDirectory, "HEAD"), join(local.controlDirectory, "HEAD"));
+  assert.ok((await rawRequest(server, "/local/advertise")).body.equals(DENIED_BODY));
+  rmSync(join(local.controlDirectory, "HEAD"));
+  writeFileSync(join(local.controlDirectory, "HEAD"), "ref: refs/heads/main\n");
+  const owned = await rawRequest(server, "/local/advertise");
+  assert.equal(owned.status, 200);
+  assert.equal(local.refs.read("refs/heads/main"), null);
+});
+
+test("all operation envelopes and object counts are bounded before publication", async () => {
+  const { server, repository } = await serveRoot({ limits: { maxBodyBytes: 4096, maxFetchRefs: 2, maxFetchHaves: 2, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2 } });
+  const name = repository.root.slice(join(repository.root, "..").length + 1);
+  const id = "a".repeat(64);
+  for (const [endpoint, body] of [
+    ["objects/missing", "null"], ["objects/fetch", JSON.stringify({ ids: [id, id, id] })],
+    ["objects/upload", "{}"], ["objects/upload", "null"], ["fetch", "[]"], ["fetch", "{}"],
+    ["push", JSON.stringify({ updates: [], now: 0 })],
+    ["push", JSON.stringify({ updates: [], now: 0, bundle: "bad" })],
+    ["publish", JSON.stringify({ updates: [], now: "bad" })],
+    ["publish", JSON.stringify({ updates: "bad", now: 0 })],
+  ]) {
+    const answer = await rawRequest(server, `/${name}/${endpoint}`, { body });
+    assert.equal(answer.status, 400, `${endpoint}: ${answer.body}`);
+  }
+  const oversizedBundle = await rawRequest(server, `/${name}/push`, { body: JSON.stringify({ bundle: exportBundle(repository.objects, repository.refs, []).toString("base64"), updates: [], now: 0 }) });
+  assert.equal(oversizedBundle.status, 400);
+  assert.match(oversizedBundle.body.toString(), /limit_exceeded/);
+  assert.equal((await rawRequest(server, `/${name}/publish`, { body: JSON.stringify({ updates: [], now: 0 }) })).status, 200);
+  assert.throws(() => startRepositoryServer({ root: tempRoot(), host: "127.0.0.1", port: 0, limits: { ...DEFAULT_SERVE_LIMITS, maxSessions: 0 } }), { code: "bad_limits" });
+  await assert.rejects(startRepositoryServer({ root: tempRoot(), host: "127.0.0.1", port: server.port }), { code: "EADDRINUSE" });
+});
+
+test("non-directory roots, malformed files and unexpected I/O failures fail closed", async () => {
+  const fixture = tempRoot();
+  const file = join(fixture, "file");
+  writeFileSync(file, "file");
+  assert.throws(() => startRepositoryServer({ root: file, host: "127.0.0.1", port: 0 }), { code: "not_a_serve_root" });
+  const { server, repository } = await serveRoot();
+  const name = repository.root.slice(join(repository.root, "..").length + 1);
+  rmSync(join(repository.controlDirectory, "oplog.jsonl"));
+  mkdirSync(join(repository.controlDirectory, "oplog.jsonl"));
+  const answer = await rawRequest(server, `/${name}/publish`, { body: JSON.stringify({ updates: [], now: 0 }) });
+  assert.equal(answer.status, 500);
+  assert.match(answer.body.toString(), /internal_error/);
 });

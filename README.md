@@ -135,10 +135,11 @@ pm vcs diff main feature
 | `pm vcs oplog` | Every operation, with the refs it moved and where from. |
 | `pm vcs export <file>` | Write refs and their history to a bundle. |
 | `pm vcs import <file>` | Import a bundle, verifying every object against its own id. |
-| `pm vcs remote [name] [url]` | List remotes, add one, or remove one (`--remove`). |
+| `pm vcs remote [name] [url]` | List remotes, add a file or HTTP(S) remote, or remove one (`--remove`). `remote add <name> <url>` is also accepted. |
 | `pm vcs clone <url> [dir]` | Create a repository from another one, adopting its record configuration. |
 | `pm vcs fetch [remote]` | Bring a remote's branches onto `refs/remotes/<remote>/`. Touches no local branch. |
 | `pm vcs push [remote]` | Send branches (`--branch`). Refuses a non-fast-forward unless `--force`. |
+| `pm vcs serve` | Serve one repository or a directory of repositories over HTTP. `--listen`, `--root` and `--auth` configure the address, root and bearer grants. |
 | `pm vcs verify` | Re-read every reachable object and check it against its id. |
 | `pm vcs trace <path-or-file-id>` | Trace one logical file across edits, moves, copies and deletion. |
 | `pm vcs files <item-id>` | Resolve a PM item's linked arbitrary files to stable identities and changes. |
@@ -245,6 +246,10 @@ engine/config.ts     Which paths hold records and how their fields merge — per
                      so two agents cannot disagree about it.
 engine/oplog.ts      Append-only operation log; `undo`.
 engine/bundle.ts     Export and import, verifying every object against its own id.
+engine/transport.ts Async transport interface, capability negotiation and filesystem receiver policy.
+engine/http-protocol.ts Shared HTTP envelopes, validation, denial bytes and transfer bounds.
+engine/http-transport.ts HTTP(S) client implementing the same transport.
+engine/serve.ts      node:http server delegating authorized operations to FileTransport.
 engine/repo.ts       The porcelain.
 ```
 
@@ -290,6 +295,68 @@ deliberately hostile commit naming `.git/HEAD` and asserts it materializes to no
 slash for a directory, a pattern without `/` matching by basename at any depth, and `!` to
 re-include. Staging an ignored path *by name* is refused rather than skipped — staging
 nothing while reporting success is how a commit ends up missing a file.
+
+Served pushes re-hash every arriving object and verify the complete reachable closure before
+publishing refs. The same fast-forward and compare-and-swap rules apply to file and HTTP
+remotes. Native `.agents/pm/history/*.jsonl` histories that preserve their base prefix merge
+through the existing append-only event union; rewritten prefixes retain conflict handling.
+
+Authorization runs before repository access. Missing repositories, invalid tokens, wrong
+repository scopes and unsafe names return identical HTTP response bytes, including headers.
+A read-only token receives 403 on write endpoints only when its repository exists and is
+readable. Traversal spellings, symlink repository/control aliases and linked instances are
+refused. Operators own the served filesystem: this is a repository authorization boundary,
+not protection against an operator changing the filesystem during a request.
+
+Requests are limited to 512 MiB, 10,000 fetch refs or ref updates, 100,000 haves or objects,
+and 4,096 upload sessions per repository. Old sessions are evicted; objects remain available
+for retry, but an evicted session loses its delivery receipt. Tokens load at startup and
+require a restart to rotate. Without `--auth`, served repositories are readable and writable.
+Keep the default loopback binding for local use; use TLS termination when carrying bearer
+tokens beyond loopback. Token-bearing remote URLs are sensitive local configuration; do not
+publish them. Client connection errors redact credentials and redirects are refused.
+
+---
+
+## Serving a repository
+
+Serve an existing repository in the foreground:
+
+```console
+pm vcs serve --root project --listen 127.0.0.1:0 --auth tokens.json
+```
+
+The command reports the chosen ephemeral port and runs until stopped. A repository passed
+as `--root` is available at the base URL. A parent root exposes its repositories by relative
+name, including nested names such as `tenant/project`. The tokens file is a JSON array:
+
+```json
+[
+  { "token": "example-read-token", "repository": "", "access": "read" },
+  { "token": "example-write-token", "repository": "", "access": "write" },
+  { "token": "example-tenant-token", "repository": "tenant/project", "access": "write" }
+]
+```
+
+The empty repository name grants the root repository. A write grant includes read access;
+all other repositories are denied. Replace the example tokens with private random secrets.
+For a reported port of 43210, another agent uses the usual commands:
+
+```console
+pm vcs clone http://example-write-token@127.0.0.1:43210 agent-a
+pm vcs remote add upstream http://example-read-token@127.0.0.1:43210
+pm vcs fetch upstream
+pm vcs merge upstream/main
+pm vcs push origin
+pm vcs verify
+```
+
+Clone adopts the same record configuration as a file clone. Ref advertisement, bundle fetch,
+verified object upload and publication use the existing transport capabilities. The optional
+`object-fetch` capability adds `Transport.fetchObjects(ids)`, returning a verified bundle of
+individually named objects, including standalone patch series. Review records travel with
+ordinary trees and commits. A series consumer fetches its base and patch history as well as
+its series object before importing the series bundle.
 
 ---
 

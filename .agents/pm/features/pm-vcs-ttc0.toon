@@ -6,15 +6,32 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:10.824Z"
-updated_at: "2026-10-05T06:38:16.512Z"
+updated_at: "2026-10-05T07:05:36.273Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:38.277Z",claude,"cli:update:dep",detected
-comments[4]{created_at,author,text}:
+comments[7]{created_at,author,text}:
   "2026-08-28T20:11:18.880Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no served-forge implementation or passing acceptance evidence for this child, so it remains open with its written specification."
   "2026-09-12T23:35:51.054Z",pi-agent,"Audit 2026-09-13: EXISTS — engine/transport.ts implements the Phase 3 transport with FileTransport, push/pull, capability negotiation, and object transfer. REMAINS — no served repository exposing refs, objects and series over the transport. The transport is used for peer-to-peer sync, not for serving a repository. The description says spec only."
   "2026-10-05T06:14:06.813Z",pi-glm,"Design for the served repository, reusing engine/transport.ts rather than forking it. The Transport interface stays the single boundary: its methods become async (a wire is asynchronous, a filesystem is not, and the interface was written so the algorithm does not care), FileTransport keeps every policy - fast-forward, force, compare-and-swap publication, verified arrival - and the HTTP server delegates every repository operation to a FileTransport opened on the repository directory under --root. Wire: POST <base>/advertise|fetch|push|objects/missing|objects/upload|publish, JSON envelopes with base64 payloads, error body {code,message} mapped back to ObjectStoreError so refusals read identically to a file remote. Client: HttpTransport implements the same interface, so clone/fetch/push/remote-add work unchanged through openTransport; the bearer token travels in the remote URL's userinfo. Resumable uploads keep their connection identity: the server holds one FileTransport per upload session, so publish reports exactly what that session delivered. Series and review records ride the same object paths: records are tree-reachable, series objects transfer through the verified-arrival upload path. Tenancy: bearer tokens scoped per repository (read/write); every pre-authorization failure - missing repo, wrong tenant, bad token, path traversal - answers with one byte-identical 404 denial; body sizes, object counts and session counts are bounded."
   "2026-10-05T06:38:16.512Z",codex-sol,"Resumed the interrupted implementation as codex-sol. Preserving the existing async Transport, HTTP protocol/client/server and socket tests; verifying policy reuse and adversarial boundaries before an early focused commit. The existing coverage command excludes the CDC benchmark; all authored source coverage will include it."
+  "2026-10-05T06:49:31.126Z",codex-sol,"Real multi-process acceptance passes: two independent pushers pause after the same advertisement, then publish concurrently. Exactly one main update succeeds, one refuses non_fast_forward, no torn ref or remaining lock; simultaneous distinct branches both land. Real PM acceptance passes: serve a base TOON item and history, clone agents A/B, commit priority/description independently, push A, refuse stale B, fetch/merge B with zero conflicts, push B, fetch/fast-forward A, and vcs verify reports zero corruption on origin/A/B. Native PM history now delegates to the existing append-only union only when both sides preserve the base prefix."
+  "2026-10-05T06:59:55.007Z",codex-sol,"Packed installed CLI acceptance passes under npm/Node and native Bun: initialize a real tracker, install the packed extension, serve it, clone over an ephemeral loopback socket, fetch, push and verify; each clone verifies 154 objects without corruption. Native Bun also passes all 30 served transport, denial, protocol and real-agent acceptance tests. README now documents root and nested repository URLs, tokens, limits, object-fetch and operator-owned filesystem boundaries. Changelog regenerated through changelog:full; active items are not emitted as released changes."
+  "2026-10-05T07:05:36.273Z",codex-sol,"All 829 tests passed in the full suite. The first whole-source coverage run identified only malformed-URL and serve-command branches missing evidence; added occupied-port, IPv6/authenticated serve and orderly worker shutdown coverage. Focused command/transport coverage now passes 100/100/100/100 over 175 tests. The server worker now exits orderly so coverage records the serve command it actually executed. Final release checks remain pending at the committed head."
+files[9]{path,scope}:
+  engine/http-protocol.ts,project
+  engine/http-transport.ts,project
+  engine/rewrite.ts,project
+  engine/serve.ts,project
+  engine/sync.ts,project
+  engine/transport.ts,project
+  test/served-acceptance.test.ts,project
+  test/served-sync.test.ts,project
+  vcs-commands.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/served-acceptance.test.ts,project,codex-sol,"2026-10-05T06:53:47.623Z",local_mutation,feat/served-repository-http
+docs[1]{path,scope}:
+  README.md,project
 body: ""

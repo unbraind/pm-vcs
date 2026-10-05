@@ -8,9 +8,11 @@
 // (`http://token@host:port/repo`), which is also where `pm vcs remote add`
 // stores it: local knowledge, like the URL itself.
 
+import { parseBundle } from "./bundle.ts";
+
 import { randomBytes } from "node:crypto";
 
-import { type ObjectId, ObjectStoreError } from "./objects.ts";
+import { type ObjectId, isObjectId, ObjectStoreError } from "./objects.ts";
 import type { Advertisement, PushReceipt, PushUpdate, TransferObject, Transport } from "./transport.ts";
 import {
   ADVERTISE_ENDPOINT,
@@ -24,12 +26,13 @@ import {
   encodeUploadRequest,
   FETCH_ENDPOINT,
   MISSING_ENDPOINT,
+  OBJECT_FETCH_ENDPOINT,
   PUBLISH_ENDPOINT,
   PUSH_ENDPOINT,
   UPLOAD_ENDPOINT,
 } from "./http-protocol.ts";
 
-/** Options an HTTP transport may be constructed with. */
+/** Round-trip deadlines used when connecting to a served peer. */
 export interface HttpTransportOptions {
   /** Milliseconds to wait for one round trip before giving up on the remote. */
   readonly timeoutMs?: number;
@@ -91,10 +94,12 @@ export class HttpTransport implements Transport {
         `${url} names the protocol "${parsed.protocol.replace(":", "")}", which the HTTP transport does not speak. Use http or https.`,
       );
     }
-    this.url = url;
+    this.token = parsed.username === "" ? null : decodeURIComponent(parsed.username);
+    parsed.username = "";
+    parsed.password = "";
+    this.url = parsed.href;
     this.origin = parsed.origin;
     this.base = parsed.pathname.replace(/\/+$/, "");
-    this.token = parsed.username === "" ? null : decodeURIComponent(parsed.username);
     this.timeoutMs = options.timeoutMs ?? 300_000;
     // One id per transport, so a resumed upload reports the same session's
     // deliveries and a second transport is a second session — the same shape a
@@ -113,6 +118,7 @@ export class HttpTransport implements Transport {
    */
   private async roundTrip(endpoint: string, body: string): Promise<WireAnswer> {
     let response: Response;
+    let payload: Buffer;
     try {
       response = await fetch(`${this.origin}${this.base}/${endpoint}`, {
         method: "POST",
@@ -122,7 +128,9 @@ export class HttpTransport implements Transport {
         },
         body,
         signal: AbortSignal.timeout(this.timeoutMs),
+        redirect: "error",
       });
+      payload = Buffer.from(await response.arrayBuffer());
     } catch (error) {
       // A timeout and a refused connection are both "the remote did not
       // answer", but naming which one saves the next agent a round of guessing.
@@ -133,7 +141,7 @@ export class HttpTransport implements Transport {
         + "Check the remote's URL, or whether the repository is being served.",
       );
     }
-    return { status: response.status, payload: Buffer.from(await response.arrayBuffer()) };
+    return { status: response.status, payload };
   }
 
   /**
@@ -155,7 +163,8 @@ export class HttpTransport implements Transport {
       decoded === null || !Array.isArray(refs)
       || refs.some((entry) => entry === null || typeof entry !== "object" || Array.isArray(entry)
         || typeof (entry as Record<string, unknown>).name !== "string"
-        || typeof (entry as Record<string, unknown>).target !== "string")
+        || typeof (entry as Record<string, unknown>).target !== "string"
+        || !isObjectId((entry as Record<string, unknown>).target as string))
       || (head !== null && typeof head !== "string")
       || config === null || typeof config !== "object" || Array.isArray(config)
       || typeof formatVersion !== "string"
@@ -171,7 +180,7 @@ export class HttpTransport implements Transport {
         const record = entry as Record<string, unknown>;
         return { name: record.name as string, target: record.target as string };
       }),
-      head: head === undefined ? null : head,
+      head,
       config: config as Advertisement["config"],
       formatVersion,
       capabilities: capabilities as readonly string[],
@@ -188,6 +197,15 @@ export class HttpTransport implements Transport {
   async fetch(refNames: readonly string[], haves: readonly ObjectId[]): Promise<Buffer> {
     const answer = await this.roundTrip(FETCH_ENDPOINT, encodeFetchRequest(refNames, haves));
     assertWireSuccess(answer.status, answer.payload, this.url);
+    parseBundle(answer.payload);
+    return answer.payload;
+  }
+
+  /** Fetch standalone objects and verify every claimed id before returning bytes. */
+  async fetchObjects(ids: readonly ObjectId[]): Promise<Buffer> {
+    const answer = await this.roundTrip(OBJECT_FETCH_ENDPOINT, encodeMissingRequest(ids));
+    assertWireSuccess(answer.status, answer.payload, this.url);
+    parseBundle(answer.payload);
     return answer.payload;
   }
 
@@ -217,7 +235,7 @@ export class HttpTransport implements Transport {
     assertWireSuccess(answer.status, answer.payload, this.url);
     const decoded = decodeWireObject(answer.payload);
     const missing = decoded === null ? undefined : decoded.missing;
-    if (!Array.isArray(missing) || missing.some((id) => typeof id !== "string")) {
+    if (!Array.isArray(missing) || missing.some((id) => typeof id !== "string" || !isObjectId(id))) {
       throw new ObjectStoreError(
         "unreachable_remote",
         `${this.url} answered a missing-objects request with a shape this build cannot read.`,

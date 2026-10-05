@@ -20,6 +20,9 @@ export const FETCH_ENDPOINT = "fetch";
 /** The endpoint accepting a whole push: one bundle plus the ref moves it asks for. */
 export const PUSH_ENDPOINT = "push";
 
+/** The endpoint returning verified objects, including standalone patch series. */
+export const OBJECT_FETCH_ENDPOINT = "objects/fetch";
+
 /** The endpoint answering which offered objects a receiver still lacks. */
 export const MISSING_ENDPOINT = "objects/missing";
 
@@ -32,6 +35,7 @@ export const PUBLISH_ENDPOINT = "publish";
 /** Endpoint suffixes an HTTP request path may end with, longest first so nested ones match. */
 const ENDPOINT_SUFFIXES = [
   UPLOAD_ENDPOINT,
+  OBJECT_FETCH_ENDPOINT,
   MISSING_ENDPOINT,
   PUBLISH_ENDPOINT,
   ADVERTISE_ENDPOINT,
@@ -128,13 +132,8 @@ export function encodeErrorBody(code: string, message: string): Buffer {
  * @returns The code and message, or null when the body is not an error body.
  */
 export function decodeErrorBody(payload: Buffer): { code: string; message: string } | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload.toString("utf8"));
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const parsed = decodeWireObject(payload);
+  if (parsed === null) return null;
   const error = (parsed as Record<string, unknown>).error;
   if (error === null || typeof error !== "object" || Array.isArray(error)) return null;
   const record = error as Record<string, unknown>;
@@ -500,7 +499,8 @@ export function decodePushReceipt(body: Record<string, unknown>): WirePushReceip
 export function decodeWireDate(body: Record<string, unknown>, field: string): Date | null {
   const value = body[field];
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return new Date(value);
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 /**

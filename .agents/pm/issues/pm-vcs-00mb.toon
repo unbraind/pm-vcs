@@ -1,0 +1,15 @@
+id: pm-vcs-00mb
+title: Fail closed when repository configuration exists but cannot be read
+description: "Discovered during served-repository adversarial testing: engine/config.ts readConfig catches every readFileSync error and returns DEFAULT_CONFIG. A repository whose .pmvcs/config.json has been replaced by a directory therefore advertises an empty record configuration rather than refusing. Distinguish absence from unreadable or invalid filesystem shape, preserve older repositories without a config file, and add FileTransport and HTTP parity tests. This is a pre-existing configuration-reader behavior; the HTTP feature records it as a separate follow-up."
+type: Issue
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-05T07:00:24.104Z"
+updated_at: "2026-10-05T07:00:49.125Z"
+author: codex-sol
+files[1]{path,scope}:
+  engine/config.ts,project
+docs[1]{path,scope}:
+  README.md,project
+body: ""

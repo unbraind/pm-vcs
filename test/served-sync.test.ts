@@ -7,9 +7,8 @@
 // loopback listener and `fetch` against it, with no request mocked anywhere.
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { afterEach, test } from "node:test";
@@ -19,12 +18,13 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import type { CloneReport, PushReport } from "../engine/sync.ts";
 import { cloneFrom, fetchFrom, pushTo } from "../engine/sync.ts";
+import { parseBundle } from "../engine/bundle.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
 import { ObjectStoreError, type ObjectId } from "../engine/objects.ts";
 import { readCommit, readSeries, readTree } from "../engine/model.ts";
 import { createSeries } from "../engine/series.ts";
 import { FileTransport, openTransport, TRANSPORT_CAPABILITIES } from "../engine/transport.ts";
-import { startRepositoryServer, type ServeHandle } from "../engine/serve.ts";
+import { readTokenFile, startRepositoryServer, type ServeHandle } from "../engine/serve.ts";
 import { Repository } from "../engine/repo.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
@@ -269,6 +269,10 @@ test("a series object transfers through the served repository's verified-arrival
   // The served repository now holds the series under the same id, byte-identical
   // — the receiver re-hashed it on arrival, so the id is a fact it verified.
   assert.deepEqual(readSeries(served.repository.objects, seriesId), readSeries(source.objects, seriesId));
+  const downloaded = parseBundle(await wire.fetchObjects([seriesId]));
+  assert.equal(downloaded.lines[0]?.id, seriesId);
+  assert.deepEqual(downloaded.lines[0]?.payload, seriesObject.payload);
+  assert.deepEqual(await new FileTransport("local", served.repository.root).fetchObjects([seriesId]), await wire.fetchObjects([seriesId]));
 });
 
 test("an HTTP transport reports an unreachable, timed-out or unrecognizable remote as unreachable", async () => {
@@ -287,7 +291,7 @@ test("an HTTP transport reports an unreachable, timed-out or unrecognizable remo
 
   // A listener that accepts and never answers: the remote is there and slow.
   const silent = createServer(() => {});
-  await new Promise<void>((resolveListening) => silent.listen(0, "127.0.0.1", resolveListening));
+  await new Promise<void>((resolveListening) => { silent.listen(0, "127.0.0.1", resolveListening); });
   const silentAddress = silent.address();
   assert.ok(typeof silentAddress === "object" && silentAddress !== null);
   await assert.rejects(
@@ -298,7 +302,7 @@ test("an HTTP transport reports an unreachable, timed-out or unrecognizable remo
       return true;
     },
   );
-  await new Promise<void>((resolveClosing) => silent.close(() => resolveClosing()));
+  await new Promise<void>((resolveClosing) => { silent.close(() => resolveClosing()); });
 
   // A responder that answers an error with no error body: this build reports the
   // shape, not a crash on a missing property.
@@ -307,7 +311,7 @@ test("an HTTP transport reports an unreachable, timed-out or unrecognizable remo
     response.end("not json");
     request.resume();
   });
-  await new Promise<void>((resolveListening) => terse.listen(0, "127.0.0.1", resolveListening));
+  await new Promise<void>((resolveListening) => { terse.listen(0, "127.0.0.1", resolveListening); });
   const terseAddress = terse.address();
   assert.ok(typeof terseAddress === "object" && terseAddress !== null);
   await assert.rejects(
@@ -318,7 +322,7 @@ test("an HTTP transport reports an unreachable, timed-out or unrecognizable remo
       return true;
     },
   );
-  await new Promise<void>((resolveClosing) => terse.close(() => resolveClosing()));
+  await new Promise<void>((resolveClosing) => { terse.close(() => resolveClosing()); });
 });
 
 test("an HTTP transport refuses a location that is not an HTTP URL", () => {
@@ -348,7 +352,7 @@ test("remote add, fetch, push and clone reach a served repository through the co
   // stored as typed, so the fetch after it resolves the same URL.
   const added = await harness.runCommand({
     command: "vcs remote",
-    args: ["wire", served.url],
+    args: ["add", "wire", served.url],
     pmRoot: root,
   });
   assert.equal(added.errorMessage, undefined, String(added.errorMessage));
@@ -414,11 +418,15 @@ test("vcs serve refuses the arguments it cannot honor without binding anything",
 test("vcs serve serves a repository a real process can clone from, until it is stopped", async () => {
   // The command surface itself, in a real child process: the server it starts
   // keeps that process alive, which is the property a foreground serve has.
-  const serveRoot = mkdtempSync(join(tmpdir(), "pm-vcs-serve-"));
+  const serveRoot = tempRoot();
   const served = Repository.init(join(serveRoot, "origin"), "main");
   commitFile(served, "a.txt", "one");
   const name = "origin";
-  const worker = spawn(process.execPath, [join(packageRoot, "test", "helpers", "serve-worker.ts"), serveRoot], {
+  const auth = join(serveRoot, "tokens.json");
+  writeFileSync(auth, JSON.stringify([{ token: "worker-token", repository: name, access: "write" }]));
+  for (const listen of [undefined, "[::1]:0"]) {
+  const host = listen === undefined ? "127.0.0.1" : "[::1]";
+  const worker = spawn(process.execPath, [join(packageRoot, "test", "helpers", "serve-worker.ts"), serveRoot, ...(listen === undefined ? [] : [listen, auth])], {
     cwd: packageRoot,
     stdio: ["ignore", "pipe", "inherit"],
   });
@@ -431,7 +439,7 @@ test("vcs serve serves a repository a real process can clone from, until it is s
         const line = buffered.split("\n").find((entry) => entry.startsWith("SERVE-READY "));
         if (line === undefined) return;
         clearTimeout(timer);
-        resolveServing(`http://127.0.0.1:${line.slice("SERVE-READY ".length).trim()}/${name}`);
+        resolveServing(`http://${listen === undefined ? "" : "worker-token@"}${host}:${line.slice("SERVE-READY ".length).trim()}/${name}`);
       });
     });
 
@@ -451,12 +459,81 @@ test("vcs serve serves a repository a real process can clone from, until it is s
     });
     assert.equal(exited, true, "the serve process stopped when signaled");
   }
+  }
 });
 
 test("openTransport builds an HTTP transport for wire locations and a file transport for paths", () => {
-  const http = openTransport("http://127.0.0.1:9/repo", "/tmp");
+  const http = openTransport("http://127.0.0.1:9/repo", tempRoot());
   assert.ok(http instanceof HttpTransport);
   assert.equal(http.url, "http://127.0.0.1:9/repo");
-  const file = openTransport("/srv/repo", "/tmp");
+  const file = openTransport("repo", tempRoot());
   assert.ok(file instanceof FileTransport);
+});
+test("one repository root is served at the base URL, with force and review-record parity", async () => {
+  const repository = Repository.init(tempRoot(), "main", { recordPaths: ["reviews/*.json"], recordPolicy: {} });
+  const base = commitFile(repository, "base.txt", "base");
+  commitFile(repository, "reviews/one.json", JSON.stringify({ series: "pending", status: "open", reviewer: "agent" }));
+  const server = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 });
+  servers.push(server);
+  const url = `http://127.0.0.1:${server.port}`;
+  const clone = Repository.open((await cloneFrom(url, join(tempRoot(), "clone"), now)).root);
+  assert.equal(readFileSync(join(clone.root, "reviews/one.json"), "utf8").includes('"reviewer"'), true);
+  clone.reset(base, "hard", now);
+  const report = await pushTo(clone, "origin", [], true, now);
+  assert.equal(report.upToDate, false);
+  assert.equal(repository.refs.read("refs/heads/main"), base);
+});
+
+test("real responders with malformed successful envelopes fail closed", async () => {
+  let answer: unknown = {};
+  const responder = createServer((request, response) => { request.resume(); response.end(JSON.stringify(answer)); });
+  await new Promise<void>((ready) => { responder.listen(0, "127.0.0.1", ready); });
+  const address = responder.address();
+  assert.ok(address !== null && typeof address === "object");
+  const wire = new HttpTransport(`http://127.0.0.1:${address.port}/repo`);
+  try {
+    const advertisement = { refs: [], head: null, config: {}, formatVersion: "1", capabilities: [] };
+    for (const malformed of [null, [], {}, { ...advertisement, refs: [null] }, { ...advertisement, refs: [[]] }, { ...advertisement, refs: [{}] }, { ...advertisement, refs: [{ name: "main", target: 1 }] }, { ...advertisement, head: 1 }, { ...advertisement, config: null }, { ...advertisement, config: [] }, { ...advertisement, config: "bad" }, { ...advertisement, formatVersion: 1 }, { ...advertisement, capabilities: [1] }]) {
+      answer = malformed;
+      await assert.rejects(wire.advertise(), { code: "unreachable_remote" });
+    }
+    answer = { ...advertisement, refs: [{ name: "refs/heads/main", target: "a".repeat(64) }], head: "refs/heads/main" };
+    assert.equal((await wire.advertise()).refs.length, 1);
+    for (const malformed of [null, {}, { missing: [1] }]) {
+      answer = malformed;
+      await assert.rejects(wire.missingObjects([]), { code: "unreachable_remote" });
+      await assert.rejects(wire.push(Buffer.alloc(0), [], false, now), { code: "unreachable_remote" });
+      await assert.rejects(wire.publish([], false, now), { code: "unreachable_remote" });
+    }
+  } finally { await new Promise<void>((closed) => { responder.close(() => closed()); }); }
+});
+
+test("bearer-scoped clients may read or write only their grants and errors redact secrets", async () => {
+  const repository = freshRepo();
+  commitFile(repository, "a.txt", "a");
+  const authFile = join(tempRoot(), "tokens.json");
+  writeFileSync(authFile, JSON.stringify([{ token: "read-secret", repository: "", access: "read" }, { token: "write-secret", repository: "", access: "write" }]));
+  const server = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0, grants: readTokenFile(authFile) });
+  servers.push(server);
+  const url = `http://127.0.0.1:${server.port}`;
+  const reader = new HttpTransport(url.replace("http://", "http://read-secret@"));
+  assert.equal((await reader.advertise()).refs.length, 1);
+  assert.equal(reader.url.includes("read-secret"), false);
+  await assert.rejects(reader.uploadObjects([]), { code: "forbidden" });
+  const writer = new HttpTransport(url.replace("http://", "http://write-secret@"));
+  await writer.uploadObjects([]);
+  await assert.rejects(new HttpTransport(url).advertise(), { code: "denied" });
+  await server.close();
+  servers.pop();
+  await assert.rejects(reader.advertise(), (error: ObjectStoreError) => !error.message.includes("read-secret"));
+});
+
+
+test("malformed wire URLs and occupied listen sockets fail through the command surface", async () => {
+  const harness = await activate();
+  const served = await serveSeededRepo();
+  const rejected = await harness.runCommand({ command: "vcs serve", pmRoot: served.root, options: { listen: `127.0.0.1:${served.server.port}` } });
+  assert.match(String(rejected.errorMessage), /EADDRINUSE/);
+  const malformed = await harness.runCommand({ command: "vcs remote", args: ["wire", "http://[broken"], pmRoot: served.repository.root });
+  assert.match(String(malformed.errorMessage), /does not parse/);
 });

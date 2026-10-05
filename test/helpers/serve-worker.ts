@@ -20,7 +20,7 @@ type HarnessCapabilities = NonNullable<
   NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]
 >;
 
-const [serveRoot, listen] = process.argv.slice(2);
+const [serveRoot, listen, auth] = process.argv.slice(2);
 if (serveRoot === undefined) {
   console.error("usage: serve-worker.ts <serve-root> [listen]");
   process.exit(2);
@@ -33,7 +33,7 @@ const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "ut
 const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
 const run = await harness.runCommand({
   command: "vcs serve",
-  options: { root: serveRoot, ...(listen === undefined ? {} : { listen }) },
+  options: { root: serveRoot, ...(listen === undefined ? {} : { listen }), ...(auth === undefined ? {} : { auth }) },
   pmRoot: serveRoot,
 });
 if (run.errorMessage !== undefined) {
@@ -42,3 +42,5 @@ if (run.errorMessage !== undefined) {
 }
 const serve = (run.result as { serve: { port: number } }).serve;
 console.log(`SERVE-READY ${serve.port}`);
+// An orderly test-worker exit flushes V8 coverage of the command it really ran.
+process.once("SIGTERM", () => { process.exit(0); });

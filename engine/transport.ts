@@ -14,7 +14,7 @@
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve } from "node:path";
 
-import { exportBundle, importBundleObjects, assertClosurePresent } from "./bundle.ts";
+import { serializeBundle, exportBundle, importBundleObjects, assertClosurePresent } from "./bundle.ts";
 import { isAncestor } from "./merge.ts";
 import { type ObjectId, type ObjectType, ObjectStoreError, hashObject } from "./objects.ts";
 import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./refs.ts";
@@ -55,7 +55,7 @@ export interface Advertisement {
 }
 
 /** Capabilities this build's transports speak. */
-export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival"] as const;
+export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival", "object-fetch"] as const;
 
 /** Capabilities a peer must offer before this build will transfer anything. */
 export const REQUIRED_TRANSPORT_CAPABILITIES: readonly string[] = ["fetch", "push", "resumable-upload", "verified-arrival"];
@@ -129,6 +129,8 @@ export interface TransferObject {
  * different product, not a different transport.
  */
 export interface Transport {
+  /** Fetch individually named verified objects, including standalone series; optional for older peers. */
+  fetchObjects?(ids: readonly ObjectId[]): Promise<Buffer>;
   /** Where this transport points, as the remote was configured. */
   readonly url: string;
 
@@ -320,6 +322,12 @@ export class FileTransport implements Transport {
       formatVersion: REPOSITORY_FORMAT,
       capabilities: [...TRANSPORT_CAPABILITIES],
     };
+  }
+
+  /** Return a verified bundle of named objects without publishing any refs. */
+  async fetchObjects(ids: readonly ObjectId[]): Promise<Buffer> {
+    const repository = this.open();
+    return serializeBundle(repository.objects, { refs: {}, prerequisites: [], objects: [...new Set(ids)].sort() });
   }
 
   /** Export requested reachable history while honoring only caller tips the receiver actually possesses. */
