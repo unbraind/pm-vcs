@@ -20,7 +20,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-import { type IgnoreRules, isIgnored, isPrunableDirectory } from "./ignore.ts";
+import { type IgnoreRules, isIgnored, isRuntimeIgnored, isPrunableDirectory } from "./ignore.ts";
 import { compareByteOrder, type FileId, type FileMode, isFileId, type TreeEntry, readTree, writeTree } from "./model.ts";
 import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError, type StoredObject } from "./objects.ts";
 
@@ -625,6 +625,7 @@ export function computeStatus(
 
   const stagedChanges: Change[] = [];
   for (const path of new Set([...committed.keys(), ...staged.keys()])) {
+    if (isRuntimeIgnored(path, rules)) continue;
     const before = committed.get(path);
     const after = staged.get(path);
     if (!before && after) stagedChanges.push({ path, kind: "added" });
@@ -637,6 +638,7 @@ export function computeStatus(
   const present = new Set(listWorkingTree(root, controlDirectory, rules));
   const unstagedChanges: Change[] = [];
   for (const entry of index) {
+    if (isRuntimeIgnored(entry.path, rules)) continue;
     // A sparse entry's path is intentionally absent from this working tree — it
     // is outside the view — so absence is not a deletion. When the path *does*
     // hold a file, the entry compares like any other, because a file that exists

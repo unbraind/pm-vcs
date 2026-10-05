@@ -9,6 +9,7 @@
 // bounds. The server and the client both import it, which is also what keeps
 // the two from drifting into dialects that agree only by accident.
 
+import { redactUserinfo } from "./credentials.ts";
 import { isObjectId, type ObjectId, type ObjectType, OBJECT_TYPES, ObjectStoreError } from "./objects.ts";
 
 /** One repository's advertisement endpoint, answering refs, HEAD, configuration and capabilities. */
@@ -522,10 +523,10 @@ export function assertWireSuccess(status: number, payload: Buffer, url: string):
   if (status >= 200 && status < 300) return;
   const wireError = decodeErrorBody(payload);
   if (wireError !== null) {
-    throw new ObjectStoreError(wireError.code, wireError.message);
+    throw new ObjectStoreError(wireError.code, redactUserinfo(wireError.message));
   }
   throw new ObjectStoreError(
     "unreachable_remote",
-    `${url} answered status ${status} without an error body. Check the remote's URL, or whether the server is a served repository.`,
+    `${redactUserinfo(url)} answered status ${status} without an error body. Check the remote's URL, or whether the server is a served repository.`,
   );
 }

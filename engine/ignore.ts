@@ -10,7 +10,10 @@
 // contents are another tool's internal state, and no project has a legitimate
 // reason to ask this system to own them.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+
+import { relative, resolve } from "node:path";
+import { getPmGitignoreBlock, getSettingsPath, resolveImplicitPmRoot, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 
 import { matchesGlob } from "./config.ts";
 
@@ -33,6 +36,8 @@ export interface IgnoreRules {
   readonly patterns: readonly string[];
   /** Patterns prefixed with `!`, which re-include a path an earlier pattern excluded. */
   readonly negations: readonly string[];
+  /** SDK runtime fences, evaluated before project rules and never negatable. */
+  readonly runtime?: readonly IgnoreRules[];
 }
 
 /**
@@ -78,17 +83,38 @@ export function parseIgnore(text: string): IgnoreRules {
  * must fail loudly rather than degrade.
  *
  * @param root - Absolute repository root.
- * @returns The compiled rules, empty when there is no ignore file.
+ * @param recordPaths - Record globs used to discover configured custom trackers.
+ * @returns The compiled rules including non-negatable SDK runtime fences.
  * @throws Error The underlying I/O error, when an ignore file exists but cannot
  *   be read.
  */
-export function readIgnoreRules(root: string): IgnoreRules {
+export function readIgnoreRules(root: string, recordPaths: readonly string[] = []): IgnoreRules {
+  const candidates = new Set([resolveImplicitPmRoot(root), resolvePmRoot(root)]);
+  for (const pattern of recordPaths) {
+    const prefix = pattern.split(/[*?[]/, 1)[0];
+    let directory = resolve(root, prefix);
+    // Record globs can start inside a type folder, so find the owning settings.
+    while (directory !== resolve(root) && relative(root, directory) !== ".." && !relative(root, directory).startsWith("../")) {
+      const tracker = resolvePmRoot(root, directory);
+      if (existsSync(getSettingsPath(tracker))) { candidates.add(tracker); break; }
+      directory = resolve(directory, "..");
+    }
+  }
+  const runtime = [...candidates].flatMap((tracker) => {
+    const path = relative(root, tracker).replaceAll("\\", "/");
+    if (path === ".." || path.startsWith("../")) return [];
+    const fence = parseIgnore(getPmGitignoreBlock(path || "."));
+    // Git's trailing /* excludes matching directories and their descendants.
+    return [{ ...fence, patterns: fence.patterns.map((pattern) => pattern.endsWith("/*") ? `${pattern}*` : pattern) }];
+  });
+  let rules: IgnoreRules;
   try {
-    return parseIgnore(readFileSync(`${root}/${IGNORE_FILE}`, "utf8"));
+    rules = parseIgnore(readFileSync(`${root}/${IGNORE_FILE}`, "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return { patterns: [], negations: [] };
+    rules = { patterns: [], negations: [] };
   }
+  return { ...rules, runtime };
 }
 
 /**
@@ -103,11 +129,17 @@ export function readIgnoreRules(root: string): IgnoreRules {
  * @returns True when the path must not be tracked.
  */
 export function isIgnored(path: string, rules: IgnoreRules): boolean {
+  if (isRuntimeIgnored(path, rules)) return true;
   for (const prefix of ALWAYS_IGNORED) {
     if (path === prefix || path.startsWith(`${prefix}/`) || path.includes(`/${prefix}/`)) return true;
   }
   if (!rules.patterns.some((pattern) => matchesGlob(path, pattern))) return false;
   return !rules.negations.some((pattern) => matchesGlob(path, pattern));
+}
+
+/** Whether a path is excluded by an SDK runtime fence, independent of project rules. */
+export function isRuntimeIgnored(path: string, rules: IgnoreRules): boolean {
+  return rules.runtime?.some((fence) => isIgnored(path, fence)) ?? false;
 }
 
 /**

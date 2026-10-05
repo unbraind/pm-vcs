@@ -22,6 +22,7 @@
 //     `--no-changed-fields`, `--full-changed-fields`). Declaring one aborts
 //     registration at that command and silently drops every later sibling.
 
+import { guardCredentialOutput } from "./credential-output.ts";
 import type {
   CommandHandlerContext,
   ExtensionApi,
@@ -313,6 +314,7 @@ export default defineExtension({
   version: "2026.7.30",
 
   activate(api: ExtensionApi) {
+    guardCredentialOutput();
     // The repository commands register first: if a later registration is ever
     // rejected the host drops it and every sibling after it, so the surface the
     // package is named for should not be the part that goes missing.

@@ -114,7 +114,8 @@ test("an unreadable ignore file fails loudly instead of silently ignoring nothin
   );
   // An absent file remains the ordinary case.
   const empty = tempRoot();
-  assert.deepEqual(readIgnoreRules(empty), { patterns: [], negations: [] });
+  const rules = readIgnoreRules(empty);
+  assert.deepEqual({ patterns: rules.patterns, negations: rules.negations }, { patterns: [], negations: [] });
 });
 
 test("an unreadable operation log fails loudly instead of reporting no operations", () => {

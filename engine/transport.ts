@@ -11,6 +11,7 @@
 // the caller. The repository being written to is the one with something to lose,
 // and a check the sender performs is a check a sender can skip.
 
+import { redactRemoteUrl } from "./credentials.ts";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve } from "node:path";
 
@@ -287,7 +288,7 @@ export class FileTransport implements Transport {
    * @param path - Absolute path to the remote repository's root.
    */
   constructor(url: string, path: string) {
-    this.url = url;
+    this.url = redactRemoteUrl(url);
     this.path = path;
   }
 
@@ -525,7 +526,7 @@ export function resolveRemoteLocation(url: string, base: string): string {
     } catch {
       throw new ObjectStoreError(
         "unsupported_transport",
-        `${url} is an ${scheme[1]}: URL that does not parse. Use http://host:port/repository.`,
+        `${redactRemoteUrl(url)} is an ${scheme[1]}: URL that does not parse. Use http://host:port/repository.`,
       );
     }
   }
@@ -544,7 +545,7 @@ export function resolveRemoteLocation(url: string, base: string): string {
     // a remote this build cannot reach.
     throw new ObjectStoreError(
       "unsupported_transport",
-      `${url} is a file: URL that names no local path. `
+      `${redactRemoteUrl(url)} is a file: URL that names no local path. `
       + "Use a host-less URL over an unescaped path, for example file:///srv/project.",
     );
   }
@@ -556,14 +557,15 @@ export function resolveRemoteLocation(url: string, base: string): string {
  * @param url - The remote's configured location: a path, a `file:` URL, or an
  *   `http:` / `https:` URL naming a served repository.
  * @param base - Directory a relative path is resolved against.
+ * @param token - Separately resolved HTTP bearer credential.
  * @returns A transport for it.
  * @throws ObjectStoreError When the URL cannot be resolved to a reachable
  *   repository.
  */
-export function openTransport(url: string, base: string): Transport {
+export function openTransport(url: string, base: string, token?: string | null): Transport {
   const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]+):/.exec(url);
   if (scheme !== null && (scheme[1].toLowerCase() === "http" || scheme[1].toLowerCase() === "https")) {
-    return new HttpTransport(resolveRemoteLocation(url, base));
+    return new HttpTransport(resolveRemoteLocation(url, base), { token });
   }
   return new FileTransport(url, resolveRemoteLocation(url, base));
 }

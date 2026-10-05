@@ -91,24 +91,24 @@ test("two served clones commit real PM item fields, merge them and verify all th
   pm(root, ["init", "served-acceptance", "--yes", "--agent-guidance", "skip"]);
   const id = pm(root, ["create", "Task", "Shared served item"]).id as string;
   const itemPath = join(".agents/pm", readdirSync(join(root, ".agents/pm"), { recursive: true }).find((path) => String(path).endsWith(`${id}.toon`)) as string);
-  const historyPath = `.agents/pm/history/${id}.jsonl`;
   const source = Repository.init(root, "main", {
     recordPaths: [".agents/pm/**/*.toon"],
     recordPolicy: { fields: { tags: "set", comments: "sequence", updated_at: "timestamp" } },
   });
-  source.stage([itemPath, historyPath]);
+  source.stage([]);
   source.commit({ message: "base PM record\n", author }, now);
   const server = await startRepositoryServer({ root: fixture.root, host: "127.0.0.1", port: 0 });
   try {
     const url = `http://127.0.0.1:${server.port}/origin`;
     const a = Repository.open((await cloneFrom(url, join(fixture.root, "a"), now)).root);
     const b = Repository.open((await cloneFrom(url, join(fixture.root, "b"), now)).root);
-    // Local tracker configuration is deliberately unversioned; each agent discovers its own tracker.
-    for (const repository of [a, b]) writeFileSync(join(repository.root, ".agents/pm/settings.json"), readFileSync(join(root, ".agents/pm/settings.json")));
     pm(a.root, ["update", id, "--priority", "1"]);
-    pm(b.root, ["update", id, "--description", "Second agent context"]);
+    pm(b.root, ["update", id, "--tags", "web,api"]);
     for (const repository of [a, b]) {
-      repository.stage([itemPath, historyPath]);
+      assert.ok(readdirSync(join(repository.root, ".agents/pm/runtime")).length > 0);
+      assert.equal(repository.status().untracked.some((path) => path.includes("/runtime/")), false);
+      repository.stage([]);
+      assert.equal(repository.readIndex().some((entry) => entry.path.includes("/runtime/")), false);
       repository.commit({ message: "agent PM field\n", author }, now);
     }
     await pushTo(a, "origin", [], false, now);
@@ -121,7 +121,8 @@ test("two served clones commit real PM item fields, merge them and verify all th
     a.merge("origin/main", { message: "converge\n", author }, now);
     const record = readFileSync(join(a.root, itemPath), "utf8");
     assert.match(record, /priority: 1/);
-    assert.match(record, /description: Second agent context/);
+    assert.match(record, /web/);
+    assert.match(record, /api/);
     assert.equal(readFileSync(join(b.root, itemPath), "utf8"), record);
     const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
     for (const repository of [source, a, b]) {
@@ -130,6 +131,6 @@ test("two served clones commit real PM item fields, merge them and verify all th
       assert.deepEqual((verified.result as { corrupt: string[] }).corrupt, []);
       assert.equal(repository.refs.read("refs/heads/main"), b.refs.read("refs/heads/main"));
     }
-    console.log("E2E: served base PM TOON; cloned agents A/B; committed priority/description; A push accepted; B stale push refused; B fetched and merged with zero conflicts; B push accepted; A fetched and fast-forwarded; vcs verify clean on origin/A/B.");
+    console.log("E2E: served base PM TOON; cloned agents A/B; committed priority/tags; A push accepted; B stale push refused; B fetched and merged with zero conflicts; B push accepted; A fetched and fast-forwarded; vcs verify clean on origin/A/B.");
   } finally { await server.close(); fixture.cleanup(); }
 });

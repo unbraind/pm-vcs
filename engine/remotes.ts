@@ -9,8 +9,9 @@
 // the two together would make every `remote add` look like a change to how the
 // repository merges.
 
-import { randomBytes } from "node:crypto";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { environmentToken, readCredentials, redactRemoteUrl, redactUserinfo, splitRemoteCredentials, writeRemoteMap } from "./credentials.ts";
 
 import { ObjectStoreError, assertRegistryName } from "./objects.ts";
 import { compareByteOrder } from "./model.ts";
@@ -68,7 +69,7 @@ function parseRemote(name: string, url: unknown): Remote {
   if (typeof url !== "string" || url.length === 0) {
     throw new ObjectStoreError(
       "bad_remotes",
-      `Remote "${name}" is stored with "${String(url)}", which is not a location.`,
+      `Remote "${name}" is stored with "${redactUserinfo(redactRemoteUrl(String(url)))}", which is not a location.`,
     );
   }
   return { name, url };
@@ -81,11 +82,15 @@ export class RemoteStore {
   /** Absolute path to the JSON file holding the remotes. */
   private readonly path: string;
 
+  /** Private credential file beside the public remote map. */
+  private readonly credentialsPath: string;
+
   /**
    * @param path - File the remotes are stored in. Need not exist yet.
    */
   constructor(path: string) {
     this.path = path;
+    this.credentialsPath = join(dirname(path), "credentials.json");
   }
 
   /**
@@ -117,9 +122,21 @@ export class RemoteStore {
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new ObjectStoreError("bad_remotes", `The remotes file at ${this.path} is not a JSON object.`);
     }
-    return Object.entries(parsed as Record<string, unknown>)
+    const remotes = Object.entries(parsed as Record<string, unknown>)
       .map(([name, url]) => parseRemote(name, url))
       .sort((left, right) => compareByteOrder(left.name, right.name));
+    let migrated = false;
+    const clean = remotes.map((remote) => {
+      const split = splitRemoteCredentials(remote.url);
+      if (split.token !== null) {
+        this.storeToken(remote.name, split.token);
+        migrated = true;
+      }
+      return { name: remote.name, url: split.url };
+    });
+    // Publish secrets first so interruption cannot lose a legacy credential.
+    if (migrated) this.write(clean);
+    return clean;
   }
 
   /**
@@ -174,7 +191,9 @@ export class RemoteStore {
         `A remote named ${name} is already configured. Remove it first, or choose another name.`,
       );
     }
-    const remote = parseRemote(name, url);
+    const split = splitRemoteCredentials(parseRemote(name, url).url);
+    const remote = { name, url: split.url };
+    if (split.token !== null) this.storeToken(name, split.token);
     this.write([...remotes, remote]);
     return remote;
   }
@@ -195,6 +214,11 @@ export class RemoteStore {
       throw new ObjectStoreError("unknown_remote", `No remote named ${name} to remove.`);
     }
     this.write(remotes.filter((remote) => remote.name !== name));
+    const credentials = readCredentials(this.credentialsPath);
+    if (Object.hasOwn(credentials, name)) {
+      delete credentials[name];
+      writeRemoteMap(this.credentialsPath, credentials, true);
+    }
   }
 
   /**
@@ -210,17 +234,25 @@ export class RemoteStore {
    * @throws Error When the file cannot be written or renamed into place.
    */
   private write(remotes: readonly Remote[]): void {
-    const map: Record<string, string> = {};
+    const map: Record<string, string> = Object.create(null);
     for (const remote of [...remotes].sort((left, right) => compareByteOrder(left.name, right.name))) {
       map[remote.name] = remote.url;
     }
-    const temporary = `${this.path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-    try {
-      writeFileSync(temporary, `${JSON.stringify(map, null, 2)}\n`, { flag: "wx" });
-      renameSync(temporary, this.path);
-    } catch (error) {
-      rmSync(temporary, { force: true });
-      throw error;
-    }
+    writeRemoteMap(this.path, map);
+  }
+
+  /** Resolve a remote's bearer secret; environment overrides the private file. */
+  token(name: string): string | null {
+    const override = environmentToken(name, null);
+    if (override !== null) return override;
+    const credentials = readCredentials(this.credentialsPath);
+    return Object.hasOwn(credentials, name) ? credentials[name] : null;
+  }
+
+  /** Save one secret without changing other remotes' credentials. */
+  private storeToken(name: string, token: string): void {
+    const map = readCredentials(this.credentialsPath);
+    Object.defineProperty(map, name, { value: token, enumerable: true, configurable: true, writable: true });
+    writeRemoteMap(this.credentialsPath, map, true);
   }
 }

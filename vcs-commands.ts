@@ -39,6 +39,7 @@ import {
   type ViewChange,
 } from "./engine/repo.ts";
 import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./engine/refs.ts";
+import { redactRemoteUrl } from "./engine/credentials.ts";
 import { REMOTE_PREFIX, type Remote } from "./engine/remotes.ts";
 import { type CloneReport, type FetchReport, type PushReport, cloneFrom, fetchFrom, pushTo } from "./engine/sync.ts";
 import { resolveRemoteLocation } from "./engine/transport.ts";
@@ -907,7 +908,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       // whenever the two differ, which is exactly when `--path` was passed.
       const workingRoot = sourceWorkingRoot(context);
       const destination = requested === undefined || requested === ""
-        ? resolve(workingRoot, basename(url.replace(/\/+$/, "")))
+        ? resolve(workingRoot, basename(redactRemoteUrl(url).replace(/\/+$/, "")))
         : resolve(workingRoot, requested);
       return {
         ok: true,
@@ -919,7 +920,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
   api.registerCommand({
     name: "vcs serve",
     description:
-      "Serve the repositories under one root over HTTP, so clone, fetch and push reach them exactly as they reach a file remote: same capability negotiation, same fast-forward rules, same compare-and-swap publication. The command keeps running until its process is stopped; pass --auth with a tokens file to scope bearer tokens to repositories, and embed a token in a remote's URL as http://token@host:port/repository.",
+      "Serve the repositories under one root over HTTP, so clone, fetch and push reach them exactly as they reach a file remote: same capability negotiation, same fast-forward rules, same compare-and-swap publication. The command keeps running until its process is stopped; pass --auth with a tokens file to scope bearer tokens to repositories, and use PM_VCS_TOKEN or PM_VCS_TOKEN_<REMOTE> for the client credential.",
     flags: [
       { long: "--listen", value_name: "host:port", description: "Address to bind (default 127.0.0.1:0, an ephemeral loopback port)", value_type: "string" },
       { long: "--root", value_name: "dir", description: "Repository directory or parent of repositories (default the working root)", value_type: "string" },

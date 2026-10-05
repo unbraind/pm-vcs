@@ -343,13 +343,30 @@ all other repositories are denied. Replace the example tokens with private rando
 For a reported port of 43210, another agent uses the usual commands:
 
 ```console
-pm vcs clone http://example-write-token@127.0.0.1:43210 agent-a
-pm vcs remote add upstream http://example-read-token@127.0.0.1:43210
-pm vcs fetch upstream
+PM_VCS_TOKEN="$WRITE_TOKEN" pm vcs clone http://127.0.0.1:43210 agent-a
+pm vcs remote add upstream http://127.0.0.1:43210
+PM_VCS_TOKEN_UPSTREAM="$READ_TOKEN" pm vcs fetch upstream
 pm vcs merge upstream/main
-pm vcs push origin
+PM_VCS_TOKEN="$WRITE_TOKEN" pm vcs push origin
 pm vcs verify
 ```
+
+Use environment variables populated from your secret manager. `PM_VCS_TOKEN_<REMOTE>`
+(uppercase remote name, punctuation replaced with underscores) overrides `PM_VCS_TOKEN`,
+which overrides the stored credential. Environment credentials are never persisted.
+For compatibility, URL userinfo supplied to clone or remote add is moved into the local
+`.pmvcs/credentials.json`; `.pmvcs/remotes.json`, receipts and diagnostics contain clean URLs.
+Existing credential-bearing remote maps migrate on first read. The credentials file is
+created with mode 0600 and existing permissions are repaired on read. Windows does not
+enforce POSIX mode bits; restrict access with filesystem ACLs or use environment tokens.
+Removing a remote also removes its stored credential. Rotate any previously exposed tokens;
+migration cannot erase old transcripts or operation logs.
+
+The native VCS always excludes the PM tracker's runtime caches, search indexes, locks,
+transactions and checkpoints using the SDK's runtime fence and resolved tracker root.
+`search/eval-queries.json` remains eligible for tracking. These exclusions apply to status,
+staging and materialization and cannot be overridden by `.pmvcsignore` negations; the next
+add removes runtime entries left in an older index. Item records and history remain tracked.
 
 Clone adopts the same record configuration as a file clone. Ref advertisement, bundle fetch,
 verified object upload and publication use the existing transport capabilities. The optional

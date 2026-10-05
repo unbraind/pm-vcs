@@ -14,6 +14,7 @@ import type { ObjectId } from "./objects.ts";
 import { ObjectStoreError } from "./objects.ts";
 import type { RefTransition } from "./oplog.ts";
 import { BRANCH_PREFIX, TAG_PREFIX } from "./refs.ts";
+import { environmentToken, redactRemoteUrl } from "./credentials.ts";
 import { REMOTE_PREFIX, trackingRef } from "./remotes.ts";
 import { DEFAULT_BRANCH, Repository } from "./repo.ts";
 import {
@@ -132,7 +133,7 @@ export async function fetchFrom(
   transport?: Transport,
 ): Promise<FetchReport> {
   const remote = repository.remotes.require(remoteName);
-  const wire = transport ?? openTransport(remote.url, repository.root);
+  const wire = transport ?? openTransport(remote.url, repository.root, repository.remotes.token(remoteName));
   // The handshake runs before anything else: an incompatible peer must be
   // refused while nothing has moved, not after a bundle has been transferred.
   const advertisement = await wire.advertise();
@@ -207,7 +208,7 @@ export async function pushTo(
   transport?: Transport,
 ): Promise<PushReport> {
   const remote = repository.remotes.require(remoteName);
-  const wire = transport ?? openTransport(remote.url, repository.root);
+  const wire = transport ?? openTransport(remote.url, repository.root, repository.remotes.token(remoteName));
 
   // Deduplicated here rather than left to the remote. A repeated name produces two
   // updates for one ref, and the receiving transaction rejects that as
@@ -309,7 +310,7 @@ export async function cloneFrom(
   transport?: Transport,
 ): Promise<CloneReport> {
   const location = resolveRemoteLocation(url, base);
-  const wire = transport ?? openTransport(url, base);
+  const wire = transport ?? openTransport(url, base, environmentToken(remoteName, null) ?? undefined);
   // Refusing an incompatible source here means before the destination
   // directory is created, so a failed clone is still just a retry away.
   const advertisement = await wire.advertise();
@@ -333,17 +334,17 @@ export async function cloneFrom(
     throw error;
   }
 
-  if (branch === null) return { root, url, branch: null, fetched };
+  if (branch === null) return { root, url: redactRemoteUrl(url), branch: null, fetched };
   const tracked = repository.refs.read(trackingRef(remoteName, branch));
   // A source whose HEAD names a branch that has no commits yet is a legitimate
   // state — `init` then nothing. The clone reproduces it as an unborn branch
   // rather than failing, so cloning an empty repository is how you start working
   // in one rather than an error to work around.
-  if (tracked === null) return { root, url, branch: null, fetched };
+  if (tracked === null) return { root, url: redactRemoteUrl(url), branch: null, fetched };
   repository.createBranch(branch, tracked, now);
   // HEAD already names this branch, so the switch is a materialization rather than
   // a move. It goes through `switchTo` anyway to keep one code path responsible for
   // writing a tree into a working directory.
   repository.switchTo(branch, now);
-  return { root, url, branch, fetched };
+  return { root, url: redactRemoteUrl(url), branch, fetched };
 }

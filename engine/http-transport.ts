@@ -4,10 +4,9 @@
 // the wire vocabulary from `engine/http-protocol.ts` and turns the answers back,
 // so `fetchFrom`, `pushTo` and `cloneFrom` — which negotiate capabilities, build
 // bundles and move tracking refs — run against a served repository without
-// knowing it is one. The bearer secret travels in the remote URL's userinfo
-// (`http://token@host:port/repo`), which is also where `pm vcs remote add`
-// stores it: local knowledge, like the URL itself.
+// knowing it is one. Bearer credentials are passed separately from printable URLs.
 
+import { redactRemoteUrl, redactUserinfo, splitRemoteCredentials } from "./credentials.ts";
 import { parseBundle } from "./bundle.ts";
 
 import { randomBytes } from "node:crypto";
@@ -36,6 +35,8 @@ import {
 export interface HttpTransportOptions {
   /** Milliseconds to wait for one round trip before giving up on the remote. */
   readonly timeoutMs?: number;
+  /** Bearer credential resolved by the caller; overrides URL userinfo. */
+  readonly token?: string | null;
 }
 
 /** A successful round trip's raw answer. */
@@ -85,16 +86,16 @@ export class HttpTransport implements Transport {
     } catch {
       throw new ObjectStoreError(
         "unsupported_transport",
-        `${url} is not a URL this build can reach. Use http://host:port/repository.`,
+        `${redactRemoteUrl(url)} is not a URL this build can reach. Use http://host:port/repository.`,
       );
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       throw new ObjectStoreError(
         "unsupported_transport",
-        `${url} names the protocol "${parsed.protocol.replace(":", "")}", which the HTTP transport does not speak. Use http or https.`,
+        `${redactRemoteUrl(url)} names the protocol "${parsed.protocol.replace(":", "")}", which the HTTP transport does not speak. Use http or https.`,
       );
     }
-    this.token = parsed.username === "" ? null : decodeURIComponent(parsed.username);
+    this.token = options.token ?? splitRemoteCredentials(url).token;
     parsed.username = "";
     parsed.password = "";
     this.url = parsed.href;
@@ -140,6 +141,13 @@ export class HttpTransport implements Transport {
         + `${(error as Error).name === "TimeoutError" ? "the remote timed out" : "the connection failed"}. `
         + "Check the remote's URL, or whether the repository is being served.",
       );
+    }
+    if (response.status < 200 || response.status >= 300) {
+      let message = redactUserinfo(payload.toString("utf8"));
+      if (this.token !== null && this.token !== "") {
+        for (const secret of new Set([this.token, encodeURIComponent(this.token)])) message = message.split(secret).join("[redacted]");
+      }
+      payload = Buffer.from(message);
     }
     return { status: response.status, payload };
   }
