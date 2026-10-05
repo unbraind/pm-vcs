@@ -15,7 +15,10 @@ for (const runtime of [process.execPath, "bun"]) {
     const fixture = makeTempDir();
     const secret = "regression-bearer-secret";
     const password = "regression-password-secret";
-    const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), HOME: join(fixture.root, "home"), PM_AUTHOR: "acceptance" };
+    const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), HOME: join(fixture.root, "home"), PM_AUTHOR: "acceptance",
+      // pm otherwise spawns a detached telemetry flusher that keeps writing under HOME after each
+      // command returns (racing the fixture cleanup) and labels these runs as agent usage.
+      PM_TELEMETRY_SOURCE_CONTEXT: "test", PM_TELEMETRY_INLINE_FLUSH: "1" };
     mkdirSync(env.HOME);
     const source = join(fixture.root, "source");
     mkdirSync(source);
