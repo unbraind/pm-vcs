@@ -533,7 +533,8 @@ test("malformed wire URLs and occupied listen sockets fail through the command s
   const harness = await activate();
   const served = await serveSeededRepo();
   const rejected = await harness.runCommand({ command: "vcs serve", pmRoot: served.root, options: { listen: `127.0.0.1:${served.server.port}` } });
-  assert.match(String(rejected.errorMessage), /EADDRINUSE/);
+  assert.equal(rejected.handled, false);
+  assert.match(String(rejected.errorMessage), /EADDRINUSE|port \d+ in use/);
   const malformed = await harness.runCommand({ command: "vcs remote", args: ["wire", "http://[broken"], pmRoot: served.repository.root });
   assert.match(String(malformed.errorMessage), /does not parse/);
 });

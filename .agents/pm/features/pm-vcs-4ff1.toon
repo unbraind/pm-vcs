@@ -1,14 +1,12 @@
 id: pm-vcs-4ff1
 title: Cross-tenant denial without existence leakage
-description: "Every object and ref read, write, copy, list and update across tenants must be denied without leaking whether the object exists. Spec only — tracked as an open child for a future pass."
+description: "Repository-scoped bearer read/write grants are checked before repository access. Invalid tokens, missing repositories, wrong scopes and unsafe repository names receive identical complete HTTP denial bytes. Request and object counts are bounded; traversal, symlink aliases and linked instances are refused. Adversarial real-socket Node/Bun tests and source coverage evidence are linked. Implementation awaits orchestrator closure after final release gates."
 type: Feature
 status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:14.362Z"
-updated_at: "2026-10-05T07:00:49.864Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-10-05T07:13:22.089Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:42.163Z",claude,"cli:update:dep",detected
