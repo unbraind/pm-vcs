@@ -6,13 +6,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:10.824Z"
-updated_at: "2026-10-05T09:05:17.073Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-10-05T09:17:42.573Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:38.277Z",claude,"cli:update:dep",detected
-comments[12]{created_at,author,text}:
+comments[14]{created_at,author,text}:
   "2026-08-28T20:11:18.880Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no served-forge implementation or passing acceptance evidence for this child, so it remains open with its written specification."
   "2026-09-12T23:35:51.054Z",pi-agent,"Audit 2026-09-13: EXISTS — engine/transport.ts implements the Phase 3 transport with FileTransport, push/pull, capability negotiation, and object transfer. REMAINS — no served repository exposing refs, objects and series over the transport. The transport is used for peer-to-peer sync, not for serving a repository. The description says spec only."
   "2026-10-05T06:14:06.813Z",pi-glm,"Design for the served repository, reusing engine/transport.ts rather than forking it. The Transport interface stays the single boundary: its methods become async (a wire is asynchronous, a filesystem is not, and the interface was written so the algorithm does not care), FileTransport keeps every policy - fast-forward, force, compare-and-swap publication, verified arrival - and the HTTP server delegates every repository operation to a FileTransport opened on the repository directory under --root. Wire: POST <base>/advertise|fetch|push|objects/missing|objects/upload|publish, JSON envelopes with base64 payloads, error body {code,message} mapped back to ObjectStoreError so refusals read identically to a file remote. Client: HttpTransport implements the same interface, so clone/fetch/push/remote-add work unchanged through openTransport; the bearer token travels in the remote URL's userinfo. Resumable uploads keep their connection identity: the server holds one FileTransport per upload session, so publish reports exactly what that session delivered. Series and review records ride the same object paths: records are tree-reachable, series objects transfer through the verified-arrival upload path. Tenancy: bearer tokens scoped per repository (read/write); every pre-authorization failure - missing repo, wrong tenant, bad token, path traversal - answers with one byte-identical 404 denial; body sizes, object counts and session counts are bounded."
@@ -25,6 +23,8 @@ comments[12]{created_at,author,text}:
   "2026-10-05T08:54:13.116Z",codex-sol,"Follow-up PR #91 security work: code-scanning API reports 26 open js/path-injection error alerts, sourced from the served repository name. Replace request-derived path construction with bounded startup enumeration and refresh-on-miss: canonical relative names map to realpath directories beneath the served root, and requests obtain engine paths only through exact Map lookup. Preserve authorization ordering, byte-identical denial, filesystem alias protection and legitimate dynamically created repositories. No suppression or exclusion changes."
   "2026-10-05T09:01:57.493Z",codex-sol,"Catalogue implementation is in engine/served-repositories.ts: scans consume at most 10000 entries and 32 levels, misses rescan at most once per second, and map values are real filesystem directories. All directory aliases (including escapes), control aliases and linked instances are refused; existing entries are rechecked before opening. Focused checks exposed that older socket fixtures served the shared temporary parent and could exceed the new bound; changed those fixtures to isolated served roots. New tests cover exact hostile keys including NUL, encoded traversal, absolute targets, backslashes, refresh throttling, discovery limits and directory replacement after startup. Typecheck, lint, 250 declaration docstrings and zero duplication passed."
   "2026-10-05T09:05:17.073Z",codex-sol,"Focused Node socket, catalogue, sync and real-agent regression suite passed all 36 tests with zero skips; c8 reports 100/100/100/100 for engine/serve.ts and engine/served-repositories.ts. Native Bun exposed its existing automatic Date-header behavior across the 1100 ms refresh wait (body and status remain identical); tracked separately as pm-vcs-sl77. The existing same-time full-wire equality adversarial test is retained. The delayed replacement test compares exact denial body and status across time. Native Bun suite rerun passed all 36 tests. Next gates run at the committed implementation head, followed by the CodeQL API result on the pushed head."
+  "2026-10-05T09:15:30.119Z",codex-sol,"npm run release:check passed at d5d3a17: 848 tests passed, zero failures or skips, all authored-source coverage 100/100/100/100 over 46 files (18336/18336 lines, 554/554 functions, 3974/3974 branches). Typecheck, lint, zero duplication, 250 documented declarations, native TOON, real installed CLI stat-cache acceptance, self-host verification at committed HEAD, zero production audit vulnerabilities, identity audit, pack dry run, pm-changelog and release checks passed. pm health --strict-exit --json is clean with ok=true. Pushing this implementation head for CodeQL analysis; baseline is 26 open path-injection alerts and the new-head code-scanning result remains pending."
+  "2026-10-05T09:17:41.543Z",codex-sol,"CodeQL confirmed the structural fix on pushed implementation d5d3a17: workflow run 37288855946 completed successfully; PR merge analysis 9f0c8b7b9582031c40929ecd93fb0d09c4937884 created at 2026-10-05T09:16:38Z reports zero findings. The code-scanning API reports zero open alerts and all original alert numbers 1 through 26 have most_recent_instance.state=fixed. The linked API zero-open assertion passed via pm test. No CodeQL suppression comments or configuration exclusions were added. Final receipt commit contains PM evidence and its regenerated self-host bundle only; verify its new-head CodeQL analysis after pushing. Out-of-scope native Bun Date-header limitation remains tracked in pm-vcs-sl77."
 files[12]{path,scope}:
   engine/http-protocol.ts,project
   engine/http-transport.ts,project
@@ -38,7 +38,7 @@ files[12]{path,scope}:
   test/served-repositories.test.ts,project
   test/served-sync.test.ts,project
   vcs-commands.ts,project
-tests[5]:
+tests[6]:
   - command: node --test test/served-acceptance.test.ts
     scope: project
     provenance:
@@ -74,6 +74,14 @@ tests[5]:
     provenance:
       author: codex-sol
       created_at: "2026-10-05T09:02:46.397Z"
+      source_kind: local_mutation
+      source_ref: feat/served-repository-http
+  - command: "test \"$(gh api 'repos/unbraind/pm-vcs/code-scanning/alerts?ref=refs/pull/91/merge&state=open&per_page=100' --jq 'length')\" -eq 0"
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-05T09:16:24.266Z"
       source_kind: local_mutation
       source_ref: feat/served-repository-http
 docs[1]{path,scope}:
