@@ -133,13 +133,18 @@ export function isIgnored(path: string, rules: IgnoreRules): boolean {
   for (const prefix of ALWAYS_IGNORED) {
     if (path === prefix || path.startsWith(`${prefix}/`) || path.includes(`/${prefix}/`)) return true;
   }
-  if (!rules.patterns.some((pattern) => matchesGlob(path, pattern))) return false;
-  return !rules.negations.some((pattern) => matchesGlob(path, pattern));
+  return matchesPatterns(path, rules);
+}
+
+/** Match only one fence's patterns and exceptions, without the global ignored names. */
+function matchesPatterns(path: string, rules: IgnoreRules): boolean {
+  return rules.patterns.some((pattern) => matchesGlob(path, pattern))
+    && !rules.negations.some((pattern) => matchesGlob(path, pattern));
 }
 
 /** Whether a path is excluded by an SDK runtime fence, independent of project rules. */
 export function isRuntimeIgnored(path: string, rules: IgnoreRules): boolean {
-  return rules.runtime?.some((fence) => isIgnored(path, fence)) ?? false;
+  return rules.runtime?.some((fence) => matchesPatterns(path, fence)) ?? false;
 }
 
 /**

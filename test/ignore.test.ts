@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { Repository } from "../engine/repo.ts";
-import { ALWAYS_IGNORED, isIgnored, isPrunableDirectory, parseIgnore, readIgnoreRules } from "../engine/ignore.ts";
+import { ALWAYS_IGNORED, isIgnored, isRuntimeIgnored, isPrunableDirectory, parseIgnore, readIgnoreRules } from "../engine/ignore.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 let dir: { root: string; cleanup(): void } | null = null;
@@ -105,6 +105,9 @@ test("SDK runtime fences resolve custom tracker roots and cannot be negated", ()
     assert.equal(isIgnored(`custom/tracker/${path}`, rules), false, path);
   }
   assert.equal(isIgnored("unrelated/runtime/source.ts", rules), false);
+  assert.equal(isIgnored(".git/config", rules), true);
+  assert.equal(isRuntimeIgnored(".git/config", rules), false);
+  assert.equal(isRuntimeIgnored("custom/tracker/runtime/context.json", rules), true);
 });
 
 test("an external PM_PATH is not a repository ignore fence; a tracker at the root is", () => {
