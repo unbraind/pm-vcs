@@ -251,13 +251,21 @@ test("remote stores the resolved location and refuses a scheme this build cannot
   assert.notEqual(resolve(workingRoot, "../sibling"), resolve(root, "../sibling"));
 
   // An unsupported scheme is refused here rather than at the first fetch, which
-  // would name the fetch as the problem.
+  // would name the fetch as the problem. http and https name served repositories
+  // now, so the refused scheme is one no transport in this build speaks — and
+  // the http one is accepted, because a served remote is a first-class remote.
   const refused = await harness.runCommand({
-    command: "vcs remote", args: ["web", "https://example.com/repo"], pmRoot: workingRoot,
+    command: "vcs remote", args: ["shell", "ssh://example.com/repo"], pmRoot: workingRoot,
   });
   assert.equal(refused.handled, false);
-  assert.match(String(refused.errorMessage), /cannot reach a remote over "https"/);
-  assert.equal(Repository.open(root).remotes.read("web"), null);
+  assert.match(String(refused.errorMessage), /cannot reach a remote over "ssh"/);
+  assert.equal(Repository.open(root).remotes.read("shell"), null);
+
+  const wire = await harness.runCommand({
+    command: "vcs remote", args: ["web", "http://example.invalid/repo"], pmRoot: workingRoot,
+  });
+  assert.equal(wire.errorMessage, undefined, String(wire.errorMessage));
+  assert.equal((wire.result as { added: Remote }).added.url, "http://example.invalid/repo");
 });
 
 test("branch --remotes lists what the fetch recorded, with divergence from HEAD", async () => {

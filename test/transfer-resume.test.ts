@@ -96,18 +96,18 @@ function closureOf(repository: Repository, commit: ObjectId): ObjectId[] {
   return [...ids].sort();
 }
 
-test("an advertisement names the peer's format version and capabilities", () => {
+test("an advertisement names the peer's format version and capabilities", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
   const wire = new FileTransport(source.root, source.root);
-  const advertisement = wire.advertise();
+  const advertisement = await wire.advertise();
   assert.equal(advertisement.formatVersion, REPOSITORY_FORMAT);
   for (const capability of REQUIRED_TRANSPORT_CAPABILITIES) {
     assert.ok(advertisement.capabilities.includes(capability), `missing ${capability}`);
   }
 });
 
-test("an incompatible peer is refused before any data moves or any ref changes", () => {
+test("an incompatible peer is refused before any data moves or any ref changes", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
   const compatible = new FileTransport(source.root, source.root);
@@ -129,7 +129,7 @@ test("an incompatible peer is refused before any data moves or any ref changes",
   };
 
   const staleFormat: Advertisement = {
-    ...counting.advertise(),
+    ...await counting.advertise(),
     formatVersion: "pmvcs-0",
   };
   assert.throws(() => assertCompatiblePeer(staleFormat), (error: unknown) => {
@@ -140,7 +140,7 @@ test("an incompatible peer is refused before any data moves or any ref changes",
   // A future peer that speaks a newer format is equally incompatible: neither
   // side can know what the other's bytes mean.
   const futureFormat: Advertisement = {
-    ...counting.advertise(),
+    ...await counting.advertise(),
     formatVersion: "pmvcs-2",
   };
   assert.throws(() => assertCompatiblePeer(futureFormat), (error: unknown) => {
@@ -149,7 +149,7 @@ test("an incompatible peer is refused before any data moves or any ref changes",
     return true;
   });
   const missingCapability: Advertisement = {
-    ...counting.advertise(),
+    ...await counting.advertise(),
     capabilities: ["fetch"],
   };
   assert.throws(() => assertCompatiblePeer(missingCapability), (error: unknown) => {
@@ -160,10 +160,10 @@ test("an incompatible peer is refused before any data moves or any ref changes",
   // The refusals happened at the handshake: no bundle was built or sent.
   assert.equal(transferred, 0);
   // And a matching peer passes.
-  assert.equal(assertCompatiblePeer(counting.advertise()), true);
+  assert.equal(assertCompatiblePeer(await counting.advertise()), true);
 });
 
-test("an interrupted upload resumes by sending only the objects the receiver still lacks", () => {
+test("an interrupted upload resumes by sending only the objects the receiver still lacks", async () => {
   const sender = freshRepo();
   commitFile(sender, "a.txt", "one");
   const tip = commitFile(sender, "b.txt", "two");
@@ -172,7 +172,7 @@ test("an interrupted upload resumes by sending only the objects the receiver sti
   const wire = new FileTransport(receiver.root, receiver.root);
   const ids = closureOf(sender, tip);
   // Nothing has arrived yet, so the receiver lacks the whole closure.
-  const firstAsk = wire.missingObjects(ids);
+  const firstAsk = await wire.missingObjects(ids);
   assert.deepEqual(firstAsk, ids);
 
   // The upload starts and is interrupted after the first object.
@@ -180,14 +180,14 @@ test("an interrupted upload resumes by sending only the objects the receiver sti
     const stored = sender.objects.read(id);
     return { id: id, type: stored.type, payload: stored.payload };
   });
-  wire.uploadObjects(objects.slice(0, 1));
+  await wire.uploadObjects(objects.slice(0, 1));
   // Resuming asks again, and the receiver only names what it still lacks.
-  const secondAsk = wire.missingObjects(ids);
+  const secondAsk = await wire.missingObjects(ids);
   assert.deepEqual(secondAsk, ids.slice(1));
-  wire.uploadObjects(objects.slice(1));
+  await wire.uploadObjects(objects.slice(1));
 
   const updates: PushUpdate[] = [{ ref: `${BRANCH_PREFIX}main`, expected: null, next: tip }];
-  const receipt = wire.publish(updates, false, now);
+  const receipt = await wire.publish(updates, false, now);
   assert.deepEqual(receipt.updated, updates);
   assert.equal(receiver.refs.read(`${BRANCH_PREFIX}main`), tip);
   // Every object arrived exactly once: the resumed transfer did not resend
@@ -195,7 +195,7 @@ test("an interrupted upload resumes by sending only the objects the receiver sti
   assert.equal(receipt.added.length, ids.length);
 });
 
-test("each uploaded object is verified against its id on arrival", () => {
+test("each uploaded object is verified against its id on arrival", async () => {
   const sender = freshRepo();
   commitFile(sender, "a.txt", "one");
   const tip = commitFile(sender, "b.txt", "two");
@@ -214,8 +214,8 @@ test("each uploaded object is verified against its id on arrival", () => {
     type: corrupted[1]!.type,
     payload: Buffer.from(`tampered-${corrupted[1]!.payload.toString("hex")}`, "utf8"),
   };
-  assert.throws(
-    () => wire.uploadObjects(corrupted),
+  await assert.rejects(
+    wire.uploadObjects(corrupted),
     (error: unknown) => {
       assert.ok(error instanceof ObjectStoreError);
       assert.equal(error.code, "corrupt_object");
@@ -227,13 +227,13 @@ test("each uploaded object is verified against its id on arrival", () => {
   assert.equal(receiver.objects.has(corrupted[1]!.id), false);
   // The objects before the corrupt one were verified and stored; the ones
   // after it never arrived, and a clean resend completes the transfer.
-  wire.uploadObjects(objects);
+  await wire.uploadObjects(objects);
   const updates: PushUpdate[] = [{ ref: `${BRANCH_PREFIX}main`, expected: null, next: tip }];
-  wire.publish(updates, false, now);
+  await wire.publish(updates, false, now);
   assert.equal(receiver.refs.read(`${BRANCH_PREFIX}main`), tip);
 });
 
-test("publication is refused until the uploaded closure is complete, leaving no ref moved", () => {
+test("publication is refused until the uploaded closure is complete, leaving no ref moved", async () => {
   const sender = freshRepo();
   commitFile(sender, "a.txt", "one");
   const tip = commitFile(sender, "b.txt", "two");
@@ -247,10 +247,10 @@ test("publication is refused until the uploaded closure is complete, leaving no 
   });
   // Everything except the tip commit: the branch would name a commit whose
   // object is absent, which is exactly the state publication must refuse.
-  wire.uploadObjects(objects.filter((object) => object.id !== tip));
+  await wire.uploadObjects(objects.filter((object) => object.id !== tip));
   const updates: PushUpdate[] = [{ ref: `${BRANCH_PREFIX}main`, expected: null, next: tip }];
-  assert.throws(
-    () => wire.publish(updates, false, now),
+  await assert.rejects(
+    wire.publish(updates, false, now),
     (error: unknown) => {
       assert.ok(error instanceof ObjectStoreError);
       assert.equal(error.code, "incomplete_bundle");
@@ -260,12 +260,12 @@ test("publication is refused until the uploaded closure is complete, leaving no 
   assert.equal(receiver.refs.read(`${BRANCH_PREFIX}main`), null);
   // Completing the upload makes the same publication succeed.
   const missing = objects.find((object) => object.id === tip)!;
-  wire.uploadObjects([missing]);
-  wire.publish(updates, false, now);
+  await wire.uploadObjects([missing]);
+  await wire.publish(updates, false, now);
   assert.equal(receiver.refs.read(`${BRANCH_PREFIX}main`), tip);
 });
 
-test("a lost publication race keeps the winner's tip and the loser's history, and is retryable", () => {
+test("a lost publication race keeps the winner's tip and the loser's history, and is retryable", async () => {
   // Two agents observed the same unborn branch and both prepared a push.
   const winnerSource = freshRepo();
   const winnerTip = commitFile(winnerSource, "winner.txt", "winner work");
@@ -277,13 +277,13 @@ test("a lost publication race keeps the winner's tip and the loser's history, an
 
   const winnerObjects = closureOf(winnerSource, winnerTip);
   const loserObjects = closureOf(loserSource, loserTip);
-  wire.uploadObjects(
+  await wire.uploadObjects(
     winnerObjects.map((id) => {
       const stored = winnerSource.objects.read(id);
       return { id: id, type: stored.type, payload: stored.payload };
     }),
   );
-  wire.uploadObjects(
+  await wire.uploadObjects(
     loserObjects.map((id) => {
       const stored = loserSource.objects.read(id);
       return { id: id, type: stored.type, payload: stored.payload };
@@ -291,14 +291,14 @@ test("a lost publication race keeps the winner's tip and the loser's history, an
   );
 
   const winnerUpdate: PushUpdate = { ref: `${BRANCH_PREFIX}main`, expected: null, next: winnerTip };
-  wire.publish([winnerUpdate], false, now);
+  await wire.publish([winnerUpdate], false, now);
 
   // The loser still believes main is unborn (it observed nothing there). The publication must refuse
   // as a retryable race, keep the winner's tip exactly where it landed, and
   // leave the loser's own repository untouched.
   const loserUpdate: PushUpdate = { ref: `${BRANCH_PREFIX}main`, expected: null, next: loserTip };
-  assert.throws(
-    () => wire.publish([loserUpdate], false, now),
+  await assert.rejects(
+    wire.publish([loserUpdate], false, now),
     (error: unknown) => {
       assert.ok(error instanceof ObjectStoreError);
       assert.equal(error.code, "publication_race");
@@ -309,7 +309,7 @@ test("a lost publication race keeps the winner's tip and the loser's history, an
   assert.equal(loserSource.refs.read(`${BRANCH_PREFIX}main`), loserTip);
 });
 
-test("pushTo surfaces the peer handshake before building or sending a bundle", () => {
+test("pushTo surfaces the peer handshake before building or sending a bundle", async () => {
   const sender = freshRepo();
   commitFile(sender, "a.txt", "one");
   const remote = freshRepo();
@@ -319,7 +319,7 @@ test("pushTo surfaces the peer handshake before building or sending a bundle", (
   let pushed = 0;
   const stale: Transport = {
     url: compatible.url,
-    advertise: () => ({ ...compatible.advertise(), formatVersion: "pmvcs-9" }),
+    advertise: async () => ({ ...(await compatible.advertise()), formatVersion: "pmvcs-9" }),
     fetch: compatible.fetch.bind(compatible),
     push: () => {
       pushed += 1;
@@ -329,8 +329,8 @@ test("pushTo surfaces the peer handshake before building or sending a bundle", (
     uploadObjects: compatible.uploadObjects.bind(compatible),
     publish: compatible.publish.bind(compatible),
   };
-  assert.throws(
-    () => pushTo(sender, "origin", ["main"], false, now, stale),
+  await assert.rejects(
+    pushTo(sender, "origin", ["main"], false, now, stale),
     (error: unknown) => {
       assert.ok(error instanceof ObjectStoreError);
       assert.equal(error.code, "incompatible_peer");
@@ -341,7 +341,7 @@ test("pushTo surfaces the peer handshake before building or sending a bundle", (
   assert.equal(remote.refs.read(`${BRANCH_PREFIX}main`), null);
 });
 
-test("publication refuses refs it cannot own and moves that are not fast-forwards", () => {
+test("publication refuses refs it cannot own and moves that are not fast-forwards", async () => {
   const sender = freshRepo();
   commitFile(sender, "a.txt", "one");
   const tip = commitFile(sender, "b.txt", "two");
@@ -354,10 +354,10 @@ test("publication refuses refs it cannot own and moves that are not fast-forward
     const stored = sender.objects.read(id);
     return { id: id, type: stored.type, payload: stored.payload };
   });
-  wire.uploadObjects(objects);
+  await wire.uploadObjects(objects);
 
-  assert.throws(
-    () => wire.publish([{ ref: "refs/remotes/other/main", expected: null, next: tip }], false, now),
+  await assert.rejects(
+    wire.publish([{ ref: "refs/remotes/other/main", expected: null, next: tip }], false, now),
     (error: unknown) => {
       assert.ok(error instanceof ObjectStoreError);
       assert.equal(error.code, "unpushable_ref");
@@ -369,7 +369,7 @@ test("publication refuses refs it cannot own and moves that are not fast-forward
   // An unrelated history is not a fast-forward from nothing... but an unborn
   // branch has no commits to discard, so the unrelated move lands; the real
   // non-fast-forward case needs a receiver that already holds other history.
-  wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: null, next: tip }], false, now);
+  await wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: null, next: tip }], false, now);
   const divergent = freshRepo();
   commitFile(divergent, "c.txt", "divergent");
   const divergentTip = divergent.refs.read(`${BRANCH_PREFIX}main`)!;
@@ -377,9 +377,9 @@ test("publication refuses refs it cannot own and moves that are not fast-forward
     const stored = divergent.objects.read(id);
     return { id: id, type: stored.type, payload: stored.payload };
   });
-  wire.uploadObjects(divergentObjects);
-  assert.throws(
-    () => wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: divergentTip }], false, now),
+  await wire.uploadObjects(divergentObjects);
+  await assert.rejects(
+    wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: divergentTip }], false, now),
     (error: unknown) => {
       assert.ok(error instanceof ObjectStoreError);
       assert.equal(error.code, "non_fast_forward");
@@ -389,7 +389,7 @@ test("publication refuses refs it cannot own and moves that are not fast-forward
   assert.equal(receiver.refs.read(`${BRANCH_PREFIX}main`), tip);
   // Republishing a ref that already holds the requested value is a no-op, not
   // an error: the receiver answers with the receipt and moves nothing.
-  const noOp = wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: tip }], false, now);
+  const noOp = await wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: tip }], false, now);
   assert.deepEqual(noOp.updated, [{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: tip }]);
   // The no-op publication consumed nothing new, so its receipt is empty too -
   // a stale accumulator here would name the divergent closure uploaded before
@@ -399,14 +399,14 @@ test("publication refuses refs it cannot own and moves that are not fast-forward
   // Every publication attempt claims and clears the arrival accumulator at
   // entry, refusals included, so retrying with force reports an empty added
   // list rather than naming objects an earlier attempt delivered.
-  const forced = wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: divergentTip }], true, now);
+  const forced = await wire.publish([{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: divergentTip }], true, now);
   assert.deepEqual(forced.updated, [{ ref: `${BRANCH_PREFIX}main`, expected: tip, next: divergentTip }]);
   assert.deepEqual(forced.added, []);
   assert.equal(receiver.refs.read(`${BRANCH_PREFIX}main`), divergentTip);
 });
 
 
-test("a transaction-level race is translated into a retryable publication failure", () => {
+test("a transaction-level race is translated into a retryable publication failure", async () => {
   const race = new ObjectStoreError(
     "ref_changed",
     "Ref refs/heads/main holds something else. Re-read the ref and retry.",

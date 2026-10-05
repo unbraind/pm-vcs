@@ -17,7 +17,6 @@ import { BRANCH_PREFIX, TAG_PREFIX } from "./refs.ts";
 import { REMOTE_PREFIX, trackingRef } from "./remotes.ts";
 import { DEFAULT_BRANCH, Repository } from "./repo.ts";
 import {
-  FileTransport,
   assertCompatiblePeer,
   type PushUpdate,
   type Transport,
@@ -126,17 +125,17 @@ function localNameFor(remote: string, name: string): string | null {
  * @returns What moved and what was transferred.
  * @throws ObjectStoreError When the remote is not configured or cannot be reached.
  */
-export function fetchFrom(
+export async function fetchFrom(
   repository: Repository,
   remoteName: string,
   now: Date,
   transport?: Transport,
-): FetchReport {
+): Promise<FetchReport> {
   const remote = repository.remotes.require(remoteName);
   const wire = transport ?? openTransport(remote.url, repository.root);
   // The handshake runs before anything else: an incompatible peer must be
   // refused while nothing has moved, not after a bundle has been transferred.
-  const advertisement = wire.advertise();
+  const advertisement = await wire.advertise();
   assertCompatiblePeer(advertisement);
 
   const wanted: { remoteRef: string; localRef: string; target: ObjectId; before: ObjectId | null }[] = [];
@@ -157,7 +156,7 @@ export function fetchFrom(
     return { remote: remoteName, url: remote.url, updated: [], conflictingTags, added: [], upToDate: true };
   }
 
-  const bundle = wire.fetch(wanted.map((item) => item.remoteRef), localTips(repository));
+  const bundle = await wire.fetch(wanted.map((item) => item.remoteRef), localTips(repository));
   const { added } = importBundleObjects(repository.objects, bundle);
   for (const item of wanted) assertClosurePresent(repository.objects, item.localRef, item.target);
 
@@ -199,14 +198,14 @@ export function fetchFrom(
  * @throws ObjectStoreError When a named branch does not exist, HEAD is detached and
  *   no branch was named, or the remote refuses a move.
  */
-export function pushTo(
+export async function pushTo(
   repository: Repository,
   remoteName: string,
   branches: readonly string[],
   force: boolean,
   now: Date,
   transport?: Transport,
-): PushReport {
+): Promise<PushReport> {
   const remote = repository.remotes.require(remoteName);
   const wire = transport ?? openTransport(remote.url, repository.root);
 
@@ -229,7 +228,7 @@ export function pushTo(
 
   // Same handshake discipline as fetch: capabilities and format are agreed
   // before any history is serialized for the wire.
-  const advertisement = wire.advertise();
+  const advertisement = await wire.advertise();
   assertCompatiblePeer(advertisement);
   const remoteRefs = new Map(advertisement.refs.map((entry) => [entry.name, entry.target]));
   const updates: PushUpdate[] = [];
@@ -252,7 +251,7 @@ export function pushTo(
   // naming an absent commit fails the export outright.
   const since = [...remoteRefs.values()].filter((id) => repository.objects.has(id));
   const bundle = exportBundle(repository.objects, repository.refs, updates.map((update) => update.ref), since);
-  const receipt = wire.push(bundle, updates, force, now);
+  const receipt = await wire.push(bundle, updates, force, now);
 
   // The remote accepted, so its branches are now where this side just put them and
   // the tracking refs can say so without another round trip.
@@ -301,19 +300,19 @@ export function pushTo(
  * @throws ObjectStoreError When `root` already holds a repository, or the source
  *   cannot be reached.
  */
-export function cloneFrom(
+export async function cloneFrom(
   url: string,
   root: string,
   now: Date,
   remoteName = "origin",
   base: string = process.cwd(),
   transport?: Transport,
-): CloneReport {
+): Promise<CloneReport> {
   const location = resolveRemoteLocation(url, base);
-  const wire = transport ?? new FileTransport(url, location);
+  const wire = transport ?? openTransport(url, base);
   // Refusing an incompatible source here means before the destination
   // directory is created, so a failed clone is still just a retry away.
-  const advertisement = wire.advertise();
+  const advertisement = await wire.advertise();
   assertCompatiblePeer(advertisement);
   const branch = advertisement.head === null || !advertisement.head.startsWith(BRANCH_PREFIX)
     ? null
@@ -328,7 +327,7 @@ export function cloneFrom(
   let fetched: FetchReport;
   try {
     repository.remotes.add(remoteName, location);
-    fetched = fetchFrom(repository, remoteName, now, wire);
+    fetched = await fetchFrom(repository, remoteName, now, wire);
   } catch (error) {
     rmSync(preexisting ? repository.controlDirectory : root, { recursive: true, force: true });
     throw error;

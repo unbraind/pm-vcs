@@ -42,6 +42,7 @@ import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./engine/refs.ts";
 import { REMOTE_PREFIX, type Remote } from "./engine/remotes.ts";
 import { type CloneReport, type FetchReport, type PushReport, cloneFrom, fetchFrom, pushTo } from "./engine/sync.ts";
 import { resolveRemoteLocation } from "./engine/transport.ts";
+import { readTokenFile, startRepositoryServer, type TokenGrants } from "./engine/serve.ts";
 import { type StatusReport, flattenTree } from "./engine/worktree.ts";
 import { type ScanReport } from "./engine/instances.ts";
 import type {
@@ -200,6 +201,65 @@ export function signatureFor(context: CommandHandlerContext, now: Date): Signatu
     timestamp: now.getTime(),
     timezoneOffsetMinutes: -now.getTimezoneOffset(),
   };
+}
+
+/**
+ * Parses a --listen address into a host and a port.
+ *
+ * Accepts `host:port` with an IPv4 or hostname host, and `[v6]:port` for a
+ * literal IPv6 address. Port 0 is kept as written and the operating system
+ * replaces it with an ephemeral port, which is also what makes a test's
+ * listener collision-proof.
+ *
+ * @param listen - The address as typed, for example `127.0.0.1:0`.
+ * @returns The host and port to bind.
+ * @throws VcsError When the address is not host:port with a port from 0 to 65535.
+ */
+function parseListenAddress(listen: string): { host: string; port: number } {
+  const match = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):(\d+)$/.exec(listen);
+  const port = match === null ? Number.NaN : Number(match[2]);
+  if (match === null || !Number.isInteger(port) || port > 65535) {
+    throw new VcsError(
+      "invalid_option",
+      `--listen accepts host:port with a port from 0 to 65535, not "${listen}".`,
+      "Pass an address like 127.0.0.1:0 to bind an ephemeral loopback port, or host:port to bind a chosen one.",
+    );
+  }
+  // An IPv6 literal in brackets keeps the brackets off the bind call, which
+  // takes the bare address.
+  return { host: match[1].startsWith("[") ? match[1].slice(1, -1) : match[1], port };
+}
+
+/**
+ * Reads the tokens file a serve command authorizes with, or grants nothing.
+ *
+ * @param authPath - The path as typed, relative to the working root; null when
+ *   the command was run without --auth, which serves every repository readable
+ *   and writable.
+ * @param workingRoot - Directory a relative path is resolved against.
+ * @returns The grants, or null when serving without authorization.
+ * @throws VcsError When the file cannot be read or holds no grant. An
+ *   authorization file that is present but empty is refused rather than
+ *   served as an open root, because the operator who wrote it meant to close
+ *   the server, not to open it.
+ */
+function readServeGrants(authPath: string | undefined, workingRoot: string): TokenGrants | null {
+  if (authPath === undefined) return null;
+  let grants: TokenGrants;
+  try {
+    grants = readTokenFile(resolve(workingRoot, authPath));
+  } catch (error) {
+    if (!(error instanceof ObjectStoreError)) throw error;
+    throw new VcsError(error.code, error.message, "Serve with a readable, well-formed tokens file, or without --auth.");
+  }
+  if (grants.isEmpty()) {
+    throw new VcsError(
+      "empty_auth_file",
+      `The tokens file at ${authPath} grants no token access.`,
+      "Add at least one {token, repository, access} entry, or serve without --auth.",
+    );
+  }
+  return grants;
 }
 
 /**
@@ -792,10 +852,13 @@ export function registerVcsCommands(api: ExtensionApi): void {
     description:
       "Bring a remote's branches onto tracking refs under refs/remotes/, transferring only the objects this repository is missing. No local branch is touched, so a fetch can never discard work that has not been pushed.",
     arguments: [{ name: "remote", description: "Remote to fetch from (default origin)", required: false }],
-    run(context: CommandHandlerContext): VcsEnvelope & { fetch: FetchReport } {
+    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { fetch: FetchReport }> {
       const repository = openRepository(context);
       const remote = context.args[0]?.trim();
-      return { ok: true, fetch: fetchFrom(repository, remote === undefined || remote === "" ? "origin" : remote, new Date()) };
+      return {
+        ok: true,
+        fetch: await fetchFrom(repository, remote === undefined || remote === "" ? "origin" : remote, new Date()),
+      };
     },
   });
 
@@ -808,12 +871,12 @@ export function registerVcsCommands(api: ExtensionApi): void {
       { long: "--branch", value_name: "names", description: "Comma-separated branches to push (default the branch HEAD is on)", value_type: "string" },
       { long: "--force", description: "Allow a push that discards commits the remote has", value_type: "boolean" },
     ],
-    run(context: CommandHandlerContext): VcsEnvelope & { push: PushReport } {
+    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { push: PushReport }> {
       const repository = openRepository(context);
       const remote = context.args[0]?.trim();
       return {
         ok: true,
-        push: pushTo(
+        push: await pushTo(
           repository,
           remote === undefined || remote === "" ? "origin" : remote,
           commaSeparated(context.options, "branch"),
@@ -833,8 +896,8 @@ export function registerVcsCommands(api: ExtensionApi): void {
       { name: "directory", description: "Where to put the clone (default a directory named after the source)", required: false },
     ],
     flags: [{ long: "--remote", value_name: "name", description: "Name to register the source under (default origin)", value_type: "string" }],
-    run(context: CommandHandlerContext): VcsEnvelope & { clone: CloneReport } {
-      const url = requiredArgument(context, 0, "url", "Pass the path or file: URL of the repository to clone.");
+    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { clone: CloneReport }> {
+      const url = requiredArgument(context, 0, "url", "Pass the path, file: URL or http: URL of the repository to clone.");
       const requested = context.args[1]?.trim();
       // One base for both sides of the command. Resolving the destination against
       // the working root while the source resolved against `process.cwd()` would
@@ -846,8 +909,35 @@ export function registerVcsCommands(api: ExtensionApi): void {
         : resolve(workingRoot, requested);
       return {
         ok: true,
-        clone: cloneFrom(url, destination, new Date(), optionalString(context.options, "remote") ?? "origin", workingRoot),
+        clone: await cloneFrom(url, destination, new Date(), optionalString(context.options, "remote") ?? "origin", workingRoot),
       };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs serve",
+    description:
+      "Serve the repositories under one root over HTTP, so clone, fetch and push reach them exactly as they reach a file remote: same capability negotiation, same fast-forward rules, same compare-and-swap publication. The command keeps running until its process is stopped; pass --auth with a tokens file to scope bearer tokens to repositories, and embed a token in a remote's URL as http://token@host:port/repository.",
+    flags: [
+      { long: "--listen", value_name: "host:port", description: "Address to bind (default 127.0.0.1:0, an ephemeral loopback port)", value_type: "string" },
+      { long: "--root", value_name: "dir", description: "Directory whose subdirectories are the repositories to serve (default the working root)", value_type: "string" },
+      { long: "--auth", value_name: "tokens-file", description: "JSON array of {token, repository, access} bearer grants; omit to serve every repository readable and writable", value_type: "string" },
+    ],
+    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { serve: { host: string; port: number; root: string; requiresAuth: boolean } }> {
+      const workingRoot = sourceWorkingRoot(context);
+      const listen = parseListenAddress(optionalString(context.options, "listen") ?? "127.0.0.1:0");
+      const root = resolve(workingRoot, optionalString(context.options, "root") ?? ".");
+      const grants = readServeGrants(optionalString(context.options, "auth"), workingRoot);
+      try {
+        const handle = await startRepositoryServer({ root, host: listen.host, port: listen.port, grants });
+        // The command's process stays alive because the server is listening: the
+        // returned envelope names the bound address, and stopping the process
+        // stops the server.
+        return { ok: true, serve: { host: handle.host, port: handle.port, root, requiresAuth: grants !== null } };
+      } catch (error) {
+        if (!(error instanceof ObjectStoreError)) throw error;
+        throw new VcsError(error.code, error.message, "Pass a directory of repositories with --root.");
+      }
     },
   });
 

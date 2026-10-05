@@ -201,13 +201,13 @@ test("a criss-cross with unrelated minimal bases builds its virtual base from an
   }
 });
 
-test("transport preserves a repository format error instead of rewriting it as unreachable", () => {
+test("transport preserves a repository format error instead of rewriting it as unreachable", async () => {
   const directory = makeTempDir();
   try {
     mkdirSync(join(directory.root, ".pmvcs"), { recursive: true });
     writeFileSync(join(directory.root, ".pmvcs", "format"), "future-format\n");
-    assert.throws(
-      () => new FileTransport(directory.root, directory.root).advertise(),
+    await assert.rejects(
+      new FileTransport(directory.root, directory.root).advertise(),
       (error: unknown) => error instanceof ObjectStoreError && error.code === "unsupported_format",
     );
   } finally {

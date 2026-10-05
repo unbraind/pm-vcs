@@ -8,7 +8,7 @@
 
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 /**
  * Creates a fresh empty directory and returns a cleanup handle.
@@ -28,3 +28,6 @@ export function makeTempDir(): { root: string; cleanup(): void } {
     },
   };
 }
+
+/** Package root, so tests and workers can locate the manifest and helpers. */
+export const packageRoot = resolve(import.meta.dirname, "..", "..");

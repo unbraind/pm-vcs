@@ -2,15 +2,19 @@ id: pm-vcs-ttc0
 title: Served repository over the Phase 3 transport
 description: "A served repository exposing refs, objects and the series over the Phase 3 transport in engine/transport.ts. Spec only — tracked as an open child for a future pass."
 type: Feature
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:10.824Z"
-updated_at: "2026-09-12T23:35:51.054Z"
+updated_at: "2026-10-05T06:38:16.512Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:38.277Z",claude,"cli:update:dep",detected
-comments[2]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-08-28T20:11:18.880Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no served-forge implementation or passing acceptance evidence for this child, so it remains open with its written specification."
   "2026-09-12T23:35:51.054Z",pi-agent,"Audit 2026-09-13: EXISTS — engine/transport.ts implements the Phase 3 transport with FileTransport, push/pull, capability negotiation, and object transfer. REMAINS — no served repository exposing refs, objects and series over the transport. The transport is used for peer-to-peer sync, not for serving a repository. The description says spec only."
+  "2026-10-05T06:14:06.813Z",pi-glm,"Design for the served repository, reusing engine/transport.ts rather than forking it. The Transport interface stays the single boundary: its methods become async (a wire is asynchronous, a filesystem is not, and the interface was written so the algorithm does not care), FileTransport keeps every policy - fast-forward, force, compare-and-swap publication, verified arrival - and the HTTP server delegates every repository operation to a FileTransport opened on the repository directory under --root. Wire: POST <base>/advertise|fetch|push|objects/missing|objects/upload|publish, JSON envelopes with base64 payloads, error body {code,message} mapped back to ObjectStoreError so refusals read identically to a file remote. Client: HttpTransport implements the same interface, so clone/fetch/push/remote-add work unchanged through openTransport; the bearer token travels in the remote URL's userinfo. Resumable uploads keep their connection identity: the server holds one FileTransport per upload session, so publish reports exactly what that session delivered. Series and review records ride the same object paths: records are tree-reachable, series objects transfer through the verified-arrival upload path. Tenancy: bearer tokens scoped per repository (read/write); every pre-authorization failure - missing repo, wrong tenant, bad token, path traversal - answers with one byte-identical 404 denial; body sizes, object counts and session counts are bounded."
+  "2026-10-05T06:38:16.512Z",codex-sol,"Resumed the interrupted implementation as codex-sol. Preserving the existing async Transport, HTTP protocol/client/server and socket tests; verifying policy reuse and adversarial boundaries before an early focused commit. The existing coverage command excludes the CDC benchmark; all authored source coverage will include it."
 body: ""
