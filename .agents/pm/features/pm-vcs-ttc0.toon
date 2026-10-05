@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:10.824Z"
-updated_at: "2026-10-05T09:17:42.573Z"
+updated_at: "2026-10-05T11:35:08.720Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:38.277Z",claude,"cli:update:dep",detected
-comments[14]{created_at,author,text}:
+comments[17]{created_at,author,text}:
   "2026-08-28T20:11:18.880Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no served-forge implementation or passing acceptance evidence for this child, so it remains open with its written specification."
   "2026-09-12T23:35:51.054Z",pi-agent,"Audit 2026-09-13: EXISTS — engine/transport.ts implements the Phase 3 transport with FileTransport, push/pull, capability negotiation, and object transfer. REMAINS — no served repository exposing refs, objects and series over the transport. The transport is used for peer-to-peer sync, not for serving a repository. The description says spec only."
   "2026-10-05T06:14:06.813Z",pi-glm,"Design for the served repository, reusing engine/transport.ts rather than forking it. The Transport interface stays the single boundary: its methods become async (a wire is asynchronous, a filesystem is not, and the interface was written so the algorithm does not care), FileTransport keeps every policy - fast-forward, force, compare-and-swap publication, verified arrival - and the HTTP server delegates every repository operation to a FileTransport opened on the repository directory under --root. Wire: POST <base>/advertise|fetch|push|objects/missing|objects/upload|publish, JSON envelopes with base64 payloads, error body {code,message} mapped back to ObjectStoreError so refusals read identically to a file remote. Client: HttpTransport implements the same interface, so clone/fetch/push/remote-add work unchanged through openTransport; the bearer token travels in the remote URL's userinfo. Resumable uploads keep their connection identity: the server holds one FileTransport per upload session, so publish reports exactly what that session delivered. Series and review records ride the same object paths: records are tree-reachable, series objects transfer through the verified-arrival upload path. Tenancy: bearer tokens scoped per repository (read/write); every pre-authorization failure - missing repo, wrong tenant, bad token, path traversal - answers with one byte-identical 404 denial; body sizes, object counts and session counts are bounded."
@@ -25,7 +25,10 @@ comments[14]{created_at,author,text}:
   "2026-10-05T09:05:17.073Z",codex-sol,"Focused Node socket, catalogue, sync and real-agent regression suite passed all 36 tests with zero skips; c8 reports 100/100/100/100 for engine/serve.ts and engine/served-repositories.ts. Native Bun exposed its existing automatic Date-header behavior across the 1100 ms refresh wait (body and status remain identical); tracked separately as pm-vcs-sl77. The existing same-time full-wire equality adversarial test is retained. The delayed replacement test compares exact denial body and status across time. Native Bun suite rerun passed all 36 tests. Next gates run at the committed implementation head, followed by the CodeQL API result on the pushed head."
   "2026-10-05T09:15:30.119Z",codex-sol,"npm run release:check passed at d5d3a17: 848 tests passed, zero failures or skips, all authored-source coverage 100/100/100/100 over 46 files (18336/18336 lines, 554/554 functions, 3974/3974 branches). Typecheck, lint, zero duplication, 250 documented declarations, native TOON, real installed CLI stat-cache acceptance, self-host verification at committed HEAD, zero production audit vulnerabilities, identity audit, pack dry run, pm-changelog and release checks passed. pm health --strict-exit --json is clean with ok=true. Pushing this implementation head for CodeQL analysis; baseline is 26 open path-injection alerts and the new-head code-scanning result remains pending."
   "2026-10-05T09:17:41.543Z",codex-sol,"CodeQL confirmed the structural fix on pushed implementation d5d3a17: workflow run 37288855946 completed successfully; PR merge analysis 9f0c8b7b9582031c40929ecd93fb0d09c4937884 created at 2026-10-05T09:16:38Z reports zero findings. The code-scanning API reports zero open alerts and all original alert numbers 1 through 26 have most_recent_instance.state=fixed. The linked API zero-open assertion passed via pm test. No CodeQL suppression comments or configuration exclusions were added. Final receipt commit contains PM evidence and its regenerated self-host bundle only; verify its new-head CodeQL analysis after pushing. Out-of-scope native Bun Date-header limitation remains tracked in pm-vcs-sl77."
-files[12]{path,scope}:
+  "2026-10-05T11:05:24.027Z",pi-glm,"PR #91 review follow-up (Greptile comments 4182612126 and 4182612135), resumed as pi-glm. P1: pushTo reads each tracking ref's expected value after the awaited push, so a late HTTP answer can overwrite a newer tip another fetch or push recorded while the wire was busy — capture the tracking values before sending and apply them only as compare-and-swap, moving a tracking ref past the captured value only when the pushed commit descends from it and never backward. P2: upload sessions have per-request bounds only, so one write session can accumulate fresh hash-valid blobs' receipts without end and reuse keeps it from evicting — add cumulative per-session object-count and byte bounds to ServeLimits (configurable, sane defaults, documented in README), refuse past them with the existing limit_exceeded shape, and release the session's receipts with the refusal. Planning a real-socket concurrency test for the late push and an adversarial session-bound test."
+  "2026-10-05T11:13:11.095Z",pi-glm,"Implementation landed in the worktree: (1) pushTo now captures each tracking ref before the push leaves and, on the late answer, applies it only as a compare-and-swap against the captured value — advancing forward when the pushed commit descends from the ref's current value and skipping otherwise, so a tip another fetch or push recorded during the flight is never overwritten backward. (2) ServeLimits gains cumulative per-session bounds maxSessionObjects (default 1,000,000) and maxSessionBytes (default 4 GiB), both configurable via ServeOptions and validated like the other bounds; an upload past either is refused with the existing limit_exceeded shape and the session's receipts are released with the session, and publication clears the charge with the receipts on every attempt. (3) startRepositoryServer accepts an optional ServeHooks.holdResponse observability hook, invoked after a request's outcome is decided and before the response is written, which the concurrency test uses to hold a real push answer in flight. Tests: a real-socket concurrent case (server accepts A, a second client pushes B, the pusher fetches B, then A's answer completes — tracking keeps B), a held-answer file-transport case covering recorded/advanced/deleted-during-flight branches, and an adversarial session-bound test driving per-request-legal uploads past both the object and byte bounds and proving the refusal released the receipts."
+  "2026-10-05T11:35:05.028Z",pi-glm,"Verification at the working tree: the full suite passes 851 tests with zero skips and c8 reports 100/100/100/100 over every authored source file; eslint, zero jscpd duplication, 250 documented declarations, and the strict and erasable typechecks pass. Focused suites recorded via pm test: the Node served socket/catalogue/sync/acceptance suites (38 tests), the Node sync suite including the new late-answer coverage (36 tests), and the same five files under native Bun (74 pass, 0 fail) — the real concurrent late-push case and the cumulative session-bound case pass on both launchers. pm health --strict-exit reports ok=true. Next: release gates at the committed head, then the changelog and self-host bundle regenerated and committed together."
+files[13]{path,scope}:
   engine/http-protocol.ts,project
   engine/http-transport.ts,project
   engine/rewrite.ts,project
@@ -37,8 +40,9 @@ files[12]{path,scope}:
   test/served-acceptance.test.ts,project
   test/served-repositories.test.ts,project
   test/served-sync.test.ts,project
+  test/sync.test.ts,project
   vcs-commands.ts,project
-tests[6]:
+tests[8]:
   - command: node --test test/served-acceptance.test.ts
     scope: project
     provenance:
@@ -82,6 +86,20 @@ tests[6]:
     provenance:
       author: codex-sol
       created_at: "2026-10-05T09:16:24.266Z"
+      source_kind: local_mutation
+      source_ref: feat/served-repository-http
+  - command: node --test test/sync.test.ts
+    scope: project
+    provenance:
+      author: pi-glm
+      created_at: "2026-10-05T11:33:18.640Z"
+      source_kind: local_mutation
+      source_ref: feat/served-repository-http
+  - command: bun test test/serve.test.ts test/served-repositories.test.ts test/served-sync.test.ts test/served-acceptance.test.ts test/sync.test.ts
+    scope: project
+    provenance:
+      author: pi-glm
+      created_at: "2026-10-05T11:33:21.941Z"
       source_kind: local_mutation
       source_ref: feat/served-repository-http
 docs[1]{path,scope}:

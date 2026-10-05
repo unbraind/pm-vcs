@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 
 import { assertClosurePresent, exportBundle, importBundleObjects } from "./bundle.ts";
+import { isAncestor } from "./merge.ts";
 import type { ObjectId } from "./objects.ts";
 import { ObjectStoreError } from "./objects.ts";
 import type { RefTransition } from "./oplog.ts";
@@ -187,7 +188,10 @@ export async function fetchFrom(
  * enough history for the decision to be answerable and to report the value it
  * observed so a concurrent pusher cannot be overwritten. Tracking refs are
  * advanced only after the remote has accepted, so a refused push leaves no local
- * trace suggesting it landed.
+ * trace suggesting it landed, and a tracking ref that another operation advanced
+ * while the answer was in flight is never moved backward: the push compares
+ * against the values it captured before sending and lands only what still holds
+ * them, or what the pushed commit descends from.
  *
  * @param repository - Repository to push from.
  * @param remoteName - Which configured remote to write to.
@@ -252,15 +256,37 @@ export async function pushTo(
   // naming an absent commit fails the export outright.
   const since = [...remoteRefs.values()].filter((id) => repository.objects.has(id));
   const bundle = exportBundle(repository.objects, repository.refs, updates.map((update) => update.ref), since);
+  // The tracking refs are captured *before* the push leaves. The remote may take
+  // an arbitrarily long time to answer — over HTTP its response can be delayed
+  // well past its acceptance — and everything this repository learns in the
+  // meantime belongs to the operation that learned it. Comparing against the
+  // value observed at send time is what keeps a late answer from overwriting a
+  // newer tip another fetch or push recorded while this wire was busy: the remote
+  // can accept commit A, accept commit B on top of it, and only then answer A.
+  const captured = updates.map((update) => {
+    const name = trackingRef(remoteName, update.ref.slice(BRANCH_PREFIX.length));
+    return { name, before: repository.refs.read(name), next: update.next };
+  });
   const receipt = await wire.push(bundle, updates, force, now);
 
   // The remote accepted, so its branches are now where this side just put them and
-  // the tracking refs can say so without another round trip.
-  const tracking = updates.map((update) => ({
-    name: trackingRef(remoteName, update.ref.slice(BRANCH_PREFIX.length)),
-    expected: repository.refs.read(trackingRef(remoteName, update.ref.slice(BRANCH_PREFIX.length))),
-    next: update.next,
-  }));
+  // the tracking refs can say so without another round trip — but only when
+  // nothing newer arrived in the meantime. A tracking ref that still holds its
+  // captured value moves as this push owns it; one that already holds the pushed
+  // commit needs nothing; one that moved forward to an ancestor of the pushed
+  // commit is advanced, not overwritten. Anything else — a newer tip, or a value
+  // this push cannot prove it is ahead of — is left exactly where the other
+  // operation put it, because writing this push's commit over it would move the
+  // tracking ref backward while the remote itself has moved on.
+  const tracking = captured.flatMap((entry) => {
+    const current = repository.refs.read(entry.name);
+    if (current === entry.before) return [{ name: entry.name, expected: current, next: entry.next }];
+    if (current === entry.next) return [];
+    if (current === null || isAncestor(repository.objects, current, entry.next)) {
+      return [{ name: entry.name, expected: current, next: entry.next }];
+    }
+    return [];
+  });
   repository.refs.transaction(tracking);
   const updated: RefTransition[] = updates.map((update) => ({
     ref: update.ref,

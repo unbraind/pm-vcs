@@ -219,6 +219,49 @@ export interface ServeOptions {
   readonly grants?: TokenGrants | null;
   /** Bounds to apply; defaults to {@link DEFAULT_SERVE_LIMITS}. */
   readonly limits?: ServeLimits;
+  /** Response hooks; defaults to none. */
+  readonly hooks?: ServeHooks | null;
+}
+
+/**
+ * Observability hooks a server caller can attach to a running server.
+ *
+ * They see what a request was answered with, not what it asked for: the push has
+ * already landed by the time the hook runs, which is exactly the window real
+ * concurrency lives in — the remote has accepted, and its answer is still in
+ * flight. Tests use the hook to hold one answer open while the world moves on
+ * around it; an operator's monitoring can use it to observe the same window.
+ */
+export interface ServeHooks {
+  /**
+   * Called after a request's outcome is decided and before it is written.
+   *
+   * The repository operation has already completed, so awaiting this hook
+   * delays the response — never the work — and never changes what the caller
+   * receives.
+   *
+   * @param repository - The repository name the request addressed.
+   * @param endpoint - The endpoint the request addressed.
+   */
+  holdResponse(repository: string, endpoint: string): Promise<void> | void;
+}
+
+/**
+ * One upload session: the transport that reports its receipts, and what it has
+ * been charged with since its last publication.
+ *
+ * The charge is cumulative rather than per request, because the memory it
+ * bounds is too: a reused session keeps every receipt it accepted until it
+ * publishes, so per-request bounds alone would leave its delivery receipts free
+ * to grow without end while every individual request passes them.
+ */
+interface UploadSession {
+  /** The transport whose receipts this session reports. */
+  readonly transport: FileTransport;
+  /** Objects accepted across every upload since the last publication. */
+  objects: number;
+  /** Decoded object bytes accepted across every upload since the last publication. */
+  bytes: number;
 }
 
 /**
@@ -228,7 +271,8 @@ export interface ServeOptions {
  * resumable-upload semantics are the transport's own: objects a session
  * verified and the receiver lacked are reported by that session's publication,
  * and cleared on every publication attempt, refused ones included, exactly as
- * a local connection would clear them.
+ * a local connection would clear them. The cumulative charge below is cleared
+ * with them, because the memory it bounds is the receipts themselves.
  */
 class ServedRepository {
   /** Transport for ordinary, connectionless requests. */
@@ -237,8 +281,8 @@ class ServedRepository {
   /** Absolute path to the repository, kept for opening session transports. */
   private readonly path: string;
 
-  /** Transport per upload session, insertion-ordered so the oldest evicts first. */
-  private readonly sessions: Map<string, FileTransport> = new Map();
+  /** Upload session state per session id, insertion-ordered so the oldest evicts first. */
+  private readonly sessions: Map<string, UploadSession> = new Map();
 
   /**
    * @param url - Token-free URL for messages and the operation log.
@@ -259,7 +303,7 @@ class ServedRepository {
   }
 
   /**
-   * The transport one upload session should use, opening a session on demand.
+   * The session one upload should use, opening a session on demand.
    *
    * The session count is bounded rather than trusted: a client that opened
    * sessions without publishing would otherwise grow the map without end, and
@@ -269,13 +313,15 @@ class ServedRepository {
    *   one opens a session that will be reported by no receipt, which is also
    *   how a publication after a server restart reads.
    * @param maxSessions - Bound on open sessions for this repository.
-   * @returns The session's transport.
+   * @returns The session's state, transport and charge.
    */
-  uploadSession(session: string, maxSessions: number): FileTransport {
+  uploadSession(session: string, maxSessions: number): UploadSession {
     const existing = this.sessions.get(session);
     if (existing !== undefined) {
       // Re-inserting moves the key to the end, so eviction order is
-      // least-recently-used rather than first-opened.
+      // least-recently-used rather than first-opened — reuse alone cannot
+      // release what a session has been charged with, which is why the
+      // cumulative bounds below exist.
       this.sessions.delete(session);
       this.sessions.set(session, existing);
       return existing;
@@ -283,9 +329,49 @@ class ServedRepository {
     while (this.sessions.size >= maxSessions) {
       this.sessions.delete(this.sessions.keys().next().value as string);
     }
-    const fresh = new FileTransport(this.main.url, this.path);
+    const fresh: UploadSession = { transport: new FileTransport(this.main.url, this.path), objects: 0, bytes: 0 };
     this.sessions.set(session, fresh);
     return fresh;
+  }
+
+  /**
+   * Charges one upload to a session's cumulative bounds.
+   *
+   * Every uploaded object counts, whether or not the receiver already held it:
+   * the charge bounds what a session may ask the server to hold at its next
+   * publication, and the request has already asked for all of it.
+   *
+   * @param session - The session id the upload named.
+   * @param state - The session's state, from {@link ServedRepository.uploadSession}.
+   * @param objects - Object count the upload carries.
+   * @param bytes - Decoded object bytes the upload carries.
+   * @param limits - Bounds in force.
+   * @returns True when the upload fits. False past either bound, with the
+   *   session released so its receipts — the memory the bound is for — are
+   *   dropped rather than held by a caller that has just been told to stop.
+   */
+  chargeUpload(session: string, state: UploadSession, objects: number, bytes: number, limits: ServeLimits): boolean {
+    if (state.objects + objects > limits.maxSessionObjects || state.bytes + bytes > limits.maxSessionBytes) {
+      this.sessions.delete(session);
+      return false;
+    }
+    state.objects += objects;
+    state.bytes += bytes;
+    return true;
+  }
+
+  /**
+   * Clears a session's charge when publication clears its receipts.
+   *
+   * Publication reports and drops the session's delivery receipts on every
+   * attempt, refused ones included, so the memory the cumulative bound guards
+   * is already gone — and the charge with it.
+   *
+   * @param state - The session that just attempted a publication.
+   */
+  settlePublication(state: UploadSession): void {
+    state.objects = 0;
+    state.bytes = 0;
   }
 }
 
@@ -326,10 +412,11 @@ export function startRepositoryServer(options: ServeOptions): Promise<ServeHandl
     if (!Number.isSafeInteger(value) || value < 1) throw new ObjectStoreError("bad_limits", "Server limits must be positive safe integers.");
   }
   const grants = options.grants ?? null;
+  const hooks = options.hooks ?? null;
   const directories = new ServedRepositoryDirectories(root);
   const repositories = new Map<string, ServedRepository>();
   const server = createServer((request, response) => {
-    void handleServedRequest(request, response, { directories, grants, limits, repositories });
+    void handleServedRequest(request, response, { directories, grants, hooks, limits, repositories });
   });
   return new Promise((resolveListen, rejectListen) => {
     server.once("error", (error) => rejectListen(error));
@@ -370,6 +457,8 @@ interface ServeContext {
   readonly directories: ServedRepositoryDirectories;
   /** Token grants, or null when serving without authorization. */
   readonly grants: TokenGrants | null;
+  /** Response hooks, or null when serving without any. */
+  readonly hooks: ServeHooks | null;
   /** Bounds in force. */
   readonly limits: ServeLimits;
   /** One repository holder per repository name, holding its upload sessions. */
@@ -405,9 +494,10 @@ async function handleServedRequest(
   response: ServerResponse,
   context: ServeContext,
 ): Promise<void> {
+  const parsed = splitServedPath((request.url as string).split("?")[0]);
   let outcome: ServedResponse;
   try {
-    outcome = await routeServedRequest(request, context);
+    outcome = await routeServedRequest(request, parsed, context);
   } catch (error) {
     outcome = error instanceof ObjectStoreError
       ? {
@@ -423,6 +513,11 @@ async function handleServedRequest(
         contentType: JSON_CONTENT_TYPE,
       };
   }
+  // The work is done; only the answer is still unsent. Holding here — an
+  // observability hook, or a test recreating a slow wire — delays the response
+  // without changing it, which is the one window real concurrency can be
+  // observed in.
+  if (parsed !== null) await context.hooks?.holdResponse(parsed.repository, parsed.endpoint);
   response.sendDate = false;
   response.setHeader("connection", "close");
   response.statusCode = outcome.status;
@@ -438,11 +533,16 @@ async function handleServedRequest(
  * Routes one request to authorization, bounds and the transport.
  *
  * @param request - The incoming request.
+ * @param parsed - The request's repository and endpoint, or null when the
+ *   path names neither.
  * @param context - The server's shared state.
  * @returns The status, body and content type to answer with.
  */
-async function routeServedRequest(request: IncomingMessage, context: ServeContext): Promise<ServedResponse> {
-  const parsed = splitServedPath((request.url as string).split("?")[0]);
+async function routeServedRequest(
+  request: IncomingMessage,
+  parsed: { repository: string; endpoint: string } | null,
+  context: ServeContext,
+): Promise<ServedResponse> {
   if (request.method !== "POST" || parsed === null || (parsed.repository !== "" && !isServedRepositoryName(parsed.repository))) {
     return denial();
   }
@@ -573,12 +673,25 @@ async function dispatchServedRequest(
     const upload = request === null ? null : decodeUploadRequest(request);
     if (upload === null) throw new ObjectStoreError("bad_request", "The request does not hold a well-formed object upload.");
     if (upload.objects.length > limits.maxUploadObjects) throw limitExceeded(`An upload may carry at most ${limits.maxUploadObjects} objects.`);
-    const session = served.uploadSession(upload.session, limits.maxSessions);
-    await session.uploadObjects(upload.objects.map((object) => ({
+    const objects = upload.objects.map((object) => ({
       id: object.id,
       type: object.type,
       payload: Buffer.from(object.payload, "base64"),
-    })));
+    }));
+    const bytes = objects.reduce((total, object) => total + object.payload.length, 0);
+    const state = served.uploadSession(upload.session, limits.maxSessions);
+    // Cumulative, not per request: a reused session keeps every receipt it has
+    // accepted since its last publication, so per-request bounds alone cannot
+    // stop one caller growing that memory without end. Past either bound the
+    // refusal releases the session's receipts with it, so the caller that is
+    // told to stop is not the one left holding them.
+    if (!served.chargeUpload(upload.session, state, objects.length, bytes, limits)) {
+      throw limitExceeded(
+        `An upload session may accept at most ${limits.maxSessionObjects} objects and ${limits.maxSessionBytes} object bytes `
+        + "before it publishes, and this session has reached one of them. Publish, then resume with a fresh session.",
+      );
+    }
+    await state.transport.uploadObjects(objects);
     return { status: 200, body: Buffer.from(`${JSON.stringify({ received: upload.objects.length })}\n`, "utf8"), contentType: JSON_CONTENT_TYPE };
   }
   const request = decodeWireObject(body);
@@ -632,8 +745,15 @@ async function dispatchRefMoves(
     return { status: 200, body: Buffer.from(encodePushReceipt(receipt), "utf8"), contentType: JSON_CONTENT_TYPE };
   }
   const session = typeof request.session === "string" ? request.session : "";
-  const receipt = await served.uploadSession(session, context.limits.maxSessions).publish(updates, force, now);
-  return { status: 200, body: Buffer.from(encodePushReceipt(receipt), "utf8"), contentType: JSON_CONTENT_TYPE };
+  const state = served.uploadSession(session, context.limits.maxSessions);
+  try {
+    const receipt = await state.transport.publish(updates, force, now);
+    return { status: 200, body: Buffer.from(encodePushReceipt(receipt), "utf8"), contentType: JSON_CONTENT_TYPE };
+  } finally {
+    // Publication clears the session's receipts on every attempt, refused ones
+    // included, so the charge that bounds them clears with them.
+    served.settlePublication(state);
+  }
 }
 
 /**

@@ -187,6 +187,68 @@ test("fetch and push over HTTP answer exactly as they do against a file remote",
   assert.equal(served.repository.refs.read("refs/heads/main"), remoteMovedTo);
 });
 
+test("a late push answer cannot overwrite the newer tip a concurrent fetch recorded", async () => {
+  const root = tempRoot();
+  const repository = Repository.init(join(root, "repo"));
+  const base = commitFile(repository, "a.txt", "one");
+  // The server holds the first push's answer after it has been accepted: the
+  // remote has moved and the client has not heard. Only the answer is delayed,
+  // never the work, and the socket underneath is real — no request is mocked.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+  let pushLanded: () => void = () => {};
+  const landed = new Promise<void>((resolveLanded) => { pushLanded = resolveLanded; });
+  let holding = true;
+  const server = await startRepositoryServer({
+    root,
+    host: "127.0.0.1",
+    port: 0,
+    grants: null,
+    hooks: {
+      holdResponse: (addressed, endpoint) => {
+        if (endpoint !== "push" || !holding) return;
+        holding = false;
+        assert.equal(addressed, "repo");
+        pushLanded();
+        return gate;
+      },
+    },
+  });
+  servers.push(server);
+  const url = `http://127.0.0.1:${server.port}/repo`;
+
+  // The pusher clones, commits A, and pushes; the server accepts A and holds
+  // its answer in flight.
+  const pusherRoot = join(tempRoot(), "pusher");
+  await cloneFrom(url, pusherRoot, now);
+  const pusher = Repository.open(pusherRoot);
+  const commitA = commitFile(pusher, "b.txt", "two");
+  const pushA = pushTo(pusher, "origin", ["main"], false, now);
+  await landed;
+  assert.equal(repository.refs.read("refs/heads/main"), commitA);
+
+  // While A's answer is in flight, a second client pushes B on top of it and
+  // the pusher fetches: the fetch records B on the tracking ref — exactly the
+  // newer value the late answer must not overwrite.
+  const secondRoot = join(tempRoot(), "second");
+  await cloneFrom(url, secondRoot, now);
+  const commitB = commitFile(Repository.open(secondRoot), "c.txt", "three");
+  await pushTo(Repository.open(secondRoot), "origin", ["main"], false, now);
+  assert.equal(repository.refs.read("refs/heads/main"), commitB);
+  await fetchFrom(pusher, "origin", now);
+  assert.equal(pusher.refs.read("refs/remotes/origin/main"), commitB);
+
+  release();
+  const report = await pushA;
+  assert.equal(report.upToDate, false);
+  assert.deepEqual(report.updated, [{ ref: "refs/heads/main", before: base, after: commitA }]);
+  // The completion kept the newer tip: the tracking ref still names what the
+  // fetch recorded, not the commit A's late answer would have written over it,
+  // and the remote keeps B.
+  assert.equal(pusher.refs.read("refs/remotes/origin/main"), commitB);
+  assert.equal(repository.refs.read("refs/heads/main"), commitB);
+});
+
 test("a resumable upload over HTTP verifies every object and refuses a tampered one", async () => {
   const served = await serveSeededRepo();
   const sender = freshRepo();

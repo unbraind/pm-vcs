@@ -14,7 +14,7 @@ import { connect } from "node:net";
 import { exportBundle } from "../engine/bundle.ts";
 import { afterEach, test } from "node:test";
 
-import { ObjectStoreError } from "../engine/objects.ts";
+import { hashObject, ObjectStoreError } from "../engine/objects.ts";
 import {
   bearerToken,
   parseTokenText,
@@ -318,7 +318,7 @@ test("a read grant may fetch but not write, and the refusal names the token not 
 
 test("a body past the bound is refused with nothing buffered or stored", async () => {
   const { server, repository } = await serveRoot({
-    limits: { maxBodyBytes: 512, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2 },
+    limits: { maxBodyBytes: 512, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2, maxSessionObjects: 8, maxSessionBytes: 1024 * 1024 },
   });
   const name = repository.root.slice(join(repository.root, "..").length + 1);
   const before = repository.refs.read("refs/heads/main");
@@ -392,7 +392,7 @@ test("a body past the bound is refused with nothing buffered or stored", async (
 
 test("an upload session is bounded and its oldest eviction reports an empty receipt, not a lost one", async () => {
   const { server, repository } = await serveRoot({
-    limits: { maxBodyBytes: 1024 * 1024, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 100, maxSessions: 1 },
+    limits: { maxBodyBytes: 1024 * 1024, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 100, maxSessions: 1, maxSessionObjects: 100, maxSessionBytes: 1024 * 1024 },
   });
   const name = repository.root.slice(join(repository.root, "..").length + 1);
   const tip = repository.refs.read("refs/heads/main");
@@ -419,6 +419,86 @@ test("an upload session is bounded and its oldest eviction reports an empty rece
   assert.equal(publish.status, 200);
   assert.deepEqual(JSON.parse(publish.body.toString("utf8")).added, []);
   assert.equal(repository.refs.read("refs/heads/main"), tip);
+});
+
+test("one reused upload session's receipts are bounded cumulatively and released past the bound", async () => {
+  // Every individual request below is legal: one object, well inside every
+  // per-request bound. The adversarial caller reuses one session so it never
+  // evicts, and never publishes, so its delivery receipts would grow without
+  // end without the cumulative charge.
+  const { server, repository } = await serveRoot({
+    limits: {
+      maxBodyBytes: 1024 * 1024, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 4, maxSessions: 4,
+      maxSessionObjects: 3, maxSessionBytes: 24,
+    },
+  });
+  const name = repository.root.slice(join(repository.root, "..").length + 1);
+  const tip = repository.refs.read("refs/heads/main");
+
+  /** Hashes one fresh blob and encodes it exactly as the wire expects. */
+  const freshBlob = (text: string) => {
+    const payload = Buffer.from(text, "utf8");
+    return { id: hashObject("blob", payload), type: "blob" as const, payload: payload.toString("base64") };
+  };
+  const upload = (session: string, objects: ReturnType<typeof freshBlob>[]) =>
+    rawRequest(server, `/${name}/objects/upload`, { body: JSON.stringify({ session, objects }) });
+
+  // Two legal requests charge the session past its cumulative object bound; the
+  // third is refused with the count bound named, and nothing it carried landed.
+  const one = freshBlob("one");
+  const two = freshBlob("two");
+  const three = freshBlob("three");
+  const four = freshBlob("four");
+  assert.equal((await upload("session", [one, two])).status, 200);
+  const objectRefusal = await upload("session", [three, four]);
+  assert.equal(objectRefusal.status, 400);
+  assert.match(objectRefusal.body.toString("utf8"), /limit_exceeded/);
+  assert.equal(repository.objects.has(three.id), false, "the refused upload stored nothing");
+  assert.equal(repository.objects.has(four.id), false, "the refused upload stored nothing");
+
+  // The refusal released the session's receipts with the session: publishing
+  // under the same id answers as a fresh session — an empty receipt — so the
+  // two delivered objects are not held anywhere for a later receipt to name.
+  const publish = await rawRequest(server, `/${name}/publish`, {
+    body: JSON.stringify({
+      session: "session",
+      updates: [{ ref: "refs/heads/main", expected: tip, next: tip }],
+      force: true,
+      now: 0,
+    }),
+  });
+  assert.equal(publish.status, 200);
+  assert.deepEqual(JSON.parse(publish.body.toString("utf8")).added, []);
+
+  // A second session runs the byte bound aground the same way: fresh objects,
+  // each request legal alone, and the charge passing the byte ceiling is
+  // refused with the same shape.
+  const five = freshBlob("f".repeat(10));
+  const six = freshBlob("s".repeat(10));
+  const seven = freshBlob("v".repeat(10));
+  assert.equal((await upload("wide", [five, six])).status, 200);
+  const byteRefusal = await upload("wide", [seven]);
+  assert.equal(byteRefusal.status, 400);
+  assert.match(byteRefusal.body.toString("utf8"), /limit_exceeded/);
+  assert.equal(repository.objects.has(seven.id), false);
+
+  // Publication clears the charge with the receipts, so a session that
+  // publishes is not one the cumulative bound strands: the same id accepts a
+  // full charge again afterwards.
+  const eight = freshBlob("eight");
+  const nine = freshBlob("nine");
+  assert.equal((await upload("reset", [eight])).status, 200);
+  const settle = await rawRequest(server, `/${name}/publish`, {
+    body: JSON.stringify({
+      session: "reset",
+      updates: [{ ref: "refs/heads/main", expected: tip, next: tip }],
+      force: true,
+      now: 0,
+    }),
+  });
+  assert.equal(settle.status, 200);
+  assert.deepEqual(JSON.parse(settle.body.toString("utf8")).added, [eight.id]);
+  assert.equal((await upload("reset", [nine])).status, 200);
 });
 
 test("a server refuses a root that is not a directory and a tokens file it cannot read", async () => {
@@ -502,7 +582,7 @@ test("new nested repositories are discovered on a bounded miss and replaced path
 });
 
 test("all operation envelopes and object counts are bounded before publication", async () => {
-  const { server, repository } = await serveRoot({ limits: { maxBodyBytes: 4096, maxFetchRefs: 2, maxFetchHaves: 2, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2 } });
+  const { server, repository } = await serveRoot({ limits: { maxBodyBytes: 4096, maxFetchRefs: 2, maxFetchHaves: 2, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2, maxSessionObjects: 8, maxSessionBytes: 4096 } });
   const name = repository.root.slice(join(repository.root, "..").length + 1);
   const id = "a".repeat(64);
   for (const [endpoint, body] of [

@@ -11,7 +11,16 @@ import { BRANCH_PREFIX, TAG_PREFIX } from "../engine/refs.ts";
 import { REMOTE_PREFIX, trackingRef } from "../engine/remotes.ts";
 import { Repository } from "../engine/repo.ts";
 import { cloneFrom, fetchFrom, pushTo } from "../engine/sync.ts";
-import { FileTransport, type Transport, openTransport, resolveRemoteLocation } from "../engine/transport.ts";
+import {
+  type Advertisement,
+  FileTransport,
+  type PushReceipt,
+  type PushUpdate,
+  type TransferObject,
+  type Transport,
+  openTransport,
+  resolveRemoteLocation,
+} from "../engine/transport.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const handles: Array<{ root: string; cleanup(): void }> = [];
@@ -267,6 +276,153 @@ test("push creates a branch the remote does not have", async () => {
 
   await pushTo(clone, "origin", ["feature"], false, now);
   assert.equal(source.refs.read(`${BRANCH_PREFIX}feature`), tip);
+});
+
+/**
+ * A transport whose push answer is held until the test releases it.
+ *
+ * The remote has already accepted by the time the hold begins — `push` has run
+ * and `accepted` has resolved — so this reproduces the one window real
+ * concurrency lives in: the work has landed, and its answer is still in flight.
+ */
+class HeldAnswerTransport implements Transport {
+  /** The transport doing the real work. */
+  private readonly inner: FileTransport;
+
+  /** Resolved by the test when the held answer may go out. */
+  private readonly hold: Promise<void>;
+
+  /** The URL of the transport being delegated to. */
+  readonly url: string;
+
+  /** Resolves once the remote has accepted and the answer is being held. */
+  private readonly resolveAccepted: () => void;
+
+  /** Resolved once the remote has accepted and the answer is being held. */
+  readonly accepted: Promise<void>;
+
+  /**
+   * @param inner - The transport to delegate every operation to.
+   * @param hold - A promise that keeps the push answer in flight until the test
+   *   resolves it.
+   */
+  constructor(inner: FileTransport, hold: Promise<void>) {
+    this.inner = inner;
+    this.hold = hold;
+    this.url = inner.url;
+    let signal: () => void = () => {};
+    this.accepted = new Promise<void>((resolveAccepted) => { signal = resolveAccepted; });
+    this.resolveAccepted = signal;
+  }
+
+  /** Delegates: the remote's description of itself. */
+  advertise(): Promise<Advertisement> {
+    return this.inner.advertise();
+  }
+
+  /** Delegates: history behind named refs. */
+  fetch(refNames: readonly string[], haves: readonly ObjectId[]): Promise<Buffer> {
+    return this.inner.fetch(refNames, haves);
+  }
+
+  /** Delegates: standalone objects by id. */
+  fetchObjects(ids: readonly ObjectId[]): Promise<Buffer> {
+    return this.inner.fetchObjects(ids);
+  }
+
+  /** Delegates, then holds the answer: the push has landed, `pushTo` has not heard. */
+  async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
+    const receipt = await this.inner.push(bundle, updates, force, now);
+    this.resolveAccepted();
+    await this.hold;
+    return receipt;
+  }
+
+  /** Delegates: which offered objects the receiver lacks. */
+  missingObjects(ids: readonly ObjectId[]): Promise<readonly ObjectId[]> {
+    return this.inner.missingObjects(ids);
+  }
+
+  /** Delegates: verified object upload. */
+  uploadObjects(objects: readonly TransferObject[]): Promise<void> {
+    return this.inner.uploadObjects(objects);
+  }
+
+  /** Delegates: publication after uploads. */
+  publish(updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
+    return this.inner.publish(updates, force, now);
+  }
+}
+
+test("a push answer that arrives late moves a tracking ref only where nothing newer arrived", async () => {
+  // One push per scenario: the remote accepts, the answer is held, and while it
+  // is held the tracking ref moves the way another operation — a concurrent
+  // fetch or push — would move it. What the completion then records is the
+  // whole question: it may never move the tracking ref backward over what the
+  // other operation learned.
+  const latePush = async (
+    whileHeld: (state: {
+      source: Repository;
+      clone: Repository;
+      base: ObjectId;
+      intermediate: ObjectId;
+      pushed: ObjectId;
+    }) => Promise<void> | void,
+  ): Promise<Repository> => {
+    const source = freshRepo();
+    const base = commitFile(source, "a.txt", "one");
+    const cloneRoot = join(tempRoot(), "clone");
+    await cloneFrom(source.root, cloneRoot, now);
+    const clone = Repository.open(cloneRoot);
+    // Two commits, so a scenario can move the tracking ref to a point strictly
+    // between the base and the push.
+    const intermediate = commitFile(clone, "b1.txt", "mid");
+    const pushed = commitFile(clone, "b2.txt", "top");
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolveHold) => { release = resolveHold; });
+    const wire = new HeldAnswerTransport(new FileTransport(source.root, source.root), hold);
+    const push = pushTo(clone, "origin", ["main"], false, now, wire);
+    await wire.accepted;
+    await whileHeld({ source, clone, base, intermediate, pushed });
+    release();
+    await push;
+    return clone;
+  };
+
+  // Another operation already recorded this very push: the completion records
+  // nothing, and the operation log says the same.
+  const recorded = await latePush(({ clone, base, pushed }) => {
+    clone.refs.compareAndSwap(trackingRef("origin", "main"), base, pushed);
+  });
+  assert.equal(recorded.refs.read(trackingRef("origin", "main")), recorded.refs.read(`${BRANCH_PREFIX}main`));
+  assert.deepEqual(recorded.operations.read().at(-1)?.refs, []);
+
+  // The tracking ref advanced to an ancestor of the pushed commit: the
+  // completion fast-forwards it, comparing against what it finds, not what it
+  // captured.
+  const advanced = await latePush(({ clone, base, intermediate }) => {
+    clone.refs.compareAndSwap(trackingRef("origin", "main"), base, intermediate);
+  });
+  assert.equal(advanced.refs.read(trackingRef("origin", "main")), advanced.refs.read(`${BRANCH_PREFIX}main`));
+
+  // A concurrent fetch learned the remote has moved past the pushed commit —
+  // another client pushed on top of this push, and the fetch recorded that tip:
+  // the completion leaves the newer tip exactly where the fetch put it.
+  let fetchedTip: ObjectId = "".repeat(64);
+  const fetchedPast = await latePush(async ({ source, clone }) => {
+    fetchedTip = commitFile(source, "c.txt", "newer");
+    await fetchFrom(clone, "origin", now);
+    assert.equal(clone.refs.read(trackingRef("origin", "main")), fetchedTip);
+  });
+  assert.equal(fetchedPast.refs.read(trackingRef("origin", "main")), fetchedTip);
+  assert.notEqual(fetchedTip, fetchedPast.refs.read(`${BRANCH_PREFIX}main`));
+
+  // The tracking ref was deleted while the answer was in flight: the push
+  // recreates it at the commit the remote accepted.
+  const deleted = await latePush(({ clone, base }) => {
+    clone.refs.transaction([{ name: trackingRef("origin", "main"), expected: base, next: null }]);
+  });
+  assert.equal(deleted.refs.read(trackingRef("origin", "main")), deleted.refs.read(`${BRANCH_PREFIX}main`));
 });
 
 test("a push that would discard commits the remote has is refused", async () => {

@@ -193,10 +193,11 @@ export function isServedRepositoryName(name: string): boolean {
  * Bounds a served repository applies to every request.
  *
  * A server that buffers a request body cannot also accept bodies of any size,
- * and one that tracks upload sessions cannot accept any number of them. Every
- * bound here is a ceiling the server refuses past rather than a hint it trusts,
- * and each has a test that pushes past it and asserts the refusal left the
- * repository untouched.
+ * and one that tracks upload sessions cannot accept any number of them — or,
+ * once one session can be reused indefinitely, any amount of retained receipt
+ * memory from it. Every bound here is a ceiling the server refuses past rather
+ * than a hint it trusts, and each has a test that pushes past it and asserts the
+ * refusal left the repository untouched.
  */
 export interface ServeLimits {
   /** Maximum bytes of one request body. */
@@ -211,6 +212,10 @@ export interface ServeLimits {
   readonly maxUploadObjects: number;
   /** Maximum concurrent upload sessions held per repository. */
   readonly maxSessions: number;
+  /** Maximum objects one upload session may accept between publications. */
+  readonly maxSessionObjects: number;
+  /** Maximum decoded object bytes one upload session may accept between publications. */
+  readonly maxSessionBytes: number;
 }
 
 /** The bounds a served repository applies when the caller configures none. */
@@ -221,6 +226,8 @@ export const DEFAULT_SERVE_LIMITS: ServeLimits = {
   maxUpdates: 10_000,
   maxUploadObjects: 100_000,
   maxSessions: 4_096,
+  maxSessionObjects: 1_000_000,
+  maxSessionBytes: 4 * 1024 * 1024 * 1024,
 };
 
 /** One ref move a push or publish asks for, in the shape it crosses the wire in. */
