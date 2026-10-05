@@ -86,7 +86,7 @@
     "pm-changelog": "2026.10.4",
     "pm-ops": "2026.10.4",
     "typescript": "7.0.2",
-    "typescript5": "npm:typescript@5.9.3"
+    "typescript5": "npm:typescript@^5.9.3"
   },
   "peerDependencies": {
     "@unbrained/pm-cli": ">=2026.8.1"
