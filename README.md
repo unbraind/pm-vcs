@@ -390,6 +390,9 @@ pm vcs verify
 Use environment variables populated from your secret manager. `PM_VCS_TOKEN_<REMOTE>`
 (uppercase remote name, punctuation replaced with underscores) overrides `PM_VCS_TOKEN`,
 which overrides the stored credential. Environment credentials are never persisted.
+A non-empty `PM_VCS_TOKEN` is not host-scoped: a clone sends it to the host in the supplied URL
+(it takes precedence over URL userinfo), so set it only when every clone target is trusted; prefer
+the per-remote `PM_VCS_TOKEN_<REMOTE>` form.
 A non-empty bearer token is only ever sent to `https://` remotes, or to a loopback `http://`
 remote — a token on plain `http://` to any other host is refused with an error naming the
 fix, because it would be a credential handed to every observer on the wire.

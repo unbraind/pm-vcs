@@ -662,7 +662,8 @@ test("a decoder refuses a payload its own return type says cannot exist", () => 
 
 test("Distribution documents both shipped transports", () => {
   const readme = readFileSync(join(packageRoot, "README.md"), "utf8");
-  const distribution = readme.split("## Distribution")[1];
+  // Only the Distribution section itself: later sections must not satisfy or break it.
+  const distribution = readme.split("## Distribution")[1].split(/\n## /)[0];
   assert.match(distribution, /filesystem transport/);
   assert.match(distribution, /HttpTransport/);
   assert.match(distribution, /pm vcs serve/);

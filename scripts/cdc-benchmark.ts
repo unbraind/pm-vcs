@@ -264,8 +264,8 @@ export function main(): void {
 
     // Object-count-based reuse (same method the tests use) for CDC default vs fixed-size.
     console.log("\n--- Object-count reuse (CDC default vs fixed-size 4K) ---");
-    console.log("Mode        | Pos   | ObjectsBefore | ObjectsAfter | NewObjects | ReuseByObjects");
-    console.log("------------|-------|---------------|--------------|------------|---------------");
+    console.log("Mode        | Pos   | Fragments | NewFragments | Reused | ReuseByObjects");
+    console.log("------------|-------|-----------|--------------|--------|---------------");
     for (const [label, writeFn] of [
       ["CDC default", (s: ObjectStore, c: Buffer) => writeCdcFragmented(s, c, DEFAULT_CDC_PARAMS)] as const,
       ["Fixed 4K", (s: ObjectStore, c: Buffer) => writeFragmented(s, c, 4096)] as const,
@@ -277,16 +277,11 @@ export function main(): void {
       ] as const) {
         const dir = mkdtempSync(join(tmpRoot, "obj-"));
         const store = new ObjectStore(join(dir, "objects"));
-        writeFn(store, corpus);
-        const before = countObjects(dir);
-        const edited = Buffer.concat([corpus.subarray(0, pos), randomBytes(editSize), corpus.subarray(pos)]);
-        writeFn(store, edited);
-        const after = countObjects(dir);
-        const newObjs = after - before;
-        // The nonempty corpus always writes fragments plus a manifest.
-        const reuseByObjs = Math.max(0, (before - 1 - (newObjs - 1)) / (before - 1));
+        // The tested measurement produces the table, so the published numbers
+        // cannot drift from the code the reuse tests exercise.
+        const { totalFragments, newFragments, reused, reuseFraction } = measureReuseByObjects(store, dir, corpus, pos, editSize, writeFn);
         console.log(
-          `${label.padEnd(12)} | ${posLabel.padEnd(5)} | ${String(before).padStart(13)} | ${String(after).padStart(12)} | ${String(newObjs).padStart(10)} | ${fmt(reuseByObjs * 100).padStart(13)}%`,
+          `${label.padEnd(12)} | ${posLabel.padEnd(5)} | ${String(totalFragments).padStart(9)} | ${String(newFragments).padStart(12)} | ${String(reused).padStart(6)} | ${fmt(reuseFraction * 100).padStart(13)}%`,
         );
         rmSync(dir, { recursive: true, force: true });
       }
