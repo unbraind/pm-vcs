@@ -138,6 +138,19 @@ test("legacy runtime index entries disappear on add and stay out of status", () 
   assert.throws(() => repository.stage([runtime]), /ignored/);
 });
 
+test("an out-of-view legacy runtime entry survives an unrelated add", () => {
+  // A sparse entry is a path this working tree cannot see; dropping it during
+  // an unrelated add would make the next commit delete it invisibly.
+  dir = makeTempDir();
+  const repository = Repository.init(dir.root);
+  const runtime = ".agents/pm/runtime/context-usage.jsonl";
+  const id = repository.objects.write("blob", Buffer.from("legacy runtime\n"));
+  writeFileSync(join(dir.root, "visible.txt"), "visible\n");
+  repository.writeIndex([{ path: runtime, id, mode: "100644", sparse: true }]);
+  assert.deepEqual(repository.stage([]), ["visible.txt"]);
+  assert.deepEqual(repository.readIndex().map((entry) => [entry.path, entry.sparse === true]), [[runtime, true], ["visible.txt", false]]);
+});
+
 test("tracker roots below globbed record-path prefixes are discovered and fenced", () => {
   // The glob `custom/*/Issues/*.toon` names records inside trackers the
   // pattern does not spell out — `custom/team`. Discovery used to walk only

@@ -912,7 +912,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       // whenever the two differ, which is exactly when `--path` was passed.
       const workingRoot = sourceWorkingRoot(context);
       const destination = requested === undefined || requested === ""
-        ? resolve(workingRoot, basename(redactRemoteUrl(url).replace(/\/+$/, "")))
+        ? resolve(workingRoot, defaultCloneDirectory(url))
         : resolve(workingRoot, requested);
       return {
         ok: true,
@@ -1289,4 +1289,26 @@ export function registerVcsCommands(api: ExtensionApi): void {
       return { ok: true, scan: repository.scan() };
     },
   });
+}
+
+/**
+ * The directory a clone is written to when the caller names none.
+ *
+ * A served repository is named by its last URL path segment. A repository
+ * served at the root of a server has no path, and `basename` of its URL is
+ * `host:port` — a name with a colon, which Windows cannot create at all — so
+ * the host, reduced to filename-safe characters, names it instead. Filesystem
+ * locations keep their basename.
+ *
+ * @param url - The clone source as the caller gave it.
+ * @returns A single, filename-safe path segment.
+ */
+function defaultCloneDirectory(url: string): string {
+  const clean = redactRemoteUrl(url);
+  if (/^https?:/i.test(clean) && URL.canParse(clean)) {
+    const parsed = new URL(clean);
+    return parsed.pathname.split("/").filter((part) => part.length > 0).at(-1)
+      ?? parsed.hostname.replace(/[^A-Za-z0-9._-]/g, "-");
+  }
+  return basename(clean.replace(/\/+$/, ""));
 }

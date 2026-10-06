@@ -666,9 +666,12 @@ export class Repository {
       ? [...new Set([...listWorkingTree(this.root, CONTROL_DIRECTORY, rules), ...index.keys()])]
       : paths.map((path) => normalizeRepoPath(this.root, path));
     const changed: string[] = [];
-    // Drop runtime entries inherited from an older index on the next add.
-    for (const path of index.keys()) {
-      if (isRuntimeIgnored(path, rules)) { index.delete(path); changed.push(path); }
+    // Drop runtime entries inherited from an older index on the next add. A
+    // sparse entry is kept: its path is outside this working tree's view, and
+    // dropping it would let the next commit delete a path the committer cannot
+    // see. A working tree whose view includes it drops it on its next add.
+    for (const [path, entry] of index) {
+      if (entry.sparse !== true && isRuntimeIgnored(path, rules)) { index.delete(path); changed.push(path); }
     }
     for (const path of targets) {
       // An explicitly named ignored path is refused rather than silently

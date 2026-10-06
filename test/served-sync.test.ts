@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { afterEach, test } from "node:test";
@@ -701,6 +701,20 @@ test("bearer-scoped clients may read or write only their grants and errors redac
   await assert.rejects(reader.advertise(), (error: ObjectStoreError) => !error.message.includes("read-secret"));
 });
 
+
+test("a clone of a root-served repository is named after the host, never host:port", async () => {
+  // The README serves a --root repository at the base URL. basename() of that
+  // URL is "127.0.0.1:<port>", which Windows cannot create; the host names it.
+  const harness = await activate();
+  const repository = freshRepo();
+  commitFile(repository, "a.txt", "a");
+  const server = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 });
+  servers.push(server);
+  const workspace = tempRoot();
+  const cloned = await harness.runCommand({ command: "vcs clone", args: [`http://127.0.0.1:${server.port}/`], pmRoot: workspace });
+  assert.equal(cloned.errorMessage, undefined, String(cloned.errorMessage));
+  assert.equal(basename((cloned.result as { clone: CloneReport }).clone.root), "127.0.0.1");
+});
 
 test("malformed wire URLs and occupied listen sockets fail through the command surface", async () => {
   const harness = await activate();
