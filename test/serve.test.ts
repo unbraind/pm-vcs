@@ -873,14 +873,21 @@ test("repository names that read like endpoint suffixes resolve by catalogue, de
   assert.equal(missing.status, 200, missing.body.toString("utf8"));
   assert.deepEqual((JSON.parse(missing.body.toString("utf8")) as { missing: string[] }).missing, [parentTip]);
 
-  // Catalogue selection precedes authorization: a parent-scoped token cannot
-  // reinterpret the nested repository's fetch as the parent's object endpoint.
+  // Only in-scope names take part in resolution: for a parent-scoped token,
+  // `/tenant/objects/fetch` is the parent's own object endpoint, exactly as if
+  // the nested repository did not exist, so its existence is not observable.
   const parentReach = await rawRequest(server, "/tenant/objects/fetch", {
     authorization: "Bearer parent-reader",
     body: JSON.stringify({ ids: [] }),
   });
-  assert.equal(parentReach.status, DENIED_STATUS);
-  assert.ok(parentReach.body.equals(DENIED_BODY));
+  assert.equal(parentReach.status, 200, parentReach.body.toString("utf8"));
+  rmSync(join(root, "tenant", "objects"), { recursive: true, force: true });
+  const parentWithoutNested = await rawRequest(server, "/tenant/objects/fetch", {
+    authorization: "Bearer parent-reader",
+    body: JSON.stringify({ ids: [] }),
+  });
+  assert.equal(parentWithoutNested.status, parentReach.status);
+  assert.ok(parentWithoutNested.body.equals(parentReach.body));
   const denied = await rawRequest(server, "/tenant/advertise", {
     authorization: "Bearer nested-reader",
     body: JSON.stringify({ refs: [], haves: [] }),

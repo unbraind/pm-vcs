@@ -632,14 +632,17 @@ async function routeServedRequest(
   }
   const token = bearerToken(request.headers.authorization) ?? "";
   const grants = context.grants;
-  // Refuse callers with no candidate in scope before any filesystem work.
-  // After preflight, retain deepest catalogue precedence for ambiguous paths.
-  if (!candidates.some((candidate) => grants.scope(token, candidate.repository) !== null)) {
-    return { response: denial(), addressed: null };
-  }
-  const addressed = catalogueCandidate(candidates, context) ?? candidates[0];
-  const access = grants.scope(token, addressed.repository);
-  if (access === null) return { response: denial(), addressed };
+  // Only names this token may read take part in resolution. Refusing when none
+  // is in scope happens before any filesystem work, and an out-of-scope deeper
+  // repository can never change the answer to an in-scope one, so whether it
+  // exists is not observable. The deepest catalogued in-scope name still wins.
+  const scoped = candidates.flatMap((candidate) => {
+    const access = grants.scope(token, candidate.repository);
+    return access === null ? [] : [{ ...candidate, access }];
+  });
+  if (scoped.length === 0) return { response: denial(), addressed: null };
+  const addressed = catalogueCandidate(scoped, context) ?? scoped[0];
+  const access = addressed.access;
   const served = openServedRepository(context, addressed.repository);
   if (served === null) return { response: denial(), addressed };
   if (mutating && access !== "write") {
@@ -661,10 +664,10 @@ async function routeServedRequest(
  * @param context - The server's shared state.
  * @returns The first candidate whose repository the catalogue holds, or null.
  */
-function catalogueCandidate(
-  candidates: readonly { repository: string; endpoint: string }[],
+function catalogueCandidate<T extends { repository: string; endpoint: string }>(
+  candidates: readonly T[],
   context: ServeContext,
-): { repository: string; endpoint: string } | null {
+): T | null {
   for (const candidate of candidates) {
     const path = context.directories.lookup(candidate.repository);
     if (path !== undefined) return candidate;

@@ -21,7 +21,11 @@ for (const runtime of [process.execPath, "bun"]) {
     const fixture = makeTempDir();
     const secret = "regression-bearer-secret";
     const password = "regression-password-secret";
-    const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), HOME: join(fixture.root, "home"), PM_AUTHOR: "acceptance",
+    // A VCS token inherited from the developer's shell would outrank the
+    // fixture's credential URL and make the server refuse the clone.
+    const inherited = Object.fromEntries(Object.entries(withoutPmContext(process.env))
+      .filter(([key]) => key !== "PM_VCS_TOKEN" && !key.startsWith("PM_VCS_TOKEN_")));
+    const env = { ...inherited, ...discardChildCoverage(), HOME: join(fixture.root, "home"), PM_AUTHOR: "acceptance",
       // pm otherwise spawns a detached telemetry flusher that keeps writing under HOME after each
       // command returns (racing the fixture cleanup) and labels these runs as agent usage.
       PM_TELEMETRY_SOURCE_CONTEXT: "test", PM_TELEMETRY_INLINE_FLUSH: "1" };
