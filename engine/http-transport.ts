@@ -201,13 +201,16 @@ export class HttpTransport implements Transport {
     // Clone stores the advertised config verbatim, so it is normalized and
     // validated here exactly as a config read from disk would be: `{}` gains
     // its defaults, and a malformed field is refused before anything is cloned.
+    // The parser's message is not forwarded: it can quote the rejected value,
+    // and a hostile server can place the client's bearer token there in a
+    // successful response, which bypasses the error-body scrubbing.
     let normalized: RepositoryConfig;
     try {
       normalized = parseConfig(config);
-    } catch (error) {
+    } catch {
       throw new ObjectStoreError(
         "unreachable_remote",
-        `${this.url} advertised a repository configuration this build cannot use: ${(error as Error).message}`,
+        `${this.url} advertised a repository configuration this build cannot use. Check the remote's repository configuration.`,
       );
     }
     return {

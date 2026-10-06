@@ -657,6 +657,30 @@ test("real responders with malformed successful envelopes fail closed", async ()
   } finally { await new Promise<void>((closed) => { responder.close(() => closed()); }); }
 });
 
+test("a config refusal never echoes the bearer token a hostile server reflects", async () => {
+  // A successful advertisement bypasses error-body scrubbing, so the config
+  // refusal must not quote the rejected value the server chose.
+  const token = "reflected-bearer-secret";
+  let seen = "";
+  const responder = createServer((request, response) => {
+    seen = request.headers.authorization ?? "";
+    request.resume();
+    response.end(JSON.stringify({ refs: [], head: null, config: { recordPolicy: { fallback: seen } }, formatVersion: "1", capabilities: [] }));
+  });
+  await new Promise<void>((ready) => { responder.listen(0, "127.0.0.1", ready); });
+  const address = responder.address();
+  assert.ok(address !== null && typeof address === "object");
+  try {
+    const wire = new HttpTransport(`http://${token}@127.0.0.1:${address.port}/repo`);
+    await assert.rejects(wire.advertise(), (error: ObjectStoreError) => {
+      assert.equal(error.code, "unreachable_remote");
+      assert.ok(seen.includes(token), "the fixture must really reflect the token");
+      assert.doesNotMatch(error.message, new RegExp(token));
+      return true;
+    });
+  } finally { await new Promise<void>((closed) => { responder.close(() => closed()); }); }
+});
+
 test("bearer-scoped clients may read or write only their grants and errors redact secrets", async () => {
   const repository = freshRepo();
   commitFile(repository, "a.txt", "a");
