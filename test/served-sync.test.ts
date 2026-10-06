@@ -252,6 +252,38 @@ test("a late push answer cannot overwrite the newer tip a concurrent fetch recor
   assert.equal(repository.refs.read("refs/heads/main"), commitB);
 });
 
+test("a throwing or rejecting holdResponse hook never withholds the decided answer", async () => {
+  const root = tempRoot();
+  const repository = Repository.init(join(root, "repo"));
+  const tip = commitFile(repository, "a.txt", "one");
+  // The first answered request meets a hook that throws synchronously, every
+  // later one a hook that rejects; neither may cost the client its answer or
+  // escape as an unhandled rejection that stops the server.
+  let calls = 0;
+  const server = await startRepositoryServer({
+    root,
+    host: "127.0.0.1",
+    port: 0,
+    grants: null,
+    hooks: {
+      holdResponse: () => {
+        calls += 1;
+        if (calls === 1) throw new Error("monitor failed synchronously");
+        return Promise.reject(new Error("monitor failed asynchronously"));
+      },
+    },
+  });
+  servers.push(server);
+  // A bounded client: without the guard the answer never comes, and the
+  // abort both fails the test and frees the socket so teardown can close.
+  const wire = new HttpTransport(`http://127.0.0.1:${server.port}/repo`, { timeoutMs: 5_000 });
+  for (const expectedCalls of [1, 2]) {
+    const advertised = await wire.advertise();
+    assert.equal(advertised.refs.find((entry) => entry.name === "refs/heads/main")?.target, tip);
+    assert.equal(calls, expectedCalls);
+  }
+});
+
 test("a resumable upload over HTTP verifies every object and refuses a tampered one", async () => {
   const served = await serveSeededRepo();
   const sender = freshRepo();

@@ -264,7 +264,8 @@ export interface ServeHooks {
    *
    * The repository operation has already completed, so awaiting this hook
    * delays the response — never the work — and never changes what the caller
-   * receives.
+   * receives. A hook that throws or rejects is ignored and the decided
+   * response is still written.
    *
    * @param repository - The repository name the request addressed.
    * @param endpoint - The endpoint the request addressed.
@@ -564,7 +565,16 @@ async function handleServedRequest(
   // observability hook, or a test recreating a slow wire — delays the response
   // without changing it, which is the one window real concurrency can be
   // observed in.
-  if (routed.addressed !== null) await context.hooks?.holdResponse(routed.addressed.repository, routed.addressed.endpoint);
+  // A hook that throws or rejects is discarded: the work it observes has
+  // already happened, so its failure must neither withhold the decided answer
+  // nor escape as an unhandled rejection that would take the server down.
+  if (routed.addressed !== null) {
+    try {
+      await context.hooks?.holdResponse(routed.addressed.repository, routed.addressed.endpoint);
+    } catch {
+      // Deliberately ignored; see above.
+    }
+  }
   response.sendDate = false;
   response.setHeader("connection", "close");
   response.statusCode = routed.response.status;
