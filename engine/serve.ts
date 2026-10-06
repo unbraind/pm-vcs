@@ -759,7 +759,11 @@ function readBoundedBody(request: IncomingMessage, maxBytes: number): Promise<Bu
       if (received > maxBytes) {
         // The rest of the body is left unread on purpose: draining it would
         // commit the server's memory to a size the bound just refused, and the
-        // response flush below ends the connection either way.
+        // response flush below ends the connection either way. Detaching the
+        // listener and pausing makes that true while the 413 is written —
+        // an attached listener would keep the stream flowing and discard.
+        request.removeAllListeners("data");
+        request.pause();
         rejectBody(new ObjectStoreError("body_too_large", "The request body exceeds the bound this server accepts."));
         return;
       }

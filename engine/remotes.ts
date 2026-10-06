@@ -194,7 +194,10 @@ export class RemoteStore {
     const split = splitRemoteCredentials(parseRemote(name, url).url);
     const remote = { name, url: split.url };
     if (split.token !== null) this.storeToken(name, split.token);
-    else this.clearToken(name);
+    // Only HTTP(S) remotes ever read a stored token, so only they can inherit
+    // one; a file remote never touches credentials.json, which may belong to
+    // another user of a shared repository.
+    else if (/^https?:/i.test(split.url)) this.clearToken(name);
     this.write([...remotes, remote]);
     return remote;
   }
@@ -211,11 +214,16 @@ export class RemoteStore {
    */
   remove(name: string): void {
     const remotes = this.list();
-    if (!remotes.some((remote) => remote.name === name)) {
+    const removed = remotes.find((remote) => remote.name === name);
+    if (removed === undefined) {
       throw new ObjectStoreError("unknown_remote", `No remote named ${name} to remove.`);
     }
+    // The secret goes first, so a credential-file failure leaves the remote map
+    // unchanged instead of reporting a failure for a removal that happened.
+    // A file remote never had a token to clear; a later HTTP(S) add of the
+    // same name clears any leftover before it can be inherited.
+    if (/^https?:/i.test(removed.url)) this.clearToken(name);
     this.write(remotes.filter((remote) => remote.name !== name));
-    this.clearToken(name);
   }
 
   /** Clear a saved secret before a new credential-free remote can inherit it. */

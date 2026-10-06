@@ -633,6 +633,31 @@ test("new nested repositories are discovered on a bounded miss and replaced path
   assert.equal(privateRepository.refs.read("refs/heads/main"), privateTip);
 });
 
+test("a refused streaming body loses its connection instead of holding the slot", async () => {
+  // A sender told "send less" must not keep its socket by streaming forever:
+  // after the 413 the server stops reading and the connection ends while the
+  // client is still writing.
+  const { server, repository } = await serveRoot({ limits: { ...DEFAULT_SERVE_LIMITS, maxBodyBytes: 512 } });
+  const name = repository.root.slice(join(repository.root, "..").length + 1);
+  const socket = connect(server.port, "127.0.0.1");
+  await new Promise<void>((resolveConnect) => { socket.once("connect", () => resolveConnect()); });
+  socket.write(`POST /${name}/fetch HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n`);
+  const chunk = `400\r\n${"x".repeat(0x400)}\r\n`;
+  let response = "";
+  socket.on("data", (data: Buffer) => { response += data.toString("utf8"); });
+  socket.on("error", () => {});
+  const closed = new Promise<boolean>((resolveClosed) => {
+    const deadline = setTimeout(() => resolveClosed(false), 3_000);
+    socket.once("close", () => { clearTimeout(deadline); resolveClosed(true); });
+  });
+  const pump = setInterval(() => { if (!socket.destroyed) socket.write(chunk); }, 10);
+  const endedPromptly = await closed;
+  clearInterval(pump);
+  socket.destroy();
+  assert.match(response, /^HTTP\/1\.1 413/);
+  assert.ok(endedPromptly, "the server kept reading a refused body for 3 s instead of ending the connection");
+});
+
 test("all operation envelopes and object counts are bounded before publication", async () => {
   const { server, repository } = await serveRoot({ limits: { maxBodyBytes: 4096, maxFetchRefs: 2, maxFetchHaves: 2, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2, maxSessionObjects: 8, maxSessionBytes: 4096 } });
   const name = repository.root.slice(join(repository.root, "..").length + 1);
