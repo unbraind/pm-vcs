@@ -1,7 +1,8 @@
 import { Writable } from "node:stream";
 import { guardCredentialOutput } from "../credential-output.ts";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { test } from "node:test";
 import { environmentToken, readCredentials, redactRemoteUrl, redactUserinfo, splitRemoteCredentials, writeRemoteMap } from "../engine/credentials.ts";
@@ -12,6 +13,40 @@ import { createServer } from "node:http";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const token = "adversarial-secret%with-encoding";
+
+test("credential repair tolerates EPERM and EROFS only for private real files", (context) => {
+  const fixture = makeTempDir();
+  const path = join(fixture.root, "credentials.json");
+  const realChmod = fs.chmodSync;
+  try {
+    writeFileSync(path, JSON.stringify({ origin: token }), { mode: 0o600 });
+    // A non-writable parent is real, but owners can still chmod their files.
+    // Simulate only that syscall's failure; reads and mode checks stay real.
+    realChmod(fixture.root, 0o500);
+    for (const mode of [0o600, 0o400, 0o640, 0o604]) {
+      realChmod(path, mode);
+      for (const code of ["EPERM", "EROFS", "EACCES"]) {
+        const failure = Object.assign(new Error("permission repair failed"), { code });
+        context.mock.method(fs, "chmodSync", () => { throw failure; });
+        syncBuiltinESMExports();
+        try {
+          if ((mode & 0o077) === 0 && code !== "EACCES") {
+            assert.deepEqual(readCredentials(path), { origin: token });
+          } else {
+            assert.throws(() => readCredentials(path), (error) => error === failure);
+          }
+          assert.equal(statSync(path).mode & 0o777, mode);
+        } finally {
+          context.mock.restoreAll();
+          syncBuiltinESMExports();
+        }
+      }
+    }
+  } finally {
+    realChmod(fixture.root, 0o700);
+    fixture.cleanup();
+  }
+});
 
 test("userinfo is stripped from valid, malformed, unsupported and embedded URLs", () => {
   assert.equal(redactUserinfo(`failed http://${token}:password@host/a https://second@host/b`), "failed http://host/a https://host/b");

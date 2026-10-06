@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:10.824Z"
-updated_at: "2026-10-06T14:12:07.433Z"
+updated_at: "2026-10-06T15:13:16.453Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:38.277Z",claude,"cli:update:dep",detected
-comments[33]{created_at,author,text}:
+comments[37]{created_at,author,text}:
   "2026-08-28T20:11:18.880Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no served-forge implementation or passing acceptance evidence for this child, so it remains open with its written specification."
   "2026-09-12T23:35:51.054Z",pi-agent,"Audit 2026-09-13: EXISTS — engine/transport.ts implements the Phase 3 transport with FileTransport, push/pull, capability negotiation, and object transfer. REMAINS — no served repository exposing refs, objects and series over the transport. The transport is used for peer-to-peer sync, not for serving a repository. The description says spec only."
   "2026-10-05T06:14:06.813Z",pi-glm,"Design for the served repository, reusing engine/transport.ts rather than forking it. The Transport interface stays the single boundary: its methods become async (a wire is asynchronous, a filesystem is not, and the interface was written so the algorithm does not care), FileTransport keeps every policy - fast-forward, force, compare-and-swap publication, verified arrival - and the HTTP server delegates every repository operation to a FileTransport opened on the repository directory under --root. Wire: POST <base>/advertise|fetch|push|objects/missing|objects/upload|publish, JSON envelopes with base64 payloads, error body {code,message} mapped back to ObjectStoreError so refusals read identically to a file remote. Client: HttpTransport implements the same interface, so clone/fetch/push/remote-add work unchanged through openTransport; the bearer token travels in the remote URL's userinfo. Resumable uploads keep their connection identity: the server holds one FileTransport per upload session, so publish reports exactly what that session delivered. Series and review records ride the same object paths: records are tree-reachable, series objects transfer through the verified-arrival upload path. Tenancy: bearer tokens scoped per repository (read/write); every pre-authorization failure - missing repo, wrong tenant, bad token, path traversal - answers with one byte-identical 404 denial; body sizes, object counts and session counts are bounded."
@@ -44,30 +44,62 @@ comments[33]{created_at,author,text}:
   "2026-10-06T12:57:46.721Z",codex-sol,"The linked test runner completed both new commands through pm test pm-vcs-ttc0 --run --match test/remotes.test.ts --progress: each runtime passed 63 tests. Result tracking is disabled, so this comment records the measured outcomes without changing project policy. npm run check and npm run docstring pass: no duplicates, all 253 declarations documented. Full coverage is running; the npm and Bun release checks will be repeated after committing the regenerated self-host bundle."
   "2026-10-06T13:07:55.098Z",codex-sol,"Round 3 coverage passes: 870/870 tests, zero failures/skips, 100/100/100/100 across the all-source c8 inventory (root, engine and scripts). This includes packed Node and Bun CLI acceptance and real multi-process PM merges. All three code regressions also fail independently with their corresponding engine file reverted and pass once restored. Dispositions: 4195172122 fixed with scope preflight before any catalogue access for callers without a candidate grant, retaining deepest-catalogue precedence; 4195172060 fixed by clearing saved credentials before adding a credential-free URL; 4195172101 fixed by checking both final line boundaries before append union; 4195172137 fixed with bound-address:port proxy Host guidance (docs only); 4195172039 fixed via pm update description. No finding declined. Existing ambiguous parent/nested object endpoints remain tracked by pm-vcs-w3yi. Finalize PM writes and release claim, regenerate changelog then self-host bundle, commit once, and run npm run changelog:check && npm run accept:self-host plus npm run release:check and bun run release:check at that final head before pushing, with no further source or tracker writes if green."
   "2026-10-06T14:12:07.433Z",claude-orchestrator,"CodeRabbit full review 13:50 posted 3 standalone inline findings (4196082593 Major docs: PM_VCS_TOKEN not host-scoped; 4196082607 benchmark main duplicated measureReuseByObjects math; 4196082622 Distribution README test read every later section). All valid, fixed: README credential paragraph, benchmark table now produced by measureReuseByObjects (columns Fragments/NewFragments/Reused), test bounded at the next '## ' heading. Greptile re-review: 57 files, 0 comments."
-files[22]{path,scope}:
-  engine/http-protocol.ts,project
-  engine/http-transport.ts,project
-  engine/ignore.ts,project
-  engine/records.ts,project
-  engine/remotes.ts,project
-  engine/rewrite.ts,project
-  engine/serve.ts,project
-  engine/served-repositories.ts,project
-  engine/sync.ts,project
-  engine/transport.ts,project
-  test/cdc-benchmark.test.ts,project
-  test/helpers/serve-worker.ts,project
-  test/ignore.test.ts,project
-  test/remotes.test.ts,project
-  test/review-findings.test.ts,project
-  test/serve.test.ts,project
-  test/served-acceptance.test.ts,project
-  test/served-defects.test.ts,project
-  test/served-repositories.test.ts,project
-  test/served-sync.test.ts,project
-  test/sync.test.ts,project
-  vcs-commands.ts,project
-tests[13]:
+  "2026-10-06T14:54:22.751Z",codex-sol,"Review round 4 (5430249455): verified all four inline findings and the outside-diff HTTP(S) help finding. Plan: preserve the credential mode guarantee while tolerating EPERM/EROFS only on private files, avoid token reads for file fetch/push, prune root .pmvcs tracker discovery, and correct current authorization/coverage fields through PM CLI. Add fail-on-revert regressions; run Node and Bun release gates and commit regenerated self-host evidence. No GitHub replies or merge."
+  "2026-10-06T14:58:21.765Z",codex-sol,"Round 4 focused regressions passed: 73 tests with no skips, both directly and via pm test --run --only-last --progress. Reverting credential repair, root control-store discovery pruning, help/remediation, file-fetch token guard and file-push token guard individually caused the corresponding tests to fail. Discovery uses a real tree with a planted .toon and settings in the root object store; observed readdir calls never enter root .pmvcs. Nested control-directory policy remains tracked by pm-vcs-nz10. Full release gates are running."
+  "2026-10-06T15:05:16.497Z",codex-sol,"npm run release:check passed on the revised source: 874 tests without skips, all-source c8 100/100/100/100 across 46 files, 253 documented declarations, zero duplication, lint/typecheck, native TOON, installed-CLI stat-cache strace, committed-baseline self-host acceptance, zero production vulnerabilities, identity audit, packaging, changelog/date and publish-attestation checks. Bun invocation is running. After PM finalization, regenerate changelog and selfhost.bundle in that order, commit once and run the committed-head changelog/self-host checks before push."
+  "2026-10-06T15:13:15.958Z",codex-sol,"Round 4 dispositions: 4196796916 fixed via pm update description; 4196796934 fixed via pm update description/actual_result and pm files notes; 4196796946 fixed with private-file EPERM/EROFS handling and HTTP(S)-only fetch/push token resolution; 4196796958 fixed with root .pmvcs discovery pruning; outside-diff clone URL help and missing_remote_url remediation now name HTTP(S). No finding declined. Both preliminary full release gates pass 874 tests without skips and all-source 100/100/100/100 over 46 files, including packed Node/Bun CLI acceptance. All code regressions fail on independent reverts. Finalize PM writes, regenerate CHANGELOG.md then selfhost.bundle, commit once, verify changelog/self-host and rerun both full release gates at the final head before push. No further tracker/source writes if green; keep items unclosed."
+files[23]:
+  - path: engine/http-protocol.ts
+    scope: project
+  - path: engine/http-transport.ts
+    scope: project
+  - path: engine/ignore.ts
+    scope: project
+    note: Prune root control directory during broad tracker discovery
+  - path: engine/records.ts
+    scope: project
+  - path: engine/remotes.ts
+    scope: project
+  - path: engine/rewrite.ts
+    scope: project
+  - path: engine/serve.ts
+    scope: project
+  - path: engine/served-repositories.ts
+    scope: project
+  - path: engine/sync.ts
+    scope: project
+  - path: engine/transport.ts
+    scope: project
+  - path: test/cdc-benchmark.test.ts
+    scope: project
+  - path: test/helpers/serve-worker.ts
+    scope: project
+  - path: test/ignore.test.ts
+    scope: project
+    note: Real planted control-store tracker and observed discovery walk
+  - path: test/remotes.test.ts
+    scope: project
+  - path: test/review-findings.test.ts
+    scope: project
+  - path: test/serve.test.ts
+    scope: project
+  - path: test/served-acceptance.test.ts
+    scope: project
+  - path: test/served-defects.test.ts
+    scope: project
+  - path: test/served-repositories.test.ts
+    scope: project
+  - path: test/served-sync.test.ts
+    scope: project
+  - path: test/sync-commands.test.ts
+    scope: project
+    note: Command registration help and error remediation assertions
+  - path: test/sync.test.ts
+    scope: project
+  - path: vcs-commands.ts
+    scope: project
+    note: HTTP(S) clone help and missing remote URL remediation
+tests[14]:
   - command: node --test test/served-acceptance.test.ts
     scope: project
     provenance:
@@ -161,6 +193,14 @@ tests[13]:
     provenance:
       author: codex-sol
       created_at: "2026-10-06T12:56:11.828Z"
+      source_kind: local_mutation
+      source_ref: feat/served-repository-http
+  - command: node --test test/credentials.test.ts test/ignore.test.ts test/sync.test.ts test/sync-commands.test.ts
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T14:57:29.094Z"
       source_kind: local_mutation
       source_ref: feat/served-repository-http
 docs[1]{path,scope}:

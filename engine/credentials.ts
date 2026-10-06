@@ -1,6 +1,6 @@
 // Credentials are clone-local secrets; public remote locations never contain them.
 import { randomBytes } from "node:crypto";
-import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { ObjectStoreError } from "./objects.ts";
 
 /** Remove URL userinfo even from malformed URLs and embedded diagnostic text. */
@@ -53,7 +53,14 @@ export function readCredentials(path: string): Record<string, string> {
     return {};
   }
   // Repair permissions on an existing file too; Windows requires filesystem ACLs.
-  chmodSync(path, 0o600);
+  try {
+    chmodSync(path, 0o600);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Non-owners and read-only mounts may retain an already private file, but
+    // a failed repair must never allow group/world access to a returned secret.
+    if ((code !== "EPERM" && code !== "EROFS") || (statSync(path).mode & 0o077) !== 0) throw error;
+  }
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { throw new ObjectStoreError("bad_credentials", "The credentials file is not valid JSON."); }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)

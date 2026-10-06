@@ -1,31 +1,34 @@
 id: pm-vcs-tj07
 title: Include CDC benchmark source in the 100/100/100/100 coverage contract
-description: "The pm-vcs coverage script explicitly excludes scripts/cdc-benchmark.ts. The full release gate is green and measures 39 source files, while the docstring gate sees 40; the benchmark is executable authored TypeScript and therefore the package cannot claim all-source 100/100/100/100 coverage under the current fleet requirement."
+description: "The coverage contract includes scripts/cdc-benchmark.ts and all authored executable TypeScript under the root, engine and scripts globs, with c8 --all --100 across statements, branches, functions and lines. Real benchmark fixtures exercise file/object-store I/O and boundary behavior. The former explicit benchmark exclusion has been removed; Node and Bun release invocations pass on the revised source. This issue remains in_progress for orchestrator verification and closure."
 type: Issue
 status: in_progress
 priority: 1
 tags: []
 created_at: "2026-09-29T13:15:34.304Z"
-updated_at: "2026-10-05T07:13:22.528Z"
+updated_at: "2026-10-06T15:13:17.873Z"
 author: codex
 acceptance_criteria: "Inventory every authored executable TypeScript source file and reconcile the coverage and docstring scopes; include scripts/cdc-benchmark.ts or refactor its executable logic into measured source with real deterministic benchmark acceptance; measure statements, lines, branches and functions at 100% with no excludes, threshold reductions, skips or synthetic-only assertion; run the full release gate and real benchmark on the exact pushed head, then update the coverage evidence and PM links."
 expected_result: "Every executable authored TypeScript source is measured at 100% across statements, lines, branches and functions, and the benchmark still runs against real file/object-store I/O."
-actual_result: The c8 invocation uses --exclude=scripts/cdc-benchmark.ts. Its LCOV lists 39 source files at 100% lines/branches/functions; docstring gate reports 40 source files. The benchmark script is not part of the measured gate.
+actual_result: "Both npm run release:check and bun run release:check pass on the revised source with c8 100/100/100/100 across all 46 authored sources, including scripts/cdc-benchmark.ts: 18785/18785 lines, 4109/4109 branches and 564/564 functions. All 874 tests pass with no skips. The c8 invocation includes scripts/**/*.ts and excludes only test/**; docstring scope also covers 46 files and 253 declarations."
 affected_version: 2026.7.30
 component: quality
-comments[2]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-10-05T06:59:53.495Z",codex-sol,"Removed the coverage exclusion for scripts/cdc-benchmark.ts without changing the 100 percent thresholds. Added real full-benchmark execution plus empty-store and directory-noise boundary fixtures. Focused c8 reports 100 statements, branches, functions and lines for HTTP protocol, HTTP client, server and CDC benchmark; full all-source coverage is running. eslint, jscpd and the 239-declaration docstring gate pass."
   "2026-10-05T07:13:21.107Z",codex-sol,"The full own release gate now passes c8 100/100/100/100 across all 43 authored source files, including the formerly excluded CDC benchmark: 18027 covered lines, 538 functions and 3842 branches, with no source ignores added or thresholds lowered. All 830 tests pass without skips. Documentation and all other release gates pass; this issue remains unclosed for orchestrator verification."
+  "2026-10-06T14:54:56.187Z",codex-sol,"Review 4196796934 accepted: refreshed description and actual_result plus package.json and benchmark file notes to the implemented coverage scope. Historical comments and notes remain unchanged."
+  "2026-10-06T15:04:44.902Z",codex-sol,"Round 4 current coverage evidence: 874/874 tests, zero skips; c8 statements/branches/functions/lines 100/100/100/100; LCOV reconciles 46 sources with the 46-file docstring inventory (253 declarations). scripts/cdc-benchmark.ts is included. Lines 18785/18785, branches 4109/4109, functions 564/564. No excludes added or thresholds lowered."
+  "2026-10-06T15:13:14.974Z",codex-sol,"Both full release invocations passed for round 4: npm run release:check and bun run release:check. Current fields and benchmark/package file notes reflect the included CDC benchmark and 46-source 100/100/100/100 measurement; historical notes remain intact. Leaving the issue in_progress and releasing the claim for orchestrator verification."
 notes[2]{created_at,author,text}:
   "2026-09-29T13:16:01.214Z",codex,"At current code head 21e8ed1, direct npm run release:check passed, including c8 --all --100, real native TOON/stat-cache/self-host acceptance, zero production audit and changelog check. The measured LCOV has 39 sources and 16030/16030 lines, 3351/3351 branches, 468/468 functions; scripts/cdc-benchmark.ts is explicitly excluded. This issue records the all-executable-source coverage gap without overstating those percentages."
   "2026-09-29T13:24:20.991Z",codex,"The real CDC benchmark completed on a temporary object store: for the declared 256 KiB corpus and 64-byte front insertion, object-count reuse was 95.00% with CDC default and 0.00% with fixed 4K; middle/end and throughput rows also emitted. Fresh npm and Bun packed projects with CLI 2026.9.29 committed a real file through pm-vcs and passed strict health. Neither result measures scripts/cdc-benchmark.ts under c8, so this issue remains open."
 files[3]:
   - path: package.json
     scope: project
-    note: Current c8 scope and explicit benchmark exclusion
+    note: Current all-source c8 --all --100 scope including scripts/cdc-benchmark.ts
   - path: scripts/cdc-benchmark.ts
     scope: project
-    note: Executable authored benchmark source outside coverage scope
+    note: Executable benchmark source included in all-source coverage and exercised through real file/object-store I/O
   - path: test/cdc-benchmark.test.ts
     scope: project
 tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:

@@ -69,7 +69,8 @@ function discoverTrackerRootsBelow(root: string, start: string, candidates: Set<
     }
     for (const entry of entries) {
       // A symlinked directory is not `isDirectory`, so aliases cannot escape.
-      if (!entry.isDirectory() || isPrunableDirectory(entry.name)) continue;
+      if (!entry.isDirectory() || isPrunableDirectory(entry.name)
+        || (current === root && entry.name === ".pmvcs")) continue;
       const child = join(current, entry.name);
       const tracker = resolvePmRoot(root, child);
       if (existsSync(getSettingsPath(tracker))) candidates.add(tracker);

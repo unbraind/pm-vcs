@@ -134,7 +134,7 @@ export async function fetchFrom(
   transport?: Transport,
 ): Promise<FetchReport> {
   const remote = repository.remotes.require(remoteName);
-  const wire = transport ?? openTransport(remote.url, repository.root, repository.remotes.token(remoteName));
+  const wire = transport ?? openTransport(remote.url, repository.root, /^https?:/i.test(remote.url) ? repository.remotes.token(remoteName) : null);
   // The handshake runs before anything else: an incompatible peer must be
   // refused while nothing has moved, not after a bundle has been transferred.
   const advertisement = await wire.advertise();
@@ -212,7 +212,7 @@ export async function pushTo(
   transport?: Transport,
 ): Promise<PushReport> {
   const remote = repository.remotes.require(remoteName);
-  const wire = transport ?? openTransport(remote.url, repository.root, repository.remotes.token(remoteName));
+  const wire = transport ?? openTransport(remote.url, repository.root, /^https?:/i.test(remote.url) ? repository.remotes.token(remoteName) : null);
 
   // Deduplicated here rather than left to the remote. A repeated name produces two
   // updates for one ref, and the receiving transaction rejects that as

@@ -841,7 +841,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         throw new VcsError(
           "missing_remote_url",
           `Adding the remote ${name} needs a location.`,
-          "Pass a filesystem path or file: URL as the second argument, or add --remove to delete the remote.",
+          "Pass a filesystem path, file: URL or HTTP(S) URL as the second argument, or add --remove to delete the remote.",
         );
       }
       // Resolved before it is stored, for the same reason `clone` resolves: the
@@ -899,7 +899,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
     description:
       "Create a repository from another one: adopt its record configuration, fetch every branch onto tracking refs, and check out the branch its HEAD names. The configuration is adopted first, so the clone stores and merges the same paths the same way rather than treating records as plain text.",
     arguments: [
-      { name: "url", description: "Where to clone from: a filesystem path or a file: URL", required: true },
+      { name: "url", description: "Where to clone from: a filesystem path, file: URL or HTTP(S) URL", required: true },
       { name: "directory", description: "Where to put the clone (default a directory named after the source)", required: false },
     ],
     flags: [{ long: "--remote", value_name: "name", description: "Name to register the source under (default origin)", value_type: "string" }],

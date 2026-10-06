@@ -1,22 +1,23 @@
 id: pm-vcs-4ff1
 title: Cross-tenant denial without existence leakage
-description: "Repository-scoped bearer read/write grants are checked before repository access. Invalid tokens, missing repositories, wrong scopes and unsafe repository names receive identical complete HTTP denial bytes. Request and object counts are bounded; traversal, symlink aliases and linked instances are refused. Adversarial real-socket Node/Bun tests and source coverage evidence are linked. Implementation awaits orchestrator closure after final release gates."
+description: "Repository-scoped bearer read/write grants are checked before repository access. Invalid tokens, missing repositories, wrong scopes and unsafe repository names receive identical complete HTTP denial bytes. Exception: a read-only grant receives a distinct 403 on write endpoints when its repository exists and is readable, because that caller can already establish existence. Request and object counts are bounded; traversal, symlink aliases and linked instances are refused. Adversarial real-socket Node/Bun tests and source coverage evidence are linked. Implementation awaits orchestrator closure after final release gates."
 type: Feature
 status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:14.362Z"
-updated_at: "2026-10-05T07:21:21.506Z"
+updated_at: "2026-10-06T15:13:17.349Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:42.163Z",claude,"cli:update:dep",detected
-comments[6]{created_at,author,text}:
+comments[7]{created_at,author,text}:
   "2026-08-28T20:11:19.300Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no cross-tenant authorization implementation or passing acceptance evidence for this child, so it remains open with its written specification."
   "2026-09-12T23:35:50.373Z",pi-agent,"Audit 2026-09-13: EXISTS — nothing. The description says spec only. grep for tenant/Tenant in engine/ returns no matches. No cross-tenant code exists. REMAINS — the full feature: every object and ref operation across tenants denied without leaking object existence."
   "2026-10-05T06:14:07.335Z",pi-glm,"Design: authorization is checked before any repository byte is touched, and every failure that happens before it succeeds - unknown token, absent token scope, missing repository, traversal-shaped repository name, wrong tenant - produces the same status, content-type and body bytes, so a caller cannot distinguish refusal reasons. A read-scoped token hitting a write endpoint on a repository it may read gets a distinct 403, because that caller can already prove the repository exists by advertising it. Adversarial tests will diff the raw responses across all refusal causes."
   "2026-10-05T06:49:32.608Z",codex-sol,"Hardened authorization boundaries after inspecting the interrupted implementation: scoped but absent repositories now receive the fixed denial, including write requests; symlink repository/control aliases and linked instances are refused; denial responses omit Date and close the connection so complete response bytes can be compared. Added object-query and bundled-push count limits, positive limit validation, and token-free client error URLs."
   "2026-10-05T07:00:49.864Z",codex-sol,"Adversarial denial now compares complete raw HTTP responses over TCP across absent/bad tokens, wrong tenants, scoped missing repositories, traversal spellings and every transport endpoint. Raw TCP preserves hostile request-target bytes in Node and Bun. Readable read-only tokens receive the explicit write refusal. Focused HTTP source coverage is 100/100/100/100 and native Bun tests pass. Separate follow-up pm-vcs-00mb records the existing unreadable-config fallback outside this authorization change."
   "2026-10-05T07:21:21.506Z",codex-sol,"Final verification is green under both npm and Bun full release gates, with all 830 tests and 100/100/100/100 all-source coverage. The separate native Bun runner passes all 31 served-feature tests, including complete raw-response denial equivalence, every transport endpoint, repository path traversal and filesystem alias refusals. No tenant scale or hostile-operator filesystem claim is made; pm-vcs-00mb remains a separate open configuration-reader follow-up."
+  "2026-10-06T14:54:52.638Z",codex-sol,"Review 4196796916 accepted: corrected the current description to state the read-only grant exception already implemented and documented in README.md; historical comments retained."
 files[4]{path,scope}:
   engine/http-protocol.ts,project
   engine/serve.ts,project
@@ -24,4 +25,6 @@ files[4]{path,scope}:
   test/serve.test.ts,project
 tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/serve.test.ts test/http-protocol.test.ts,project,codex-sol,"2026-10-05T06:53:48.395Z",local_mutation,feat/served-repository-http
+docs[1]{path,scope,note}:
+  README.md,project,Read-only grant 403 exception agrees with the current authorization description
 body: ""

@@ -399,7 +399,9 @@ fix, because it would be a credential handed to every observer on the wire.
 For compatibility, URL userinfo supplied to clone or remote add is moved into the local
 `.pmvcs/credentials.json`; `.pmvcs/remotes.json`, receipts and diagnostics contain clean URLs.
 Existing credential-bearing remote maps migrate on first read. The credentials file is
-created with mode 0600 and existing permissions are repaired on read. Windows does not
+created with mode 0600 and existing permissions are repaired on read. If repair fails with
+EPERM or EROFS, reading is allowed only when no group or world permission bits are set;
+otherwise the error is raised. File fetch/push does not read bearer credentials. Windows does not
 enforce POSIX mode bits; restrict access with filesystem ACLs or use environment tokens.
 Removing a remote also removes its stored credential. Rotate any previously exposed tokens;
 migration cannot erase old transcripts or operation logs.

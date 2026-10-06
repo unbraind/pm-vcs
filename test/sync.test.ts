@@ -608,6 +608,25 @@ test("an absolute path and a file URL reach the same repository", async () => {
   }
 });
 
+test("file fetch and push never read unrelated bearer credentials", async () => {
+  const source = freshRepo();
+  const first = commitFile(source, "a.txt", "one");
+  for (const url of [source.root, pathToFileURL(source.root).href]) {
+    const clone = freshRepo();
+    clone.remotes.add("origin", url);
+    // A real corrupt secret file proves both operations avoid the token store.
+    writeFileSync(join(clone.controlDirectory, "credentials.json"), "not a secret map");
+    await fetchFrom(clone, "origin", now);
+    assert.equal(clone.refs.read(trackingRef("origin", "main")), first);
+    clone.refs.compareAndSwap(`${BRANCH_PREFIX}main`, null, first);
+    const next = commitFile(clone, "b.txt", "two");
+    const pushed = await pushTo(clone, "origin", [], false, now);
+    assert.equal(pushed.upToDate, false);
+    assert.equal(source.refs.read(`${BRANCH_PREFIX}main`), next);
+    source.refs.compareAndSwap(`${BRANCH_PREFIX}main`, next, first);
+  }
+});
+
 test("push refuses a ref whose history the bundle did not carry", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");

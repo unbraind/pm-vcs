@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
@@ -182,4 +183,33 @@ test("staging cannot take a tracker's runtime files once a glob discovers the tr
   const repository = Repository.init(dir.root, "main", { recordPaths: ["custom/*/Issues/*.toon"], recordPolicy: {} });
   assert.deepEqual(repository.stage([]), ["custom/team/Issues/item.toon", "custom/team/settings.json"]);
   assert.equal(repository.status().untracked.includes("custom/team/runtime/context.jsonl"), false);
+});
+
+test("tracker discovery never walks the root .pmvcs object store", (context) => {
+  dir = makeTempDir();
+  const control = join(dir.root, ".pmvcs");
+  const hidden = join(control, "objects", "tracker");
+  const visible = join(dir.root, "custom", ".pmvcs", "tracker");
+  for (const tracker of [hidden, visible]) {
+    mkdirSync(join(tracker, "Issues"), { recursive: true });
+    writeFileSync(join(tracker, "settings.json"), "{}");
+    writeFileSync(join(tracker, "Issues", "planted.toon"), "title: planted\n");
+  }
+  const visited: string[] = [];
+  const realReaddir = fs.readdirSync;
+  context.mock.method(fs, "readdirSync", (...args: Parameters<typeof fs.readdirSync>) => {
+    visited.push(String(args[0]));
+    return realReaddir(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    const rules = readIgnoreRules(dir.root, ["**/*.toon"]);
+    assert.equal(visited.some((path) => path === control || path.startsWith(`${control}/`)), false);
+    assert.equal(isRuntimeIgnored(".pmvcs/objects/tracker/runtime/cache.json", rules), false);
+    // This change deliberately leaves nested control-directory policy alone.
+    assert.equal(isRuntimeIgnored("custom/.pmvcs/tracker/runtime/cache.json", rules), true);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
 });
