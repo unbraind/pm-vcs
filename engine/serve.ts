@@ -875,7 +875,9 @@ async function dispatchRefMoves(
     const encoded = request.bundle;
     if (typeof encoded !== "string") throw new ObjectStoreError("bad_request", "The push request does not carry a bundle.");
     const bundle = Buffer.from(encoded, "base64");
-    if (parseBundle(bundle).header.objects.length > context.limits.maxUploadObjects) throw limitExceeded(`A push may carry at most ${context.limits.maxUploadObjects} objects.`);
+    // Count the object lines the importer would store, not the header's object
+    // list: the header is the sender's claim and nothing ties the two together.
+    if (parseBundle(bundle).lines.length > context.limits.maxUploadObjects) throw limitExceeded(`A push may carry at most ${context.limits.maxUploadObjects} objects.`);
     const receipt = await served.transport().push(bundle, updates, force, now);
     return { status: 200, body: Buffer.from(encodePushReceipt(receipt), "utf8"), contentType: JSON_CONTENT_TYPE };
   }

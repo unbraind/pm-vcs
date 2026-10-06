@@ -825,7 +825,11 @@ export function registerVcsCommands(api: ExtensionApi): void {
     flags: [{ long: "--remove", description: "Remove the named remote instead of adding one", value_type: "boolean" }],
     run(context: CommandHandlerContext): VcsEnvelope & { remotes?: readonly Remote[]; added?: Remote; removed?: string } {
       const repository = openRepository(context);
-      const remoteArgs = context.args[0] === "add" ? context.args.slice(1) : context.args;
+      // `remote add <name> <url>` is an alias for `remote <name> <url>`, but only
+      // in that exact three-argument shape: a remote may itself be named "add",
+      // and `remote add --remove` or `remote add <url>` must still address it.
+      const remoteArgs = context.options?.remove !== true && context.args[0] === "add" && context.args.length === 3
+        ? context.args.slice(1) : context.args;
       const name = remoteArgs[0]?.trim();
       if (name === undefined || name === "") return { ok: true, remotes: repository.remotes.list() };
       if (context.options?.remove === true) {

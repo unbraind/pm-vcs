@@ -317,7 +317,8 @@ accepted until it publishes. Past either cumulative bound the upload is refused 
 `limit_exceeded`, the session's receipts are released with it, and a publication under that
 session id afterwards reports a fresh session's empty receipt. A publication clears the charge
 with the receipts, refused publications included. Tokens load at startup and
-require a restart to rotate. Without `--auth`, served repositories are readable and writable.
+require a restart to rotate. Without `--auth`, served repositories are read-only unless
+`--allow-unauthenticated-writes` is passed.
 Keep the default loopback binding for local use; use TLS termination when carrying bearer
 tokens beyond loopback. Token-bearing remote URLs are sensitive local configuration; do not
 publish them. Client connection errors redact credentials and redirects are refused.

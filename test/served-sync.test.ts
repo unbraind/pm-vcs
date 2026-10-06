@@ -499,6 +499,15 @@ test("remote add, fetch, push and clone reach a served repository through the co
   const listed = (branches.result as { remoteBranches: Array<{ name: string; target: string }> }).remoteBranches;
   assert.deepEqual(listed.map((entry) => entry.name), ["origin/main", "wire/main"]);
 
+  // A remote may itself be named "add": the alias only applies to the exact
+  // `add <name> <url>` shape, so the two-argument form adds a remote called
+  // "add" and `--remove` removes it instead of the alias swallowing the name.
+  const named = await harness.runCommand({ command: "vcs remote", args: ["add", served.url], pmRoot: root });
+  assert.equal(named.errorMessage, undefined, String(named.errorMessage));
+  assert.equal((named.result as { added: { name: string } }).added.name, "add");
+  const removed = await harness.runCommand({ command: "vcs remote", args: ["add"], options: { remove: true }, pmRoot: root });
+  assert.equal((removed.result as { removed?: string }).removed, "add");
+
   writeFileSync(join(root, "pushed.txt"), "over the wire\n");
   await harness.runCommand({ command: "vcs add", pmRoot: root });
   await harness.runCommand({ command: "vcs commit", options: { message: "wire" }, global: { author: "A <a@b>" }, pmRoot: root });

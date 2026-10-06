@@ -617,6 +617,14 @@ test("all operation envelopes and object counts are bounded before publication",
   const oversizedBundle = await rawRequest(server, `/${name}/push`, { body: JSON.stringify({ bundle: exportBundle(repository.objects, repository.refs, []).toString("base64"), updates: [], now: 0 }) });
   assert.equal(oversizedBundle.status, 400);
   assert.match(oversizedBundle.body.toString(), /limit_exceeded/);
+  // The header's object list is only the sender's claim; the object lines are
+  // what would be stored. A header that declares none cannot smuggle the same
+  // objects past the bound.
+  const [format, rawHeader, ...objectLines] = exportBundle(repository.objects, repository.refs, []).toString("utf8").split("\n");
+  const understated = [format, JSON.stringify({ ...(JSON.parse(rawHeader) as Record<string, unknown>), objects: [] }), ...objectLines].join("\n");
+  const smuggled = await rawRequest(server, `/${name}/push`, { body: JSON.stringify({ bundle: Buffer.from(understated, "utf8").toString("base64"), updates: [], now: 0 }) });
+  assert.equal(smuggled.status, 400);
+  assert.match(smuggled.body.toString(), /limit_exceeded/);
   assert.equal((await rawRequest(server, `/${name}/publish`, { body: JSON.stringify({ updates: [], now: 0 }) })).status, 200);
   assert.throws(() => startRepositoryServer({ root: tempRoot(), host: "127.0.0.1", port: 0, limits: { ...DEFAULT_SERVE_LIMITS, maxSessions: 0 } }), { code: "bad_limits" });
   await assert.rejects(startRepositoryServer({ root: tempRoot(), host: "127.0.0.1", port: server.port }), { code: "EADDRINUSE" });
