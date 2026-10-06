@@ -697,6 +697,27 @@ test("merging native history preserves the raw base through subsequent merges", 
 });
 
 
+test("unterminated history line edits use ordinary content merge instead of append union", () => {
+  const repo = Repository.init(tempRoot());
+  const base = '{"ts":"1"}';
+  const joined = base + '{"ts":"2"}\n';
+  const separated = base + '\n{"ts":"3"}\n';
+  const blob = (text: string): string => repo.objects.write("blob", Buffer.from(text));
+  const context = { store: repo.objects, config: repo.config, committer: SIGNATURE };
+  for (const [ours, theirs] of [[joined, separated], [separated, joined], [joined, joined], [joined, base]]) {
+    const expected = mergeContent(base, ours, theirs);
+    const result = mergePath(context, ".agents/pm/history/example.jsonl", blob(base), blob(ours), blob(theirs));
+    assert.equal(repo.objects.readTyped(result.id, "blob").toString("utf8"), expected.text);
+    assert.equal(result.conflict?.reason, expected.clean ? undefined : "content");
+  }
+  // Exact, unterminated sides still preserve the base and accept separated appends.
+  for (const [ours, theirs] of [[base, base], [base, separated], [separated, base]]) {
+    const result = mergePath(context, ".agents/pm/history/example.jsonl", blob(base), blob(ours), blob(theirs));
+    assert.equal(result.conflict, undefined);
+    assert.equal(repo.objects.readTyped(result.id, "blob").toString("utf8"), ours === theirs ? base : separated);
+  }
+});
+
 test("an earlier appended timestamp never moves an event ahead of the base", () => {
   const base = ['{"at":"9","event":"base"}'];
   const early = '{"at":"0","event":"early"}';

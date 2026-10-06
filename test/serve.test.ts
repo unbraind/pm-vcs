@@ -34,6 +34,7 @@ import {
   splitServedPath,
 } from "../engine/http-protocol.ts";
 import { Repository } from "../engine/repo.ts";
+import { ServedRepositoryDirectories } from "../engine/served-repositories.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const handles: Array<{ root: string; cleanup(): void }> = [];
@@ -307,6 +308,39 @@ test("every refusal a caller may not learn from answers with the same bytes", as
   // URL seemed to name was never opened.
   assert.equal(tenantA.refs.read("refs/heads/main") !== null, true);
   assert.equal(tenantB.refs.read("refs/heads/main") !== null, true);
+});
+
+test("unauthenticated and out-of-scope requests never refresh the real catalogue", async (t) => {
+  const prototype = ServedRepositoryDirectories.prototype as unknown as { refresh(): void };
+  const refresh = prototype.refresh;
+  let refreshes = 0;
+  prototype.refresh = function (): void {
+    refreshes += 1;
+    refresh.call(this);
+  };
+  t.after(() => { prototype.refresh = refresh; });
+  const grants = new TokenGrants([
+    { token: "reader", repository: "repo", access: "read" },
+    { token: "missing-reader", repository: "unknown", access: "read" },
+  ]);
+  const { server } = await serveRoot({ grants });
+  assert.equal(refreshes, 1, "startup performs a real filesystem scan");
+  // Open the real catalogue's refresh window, without mocking filesystem I/O.
+  await new Promise((resolve) => { setTimeout(resolve, 1_100); });
+  for (const [path, authorization] of [
+    ["/unknown/advertise", undefined],
+    ["/unknown/advertise", "Bearer invalid"],
+    ["/unknown/advertise", "Bearer reader"],
+    ["/repo/advertise", undefined],
+  ] as const) {
+    const denied = await rawRequest(server, path, { authorization, body: "{}" });
+    assert.equal(denied.status, DENIED_STATUS);
+    assert.ok(denied.body.equals(DENIED_BODY));
+    assert.equal(refreshes, 1, "a denial cannot scan the served filesystem");
+  }
+  const authorized = await rawRequest(server, "/unknown/advertise", { authorization: "Bearer missing-reader", body: "{}" });
+  assert.equal(authorized.status, DENIED_STATUS);
+  assert.equal(refreshes, 2, "an authorized miss still performs a real refresh");
 });
 
 test("a read grant may fetch but not write, and the refusal names the token not the repository", async () => {

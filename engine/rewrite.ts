@@ -169,8 +169,10 @@ export function mergePath(
   const theirText = theirObject.payload.toString("utf8");
   // Native PM event histories are append-only; preserve both agents' events.
   // A rewritten prefix keeps ordinary conflict handling rather than hiding edits.
+  const keepsBaseLines = (text: string): boolean => text.startsWith(baseText)
+    && (baseText.length === 0 || baseText.endsWith("\n") || text.length === baseText.length || text[baseText.length] === "\n");
   if (/^\.agents\/pm\/history\/[^/]+\.jsonl$/.test(path)
-    && ourText.startsWith(baseText) && theirText.startsWith(baseText)) {
+    && keepsBaseLines(ourText) && keepsBaseLines(theirText)) {
     const baseLines = baseText.split("\n");
     const lines = mergeAppendOnlyLog(baseLines, ourText.split("\n"), theirText.split("\n"), "ts");
     const appended = lines.slice(baseLines.length);

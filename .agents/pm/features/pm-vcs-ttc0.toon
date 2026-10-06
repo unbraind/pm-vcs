@@ -1,16 +1,16 @@
 id: pm-vcs-ttc0
 title: Served repository over the Phase 3 transport
-description: "Serve one repository or a directory of repositories through the existing async Phase 3 transport over node:http. Includes ref advertisement, verified fetch/upload, atomic push/publication, standalone series object download, review records, HTTP(S) client clone/fetch/push and capability negotiation. Real socket, packed Node/Bun and multi-process PM record acceptance evidence is linked in comments and tests. Implementation awaits orchestrator closure after final release gates."
+description: "Serve one repository or a directory of repositories through the existing async Phase 3 transport over node:http. Includes ref advertisement, verified fetch/upload, atomic push/publication, standalone series object download, review records, HTTP(S) client clone/fetch/push and capability negotiation. Unauthenticated serving is read-only by default and permits writes only when --allow-unauthenticated-writes is set. Real socket, packed Node/Bun and multi-process PM record acceptance evidence is linked in comments and tests. Implementation awaits orchestrator closure after final release gates."
 type: Feature
 status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:10.824Z"
-updated_at: "2026-10-06T12:04:49.072Z"
+updated_at: "2026-10-06T13:07:57.051Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:38.277Z",claude,"cli:update:dep",detected
-comments[28]{created_at,author,text}:
+comments[32]{created_at,author,text}:
   "2026-08-28T20:11:18.880Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no served-forge implementation or passing acceptance evidence for this child, so it remains open with its written specification."
   "2026-09-12T23:35:51.054Z",pi-agent,"Audit 2026-09-13: EXISTS — engine/transport.ts implements the Phase 3 transport with FileTransport, push/pull, capability negotiation, and object transfer. REMAINS — no served repository exposing refs, objects and series over the transport. The transport is used for peer-to-peer sync, not for serving a repository. The description says spec only."
   "2026-10-05T06:14:06.813Z",pi-glm,"Design for the served repository, reusing engine/transport.ts rather than forking it. The Transport interface stays the single boundary: its methods become async (a wire is asynchronous, a filesystem is not, and the interface was written so the algorithm does not care), FileTransport keeps every policy - fast-forward, force, compare-and-swap publication, verified arrival - and the HTTP server delegates every repository operation to a FileTransport opened on the repository directory under --root. Wire: POST <base>/advertise|fetch|push|objects/missing|objects/upload|publish, JSON envelopes with base64 payloads, error body {code,message} mapped back to ObjectStoreError so refusals read identically to a file remote. Client: HttpTransport implements the same interface, so clone/fetch/push/remote-add work unchanged through openTransport; the bearer token travels in the remote URL's userinfo. Resumable uploads keep their connection identity: the server holds one FileTransport per upload session, so publish reports exactly what that session delivered. Series and review records ride the same object paths: records are tree-reachable, series objects transfer through the verified-arrival upload path. Tenancy: bearer tokens scoped per repository (read/write); every pre-authorization failure - missing repo, wrong tenant, bad token, path traversal - answers with one byte-identical 404 denial; body sizes, object counts and session counts are bounded."
@@ -39,11 +39,16 @@ comments[28]{created_at,author,text}:
   "2026-10-06T11:19:36.537Z",codex-sol,"npm run release:check passes at merge commit d83c970: 866 tests, zero failures or skips; every authored source file reaches 100/100/100/100; typecheck, build/test build, lint, zero duplication, 253 docstrings, native TOON, installed-CLI stat-cache, self-host, production/identity audits, pack, changelog and release metadata checks pass. Native Bun focused validation passes 78 tests. Residual catalogue-precedence ambiguity is tracked in pm-vcs-w3yi: a nested objects repository shadows the parent objects/fetch endpoint; an explicit wire address is follow-up scope. PM test-result tracking is disabled and the none/source runner combination was refused before execution, so direct gate logs and this comment provide the measured result. Commit these final receipts and the follow-up with the regenerated bundle, then run both npm and Bun release:check at that exact final head without further source or tracker writes."
   "2026-10-06T11:54:10.396Z",claude-orchestrator,"Greptile P1 4183773309 (holdResponse failure stops serving) was still open after the CodeRabbit round: a throwing/rejecting hook skipped response.end and escaped as an unhandled rejection from the void-ed handler. Fix: engine/serve.ts catches hook failures and still writes the decided answer. Regression test test/served-sync.test.ts 'a throwing or rejecting holdResponse hook never withholds the decided answer' (bounded 5s client) fails on revert with 'monitor failed synchronously' and passes with the fix."
   "2026-10-06T12:04:49.072Z",claude-orchestrator,"Greptile re-review (f89236a) 3 P2s, all valid and fixed: (1) push object bound counted header.objects (sender's claim) instead of parsed object lines — a header with objects:[] smuggled any number past maxUploadObjects; serve.ts now counts parseBundle().lines; test/serve.test.ts 'object counts are bounded' got an understated-header case (200 before fix, 400 limit_exceeded after). (2) 'remote add' alias swallowed a remote literally named add (two-arg add and --remove); alias now only applies to the exact 3-arg shape without --remove; served-sync test adds+removes a remote named add (fails on revert). (3) README line 320 said unauthenticated serve is writable; now states read-only unless --allow-unauthenticated-writes."
-files[20]{path,scope}:
+  "2026-10-06T12:54:33.839Z",codex-sol,"Review round 3: read all five CodeRabbit findings in review 5428243761; no Greptile root inline comments after 2026-10-06T12:16Z were returned. All findings are valid. Plan: scope preflight before catalogue lookup while preserving deepest catalogued repository precedence, clear orphaned credentials before registering a credential-free remote, require a final line boundary for history append unions, and document proxy Host plus unauthenticated read-only defaults. Add real-catalogue refresh-count and merge/credential regressions, prove failures with each fix reverted, then run both release gates."
+  "2026-10-06T12:56:12.399Z",codex-sol,"All three regression tests failed on the unchanged engine before fixes and now pass in Node and native Bun (63/63 per runtime). Names: unauthenticated and out-of-scope requests never refresh the real catalogue; a credential-free remote never inherits an orphaned token for its name; unterminated history line edits use ordinary content merge instead of append union. The refresh spy wraps the real catalogue scan, uses real sockets and filesystem I/O, waits for the refresh window, and confirms an authorized miss still refreshes. Scope preflight preserves existing deepest-catalogue precedence and its denial test. TLS proxy guidance is docs-only to avoid broadening accepted authorities. Tracker description now states the read-only default."
+  "2026-10-06T12:57:46.721Z",codex-sol,"The linked test runner completed both new commands through pm test pm-vcs-ttc0 --run --match test/remotes.test.ts --progress: each runtime passed 63 tests. Result tracking is disabled, so this comment records the measured outcomes without changing project policy. npm run check and npm run docstring pass: no duplicates, all 253 declarations documented. Full coverage is running; the npm and Bun release checks will be repeated after committing the regenerated self-host bundle."
+  "2026-10-06T13:07:55.098Z",codex-sol,"Round 3 coverage passes: 870/870 tests, zero failures/skips, 100/100/100/100 across the all-source c8 inventory (root, engine and scripts). This includes packed Node and Bun CLI acceptance and real multi-process PM merges. All three code regressions also fail independently with their corresponding engine file reverted and pass once restored. Dispositions: 4195172122 fixed with scope preflight before any catalogue access for callers without a candidate grant, retaining deepest-catalogue precedence; 4195172060 fixed by clearing saved credentials before adding a credential-free URL; 4195172101 fixed by checking both final line boundaries before append union; 4195172137 fixed with bound-address:port proxy Host guidance (docs only); 4195172039 fixed via pm update description. No finding declined. Existing ambiguous parent/nested object endpoints remain tracked by pm-vcs-w3yi. Finalize PM writes and release claim, regenerate changelog then self-host bundle, commit once, and run npm run changelog:check && npm run accept:self-host plus npm run release:check and bun run release:check at that final head before pushing, with no further source or tracker writes if green."
+files[22]{path,scope}:
   engine/http-protocol.ts,project
   engine/http-transport.ts,project
   engine/ignore.ts,project
   engine/records.ts,project
+  engine/remotes.ts,project
   engine/rewrite.ts,project
   engine/serve.ts,project
   engine/served-repositories.ts,project
@@ -52,6 +57,7 @@ files[20]{path,scope}:
   test/cdc-benchmark.test.ts,project
   test/helpers/serve-worker.ts,project
   test/ignore.test.ts,project
+  test/remotes.test.ts,project
   test/review-findings.test.ts,project
   test/serve.test.ts,project
   test/served-acceptance.test.ts,project
@@ -60,7 +66,7 @@ files[20]{path,scope}:
   test/served-sync.test.ts,project
   test/sync.test.ts,project
   vcs-commands.ts,project
-tests[11]:
+tests[13]:
   - command: node --test test/served-acceptance.test.ts
     scope: project
     provenance:
@@ -140,6 +146,20 @@ tests[11]:
     provenance:
       author: claude-orchestrator
       created_at: "2026-10-06T11:54:10.915Z"
+      source_kind: local_mutation
+      source_ref: feat/served-repository-http
+  - command: node --test test/serve.test.ts test/remotes.test.ts test/review-findings.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T12:56:11.301Z"
+      source_kind: local_mutation
+      source_ref: feat/served-repository-http
+  - command: bun test test/serve.test.ts test/remotes.test.ts test/review-findings.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T12:56:11.828Z"
       source_kind: local_mutation
       source_ref: feat/served-repository-http
 docs[1]{path,scope}:

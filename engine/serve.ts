@@ -629,9 +629,15 @@ async function routeServedRequest(
     const body = await readBoundedBody(request, context.limits.maxBodyBytes);
     return { response: await dispatchServedRequest(served, addressed.endpoint, body, context), addressed };
   }
-  const addressed = catalogueCandidate(candidates, context) ?? candidates[0];
   const token = bearerToken(request.headers.authorization) ?? "";
-  const access = context.grants.scope(token, addressed.repository);
+  const grants = context.grants;
+  // Refuse callers with no candidate in scope before any filesystem work.
+  // After preflight, retain deepest catalogue precedence for ambiguous paths.
+  if (!candidates.some((candidate) => grants.scope(token, candidate.repository) !== null)) {
+    return { response: denial(), addressed: null };
+  }
+  const addressed = catalogueCandidate(candidates, context) ?? candidates[0];
+  const access = grants.scope(token, addressed.repository);
   if (access === null) return { response: denial(), addressed };
   const served = openServedRepository(context, addressed.repository);
   if (served === null) return { response: denial(), addressed };
@@ -643,7 +649,7 @@ async function routeServedRequest(
 }
 
 /**
- * The candidate a request addresses, resolved by catalogue before authorization.
+ * The candidate a request addresses, resolved by catalogue after scope preflight.
  *
  * The repository the caller means is the one
  * the root actually serves: a name that also reads as an endpoint suffix —

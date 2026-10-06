@@ -43,6 +43,20 @@ test("read returns null for a name that is not configured", () => {
   assert.equal(fresh().store.read("origin"), null);
 });
 
+test("a credential-free remote never inherits an orphaned token for its name", () => {
+  const { store, path } = fresh();
+  store.add("origin", "https://old-secret@old.example/repo");
+  store.add("upstream", "https://other-secret@upstream.example/repo");
+  // Recreate interruption between remove's remote and credential writes.
+  writeFileSync(path, JSON.stringify({ upstream: "https://upstream.example/repo" }));
+  assert.equal(store.token("origin"), "old-secret");
+  store.add("origin", "https://new.example/repo");
+  const reopened = new RemoteStore(path);
+  assert.equal(reopened.require("origin").url, "https://new.example/repo");
+  assert.equal(reopened.token("origin"), null);
+  assert.equal(reopened.token("upstream"), "other-secret");
+});
+
 test("require names the configured remotes when the one asked for is absent", () => {
   const { store } = fresh();
   assert.throws(() => store.require("origin"), (error: ObjectStoreError) => {

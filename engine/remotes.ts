@@ -194,6 +194,7 @@ export class RemoteStore {
     const split = splitRemoteCredentials(parseRemote(name, url).url);
     const remote = { name, url: split.url };
     if (split.token !== null) this.storeToken(name, split.token);
+    else this.clearToken(name);
     this.write([...remotes, remote]);
     return remote;
   }
@@ -214,6 +215,11 @@ export class RemoteStore {
       throw new ObjectStoreError("unknown_remote", `No remote named ${name} to remove.`);
     }
     this.write(remotes.filter((remote) => remote.name !== name));
+    this.clearToken(name);
+  }
+
+  /** Clear a saved secret before a new credential-free remote can inherit it. */
+  private clearToken(name: string): void {
     const credentials = readCredentials(this.credentialsPath);
     if (Object.hasOwn(credentials, name)) {
       delete credentials[name];

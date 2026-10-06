@@ -320,8 +320,12 @@ with the receipts, refused publications included. Tokens load at startup and
 require a restart to rotate. Without `--auth`, served repositories are read-only unless
 `--allow-unauthenticated-writes` is passed.
 Keep the default loopback binding for local use; use TLS termination when carrying bearer
-tokens beyond loopback. Token-bearing remote URLs are sensitive local configuration; do not
-publish them. Client connection errors redact credentials and redirects are refused.
+tokens beyond loopback. The TLS-terminating proxy must forward `Host` as the bound server
+address and port, for example nginx `proxy_set_header Host 127.0.0.1:<port>;` for a loopback
+bind. Replace `<port>` with the server's listening port; forwarding the public hostname
+instead fails host validation and returns the fixed denial. Token-bearing remote URLs are
+sensitive local configuration; do not publish them. Client connection errors redact
+credentials and redirects are refused.
 
 ---
 
@@ -337,10 +341,13 @@ The command reports the chosen ephemeral port and runs until stopped. A reposito
 as `--root` is available at the base URL. A parent root exposes its repositories by relative
 name, including nested names such as `tenant/project`. At startup the server enumerates
 repository directories into a catalogue of canonical names and real paths. Requests resolve
-only by exact catalogue lookup; request text is never joined into a filesystem path. A request
+only by exact catalogue lookup; request text is never joined into a filesystem path. With
+authentication enabled, requests without any candidate repository in scope are denied before
+catalogue access. A request
 path that also reads as an endpoint — `tenant/objects/fetch` is either the repository
 `tenant/objects` with endpoint `fetch` or the repository `tenant` with endpoint `objects/fetch` —
-resolves by catalogue lookup first, so a repository whose name shares a segment with an
+resolves by catalogue lookup followed by the selected repository's scope check, so a
+repository whose name shares a segment with an
 endpoint suffix is reachable under its own name. An
 authorized lookup of an unknown name triggers at most one rescan per second. Each scan
 examines at most 10,000 directory entries and descends at most 32 levels; repositories beyond
