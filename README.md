@@ -308,7 +308,7 @@ readable. Traversal spellings, symlink repository/control aliases and linked ins
 refused. Operators own the served filesystem: this is a repository authorization boundary,
 not protection against an operator changing the filesystem during a request.
 
-Requests are limited to 512 MiB, 10,000 fetch refs or ref updates, 100,000 haves or objects,
+Requests are limited to 512 MiB on write endpoints and 16 MiB on read endpoints, 10,000 fetch refs or ref updates, 100,000 haves or objects,
 and 4,096 upload sessions per repository. Old sessions are evicted; objects remain available
 for retry, but an evicted session loses its delivery receipt. Upload sessions are also bounded
 cumulatively — 1,000,000 accepted objects and 4 GiB of decoded object bytes between publications,

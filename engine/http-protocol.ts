@@ -251,8 +251,15 @@ export function isLoopbackHostname(hostname: string): boolean {
  * refusal left the repository untouched.
  */
 export interface ServeLimits {
-  /** Maximum bytes of one request body. */
+  /** Maximum bytes of one request body on a write endpoint (push, upload, publish). */
   readonly maxBodyBytes: number;
+  /**
+   * Maximum bytes of one request body on a read endpoint. Reads carry only ref
+   * names and object ids, so they never need the push-sized bound; an open
+   * read-only server would otherwise buffer and parse several 512 MiB bodies.
+   * The effective read bound is the smaller of this and `maxBodyBytes`.
+   */
+  readonly maxReadBodyBytes: number;
   /** Maximum refs one fetch may name. */
   readonly maxFetchRefs: number;
   /** Maximum haves one fetch may offer. */
@@ -272,6 +279,8 @@ export interface ServeLimits {
 /** The bounds a served repository applies when the caller configures none. */
 export const DEFAULT_SERVE_LIMITS: ServeLimits = {
   maxBodyBytes: 512 * 1024 * 1024,
+  // The largest legal read is ~10 MB: 10,000 refs plus 100,000 64-hex haves.
+  maxReadBodyBytes: 16 * 1024 * 1024,
   maxFetchRefs: 10_000,
   maxFetchHaves: 100_000,
   maxUpdates: 10_000,

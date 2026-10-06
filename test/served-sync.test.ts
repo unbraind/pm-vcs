@@ -638,12 +638,16 @@ test("real responders with malformed successful envelopes fail closed", async ()
   const wire = new HttpTransport(`http://127.0.0.1:${address.port}/repo`);
   try {
     const advertisement = { refs: [], head: null, config: {}, formatVersion: "1", capabilities: [] };
-    for (const malformed of [null, [], {}, { ...advertisement, refs: [null] }, { ...advertisement, refs: [[]] }, { ...advertisement, refs: [{}] }, { ...advertisement, refs: [{ name: "main", target: 1 }] }, { ...advertisement, head: 1 }, { ...advertisement, config: null }, { ...advertisement, config: [] }, { ...advertisement, config: "bad" }, { ...advertisement, formatVersion: 1 }, { ...advertisement, capabilities: [1] }]) {
+    for (const malformed of [null, [], {}, { ...advertisement, refs: [null] }, { ...advertisement, refs: [[]] }, { ...advertisement, refs: [{}] }, { ...advertisement, refs: [{ name: "main", target: 1 }] }, { ...advertisement, head: 1 }, { ...advertisement, config: null }, { ...advertisement, config: [] }, { ...advertisement, config: "bad" }, { ...advertisement, config: { recordPaths: "x" } }, { ...advertisement, config: { recordPolicy: [] } }, { ...advertisement, formatVersion: 1 }, { ...advertisement, capabilities: [1] }]) {
       answer = malformed;
       await assert.rejects(wire.advertise(), { code: "unreachable_remote" });
     }
     answer = { ...advertisement, refs: [{ name: "refs/heads/main", target: "a".repeat(64) }], head: "refs/heads/main" };
-    assert.equal((await wire.advertise()).refs.length, 1);
+    const advertised = await wire.advertise();
+    assert.equal(advertised.refs.length, 1);
+    // Clone stores the advertised config verbatim, so an empty one arrives
+    // normalized with its defaults rather than missing recordPaths.
+    assert.deepEqual(advertised.config.recordPaths, []);
     for (const malformed of [null, {}, { missing: [1] }]) {
       answer = malformed;
       await assert.rejects(wire.missingObjects([]), { code: "unreachable_remote" });

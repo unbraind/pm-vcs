@@ -626,7 +626,7 @@ async function routeServedRequest(
     if (mutating && !context.unauthenticatedWrites) return { response: { status: FORBIDDEN_STATUS, body: READONLY_BODY, contentType: JSON_CONTENT_TYPE }, addressed: null };
     const served = openServedRepository(context, addressed.repository);
     if (served === null) return { response: denial(), addressed };
-    const body = await readBoundedBody(request, context.limits.maxBodyBytes);
+    const body = await readBoundedBody(request, mutating ? context.limits.maxBodyBytes : Math.min(context.limits.maxBodyBytes, context.limits.maxReadBodyBytes));
     return { response: await dispatchServedRequest(served, addressed.endpoint, body, context), addressed };
   }
   const token = bearerToken(request.headers.authorization) ?? "";
@@ -644,7 +644,7 @@ async function routeServedRequest(
   if (mutating && access !== "write") {
     return { response: { status: FORBIDDEN_STATUS, body: FORBIDDEN_BODY, contentType: JSON_CONTENT_TYPE }, addressed };
   }
-  const body = await readBoundedBody(request, context.limits.maxBodyBytes);
+  const body = await readBoundedBody(request, mutating ? context.limits.maxBodyBytes : Math.min(context.limits.maxBodyBytes, context.limits.maxReadBodyBytes));
   return { response: await dispatchServedRequest(served, addressed.endpoint, body, context), addressed };
 }
 

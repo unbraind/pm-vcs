@@ -11,6 +11,8 @@ import { parseBundle } from "./bundle.ts";
 
 import { randomBytes } from "node:crypto";
 
+import { parseConfig, type RepositoryConfig } from "./config.ts";
+
 import { type ObjectId, isObjectId, ObjectStoreError } from "./objects.ts";
 import type { Advertisement, PushReceipt, PushUpdate, TransferObject, Transport } from "./transport.ts";
 import {
@@ -196,13 +198,25 @@ export class HttpTransport implements Transport {
         `${this.url} advertised itself with a shape this build cannot read. Check the remote's URL, or whether the server is a served repository.`,
       );
     }
+    // Clone stores the advertised config verbatim, so it is normalized and
+    // validated here exactly as a config read from disk would be: `{}` gains
+    // its defaults, and a malformed field is refused before anything is cloned.
+    let normalized: RepositoryConfig;
+    try {
+      normalized = parseConfig(config);
+    } catch (error) {
+      throw new ObjectStoreError(
+        "unreachable_remote",
+        `${this.url} advertised a repository configuration this build cannot use: ${(error as Error).message}`,
+      );
+    }
     return {
       refs: refs.map((entry) => {
         const record = entry as Record<string, unknown>;
         return { name: record.name as string, target: record.target as string };
       }),
       head,
-      config: config as Advertisement["config"],
+      config: normalized,
       formatVersion,
       capabilities: capabilities as readonly string[],
     };

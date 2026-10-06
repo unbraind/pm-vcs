@@ -370,7 +370,7 @@ test("a read grant may fetch but not write, and the refusal names the token not 
 
 test("a body past the bound is refused with nothing buffered or stored", async () => {
   const { server, repository } = await serveRoot({
-    limits: { maxBodyBytes: 512, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2, maxSessionObjects: 8, maxSessionBytes: 1024 * 1024 },
+    limits: { maxBodyBytes: 512, maxReadBodyBytes: 512, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2, maxSessionObjects: 8, maxSessionBytes: 1024 * 1024 },
   });
   const name = repository.root.slice(join(repository.root, "..").length + 1);
   const before = repository.refs.read("refs/heads/main");
@@ -444,7 +444,7 @@ test("a body past the bound is refused with nothing buffered or stored", async (
 
 test("an upload session is bounded and its oldest eviction reports an empty receipt, not a lost one", async () => {
   const { server, repository } = await serveRoot({
-    limits: { maxBodyBytes: 1024 * 1024, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 100, maxSessions: 1, maxSessionObjects: 100, maxSessionBytes: 1024 * 1024 },
+    limits: { maxBodyBytes: 1024 * 1024, maxReadBodyBytes: 1024 * 1024, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 100, maxSessions: 1, maxSessionObjects: 100, maxSessionBytes: 1024 * 1024 },
   });
   const name = repository.root.slice(join(repository.root, "..").length + 1);
   const tip = repository.refs.read("refs/heads/main");
@@ -480,7 +480,7 @@ test("one reused upload session's receipts are bounded cumulatively and released
   // end without the cumulative charge.
   const { server, repository } = await serveRoot({
     limits: {
-      maxBodyBytes: 1024 * 1024, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 4, maxSessions: 4,
+      maxBodyBytes: 1024 * 1024, maxReadBodyBytes: 1024 * 1024, maxFetchRefs: 4, maxFetchHaves: 4, maxUpdates: 2, maxUploadObjects: 4, maxSessions: 4,
       maxSessionObjects: 3, maxSessionBytes: 24,
     },
   });
@@ -633,6 +633,27 @@ test("new nested repositories are discovered on a bounded miss and replaced path
   assert.equal(privateRepository.refs.read("refs/heads/main"), privateTip);
 });
 
+test("read endpoints get their own small body bound while writes keep the push-sized one", async () => {
+  // An open read-only server must not buffer and parse push-sized bodies on
+  // endpoints that only ever carry ref names and object ids.
+  const { server, repository } = await serveRoot({
+    limits: { ...DEFAULT_SERVE_LIMITS, maxBodyBytes: 1024 * 1024, maxReadBodyBytes: 1024 },
+    unauthenticatedWrites: true,
+  });
+  const name = repository.root.slice(join(repository.root, "..").length + 1);
+  const padded = (fields: Record<string, unknown>): string => JSON.stringify({ ...fields, padding: "x".repeat(2048) });
+  for (const endpoint of ["fetch", "objects/missing", "objects/fetch", "advertise"]) {
+    const read = await rawRequest(server, `/${name}/${endpoint}`, { body: padded({ refs: [], haves: [], ids: [] }) });
+    assert.equal(read.status, 413, endpoint);
+    assert.match(read.body.toString("utf8"), /body_too_large/);
+  }
+  // The same 2 KiB on a write endpoint passes the bound and reaches the
+  // request validation behind it.
+  const write = await rawRequest(server, `/${name}/publish`, { body: padded({ updates: [], now: 0 }) });
+  assert.notEqual(write.status, 413);
+  assert.doesNotMatch(write.body.toString("utf8"), /body_too_large/);
+});
+
 test("a refused streaming body loses its connection instead of holding the slot", async () => {
   // A sender told "send less" must not keep its socket by streaming forever:
   // after the 413 the server stops reading and the connection ends while the
@@ -659,7 +680,7 @@ test("a refused streaming body loses its connection instead of holding the slot"
 });
 
 test("all operation envelopes and object counts are bounded before publication", async () => {
-  const { server, repository } = await serveRoot({ limits: { maxBodyBytes: 4096, maxFetchRefs: 2, maxFetchHaves: 2, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2, maxSessionObjects: 8, maxSessionBytes: 4096 } });
+  const { server, repository } = await serveRoot({ limits: { maxBodyBytes: 4096, maxReadBodyBytes: 4096, maxFetchRefs: 2, maxFetchHaves: 2, maxUpdates: 2, maxUploadObjects: 2, maxSessions: 2, maxSessionObjects: 8, maxSessionBytes: 4096 } });
   const name = repository.root.slice(join(repository.root, "..").length + 1);
   const id = "a".repeat(64);
   for (const [endpoint, body] of [
