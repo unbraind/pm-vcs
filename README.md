@@ -346,9 +346,10 @@ authentication enabled, requests without any candidate repository in scope are d
 catalogue access. A request
 path that also reads as an endpoint — `tenant/objects/fetch` is either the repository
 `tenant/objects` with endpoint `fetch` or the repository `tenant` with endpoint `objects/fetch` —
-resolves by catalogue lookup followed by the selected repository's scope check, so a
-repository whose name shares a segment with an
-endpoint suffix is reachable under its own name. An
+resolves among the candidates the token is in scope for (every candidate without
+`--auth`), and the deepest catalogued one wins. A repository whose name shares a segment
+with an endpoint suffix is therefore reachable under its own name, and an out-of-scope
+nested repository never changes the answer to an in-scope parent. An
 authorized lookup of an unknown name triggers at most one rescan per second. Each scan
 examines at most 10,000 directory entries and descends at most 32 levels; repositories beyond
 those bounds receive the same denial as unknown names. Use a narrower root for larger trees.
