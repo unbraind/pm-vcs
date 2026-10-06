@@ -18,6 +18,7 @@ import { resolve } from "node:path";
 
 import { parseBundle } from "./bundle.ts";
 import { ObjectStoreError } from "./objects.ts";
+import { BRANCH_PREFIX, TAG_PREFIX } from "./refs.ts";
 import { FileTransport } from "./transport.ts";
 import { isServableRepositoryDirectory, ServedRepositoryDirectories } from "./served-repositories.ts";
 import {
@@ -846,6 +847,14 @@ async function dispatchServedRequest(
     if (fetchRequest === null) throw new ObjectStoreError("bad_request", "The fetch request does not hold a well-formed ref and have list.");
     if (fetchRequest.refs.length > limits.maxFetchRefs) throw limitExceeded(`A fetch may name at most ${limits.maxFetchRefs} refs.`);
     if (fetchRequest.haves.length > limits.maxFetchHaves) throw limitExceeded(`A fetch may offer at most ${limits.maxFetchHaves} haves.`);
+    // Ref names resolve under the control directory, so anything outside the
+    // published branch and tag namespaces (config.json, HEAD, the oplog,
+    // remote-tracking refs) is refused before it is read. Pushes already
+    // carry the same rule. Checked after the count bounds, so an oversized
+    // list is refused without being scanned.
+    if (fetchRequest.refs.some((ref) => !ref.startsWith(BRANCH_PREFIX) && !ref.startsWith(TAG_PREFIX))) {
+      throw new ObjectStoreError("bad_request", "A fetch may name only branch and tag refs.");
+    }
     const bundle = await served.transport().fetch(fetchRequest.refs, fetchRequest.haves);
     return { status: 200, body: bundle, contentType: BUNDLE_CONTENT_TYPE };
   }

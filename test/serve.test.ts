@@ -633,6 +633,24 @@ test("new nested repositories are discovered on a bounded miss and replaced path
   assert.equal(privateRepository.refs.read("refs/heads/main"), privateTip);
 });
 
+test("fetch names only branch and tag refs, so control files never answer as refs", async () => {
+  // A ref name resolves under the control directory; without a refs/ prefix
+  // rule, "config.json" was read as a ref and its bytes came back in the
+  // corrupt_ref error on an open server.
+  const { server, repository } = await serveRoot();
+  const name = repository.root.slice(join(repository.root, "..").length + 1);
+  for (const ref of ["config.json", "HEAD", "oplog.jsonl", "refs/../config.json", "refs/remotes/origin/main", "refs/heads/../../config.json"]) {
+    const answer = await rawRequest(server, `/${name}/fetch`, { body: JSON.stringify({ refs: [ref], haves: [] }) });
+    assert.equal(answer.status, 400, ref);
+    // A traversal is already refused by ref-name validation; everything else
+    // by the namespace rule. Either way no control-file bytes come back.
+    assert.match(answer.body.toString("utf8"), /bad_request|invalid_ref_name/);
+    assert.doesNotMatch(answer.body.toString("utf8"), /recordPaths|recordPolicy|formatVersion/);
+  }
+  const branch = await rawRequest(server, `/${name}/fetch`, { body: JSON.stringify({ refs: ["refs/heads/main"], haves: [] }) });
+  assert.equal(branch.status, 200);
+});
+
 test("read endpoints get their own small body bound while writes keep the push-sized one", async () => {
   // An open read-only server must not buffer and parse push-sized bodies on
   // endpoints that only ever carry ref names and object ids.
