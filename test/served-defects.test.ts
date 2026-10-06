@@ -10,8 +10,14 @@ import { pmExecutable, withoutPmContext, npmPackArguments, npmPackExecutable } f
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
+const bunAvailable = spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
 for (const runtime of [process.execPath, "bun"]) {
-  test(`packed global served CLI protects secrets and merges real updates (${runtime === "bun" ? "bun" : "node"})`, { timeout: 240_000 }, async () => {
+  // Bun is a required runtime where CI runs, so a missing Bun there must fail
+  // rather than skip. Everywhere else the Node-only development setup keeps
+  // working: the Bun case skips with a reason, the Node case always runs.
+  const skip = runtime === "bun" && !bunAvailable && process.env.CI === undefined ? "bun is not installed" : false;
+  test(`packed global served CLI protects secrets and merges real updates (${runtime === "bun" ? "bun" : "node"})`, { timeout: 240_000, skip }, async () => {
+    if (runtime === "bun") assert.ok(bunAvailable, "Bun is required on CI");
     const fixture = makeTempDir();
     const secret = "regression-bearer-secret";
     const password = "regression-password-secret";
@@ -100,3 +106,20 @@ for (const runtime of [process.execPath, "bun"]) {
     } finally { await server?.close(); rmSync(fixture.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
   });
 }
+
+
+test("missing Bun skips locally and fails explicitly on CI", () => {
+  const fixture = makeTempDir();
+  try {
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: fixture.root };
+    delete env.CI;
+    delete env.NODE_TEST_CONTEXT;
+    const args = ["--test", "--test-reporter=tap", "--test-name-pattern=^packed global.*\\(bun\\)$", import.meta.filename];
+    const local = spawnSync(process.execPath, args, { env, encoding: "utf8" });
+    assert.equal(local.status, 0, local.stderr);
+    assert.match(local.stdout, /SKIP bun is not installed/);
+    const ci = spawnSync(process.execPath, args, { env: { ...env, CI: "true" }, encoding: "utf8" });
+    assert.equal(ci.status, 1);
+    assert.match(ci.stdout, /Bun is required on CI/);
+  } finally { fixture.cleanup(); }
+});

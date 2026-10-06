@@ -171,8 +171,13 @@ export function mergePath(
   // A rewritten prefix keeps ordinary conflict handling rather than hiding edits.
   if (/^\.agents\/pm\/history\/[^/]+\.jsonl$/.test(path)
     && ourText.startsWith(baseText) && theirText.startsWith(baseText)) {
-    const lines = mergeAppendOnlyLog(baseText.split("\n"), ourText.split("\n"), theirText.split("\n"), "ts");
-    return { id: ctx.store.write("blob", Buffer.from(`${lines.join("\n")}\n`, "utf8")) };
+    const baseLines = baseText.split("\n");
+    const lines = mergeAppendOnlyLog(baseLines, ourText.split("\n"), theirText.split("\n"), "ts");
+    const appended = lines.slice(baseLines.length);
+    // Preserve the agreed prefix byte for byte, including whitespace and blanks.
+    const separator = baseText.length > 0 && !baseText.endsWith("\n") ? "\n" : "";
+    const text = baseText + (appended.length === 0 ? "" : `${separator}${appended.join("\n")}\n`);
+    return { id: ctx.store.write("blob", Buffer.from(text, "utf8")) };
   }
   const result: ContentMergeResult = mergeContent(
     baseText,

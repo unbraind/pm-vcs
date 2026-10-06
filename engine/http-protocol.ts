@@ -9,6 +9,8 @@
 // bounds. The server and the client both import it, which is also what keeps
 // the two from drifting into dialects that agree only by accident.
 
+import { isIP } from "node:net";
+
 import { redactUserinfo } from "./credentials.ts";
 import { isObjectId, type ObjectId, type ObjectType, OBJECT_TYPES, ObjectStoreError } from "./objects.ts";
 
@@ -165,6 +167,34 @@ export function splitServedPath(path: string): { repository: string; endpoint: s
   return null;
 }
 
+/**
+ * Every way a served request path can name a repository and an endpoint.
+ *
+ * A path can end with more than one endpoint suffix: `/tenant/objects/fetch`
+ * ends with `/fetch` (repository `tenant/objects`) and with `/objects/fetch`
+ * (repository `tenant`). Suffix-first matching would always pick the shorter
+ * repository and leave a repository whose last segment is `objects` — or any
+ * name that shares a segment with an endpoint — unreachable. The caller
+ * resolves the ambiguity against the catalogue instead, so the candidates are
+ * ordered deepest repository first: a repository the root actually serves is
+ * preferred over an endpoint-suffix reading of the same bytes.
+ *
+ * @param path - The request path, with any query string already stripped.
+ * @returns Every valid split, deepest repository first; empty when the path
+ *   names no endpoint under any repository name this root accepts.
+ */
+export function splitServedPathCandidates(path: string): { repository: string; endpoint: string }[] {
+  const candidates: { repository: string; endpoint: string }[] = [];
+  for (const suffix of ENDPOINT_SUFFIXES) {
+    const separator = `/${suffix}`;
+    if (!path.endsWith(separator)) continue;
+    const repository = path.slice(1, path.length - separator.length);
+    if (repository === "" || isServedRepositoryName(repository)) candidates.push({ repository, endpoint: suffix });
+  }
+  candidates.sort((left, right) => right.repository.length - left.repository.length);
+  return candidates;
+}
+
 /** Characters a repository name segment may contain. */
 const SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -187,6 +217,27 @@ export function isServedRepositoryName(name: string): boolean {
   if (name.length === 0 || name.length > MAX_REPOSITORY_NAME_LENGTH) return false;
   if (name.endsWith("/") || name.includes("//") || name.includes("\\")) return false;
   return name.split("/").every((segment) => SEGMENT_PATTERN.test(segment));
+}
+
+/**
+ * Whether a hostname is a loopback address.
+ *
+ * `localhost`, every `127.0.0.0/8` spelling and IPv6 loopback (including its
+ * IPv4-mapped form) are the one set of hosts for which plain `http://` is not a
+ * cleartext hop across a network, which is why both the client transport's
+ * token guard and the served host check consult this.
+ *
+ * @param hostname - The host as a URL or `Host` header presents it, lowercased
+ *   by the caller, brackets already stripped for IPv6.
+ * @returns True when the host can only be this machine.
+ */
+export function isLoopbackHostname(hostname: string): boolean {
+  // A URL keeps IPv6 brackets in its hostname; a Host header is stripped before
+  // this runs. Accept both spellings rather than making the two callers agree.
+  const host = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  return host === "localhost" || host === "::1"
+    || (isIP(host) === 4 && host.startsWith("127."))
+    || (isIP(host) === 6 && /^::ffff:(?:127\.|7f[0-9a-f]{2}:)/.test(host));
 }
 
 /**

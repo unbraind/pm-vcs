@@ -336,7 +336,11 @@ The command reports the chosen ephemeral port and runs until stopped. A reposito
 as `--root` is available at the base URL. A parent root exposes its repositories by relative
 name, including nested names such as `tenant/project`. At startup the server enumerates
 repository directories into a catalogue of canonical names and real paths. Requests resolve
-only by exact catalogue lookup; request text is never joined into a filesystem path. An
+only by exact catalogue lookup; request text is never joined into a filesystem path. A request
+path that also reads as an endpoint — `tenant/objects/fetch` is either the repository
+`tenant/objects` with endpoint `fetch` or the repository `tenant` with endpoint `objects/fetch` —
+resolves by catalogue lookup first, so a repository whose name shares a segment with an
+endpoint suffix is reachable under its own name. An
 authorized lookup of an unknown name triggers at most one rescan per second. Each scan
 examines at most 10,000 directory entries and descends at most 32 levels; repositories beyond
 those bounds receive the same denial as unknown names. Use a narrower root for larger trees.
@@ -353,6 +357,17 @@ introduced after discovery. The tokens file is a JSON array:
 
 The empty repository name grants the root repository. A write grant includes read access;
 all other repositories are denied. Replace the example tokens with private random secrets.
+
+Without `--auth`, every repository is served **readable**: fetch and clone work for anyone who
+can reach the port, and every mutating endpoint refuses until the operator passes
+`--allow-unauthenticated-writes` — the explicit override for a port fenced another way. The
+server is an agent transport, not a web service, so it also refuses requests a browser would
+send: any request carrying an `Origin` header, any request whose `Host` is not the bound
+address and port (which is how a DNS-rebound page would read an answer it is not allowed to read), and
+any mutating request whose content type is not JSON (the one shape a cross-site page can send
+without a preflight this server never answers). A wildcard bind accepts address literals
+in `Host` at the bound port; reach such a server by its address, or bind to the name you use.
+
 For a reported port of 43210, another agent uses the usual commands:
 
 ```console
@@ -367,6 +382,9 @@ pm vcs verify
 Use environment variables populated from your secret manager. `PM_VCS_TOKEN_<REMOTE>`
 (uppercase remote name, punctuation replaced with underscores) overrides `PM_VCS_TOKEN`,
 which overrides the stored credential. Environment credentials are never persisted.
+A non-empty bearer token is only ever sent to `https://` remotes, or to a loopback `http://`
+remote — a token on plain `http://` to any other host is refused with an error naming the
+fix, because it would be a credential handed to every observer on the wire.
 For compatibility, URL userinfo supplied to clone or remote add is moved into the local
 `.pmvcs/credentials.json`; `.pmvcs/remotes.json`, receipts and diagnostics contain clean URLs.
 Existing credential-bearing remote maps migrate on first read. The credentials file is
@@ -437,10 +455,9 @@ that started from the defaults would store the same paths as blobs rather than r
 merge them line by line: two repositories sharing commit ids while disagreeing about what
 those commits mean, each internally consistent and therefore undetectable.
 
-The transport is an interface. The implementation that ships reaches a repository through the
-filesystem, which is the case that occurs today — several agents, several working trees, one
-host. A served implementation lands with the forge in Phase 5, when there is a repository
-service for it to speak to.
+The transport is an interface with two shipped implementations: a filesystem transport, which
+is the case that occurs today — several agents, several working trees, one host — and `HttpTransport`, an HTTP
+transport that speaks to `pm vcs serve` (see [Serving a repository](#serving-a-repository)).
 
 Bundles remain, for the times a file is the transport you have:
 

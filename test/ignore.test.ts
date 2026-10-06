@@ -136,3 +136,50 @@ test("legacy runtime index entries disappear on add and stay out of status", () 
   assert.equal(repository.status().clean, true);
   assert.throws(() => repository.stage([runtime]), /ignored/);
 });
+
+test("tracker roots below globbed record-path prefixes are discovered and fenced", () => {
+  // The glob `custom/*/Issues/*.toon` names records inside trackers the
+  // pattern does not spell out — `custom/team`. Discovery used to walk only
+  // toward the repository root, so a tracker below the globbed prefix was
+  // never found: no runtime fence covered it, and `stage` took its
+  // `runtime/context.jsonl` as an ordinary file.
+  dir = makeTempDir();
+  const team = join(dir.root, "custom/team");
+  const nested = join(dir.root, "custom/team/nested");
+  mkdirSync(join(team, "Issues"), { recursive: true });
+  mkdirSync(join(nested, "Issues"), { recursive: true });
+  writeFileSync(join(team, "settings.json"), "{}");
+  writeFileSync(join(nested, "settings.json"), "{}");
+  const partial = readIgnoreRules(dir.root, ["custom/te*/Issues/*.toon"]);
+  assert.equal(isIgnored("custom/team/runtime/context.jsonl", partial), true);
+  const rules = readIgnoreRules(dir.root, ["custom/*/Issues/*.toon"]);
+  for (const path of ["custom/team/runtime/context.jsonl", "custom/team/locks/item.lock", "custom/team/transactions/journal.json", "custom/team/nested/runtime/context.jsonl"]) {
+    assert.equal(isIgnored(path, rules), true, path);
+    assert.equal(isRuntimeIgnored(path, rules), true, path);
+  }
+  // The records themselves stay trackable, and the walk below the prefix does
+  // not fence anything that is not a tracker's runtime state.
+  for (const path of ["custom/team/settings.json", "custom/team/Issues/item.toon", "custom/team/nested/Issues/item.toon", "custom/other/source.ts"]) {
+    assert.equal(isIgnored(path, rules), false, path);
+  }
+  // A prefix outside the repository is not walked, whatever the glob says: the
+  // fences it produces are exactly the ones the repository root itself yields.
+  const outside = readIgnoreRules(dir.root, ["../outside/*/Issues/*.toon"]);
+  assert.equal(isRuntimeIgnored("outside/runtime/context.jsonl", outside), false);
+  assert.deepEqual(outside.runtime, readIgnoreRules(dir.root).runtime);
+});
+
+test("staging cannot take a tracker's runtime files once a glob discovers the tracker", () => {
+  // The end-to-end shape of the finding: without discovery, `stage([])` took
+  // the tracker's runtime context as an ordinary untracked file.
+  dir = makeTempDir();
+  const team = join(dir.root, "custom/team");
+  mkdirSync(join(team, "runtime"), { recursive: true });
+  mkdirSync(join(team, "Issues"), { recursive: true });
+  writeFileSync(join(team, "settings.json"), "{}");
+  writeFileSync(join(team, "runtime", "context.jsonl"), "{}\n");
+  writeFileSync(join(team, "Issues", "item.toon"), JSON.stringify({ title: "example" }) + "\n");
+  const repository = Repository.init(dir.root, "main", { recordPaths: ["custom/*/Issues/*.toon"], recordPolicy: {} });
+  assert.deepEqual(repository.stage([]), ["custom/team/Issues/item.toon", "custom/team/settings.json"]);
+  assert.equal(repository.status().untracked.includes("custom/team/runtime/context.jsonl"), false);
+});

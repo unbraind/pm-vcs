@@ -6,11 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:10.824Z"
-updated_at: "2026-10-05T11:56:57.577Z"
+updated_at: "2026-10-06T11:07:43.914Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:38.277Z",claude,"cli:update:dep",detected
-comments[18]{created_at,author,text}:
+comments[24]{created_at,author,text}:
   "2026-08-28T20:11:18.880Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no served-forge implementation or passing acceptance evidence for this child, so it remains open with its written specification."
   "2026-09-12T23:35:51.054Z",pi-agent,"Audit 2026-09-13: EXISTS — engine/transport.ts implements the Phase 3 transport with FileTransport, push/pull, capability negotiation, and object transfer. REMAINS — no served repository exposing refs, objects and series over the transport. The transport is used for peer-to-peer sync, not for serving a repository. The description says spec only."
   "2026-10-05T06:14:06.813Z",pi-glm,"Design for the served repository, reusing engine/transport.ts rather than forking it. The Transport interface stays the single boundary: its methods become async (a wire is asynchronous, a filesystem is not, and the interface was written so the algorithm does not care), FileTransport keeps every policy - fast-forward, force, compare-and-swap publication, verified arrival - and the HTTP server delegates every repository operation to a FileTransport opened on the repository directory under --root. Wire: POST <base>/advertise|fetch|push|objects/missing|objects/upload|publish, JSON envelopes with base64 payloads, error body {code,message} mapped back to ObjectStoreError so refusals read identically to a file remote. Client: HttpTransport implements the same interface, so clone/fetch/push/remote-add work unchanged through openTransport; the bearer token travels in the remote URL's userinfo. Resumable uploads keep their connection identity: the server holds one FileTransport per upload session, so publish reports exactly what that session delivered. Series and review records ride the same object paths: records are tree-reachable, series objects transfer through the verified-arrival upload path. Tenancy: bearer tokens scoped per repository (read/write); every pre-authorization failure - missing repo, wrong tenant, bad token, path traversal - answers with one byte-identical 404 denial; body sizes, object counts and session counts are bounded."
@@ -29,21 +31,34 @@ comments[18]{created_at,author,text}:
   "2026-10-05T11:13:11.095Z",pi-glm,"Implementation landed in the worktree: (1) pushTo now captures each tracking ref before the push leaves and, on the late answer, applies it only as a compare-and-swap against the captured value — advancing forward when the pushed commit descends from the ref's current value and skipping otherwise, so a tip another fetch or push recorded during the flight is never overwritten backward. (2) ServeLimits gains cumulative per-session bounds maxSessionObjects (default 1,000,000) and maxSessionBytes (default 4 GiB), both configurable via ServeOptions and validated like the other bounds; an upload past either is refused with the existing limit_exceeded shape and the session's receipts are released with the session, and publication clears the charge with the receipts on every attempt. (3) startRepositoryServer accepts an optional ServeHooks.holdResponse observability hook, invoked after a request's outcome is decided and before the response is written, which the concurrency test uses to hold a real push answer in flight. Tests: a real-socket concurrent case (server accepts A, a second client pushes B, the pusher fetches B, then A's answer completes — tracking keeps B), a held-answer file-transport case covering recorded/advanced/deleted-during-flight branches, and an adversarial session-bound test driving per-request-legal uploads past both the object and byte bounds and proving the refusal released the receipts."
   "2026-10-05T11:35:05.028Z",pi-glm,"Verification at the working tree: the full suite passes 851 tests with zero skips and c8 reports 100/100/100/100 over every authored source file; eslint, zero jscpd duplication, 250 documented declarations, and the strict and erasable typechecks pass. Focused suites recorded via pm test: the Node served socket/catalogue/sync/acceptance suites (38 tests), the Node sync suite including the new late-answer coverage (36 tests), and the same five files under native Bun (74 pass, 0 fail) — the real concurrent late-push case and the cumulative session-bound case pass on both launchers. pm health --strict-exit reports ok=true. Next: release gates at the committed head, then the changelog and self-host bundle regenerated and committed together."
   "2026-10-05T11:56:54.190Z",pi-glm,"Full gates at committed head 42a0b4b: npm run release:check passes (851 tests, zero skips, all authored-source c8 100/100/100/100, eslint, zero duplication, 250 docstrings, typechecks, native TOON and installed-CLI stat-cache acceptance, self-host verification, production and identity audits, pack dry run, changelog and release-attestation checks), and bun run release:check passes the same gate under the native Bun launcher. The self-host gate ran in the prescribed order: all pm writes finished, then changelog:full, then self-host:write, then one commit of code, tests, README, tracker evidence and the bundle together, then changelog:check and accept:self-host verified green (changelog unchanged — active items are not emitted). No merges, no bot mentions, no GitHub replies; the item stays open for orchestrator verification."
-files[13]{path,scope}:
+  "2026-10-06T10:07:26.893Z",pi-vcs-cr,"CodeRabbit full-review round on PR #91: working all 8 inline findings plus the README Distribution outside-diff note. Dispositions follow the promises on the PR: (1) 4183822317 CSRF/DNS-rebinding hardening in the served router: JSON content-type on mutating endpoints, refuse any Origin header, validate Host against the bound address, and unauthenticated serve becomes read-only without an explicit override flag; adversarial tests via raw TCP. (2) 4183822267 HttpTransport refuses a non-empty bearer token over plain http to a non-loopback host with an error naming https. (3) 4183822241 served repository names resolve by catalogue lookup over all endpoint-suffix candidates, so tenant/objects repos route correctly. (4) 4183822298+4183822310 mergeAppendOnlyLog counts appended occurrences per side over the shared base, keeps base as strict prefix and orders only appended events; property test over random interleavings with duplicates and earlier timestamps. (5) 4183822280 ignore discovery walks below globbed record-path prefixes to find custom tracker roots. (6) 4183822331 bun variant of the packed CLI test skips when bun is missing off CI, fails on CI. (7) 4183822324 fileURLToPath in the cdc benchmark test. (8) README Distribution names both shipped transports and the serving section documents the new hardening."
+  "2026-10-06T10:45:11.638Z",codex-sol,"Continuation after provider limit: reviewed the inherited uncommitted patch and all nine review findings; taking over the existing claim. Verify each regression fails with its fix reverted, complete all-source gates, then commit and merge the dependency refresh from main without rewriting reviewed history."
+  "2026-10-06T10:51:07.355Z",codex-sol,"All nine findings are valid and fixed. Catalogue resolution precedes authorization; bearer tokens require HTTPS beyond loopback; glob-prefix discovery excludes custom tracker runtime state; history union adds each appended occurrence from both sides and preserves the raw shared prefix. Host authority parsing validates the bound port and rejects malformed names; Origin is refused and writes require JSON, with unauthenticated writes opt-in. Regression checks failed on individual temporary reverts for all eight inline findings and the README note; every file was restored. Core suites: 77 pass, zero fail or skip; checkout-with-spaces and missing-Bun local/CI boundary fixtures pass. Static typecheck, test build, lint, zero duplication and docstrings pass."
+  "2026-10-06T10:54:43.184Z",codex-sol,"The pm-linked focused command passed 84 tests with zero failures or skips, including both real packed global CLI variants (Node and Bun), raw-socket CSRF/rebinding checks, randomized history interleavings, missing-Bun local/CI behavior, and the checkout-with-spaces fixture. PM health and observational validation report ok=true, with pre-existing advisory metadata and telemetry warnings left outside this review scope."
+  "2026-10-06T10:58:22.724Z",codex-sol,"Additional loopback validation preserves bearer-token use with URL-normalized IPv4-mapped IPv6 loopback addresses and refuses invalid numeric Host spellings. Focused adversarial socket and client guard tests pass. The previous in-flight coverage attempt was invalidated by a corrected import-edit error, so full coverage is rerunning from a clean start; no partial report is accepted as the 100-percent gate."
+  "2026-10-06T11:07:43.914Z",codex-sol,"Full suite: 866 tests pass with zero failures or skips. All source modules except rewrite.ts report 100/100/100/100; the rewrite coverage measurement mixes source versions because the unterminated-prefix fix landed during that run, so this report is not accepted as the full coverage gate. The new prefix fixture passes, source/type/test builds, lint, zero duplication and 253 docstrings pass, and native Bun passes 78 tests. Freeze the source, commit the complete fixes and tracker evidence with the regenerated bundle, merge the main dependency refresh, then run both linked release:check commands on the committed merged head for authoritative full coverage."
+files[20]{path,scope}:
   engine/http-protocol.ts,project
   engine/http-transport.ts,project
+  engine/ignore.ts,project
+  engine/records.ts,project
   engine/rewrite.ts,project
   engine/serve.ts,project
   engine/served-repositories.ts,project
   engine/sync.ts,project
   engine/transport.ts,project
+  test/cdc-benchmark.test.ts,project
+  test/helpers/serve-worker.ts,project
+  test/ignore.test.ts,project
+  test/review-findings.test.ts,project
   test/serve.test.ts,project
   test/served-acceptance.test.ts,project
+  test/served-defects.test.ts,project
   test/served-repositories.test.ts,project
   test/served-sync.test.ts,project
   test/sync.test.ts,project
   vcs-commands.ts,project
-tests[8]:
+tests[10]:
   - command: node --test test/served-acceptance.test.ts
     scope: project
     provenance:
@@ -101,6 +116,21 @@ tests[8]:
     provenance:
       author: pi-glm
       created_at: "2026-10-05T11:33:21.941Z"
+      source_kind: local_mutation
+      source_ref: feat/served-repository-http
+  - command: node --test test/serve.test.ts test/served-sync.test.ts test/review-findings.test.ts test/ignore.test.ts test/cdc-benchmark.test.ts test/served-defects.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T10:51:08.677Z"
+      source_kind: local_mutation
+      source_ref: feat/served-repository-http
+  - command: bun test test/serve.test.ts test/served-sync.test.ts test/review-findings.test.ts test/ignore.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T10:59:51.033Z"
       source_kind: local_mutation
       source_ref: feat/served-repository-http
 docs[1]{path,scope}:

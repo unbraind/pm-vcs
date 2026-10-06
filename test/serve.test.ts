@@ -17,6 +17,7 @@ import { afterEach, test } from "node:test";
 import { hashObject, ObjectStoreError } from "../engine/objects.ts";
 import {
   bearerToken,
+  isAcceptableHost,
   parseTokenText,
   readTokenFile,
   startRepositoryServer,
@@ -85,11 +86,18 @@ function commitFile(repository: Repository, path: string, text: string): string 
 /**
  * Starts a server for a freshly seeded repository root.
  *
- * @param options - Grants and limits to serve with, over an open loopback server.
+ * @param options - Grants, limits and the open-writes override to serve with,
+ * over an open loopback server. Writes stay open by default because these
+ * tests exercise the dispatch and bounds machinery, not the read-only guard —
+ * which has its own tests below.
  * @returns The running server and the root it serves.
  */
 async function serveRoot(
-  options: { grants?: TokenGrants | null; limits?: Parameters<typeof startRepositoryServer>[0]["limits"] } = {},
+  options: {
+    grants?: TokenGrants | null;
+    limits?: Parameters<typeof startRepositoryServer>[0]["limits"];
+    unauthenticatedWrites?: boolean;
+  } = {},
 ): Promise<{ server: ServeHandle; root: string; repository: Repository }> {
   const root = tempRoot();
   const repository = Repository.init(join(root, "repo"));
@@ -100,6 +108,7 @@ async function serveRoot(
     port: 0,
     grants: options.grants ?? null,
     limits: options.limits,
+    unauthenticatedWrites: options.unauthenticatedWrites ?? true,
   });
   servers.push(server);
   return { server, root, repository };
@@ -125,11 +134,12 @@ function rawRequest(
     body?: string;
     chunked?: readonly string[];
     headers?: Record<string, string>;
+    connectHost?: string;
   } = {},
 ): Promise<{ status: number; body: Buffer; wire: Buffer }> {
   // Raw TCP preserves hostile request-target bytes under both Node and Bun.
   return new Promise((resolveRequest, rejectRequest) => {
-    const socket = connect({ host: server.host, port: server.port });
+    const socket = connect({ host: options.connectHost ?? server.host, port: server.port });
     const chunks: Buffer[] = [];
     socket.on("error", rejectRequest);
     socket.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -139,7 +149,12 @@ function rawRequest(
       resolveRequest({ status: Number(wire.toString("utf8", 0, separator).split(" ")[1]), body: wire.subarray(separator + 4), wire });
     });
     socket.on("connect", () => {
-      const headers: Record<string, string> = { host: "127.0.0.1", connection: "close", ...options.headers };
+      const headers: Record<string, string> = { host: `127.0.0.1:${server.port}`, connection: "close", ...options.headers };
+      // The real client always declares JSON, so a request carrying a body does
+      // too; a test may still override the header to shape a hostile request.
+      if ((options.body !== undefined || options.chunked !== undefined) && headers["content-type"] === undefined) {
+        headers["content-type"] = "application/json";
+      }
       if (options.authorization !== undefined) headers.authorization = options.authorization;
       let body: string;
       if (options.chunked === undefined) {
@@ -149,7 +164,10 @@ function rawRequest(
         headers["transfer-encoding"] = "chunked";
         body = options.chunked.map((chunk) => `${Buffer.byteLength(chunk).toString(16)}\r\n${chunk}\r\n`).join("") + "0\r\n\r\n";
       }
-      socket.write(`${options.method ?? "POST"} ${path} HTTP/1.1\r\n${Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("")}\r\n${body}`);
+      // A test may name a header with an empty value to omit it entirely — the
+      // one way to send a request with no Host header, which raw sockets allow.
+      const written = Object.entries(headers).filter(([, value]) => value !== "");
+      socket.write(`${options.method ?? "POST"} ${path} HTTP/1.1\r\n${written.map(([name, value]) => `${name}: ${value}\r\n`).join("")}\r\n${body}`);
     });
   });
 }
@@ -616,4 +634,223 @@ test("non-directory roots, malformed files and unexpected I/O failures fail clos
   const answer = await rawRequest(server, `/${name}/publish`, { body: JSON.stringify({ updates: [], now: 0 }) });
   assert.equal(answer.status, 500);
   assert.match(answer.body.toString(), /internal_error/);
+});
+
+test("browser-shaped requests cannot reach an endpoint: no cross-site write, no rebound read", async () => {
+  // A served repository is an agent transport, not a web service. Three
+  // browser shapes are refused with the fixed denial, before authorization
+  // has anything to say, so no two of them can be told apart either.
+  const { server, repository } = await serveRoot();
+  const name = repository.root.slice(join(repository.root, "..").length + 1);
+  const tip = repository.refs.read("refs/heads/main");
+
+  // The control: an ordinary client's request answers.
+  const allowed = await rawRequest(server, `/${name}/advertise`, { body: "{}" });
+  assert.equal(allowed.status, 200);
+
+  // A page's cross-site POST carries Origin; no legitimate client does.
+  const crossSite = await rawRequest(server, `/${name}/advertise`, { body: "{}", headers: { origin: "https://attacker.example" } });
+  assert.equal(crossSite.status, DENIED_STATUS);
+  assert.ok(crossSite.body.equals(DENIED_BODY));
+
+  // A CORS "simple" request is the only shape a browser can send without a
+  // preflight this server never answers — and its content type is not JSON,
+  // so a cross-site page cannot write even to a server an operator left open.
+  const simpleWrite = await rawRequest(server, `/${name}/push`, {
+    body: JSON.stringify({ bundle: "", updates: [{ ref: "refs/heads/main", expected: tip, next: tip }], force: true, now: 0 }),
+    headers: { "content-type": "text/plain" },
+  });
+  assert.equal(simpleWrite.status, DENIED_STATUS);
+  assert.ok(simpleWrite.body.equals(DENIED_BODY));
+  for (const endpoint of ["push", "objects/upload", "publish"]) {
+    const absentType = await rawRequest(server, `/${name}/${endpoint}`);
+    assert.equal(absentType.status, DENIED_STATUS);
+    assert.ok(absentType.body.equals(DENIED_BODY));
+  }
+
+  // A parameterised JSON content type is the same type and is accepted.
+  const parameterised = await rawRequest(server, `/${name}/publish`, {
+    body: JSON.stringify({ updates: [], force: false, now: 0 }),
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+  assert.equal(parameterised.status, 200);
+
+  // A DNS-rebound page reads through a Host this server never bound. Only the
+  // bound host's spellings answer: the loopback family on a loopback bind.
+  for (const [label, host, expected] of [
+    ["rebound name", "attacker.example:1234", DENIED_STATUS],
+    // A request with no Host header is refused by the HTTP layer itself, with
+    // its own 400; the point is that it never reaches an endpoint.
+    ["no host", "", 400],
+    ["loopback by name", `localhost:${server.port}`, 200],
+    ["loopback by address with port", `127.0.0.1:${server.port}`, 200],
+    ["loopback by address without port", "127.0.0.1", DENIED_STATUS],
+    ["invalid numeric loopback", `127.999.0.1:${server.port}`, DENIED_STATUS],
+    ["mapped loopback", `[::ffff:127.0.0.1]:${server.port}`, 200],
+  ] as const) {
+    const answer = await rawRequest(server, `/${name}/advertise`, {
+      body: "{}",
+      headers: { host },
+    });
+    assert.equal(answer.status, expected, `${label}: wrong status`);
+    if (expected === DENIED_STATUS) assert.ok(answer.body.equals(DENIED_BODY), `${label}: wrong body`);
+  }
+
+  // Nothing above moved a ref: the refusal came before any repository byte.
+  assert.equal(repository.refs.read("refs/heads/main"), tip);
+});
+
+test("an unauthenticated server is read-only unless the operator explicitly reopens writes", async () => {
+  const readonly = await serveRoot({ unauthenticatedWrites: false });
+  const name = readonly.repository.root.slice(join(readonly.repository.root, "..").length + 1);
+  const tip = readonly.repository.refs.read("refs/heads/main");
+
+  // Reads stay open: an operator who serves without --auth meant to serve reads.
+  const read = await rawRequest(readonly.server, `/${name}/advertise`, { body: "{}" });
+  assert.equal(read.status, 200);
+
+  // Every mutating endpoint refuses, naming the reason rather than hiding
+  // behind the missing-repository denial — existence is public on this server.
+  for (const endpoint of ["push", "objects/upload", "publish"]) {
+    const answer = await rawRequest(readonly.server, `/${name}/${endpoint}`, { body: JSON.stringify({ updates: [], now: 0, session: "s", objects: [] }) });
+    assert.equal(answer.status, FORBIDDEN_STATUS, `${endpoint}: wrong status`);
+    assert.match(answer.body.toString("utf8"), /accepts reads without a token/, `${endpoint}: wrong body`);
+    assert.equal(answer.body.equals(DENIED_BODY), false);
+  }
+  assert.equal(readonly.repository.refs.read("refs/heads/main"), tip);
+
+  // The same server with the override behaves as before the hardening.
+  const open = await serveRoot();
+  const openName = open.repository.root.slice(join(open.repository.root, "..").length + 1);
+  const published = await rawRequest(open.server, `/${openName}/publish`, {
+    body: JSON.stringify({ updates: [], force: false, now: 0 }),
+  });
+  assert.equal(published.status, 200);
+});
+
+test("repository names that read like endpoint suffixes resolve by catalogue, deepest first", async () => {
+  // `tenant/objects` is a legitimate nested name, and `/tenant/objects/fetch`
+  // reads two ways: repository `tenant/objects` with endpoint `fetch`, or
+  // repository `tenant` with endpoint `objects/fetch`. Suffix-first matching
+  // always picked the shorter repository, so the deeper one was unreachable.
+  const root = tempRoot();
+  const parent = Repository.init(join(root, "tenant"));
+  const parentTip = commitFile(parent, "parent.txt", "parent");
+  const nested = Repository.init(join(root, "tenant/objects"));
+  const nestedTip = commitFile(nested, "nested.txt", "nested");
+  const grants = new TokenGrants(parseTokenText(JSON.stringify([
+    { token: "nested-reader", repository: "tenant/objects", access: "read" },
+    { token: "parent-reader", repository: "tenant", access: "read" },
+  ])) ?? []);
+  const server = await startRepositoryServer({ root, host: "127.0.0.1", port: 0, grants });
+  servers.push(server);
+
+  // The nested repository answers advertise under its own name.
+  const advertised = await rawRequest(server, "/tenant/objects/advertise", { authorization: "Bearer nested-reader", body: "{}" });
+  assert.equal(advertised.status, 200, advertised.body.toString("utf8"));
+  assert.equal(headTarget(advertised.body), nestedTip);
+
+  // A token scoped to the nested repository reaches its colliding endpoints:
+  // `/tenant/objects/fetch` is the nested repository's fetch under catalogue
+  // resolution — under suffix-first matching it was the parent's object
+  // endpoint, and a nested-scoped token was denied on it.
+  const fetched = await rawRequest(server, "/tenant/objects/fetch", {
+    authorization: "Bearer nested-reader",
+    body: JSON.stringify({ refs: [], haves: [] }),
+  });
+  assert.equal(fetched.status, 200, fetched.body.toString("utf8"));
+  // The nested repository's object endpoint remains reachable too.
+  const missing = await rawRequest(server, "/tenant/objects/objects/missing", {
+    authorization: "Bearer nested-reader",
+    body: JSON.stringify({ ids: [parentTip] }),
+  });
+  assert.equal(missing.status, 200, missing.body.toString("utf8"));
+  assert.deepEqual((JSON.parse(missing.body.toString("utf8")) as { missing: string[] }).missing, [parentTip]);
+
+  // Catalogue selection precedes authorization: a parent-scoped token cannot
+  // reinterpret the nested repository's fetch as the parent's object endpoint.
+  const parentReach = await rawRequest(server, "/tenant/objects/fetch", {
+    authorization: "Bearer parent-reader",
+    body: JSON.stringify({ ids: [] }),
+  });
+  assert.equal(parentReach.status, DENIED_STATUS);
+  assert.ok(parentReach.body.equals(DENIED_BODY));
+  const denied = await rawRequest(server, "/tenant/advertise", {
+    authorization: "Bearer nested-reader",
+    body: JSON.stringify({ refs: [], haves: [] }),
+  });
+  assert.equal(denied.status, DENIED_STATUS);
+  assert.ok(denied.body.equals(DENIED_BODY));
+  // And no token at all reaches the nested repository's neighbour: a name the
+  // catalogue does not hold is the fixed denial, whatever the suffix reading.
+  const absent = await rawRequest(server, "/tenant/objects/other/objects/missing", {
+    authorization: "Bearer nested-reader",
+    body: JSON.stringify({ ids: [] }),
+  });
+  assert.equal(absent.status, DENIED_STATUS);
+  assert.ok(absent.body.equals(DENIED_BODY));
+
+  // A root-level repository named `objects` is reachable too: catalogue lookup
+  // beats the suffix reading that would address the root's object endpoint.
+  const objectRoot = tempRoot();
+  const base = Repository.init(objectRoot);
+  const baseTip = commitFile(base, "base.txt", "base");
+  const named = Repository.init(join(objectRoot, "objects"));
+  const namedTip = commitFile(named, "named.txt", "named");
+  const objectServer = await startRepositoryServer({ root: objectRoot, host: "127.0.0.1", port: 0, grants: null, unauthenticatedWrites: true });
+  servers.push(objectServer);
+  const nestedAdvertise = await rawRequest(objectServer, "/objects/advertise", { body: "{}" });
+  assert.equal(nestedAdvertise.status, 200);
+  assert.equal(headTarget(nestedAdvertise.body), namedTip);
+  const rootAdvertise = await rawRequest(objectServer, "/advertise", { body: "{}" });
+  assert.equal(headTarget(rootAdvertise.body), baseTip);
+  // The colliding fetch addresses the `objects` repository's history, not the
+  // root repository's object endpoint.
+  const nestedFetch = await rawRequest(objectServer, "/objects/fetch", { body: JSON.stringify({ refs: [], haves: [] }) });
+  assert.equal(nestedFetch.status, 200);
+});
+
+/** The commit an advertisement names for `refs/heads/main`. */
+function headTarget(body: Buffer): string {
+  const refs = (JSON.parse(body.toString("utf8")) as { refs: { name: string; target: string }[] }).refs;
+  return refs.find((entry) => entry.name === "refs/heads/main")?.target ?? "";
+}
+
+test("a wildcard bind accepts address literals in Host and refuses names a resolver must answer", async () => {
+  // A bind on the wildcard serves addresses this host has; the clients that
+  // reach it name one, and a DNS name in Host can only be a rebound page.
+  const root = tempRoot();
+  const repository = Repository.init(join(root, "repo"));
+  commitFile(repository, "a.txt", "one");
+  const server = await startRepositoryServer({ root, host: "0.0.0.0", port: 0, grants: null, unauthenticatedWrites: true });
+  servers.push(server);
+  for (const [label, host, expected] of [
+    ["an IPv4 literal", `192.168.1.10:${server.port}`, 200],
+    ["an IPv6 literal without port", "[fd00::10]", DENIED_STATUS],
+    ["an IPv6 literal with port", `[fd00::10]:${server.port}`, 200],
+    ["loopback by name", `localhost:${server.port}`, 200],
+    ["a DNS name", "myserver.example", DENIED_STATUS],
+    ["an unterminated IPv6 literal", "[::10", DENIED_STATUS],
+  ] as const) {
+    const answer = await rawRequest(server, "/repo/advertise", { body: "{}", headers: { host }, connectHost: "127.0.0.1" });
+    assert.equal(answer.status, expected, `${label}: wrong status`);
+    if (expected === DENIED_STATUS) assert.ok(answer.body.equals(DENIED_BODY), `${label}: wrong body`);
+  }
+});
+
+test("a bind to a named host answers only its own name in Host", () => {
+  // A bind to a hostname neither loopback nor wildcard is the one shape a
+  // real test socket cannot cheaply produce; the decision table is checked
+  // directly instead. The bound name answers, and nothing else does.
+  const bound = { host: "serve.internal.example", port: 43210 };
+  assert.equal(isAcceptableHost("serve.internal.example:43210", bound), true);
+  assert.equal(isAcceptableHost("SERVE.INTERNAL.EXAMPLE:43210", bound), true);
+  assert.equal(isAcceptableHost("127.0.0.1", bound), false);
+  assert.equal(isAcceptableHost("attacker.example:43210", bound), false);
+  assert.equal(isAcceptableHost(undefined, bound), false);
+  for (const host of ["serve.internal.example", "serve.internal.example:80", "serve.internal.example:bad", "[::1]junk:43210", "[garbage]:43210", "[::1]:43211", "::1:43210"]) {
+    assert.equal(isAcceptableHost(host, bound), false, host);
+  }
+  assert.equal(isAcceptableHost("serve.internal.example", { host: bound.host, port: 80 }), true);
+  assert.equal(isAcceptableHost("serve.internal.example", { host: "127.0.0.1", port: 43210 }), false);
 });

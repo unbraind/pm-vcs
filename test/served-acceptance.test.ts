@@ -43,7 +43,7 @@ test("two real processes race on one branch and both land on different branches"
   const fixture = makeTempDir();
   const source = Repository.init(join(fixture.root, "origin"));
   const base = commit(source, "base.txt", "base");
-  const server = await startRepositoryServer({ root: fixture.root, host: "127.0.0.1", port: 0 });
+  const server = await startRepositoryServer({ root: fixture.root, host: "127.0.0.1", port: 0, unauthenticatedWrites: true });
   const workers: ChildProcess[] = [];
   try {
     const url = `http://127.0.0.1:${server.port}/origin`;
@@ -97,7 +97,7 @@ test("two served clones commit real PM item fields, merge them and verify all th
   });
   source.stage([]);
   source.commit({ message: "base PM record\n", author }, now);
-  const server = await startRepositoryServer({ root: fixture.root, host: "127.0.0.1", port: 0 });
+  const server = await startRepositoryServer({ root: fixture.root, host: "127.0.0.1", port: 0, unauthenticatedWrites: true });
   try {
     const url = `http://127.0.0.1:${server.port}/origin`;
     const a = Repository.open((await cloneFrom(url, join(fixture.root, "a"), now)).root);

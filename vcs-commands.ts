@@ -236,7 +236,7 @@ function parseListenAddress(listen: string): { host: string; port: number } {
  *
  * @param authPath - The path as typed, relative to the working root; null when
  *   the command was run without --auth, which serves every repository readable
- *   and writable.
+ *   and refuses writes unless the operator passed the explicit open-writes flag.
  * @param workingRoot - Directory a relative path is resolved against.
  * @returns The grants, or null when serving without authorization.
  * @throws VcsError When the file cannot be read or holds no grant. An
@@ -920,11 +920,12 @@ export function registerVcsCommands(api: ExtensionApi): void {
   api.registerCommand({
     name: "vcs serve",
     description:
-      "Serve the repositories under one root over HTTP, so clone, fetch and push reach them exactly as they reach a file remote: same capability negotiation, same fast-forward rules, same compare-and-swap publication. The command keeps running until its process is stopped; pass --auth with a tokens file to scope bearer tokens to repositories, and use PM_VCS_TOKEN or PM_VCS_TOKEN_<REMOTE> for the client credential.",
+      "Serve the repositories under one root over HTTP, so clone, fetch and push reach them exactly as they reach a file remote: same capability negotiation, same fast-forward rules, same compare-and-swap publication. The command keeps running until its process is stopped; pass --auth with a tokens file to scope bearer tokens to repositories, and use PM_VCS_TOKEN or PM_VCS_TOKEN_<REMOTE> for the client credential. Without --auth the server answers reads only — no cross-site page or unauthenticated process can push — unless --allow-unauthenticated-writes explicitly reopens writes; it also refuses requests that carry a browser's Origin header, whose Host is not the bound address, or whose content type is not JSON on a mutating endpoint.",
     flags: [
       { long: "--listen", value_name: "host:port", description: "Address to bind (default 127.0.0.1:0, an ephemeral loopback port)", value_type: "string" },
       { long: "--root", value_name: "dir", description: "Repository directory or parent of repositories (default the working root)", value_type: "string" },
-      { long: "--auth", value_name: "tokens-file", description: "JSON array of {token, repository, access} bearer grants; omit to serve every repository readable and writable", value_type: "string" },
+      { long: "--auth", value_name: "tokens-file", description: "JSON array of {token, repository, access} bearer grants; omit to serve every repository readable, with writes refused unless --allow-unauthenticated-writes is also given", value_type: "string" },
+      { long: "--allow-unauthenticated-writes", description: "With no --auth, also accept pushes and uploads without a token; the default is read-only", value_type: "boolean" },
     ],
     async run(context: CommandHandlerContext): Promise<VcsEnvelope & { serve: { host: string; port: number; root: string; requiresAuth: boolean } }> {
       const workingRoot = sourceWorkingRoot(context);
@@ -932,7 +933,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const root = resolve(workingRoot, optionalString(context.options, "root") ?? ".");
       const grants = readServeGrants(optionalString(context.options, "auth"), workingRoot);
       try {
-        const handle = await startRepositoryServer({ root, host: listen.host, port: listen.port, grants });
+        const handle = await startRepositoryServer({ root, host: listen.host, port: listen.port, grants, unauthenticatedWrites: context.options?.allowUnauthenticatedWrites === true });
         // The command's process stays alive because the server is listening: the
         // returned envelope names the bound address, and stopping the process
         // stops the server.

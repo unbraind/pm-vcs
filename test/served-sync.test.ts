@@ -98,7 +98,7 @@ async function serveSeededRepo(): Promise<Served> {
   const root = tempRoot();
   const repository = Repository.init(join(root, "repo"));
   commitFile(repository, "a.txt", "one");
-  const server = await startRepositoryServer({ root, host: "127.0.0.1", port: 0, grants: null });
+  const server = await startRepositoryServer({ root, host: "127.0.0.1", port: 0, grants: null, unauthenticatedWrites: true });
   servers.push(server);
   const name = repository.root.slice(root.length + 1);
   return { server, root, repository, name, url: `http://127.0.0.1:${server.port}/${name}` };
@@ -204,6 +204,9 @@ test("a late push answer cannot overwrite the newer tip a concurrent fetch recor
     host: "127.0.0.1",
     port: 0,
     grants: null,
+    // This test races two real pushes on the open server; the read-only guard
+    // has its own tests, so the open-writes override restores the old behaviour.
+    unauthenticatedWrites: true,
     hooks: {
       holdResponse: (addressed, endpoint) => {
         if (endpoint !== "push" || !holding) return;
@@ -339,7 +342,7 @@ test("a series object transfers through the served repository's verified-arrival
 
 test("an HTTP transport reports an unreachable, timed-out or unrecognizable remote as unreachable", async () => {
   // A port with no listener: the remote went away.
-  const orphan = await startRepositoryServer({ root: tempRoot(), host: "127.0.0.1", port: 0, grants: null });
+  const orphan = await startRepositoryServer({ root: tempRoot(), host: "127.0.0.1", port: 0, grants: null, unauthenticatedWrites: true });
   const orphanPort = orphan.port;
   await orphan.close();
   await assert.rejects(
@@ -398,6 +401,40 @@ test("an HTTP transport refuses a location that is not an HTTP URL", () => {
       return true;
     }, url);
   }
+});
+
+test("an HTTP transport refuses to carry a bearer token over plain http beyond loopback", () => {
+  // A token on the wire is a credential handed to every observer between this
+  // machine and the remote; only loopback is this machine talking to itself.
+  for (const url of [
+    "http://example.invalid/repo",
+    "http://192.168.1.10:43210/repo",
+    "http://user:secret@example.invalid/repo",
+    // URL userinfo is a token too, wherever the credential was resolved.
+    "http://secret@example.invalid/repo",
+    "http://secret@[::ffff:8.8.8.8]/repo",
+  ] as const) {
+    assert.throws(() => new HttpTransport(url, { token: "bearer-secret" }), (error: ObjectStoreError) => {
+      assert.equal(error.code, "unsupported_transport", url);
+      assert.match(error.message, /Use https:/, url);
+      // The refusal names the remote, never the credential it refused to send.
+      assert.equal(error.message.includes("bearer-secret"), false, url);
+      assert.equal(error.message.includes("secret"), false, url);
+      return true;
+    }, url);
+  }
+  // A userinfo token is refused even without the options token.
+  assert.throws(() => new HttpTransport("http://secret@example.invalid/repo"), /Use https:/);
+  // Loopback, tokenless http and https all keep working, with or without a token.
+  assert.doesNotThrow(() => new HttpTransport("http://127.0.0.1:43210/repo", { token: "bearer-secret" }));
+  assert.doesNotThrow(() => new HttpTransport("http://[::1]:43210/repo", { token: "bearer-secret" }));
+  assert.doesNotThrow(() => new HttpTransport("http://[::ffff:127.0.0.1]:43210/repo", { token: "bearer-secret" }));
+  assert.doesNotThrow(() => new HttpTransport("http://127.42.1.2:43210/repo", { token: "bearer-secret" }));
+  assert.doesNotThrow(() => new HttpTransport("http://localhost:43210/repo", { token: "bearer-secret" }));
+  assert.doesNotThrow(() => new HttpTransport("http://example.invalid/repo"));
+  assert.doesNotThrow(() => new HttpTransport("https://example.invalid/repo", { token: "bearer-secret" }));
+  // An empty token is no credential: a tokenless http remote to any host stays usable.
+  assert.doesNotThrow(() => new HttpTransport("http://example.invalid/repo", { token: "" }));
 });
 
 test("remote add, fetch, push and clone reach a served repository through the command surface", async () => {
@@ -486,9 +523,9 @@ test("vcs serve serves a repository a real process can clone from, until it is s
   const name = "origin";
   const auth = join(serveRoot, "tokens.json");
   writeFileSync(auth, JSON.stringify([{ token: "worker-token", repository: name, access: "write" }]));
-  for (const listen of [undefined, "[::1]:0"]) {
-  const host = listen === undefined ? "127.0.0.1" : "[::1]";
-  const worker = spawn(process.execPath, [join(packageRoot, "test", "helpers", "serve-worker.ts"), serveRoot, ...(listen === undefined ? [] : [listen, auth])], {
+  for (const listen of [undefined, "[::1]:0", "127.0.0.1:0"]) {
+  const host = listen === "[::1]:0" ? "[::1]" : "127.0.0.1";
+  const worker = spawn(process.execPath, [join(packageRoot, "test", "helpers", "serve-worker.ts"), serveRoot, ...(listen === undefined ? [] : [listen, listen === "[::1]:0" ? auth : "-", "allow"])], {
     cwd: packageRoot,
     stdio: ["ignore", "pipe", "inherit"],
   });
@@ -501,7 +538,7 @@ test("vcs serve serves a repository a real process can clone from, until it is s
         const line = buffered.split("\n").find((entry) => entry.startsWith("SERVE-READY "));
         if (line === undefined) return;
         clearTimeout(timer);
-        resolveServing(`http://${listen === undefined ? "" : "worker-token@"}${host}:${line.slice("SERVE-READY ".length).trim()}/${name}`);
+        resolveServing(`http://${listen === "[::1]:0" ? "worker-token@" : ""}${host}:${line.slice("SERVE-READY ".length).trim()}/${name}`);
       });
     });
 
@@ -513,6 +550,11 @@ test("vcs serve serves a repository a real process can clone from, until it is s
     const wire = new HttpTransport(url);
     const advertisement = await wire.advertise();
     assert.deepEqual(advertisement.refs.map((entry) => entry.name), ["refs/heads/main"]);
+    if (listen === undefined) {
+      await assert.rejects(wire.publish([], false, now), { code: "forbidden" });
+    } else {
+      assert.deepEqual((await wire.publish([], false, now)).updated, []);
+    }
   } finally {
     worker.kill("SIGTERM");
     const exited = await new Promise<boolean>((resolveExit) => {
@@ -535,7 +577,7 @@ test("one repository root is served at the base URL, with force and review-recor
   const repository = Repository.init(tempRoot(), "main", { recordPaths: ["reviews/*.json"], recordPolicy: {} });
   const base = commitFile(repository, "base.txt", "base");
   commitFile(repository, "reviews/one.json", JSON.stringify({ series: "pending", status: "open", reviewer: "agent" }));
-  const server = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 });
+  const server = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0, unauthenticatedWrites: true });
   servers.push(server);
   const url = `http://127.0.0.1:${server.port}`;
   const clone = Repository.open((await cloneFrom(url, join(tempRoot(), "clone"), now)).root);

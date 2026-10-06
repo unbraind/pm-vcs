@@ -225,16 +225,26 @@ export function mergeRecords(
  *
  * Item history in this ecosystem is append-only JSON Lines, and its merge rule
  * is not the same as a record's: entries are never edited, so any entry present
- * on either side must survive, and the only real question is ordering. Entries
- * are ordered by their timestamp field when both carry one, falling back to
- * base-then-ours-then-theirs, and an entry byte-identical on both sides appears
- * once.
+ * on either side must survive, and the only real question is ordering.
+ *
+ * Two properties hold by construction. The shared base is the merged log's
+ * strict prefix, byte for byte and in its own order — an appended entry with an
+ * earlier timestamp cannot reorder history both sides already agreed on, which
+ * would break the caller's append-only branch on the next merge. And the
+ * entries each side appended are counted per side over the base, so an entry
+ * that both sides appended once survives twice: two identical state
+ * transitions recorded at the same instant are two events, not one, and the
+ * highest-count rule this function used to apply would have collapsed them.
+ * The appended entries are ordered by their timestamp field when they carry
+ * one, inheriting the last timestamp seen on their own side, and otherwise keep
+ * arrival order, ours before theirs.
  *
  * @param base - Lines in the common ancestor.
  * @param ours - Lines on our side.
  * @param theirs - Lines on their side.
- * @param timestampField - Field to order by when present on both entries.
- * @returns The unioned lines, ordered deterministically. Never conflicts.
+ * @param timestampField - Field to order appended entries by when present.
+ * @returns The base lines, then the union of both sides' appended entries,
+ *   ordered deterministically. Never conflicts.
  */
 export function mergeAppendOnlyLog(
   base: readonly string[],
@@ -242,14 +252,6 @@ export function mergeAppendOnlyLog(
   theirs: readonly string[],
   timestampField = "at",
 ): string[] {
-  // Keyed by content, but counting occurrences rather than collapsing them. An
-  // append-only log can legitimately hold one line twice — two identical state
-  // transitions recorded at the same instant are two events, not one — and a
-  // content-keyed set would silently drop the second, which is exactly the loss
-  // this union exists to prevent. Keeping the highest count either side reached
-  // means a line one side appended twice survives twice, while a line both sides
-  // inherited from the base is not duplicated by the merge.
-  const kept = new Map<string, number>();
   /** Count byte-identical event occurrences so repeated legitimate entries survive branch union. */
   const counts = (lines: readonly string[]): Map<string, number> => {
     const tally = new Map<string, number>();
@@ -260,44 +262,45 @@ export function mergeAppendOnlyLog(
     }
     return tally;
   };
-  const sideCounts = [counts(base), counts(ours), counts(theirs)];
-  for (const tally of sideCounts) {
-    for (const [line, count] of tally) kept.set(line, Math.max(kept.get(line) ?? 0, count));
-  }
-  const emitted = new Map<string, number>();
-  const ordered: Array<{ line: string; timestamp: string; arrival: number }> = [];
-  // An entry with no usable timestamp inherits the last one seen in arrival
-  // order. Defaulting it to the empty string instead would sort every such entry
-  // ahead of every timestamped one, tearing a non-JSON line out of the position
-  // it was actually appended at; inheriting keeps it adjacent to its neighbours
-  // while still giving the comparator a total order to work with.
-  let lastTimestamp = "";
-  for (const line of [...base, ...ours, ...theirs]) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    const already = emitted.get(trimmed) ?? 0;
-    if (already >= (kept.get(trimmed) as number)) continue;
-    emitted.set(trimmed, already + 1);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      // A line that is not JSON still belongs in the union; it simply carries no
-      // timestamp of its own.
-      parsed = null;
+  const baseCounts = counts(base);
+  /** The entries one side appended past the base occurrences it inherited. */
+  const appended = (lines: readonly string[]): Array<{ line: string; timestamp: string }> => {
+    const seen = new Map<string, number>();
+    const events: Array<{ line: string; timestamp: string }> = [];
+    // An entry with no usable timestamp inherits the last one seen on this side,
+    // inherited entries included, which keeps it adjacent to its neighbours
+    // while still giving the comparator a total order to work with.
+    let lastTimestamp = "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      const occurrence = seen.get(trimmed) ?? 0;
+      seen.set(trimmed, occurrence + 1);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        // A line that is not JSON still belongs in the union; it simply carries no
+        // timestamp of its own.
+        parsed = null;
+      }
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const candidate = (parsed as Record<string, unknown>)[timestampField];
+        if (typeof candidate === "string") lastTimestamp = candidate;
+      }
+      if (occurrence >= (baseCounts.get(trimmed) ?? 0)) events.push({ line: trimmed, timestamp: lastTimestamp });
     }
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const candidate = (parsed as Record<string, unknown>)[timestampField];
-      if (typeof candidate === "string") lastTimestamp = candidate;
-    }
-    ordered.push({ line: trimmed, timestamp: lastTimestamp, arrival: ordered.length });
-  }
-  // Ties keep arrival order, so the result is a function of the inputs alone.
-  return ordered
-    .sort((left, right) => (
-      left.timestamp === right.timestamp
-        ? left.arrival - right.arrival
-        : left.timestamp < right.timestamp ? -1 : 1
-    ))
-    .map((entry) => entry.line);
+    return events;
+  };
+  // Ties keep arrival order, ours before theirs, so the result is a function of
+  // the inputs alone.
+  const ordered = [...appended(ours), ...appended(theirs)].sort((left, right) => (
+    left.timestamp === right.timestamp
+      ? 0
+      : left.timestamp < right.timestamp ? -1 : 1
+  ));
+  // The base is emitted first, verbatim in its own order and with its own
+  // multiplicity, so the merged log starts with exactly the events both sides
+  // share — duplicates included, because they are events too.
+  return [...base, ...ordered.map((entry) => entry.line)];
 }

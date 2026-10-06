@@ -20,7 +20,7 @@ type HarnessCapabilities = NonNullable<
   NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]
 >;
 
-const [serveRoot, listen, auth] = process.argv.slice(2);
+const [serveRoot, listen, auth, writes] = process.argv.slice(2);
 if (serveRoot === undefined) {
   console.error("usage: serve-worker.ts <serve-root> [listen]");
   process.exit(2);
@@ -33,7 +33,7 @@ const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "ut
 const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
 const run = await harness.runCommand({
   command: "vcs serve",
-  options: { root: serveRoot, ...(listen === undefined ? {} : { listen }), ...(auth === undefined ? {} : { auth }) },
+  options: { root: serveRoot, ...(listen === undefined ? {} : { listen }), ...(auth === undefined || auth === "-" ? {} : { auth }), allowUnauthenticatedWrites: writes === "allow" },
   pmRoot: serveRoot,
 });
 if (run.errorMessage !== undefined) {

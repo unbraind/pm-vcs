@@ -24,6 +24,7 @@ import {
   encodePushRequest,
   encodeUploadRequest,
   FETCH_ENDPOINT,
+  isLoopbackHostname,
   MISSING_ENDPOINT,
   OBJECT_FETCH_ENDPOINT,
   PUBLISH_ENDPOINT,
@@ -77,7 +78,9 @@ export class HttpTransport implements Transport {
   /**
    * @param url - The remote's configured location: `http://…` or `https://…`.
    * @param options - Construction options, all optional.
-   * @throws ObjectStoreError When the URL is not an HTTP(S) URL.
+   * @throws ObjectStoreError When the URL is not an HTTP(S) URL, or when a
+   *   non-empty bearer token would travel over plain `http://` to a host that
+   *   is not loopback.
    */
   constructor(url: string, options: HttpTransportOptions = {}) {
     let parsed: URL;
@@ -96,6 +99,16 @@ export class HttpTransport implements Transport {
       );
     }
     this.token = options.token ?? splitRemoteCredentials(url).token;
+    // A bearer token sent over plain `http://` is a credential handed to every
+    // observer on the wire between this machine and the remote, so the one host
+    // set for which cleartext is acceptable is loopback — this machine talking
+    // to itself. Everywhere else the token travels only under TLS.
+    if (this.token !== null && this.token !== "" && parsed.protocol === "http:" && !isLoopbackHostname(parsed.hostname)) {
+      throw new ObjectStoreError(
+        "unsupported_transport",
+        `${redactRemoteUrl(url)} would send a bearer token in cleartext over plain http to a host that is not loopback. Use https:// for this remote, or a tokenless http:// remote.`,
+      );
+    }
     parsed.username = "";
     parsed.password = "";
     this.url = parsed.href;

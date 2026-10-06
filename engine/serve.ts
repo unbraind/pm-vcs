@@ -4,10 +4,13 @@
 // refusal, `--force`, compare-and-swap publication, re-hashing every arriving
 // object — and this server adds none of its own. What it adds is the wire:
 // authorization before any repository byte is touched, a bound on what it will
-// buffer, and the tenancy rule that every refusal a caller may not learn from
-// is the same bytes. The engine functions this module calls are the same ones
-// `pm vcs push` runs against a directory.
+// buffer, refusal of browser-shaped requests (a served repository is an agent
+// transport, not a web service — so no cross-site page may reach an endpoint
+// and no rebound host may read one), and the tenancy rule that every refusal a
+// caller may not learn from is the same bytes. The engine functions this module
+// calls are the same ones `pm vcs push` runs against a directory.
 
+import { isIP } from "node:net";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -39,6 +42,7 @@ import {
   FORBIDDEN_STATUS,
   INTERNAL_ERROR_STATUS,
   isServedRepositoryName,
+  isLoopbackHostname,
   isWriteEndpoint,
   JSON_CONTENT_TYPE,
   MISSING_ENDPOINT,
@@ -46,7 +50,7 @@ import {
   PUBLISH_ENDPOINT,
   PUSH_ENDPOINT,
   type ServeLimits,
-  splitServedPath,
+  splitServedPathCandidates,
   UPLOAD_ENDPOINT,
 } from "./http-protocol.ts";
 
@@ -197,6 +201,19 @@ export function bearerToken(header: string | undefined): string | null {
   return match === null ? null : match[1];
 }
 
+/**
+ * The body answering a write sent to an unauthenticated server that is read-only.
+ *
+ * Serving without `--auth` is open for reads, so a repository's existence is
+ * already public to anyone who can reach the port; naming the reason costs no
+ * tenancy and saves the operator the confusion of a push answered with the
+ * missing-repository denial.
+ */
+const READONLY_BODY = Buffer.from(
+  `${JSON.stringify({ error: { code: "forbidden", message: "This served repository accepts reads without a token. A write needs --auth, or the operator's explicit open-writes override." } })}\n`,
+  "utf8",
+);
+
 /** A running served repository root. */
 export interface ServeHandle {
   /** The host the server bound. */
@@ -215,8 +232,17 @@ export interface ServeOptions {
   readonly host: string;
   /** Port to bind; `0` chooses an ephemeral one. */
   readonly port: number;
-  /** Token grants, or null to serve every repository readable and writable. */
+  /** Token grants, or null to serve every repository readable. */
   readonly grants?: TokenGrants | null;
+  /**
+   * Whether writes are accepted without a token when no grants are configured.
+   *
+   * The default is read-only: an unauthenticated server is reachable by any
+   * process on the host, and a page in a browser is one of those. The override
+   * exists for operators who have fenced the port another way and want the
+   * pre-hardening behaviour back.
+   */
+  readonly unauthenticatedWrites?: boolean;
   /** Bounds to apply; defaults to {@link DEFAULT_SERVE_LIMITS}. */
   readonly limits?: ServeLimits;
   /** Response hooks; defaults to none. */
@@ -413,16 +439,21 @@ export function startRepositoryServer(options: ServeOptions): Promise<ServeHandl
   }
   const grants = options.grants ?? null;
   const hooks = options.hooks ?? null;
+  const unauthenticatedWrites = options.unauthenticatedWrites ?? false;
   const directories = new ServedRepositoryDirectories(root);
   const repositories = new Map<string, ServedRepository>();
+  // The port is only known once the socket is listening; the handler cannot run
+  // before then, so the holder below hands the bound address to every request.
+  const boundAddress = { host: options.host, port: 0 };
   const server = createServer((request, response) => {
-    void handleServedRequest(request, response, { directories, grants, hooks, limits, repositories });
+    void handleServedRequest(request, response, { directories, grants, hooks, limits, repositories, unauthenticatedWrites, boundAddress });
   });
   return new Promise((resolveListen, rejectListen) => {
     server.once("error", (error) => rejectListen(error));
     server.listen(options.port, options.host, () => {
       // A successful TCP listen callback always carries the bound TCP address.
       const port = (server.address() as AddressInfo).port;
+      boundAddress.port = port;
       resolveListen({
         host: options.host,
         port,
@@ -457,6 +488,10 @@ interface ServeContext {
   readonly directories: ServedRepositoryDirectories;
   /** Token grants, or null when serving without authorization. */
   readonly grants: TokenGrants | null;
+  /** Whether writes are accepted without a token when grants are null. */
+  readonly unauthenticatedWrites: boolean;
+  /** The address the server bound, for the Host header check. */
+  readonly boundAddress: { host: string; port: number };
   /** Response hooks, or null when serving without any. */
   readonly hooks: ServeHooks | null;
   /** Bounds in force. */
@@ -473,6 +508,15 @@ interface ServedResponse {
   readonly body: Buffer;
   /** Content type the bytes carry. */
   readonly contentType: string;
+}
+
+/** A routed request: the answer to write, and the target it addressed. */
+interface RoutedServedRequest {
+  /** The status, body and content type to answer with. */
+  readonly response: ServedResponse;
+  /** The repository and endpoint the request was routed to, or null when the
+   * path named no endpoint this root accepts. */
+  readonly addressed: { repository: string; endpoint: string } | null;
 }
 
 /**
@@ -494,70 +538,151 @@ async function handleServedRequest(
   response: ServerResponse,
   context: ServeContext,
 ): Promise<void> {
-  const parsed = splitServedPath((request.url as string).split("?")[0]);
-  let outcome: ServedResponse;
+  const candidates = splitServedPathCandidates((request.url as string).split("?")[0]);
+  let routed: RoutedServedRequest;
   try {
-    outcome = await routeServedRequest(request, parsed, context);
+    routed = await routeServedRequest(request, candidates, context);
   } catch (error) {
-    outcome = error instanceof ObjectStoreError
-      ? {
-        // A body past the bound is refused with the status that names it, so a
-        // client sizing its retries can distinguish "send less" from "send right".
-        status: error.code === "body_too_large" ? BODY_TOO_LARGE_STATUS : BAD_REQUEST_STATUS,
-        body: encodeErrorBody(error.code, error.message),
-        contentType: JSON_CONTENT_TYPE,
-      }
-      : {
-        status: INTERNAL_ERROR_STATUS,
-        body: encodeErrorBody("internal_error", "The server failed to answer the request."),
-        contentType: JSON_CONTENT_TYPE,
-      };
+    routed = {
+      response: error instanceof ObjectStoreError
+        ? {
+          // A body past the bound is refused with the status that names it, so a
+          // client sizing its retries can distinguish "send less" from "send right".
+          status: error.code === "body_too_large" ? BODY_TOO_LARGE_STATUS : BAD_REQUEST_STATUS,
+          body: encodeErrorBody(error.code, error.message),
+          contentType: JSON_CONTENT_TYPE,
+        }
+        : {
+          status: INTERNAL_ERROR_STATUS,
+          body: encodeErrorBody("internal_error", "The server failed to answer the request."),
+          contentType: JSON_CONTENT_TYPE,
+        },
+      addressed: candidates[0],
+    };
   }
   // The work is done; only the answer is still unsent. Holding here — an
   // observability hook, or a test recreating a slow wire — delays the response
   // without changing it, which is the one window real concurrency can be
   // observed in.
-  if (parsed !== null) await context.hooks?.holdResponse(parsed.repository, parsed.endpoint);
+  if (routed.addressed !== null) await context.hooks?.holdResponse(routed.addressed.repository, routed.addressed.endpoint);
   response.sendDate = false;
   response.setHeader("connection", "close");
-  response.statusCode = outcome.status;
-  response.setHeader("content-type", outcome.contentType);
-  response.setHeader("content-length", String(outcome.body.length));
+  response.statusCode = routed.response.status;
+  response.setHeader("content-type", routed.response.contentType);
+  response.setHeader("content-length", String(routed.response.body.length));
   // A request whose body was refused is never drained: Node closes its
   // connection once the response is flushed, so a refused client cannot hold a
   // slot by streaming a body nobody will read.
-  response.end(outcome.body);
+  response.end(routed.response.body);
 }
 
 /**
  * Routes one request to authorization, bounds and the transport.
  *
+ * A served repository is an agent transport, not a web service, so three
+ * browser-shaped requests are refused with the same fixed denial as any other
+ * unauthorized request, before authorization has anything to say: a request
+ * that carries an `Origin` header (only browsers send one, and a same-origin
+ * browser client is not a client this server has); a request whose `Host` is
+ * not the address the server bound (which is how a DNS-rebound page would read
+ * an answer no origin policy would otherwise let it read); and, on the
+ * mutating endpoints, a request that is not JSON (a browser can only send
+ * those without a CORS preflight, which this server never answers — so a
+ * cross-site page cannot write even to a server an operator left open).
+ *
  * @param request - The incoming request.
- * @param parsed - The request's repository and endpoint, or null when the
- *   path names neither.
+ * @param candidates - Every repository/endpoint split of the request path,
+ *   deepest repository first, as {@link splitServedPathCandidates} ordered them.
  * @param context - The server's shared state.
- * @returns The status, body and content type to answer with.
+ * @returns The response to answer with, and the request's resolved target.
  */
 async function routeServedRequest(
   request: IncomingMessage,
-  parsed: { repository: string; endpoint: string } | null,
+  candidates: readonly { repository: string; endpoint: string }[],
   context: ServeContext,
-): Promise<ServedResponse> {
-  if (request.method !== "POST" || parsed === null || (parsed.repository !== "" && !isServedRepositoryName(parsed.repository))) {
-    return denial();
+): Promise<RoutedServedRequest> {
+  if (request.method !== "POST" || candidates.length === 0 || !isAcceptableHost(request.headers.host, context.boundAddress)
+    || request.headers.origin !== undefined) {
+    return { response: denial(), addressed: null };
   }
-  const repository = parsed.repository;
-  const access = context.grants === null
-    ? "write" as TokenAccess
-    : context.grants.scope(bearerToken(request.headers.authorization) ?? "", repository);
-  if (access === null) return denial();
-  const served = openServedRepository(context, repository);
-  if (served === null) return denial();
-  if (isWriteEndpoint(parsed.endpoint) && access !== "write") {
-    return { status: FORBIDDEN_STATUS, body: FORBIDDEN_BODY, contentType: JSON_CONTENT_TYPE };
+  // Every candidate split of one path classifies the request identically, so
+  // the content-type rule for mutating endpoints is checked once, up front.
+  const mutating = isWriteEndpoint(candidates[0].endpoint);
+  const declared = request.headers["content-type"];
+  const contentType = (declared === undefined ? "" : declared).split(";")[0].trim().toLowerCase();
+  if (mutating && contentType !== JSON_CONTENT_TYPE) return { response: denial(), addressed: null };
+  if (context.grants === null) {
+    const addressed = catalogueCandidate(candidates, context) ?? candidates[0];
+    if (mutating && !context.unauthenticatedWrites) return { response: { status: FORBIDDEN_STATUS, body: READONLY_BODY, contentType: JSON_CONTENT_TYPE }, addressed: null };
+    const served = openServedRepository(context, addressed.repository);
+    if (served === null) return { response: denial(), addressed };
+    const body = await readBoundedBody(request, context.limits.maxBodyBytes);
+    return { response: await dispatchServedRequest(served, addressed.endpoint, body, context), addressed };
+  }
+  const addressed = catalogueCandidate(candidates, context) ?? candidates[0];
+  const token = bearerToken(request.headers.authorization) ?? "";
+  const access = context.grants.scope(token, addressed.repository);
+  if (access === null) return { response: denial(), addressed };
+  const served = openServedRepository(context, addressed.repository);
+  if (served === null) return { response: denial(), addressed };
+  if (mutating && access !== "write") {
+    return { response: { status: FORBIDDEN_STATUS, body: FORBIDDEN_BODY, contentType: JSON_CONTENT_TYPE }, addressed };
   }
   const body = await readBoundedBody(request, context.limits.maxBodyBytes);
-  return dispatchServedRequest(served, parsed.endpoint, body, context);
+  return { response: await dispatchServedRequest(served, addressed.endpoint, body, context), addressed };
+}
+
+/**
+ * The candidate a request addresses, resolved by catalogue before authorization.
+ *
+ * The repository the caller means is the one
+ * the root actually serves: a name that also reads as an endpoint suffix —
+ * `tenant/objects`, `objects` — is only routed to its endpoint spelling when
+ * no served repository answers to the longer name.
+ *
+ * @param candidates - Every split of the request path, deepest repository first.
+ * @param context - The server's shared state.
+ * @returns The first candidate whose repository the catalogue holds, or null.
+ */
+function catalogueCandidate(
+  candidates: readonly { repository: string; endpoint: string }[],
+  context: ServeContext,
+): { repository: string; endpoint: string } | null {
+  for (const candidate of candidates) {
+    const path = context.directories.lookup(candidate.repository);
+    if (path !== undefined) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Whether a request's `Host` header names the address the server bound.
+ *
+ * The authority must use the bound port (an omitted port means HTTP's default
+ * 80). Loopback binds accept loopback spellings; wildcard binds accept address
+ * literals. Other binds accept only their configured hostname or address.
+ * Malformed authorities are refused before comparing names.
+ *
+ * Exported for the adversarial tests: a bind to a hostname no test machine
+ * shares is the one shape a real socket cannot cheaply produce.
+ *
+ * @param host - The `Host` header as presented, or its absence.
+ * @param bound - The host and port the server bound.
+ * @returns True when the header names the bound address.
+ */
+export function isAcceptableHost(host: string | undefined, bound: { host: string; port: number }): boolean {
+  if (host === undefined) return false;
+  const authority = /^(?:\[([^\]]+)\]|([^:\s/[\]@?#]+))(?::([0-9]+))?$/.exec(host);
+  if (authority === null) return false;
+  const name = (authority[1] ?? authority[2]).toLowerCase();
+  if (authority[1] !== undefined && isIP(name) !== 6) return false;
+  const port = authority[3] === undefined ? 80 : Number(authority[3]);
+  if (port !== bound.port) return false;
+  const boundHost = bound.host.toLowerCase();
+  if (name === boundHost) return true;
+  if (isLoopbackHostname(boundHost)) return isLoopbackHostname(name);
+  if (boundHost === "0.0.0.0" || boundHost === "::") return isIP(name) !== 0 || name === "localhost";
+  return false;
 }
 
 /**

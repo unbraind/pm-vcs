@@ -10,9 +10,9 @@
 // contents are another tool's internal state, and no project has a legitimate
 // reason to ask this system to own them.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 
-import { relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { getPmGitignoreBlock, getSettingsPath, resolveImplicitPmRoot, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 
 import { matchesGlob } from "./config.ts";
@@ -29,6 +29,59 @@ export const ALWAYS_IGNORED = [".git", ".hg", ".svn", ".bzr", "_darcs", "CVS", "
 
 /** Name of the per-project ignore file, read from the repository root. */
 export const IGNORE_FILE = ".pmvcsignore";
+
+/**
+ * Directory names the SDK's runtime fence reserves below a tracker root.
+ *
+ * These are the directories the fence ignores under every resolved tracker, so
+ * no tracker can be nested inside them and walking one costs time for nothing.
+ * The SDK owns the fence; if it grows a name, this list only prunes a little
+ * less and the walk stays correct.
+ */
+const FENCED_TRACKER_DIRECTORIES = ["runtime", "search", "locks", "transactions", "checkpoints"] as const;
+
+/**
+ * Finds every tracker root at or below one directory, inside the repository.
+ *
+ * A record-path glob such as `custom/<asterisk>/Issues/<asterisk>.toon` says its
+ * records live in trackers the pattern does not name — `custom/team` — and discovery that only
+ * walks toward the repository root never reaches them, so their runtime caches
+ * reach `stage` as ordinary files. This walk goes the other way: every directory
+ * below the prefix that resolves to a tracker root is added as a candidate, and
+ * the walk keeps descending so a tracker nested inside another one is found
+ * too. Directories the always-ignored set prunes are skipped, and the runtime
+ * directories of a discovered tracker are not descended into.
+ *
+ * @param root - Absolute repository root; nothing outside it is visited.
+ * @param start - The prefix directory to walk below, already inside the root.
+ * @param candidates - The tracker-root set to add discoveries to.
+ */
+function discoverTrackerRootsBelow(root: string, start: string, candidates: Set<string>): void {
+  const pending = [start];
+  while (pending.length > 0) {
+    const current = pending.pop() as string;
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      // Missing, unreadable or concurrently replaced entries hide no tracker.
+      continue;
+    }
+    for (const entry of entries) {
+      // A symlinked directory is not `isDirectory`, so aliases cannot escape.
+      if (!entry.isDirectory() || isPrunableDirectory(entry.name)) continue;
+      const child = join(current, entry.name);
+      const tracker = resolvePmRoot(root, child);
+      if (existsSync(getSettingsPath(tracker))) candidates.add(tracker);
+      if (existsSync(getSettingsPath(current)) && (FENCED_TRACKER_DIRECTORIES as readonly string[]).includes(entry.name)) {
+        // A tracker root's fenced directories hold its runtime caches, never
+        // another tracker; skip the walk, not the fence.
+        continue;
+      }
+      pending.push(child);
+    }
+  }
+}
 
 /** Ordered exclusion and re-inclusion patterns compiled from one repository ignore file. */
 export interface IgnoreRules {
@@ -93,11 +146,23 @@ export function readIgnoreRules(root: string, recordPaths: readonly string[] = [
   for (const pattern of recordPaths) {
     const prefix = pattern.split(/[*?[]/, 1)[0];
     let directory = resolve(root, prefix);
+    const withinRoot = (() => {
+      const location = relative(root, directory).replaceAll("\\", "/");
+      return location !== ".." && !location.startsWith("../") && !/^[A-Za-z]:\//.test(location);
+    })();
     // Record globs can start inside a type folder, so find the owning settings.
-    while (directory !== resolve(root) && relative(root, directory) !== ".." && !relative(root, directory).startsWith("../")) {
+    while (directory !== resolve(root)) {
+      if (!withinRoot) break;
       const tracker = resolvePmRoot(root, directory);
       if (existsSync(getSettingsPath(tracker))) { candidates.add(tracker); break; }
       directory = resolve(directory, "..");
+    }
+    // A glob can also sit above the trackers it serves — `custom/*/Issues/*.toon`
+    // names records inside `custom/team`, a directory the walk toward the root
+    // never visits — so the prefix's subtree is searched for tracker roots too.
+    if (prefix !== pattern && withinRoot) {
+      const directoryPrefix = prefix.slice(0, prefix.lastIndexOf("/") + 1);
+      discoverTrackerRootsBelow(root, resolve(root, directoryPrefix), candidates);
     }
   }
   const runtime = [...candidates].flatMap((tracker) => {
