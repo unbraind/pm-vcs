@@ -252,6 +252,30 @@ human's attention. Only genuine disagreement produces markers.
 | `sequence` | Append-only. Both sides' additions survive in deterministic order. |
 | `timestamp` | Both sides must provide valid timestamps; the chronologically latest value wins, with UTF-8 byte order breaking equal-instant ties deterministically. |
 
+**Native PM event history** uses byte-exact JSONL line identity and a multiset union
+relative to the merge base. For each nonblank line, the result count is
+`base_count + max(left_extra, right_extra)`, where each extra count is the number
+of occurrences beyond those inherited from the base. A cherry-picked event or the
+same event commit merged into two branches appears once. Two identical appends on
+one branch remain two; repeated lines in the base remain exactly as recorded.
+Whitespace differences make distinct events; appended blank lines carry no event.
+
+The base remains a byte-for-byte prefix, including whitespace and blank lines.
+Appended events retain the existing timestamp ordering (`ts` for native PM history),
+with missing timestamps inheriting the previous timestamp on their own side and
+stable arrival order on ties, ours before theirs. Overlapping occurrences are kept
+from ours, followed by any surplus occurrences from theirs. Identical history blobs
+already contain the maximum multiplicity, so the tree shortcut and event union
+agree on event counts even when unrelated edits force the union path.
+
+This union applies only to direct `.agents/pm/history/*.jsonl` children when both
+sides preserve the base prefix at a line boundary. Rewritten prefixes, nested history
+paths and other blobs keep ordinary content merge. The union does not reanchor PM
+hash chains: the PM CLI history driver does, and post-merge chain validation and
+reconciliation remain separate from preserving event identity. The regression suite
+compares event payloads from hash-chain-valid PM-written inputs with that driver,
+excluding hashes and reanchor evidence that the driver regenerates.
+
 A conflict is scoped to the thing that conflicted. A scalar disagreement on `status` conflicts
 on `status`; `priority`, `tags` and `history` still merge. A document does not become
 unreadable because one value disagreed, and no conflict markers are ever written into a

@@ -445,15 +445,14 @@ test("an append-only log union keeps a line that legitimately occurs twice", () 
 });
 
 test("an append-only log union keeps events both sides appended and the base as its prefix", () => {
-  // The highest-count rule kept only the higher of two appended counts, so a
-  // line each side appended once survived once — one event of two lost.
+  // Byte-identical appends on two sides represent one shared event.
   const base = ['{"at":"1","event":"start"}'];
   const both = '{"at":"5","event":"ping"}';
   const ours = [...base, both];
   const theirs = [...base, both];
   const merged = mergeAppendOnlyLog(base, ours, theirs);
-  assert.equal(merged.filter((line) => line === both).length, 2);
-  assert.equal(merged.length, 3);
+  assert.equal(merged.filter((line) => line === both).length, 1);
+  assert.equal(merged.length, 2);
 
   // The base is the merged log's strict prefix, whatever the appended events'
   // timestamps are: an earlier timestamp on one side used to sort the appended
@@ -462,14 +461,14 @@ test("an append-only log union keeps events both sides appended and the base as 
   const early = '{"at":"0","event":"early"}';
   const prefixed = mergeAppendOnlyLog(base, [...base, early], [...base, early]);
   assert.deepEqual(prefixed.slice(0, base.length), base);
-  assert.deepEqual(prefixed.slice(base.length), [early, early]);
+  assert.deepEqual(prefixed.slice(base.length), [early]);
 });
 
 test("an append-only log union preserves the base and both sides' appends over random interleavings", () => {
   // A property, not a fixture: random histories, random duplicate identical
   // events, and appended timestamps that can precede the base's own. Whatever
   // the interleaving, the merged log is exactly the shared base followed by
-  // both sides' appended events in timestamp order — and merging the same
+  // the multiset union of appended events in timestamp order — and merging the same
   // inputs twice answers the same way.
   let seed = 0x2a636f6e; // deterministic: every run probes the same interleavings
   const random = (): number => {
@@ -510,17 +509,17 @@ test("an append-only log union preserves the base and both sides' appends over r
     const theirs = interleave();
     const merged = mergeAppendOnlyLog(base, ours, theirs);
     // Each side's appended occurrences are the ones past the base's count, and
-    // the merged count is the base count plus both sides' appends.
+    // the merged count is the base count plus the greater appended count.
     const baseTally = counts(base);
     const expected = new Map(baseTally);
     for (const side of [ours, theirs]) {
       for (const [line, count] of counts(side)) {
-        expected.set(line, (expected.get(line) ?? 0) + Math.max(0, count - (baseTally.get(line) ?? 0)));
+        expected.set(line, Math.max(expected.get(line) ?? 0, count));
       }
     }
     // The base is a strict prefix of the merged log, in its own order.
     assert.deepEqual(merged.slice(0, base.length), base);
-    // Every line's merged count is the base count plus both sides' appends.
+    // Every line's merged count is the base count plus max appended counts.
     assert.deepEqual(counts(merged), expected);
     for (const [line, count] of counts(merged)) {
       assert.equal(count, expected.get(line) ?? 0, line);
@@ -683,10 +682,10 @@ test("merging native history preserves the raw base through subsequent merges", 
   const result = mergePath(context, path, baseId, blob(base + early), blob(base + early));
   const text = repo.objects.readTyped(result.id, "blob").toString("utf8");
   assert.equal(result.conflict, undefined);
-  assert.equal(text, base + early + early);
+  assert.equal(text, base + early);
   const next = mergePath(context, path, baseId, result.id, blob(base + later));
   assert.equal(next.conflict, undefined);
-  assert.equal(repo.objects.readTyped(next.id, "blob").toString("utf8"), base + early + early + later);
+  assert.equal(repo.objects.readTyped(next.id, "blob").toString("utf8"), base + early + later);
   const unchanged = mergePath(context, path, baseId, baseId, baseId);
   assert.equal(repo.objects.readTyped(unchanged.id, "blob").toString("utf8"), base);
   // An unterminated ancestor still needs a line separator before new events.
