@@ -299,7 +299,12 @@ nothing while reporting success is how a commit ends up missing a file.
 Served pushes re-hash every arriving object and verify the complete reachable closure before
 publishing refs. The same fast-forward and compare-and-swap rules apply to file and HTTP
 remotes. Native `.agents/pm/history/*.jsonl` histories that preserve their base prefix merge
-through the existing append-only event union; rewritten prefixes retain conflict handling.
+through an append-only multiset union: each byte-identical event keeps the base count
+plus `max(left_extra, right_extra)`. Cherry-picked or doubly merged events replay once;
+two identical appends on one branch remain two. Base bytes and timestamp ordering are
+preserved, and whitespace-distinct lines remain distinct. Rewritten prefixes retain
+conflict handling. See [merge semantics](ARCHITECTURE.md#6-diff-and-merge) for the
+line boundaries, ordering and separate PM hash-chain reconciliation contract.
 
 Authorization runs before repository access. Missing repositories, invalid tokens, wrong
 repository scopes and unsafe names return identical HTTP response bytes, including headers.

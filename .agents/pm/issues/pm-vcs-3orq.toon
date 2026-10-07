@@ -2,13 +2,28 @@ id: pm-vcs-3orq
 title: Reconcile duplicate-event semantics between the identical-blob shortcut and the append-only history union
 description: "mergeTrees keeps one copy when both sides changed a history blob to the same id (git's identical-blob rule), while mergeAppendOnlyLog (since the PR #91 review fix for 4183822298) keeps one occurrence per side, so a byte-identical event appended on both sides survives twice when the sides differ elsewhere. The outcome therefore depends on unrelated edits. Byte-identical pm events (same ms timestamp, author, op, patch) on two branches realistically come from a cherry-pick or the same commit merged into both, where duplication would replay one event twice. Decide one rule (likely: dedupe byte-identical appended events) and apply it in both paths, validated against the pm CLI's own pm-history merge driver on real (hash-chain-valid) events."
 type: Issue
-status: open
+status: in_progress
 priority: 2
 tags[3]: history,merge,semantics
 created_at: "2026-10-07T00:14:49.678Z"
-updated_at: "2026-10-07T02:41:00.117Z"
+updated_at: "2026-10-07T16:18:16.625Z"
 author: claude-orchestrator
 acceptance_criteria: "Event identity is the byte-exact JSONL line; results are a multiset union over a shared base. (1) Base occurrences are kept exactly, including repeated identical lines, and the base stays a strict prefix. (2) Lines appended on only one side keep that side's multiplicity, so two identical appends on one side stay two (as test/review-findings.test.ts expects). (3) A line appended on both sides appears max(countA, countB) times, so a cherry-picked or doubly merged event appears once, not twice, whether or not the two blobs are otherwise identical. (4) Distinct appended events from both sides all appear. The identical-blob shortcut and mergeAppendOnlyLog produce the same result in every case; the rule is checked against the pm CLI's pm-history merge driver on hash-chain-valid pm-written events, and tests cover cases 1-4 including repeated lines in the base and on one side."
-files[1]{path,scope}:
+comments[3]{created_at,author,text}:
+  "2026-10-07T15:59:21.079Z",codex-sol,"Plan: use byte-exact event identity and base-relative multiset union: retain base occurrences, then max(left_extra, right_extra). Preserve timestamp ordering and native-history prefix/path boundaries. Add generated tree/log invariance, cherry-pick/double-merge, repeated-event and pm-history driver checks; prove regressions with a function-only behavioral revert before exact release gates."
+  "2026-10-07T16:05:01.964Z",codex-sol,"Implemented exact-line base-relative maximum multiplicity. Focused tests passed 45/45 before extending the generated tree invariance cases. Function-only behavioral revert removed overlap consumption and restored concatenated appends while retaining exact-byte identity, docs and tests: generated invariance, repeated multiplicity, cherry-pick and real PM driver comparisons failed (4/5); double-merge ancestry control passed. Restoring the fix passed. PM-written inputs and the CLI-reanchored output verify their hash chains; payload comparison excludes regenerated hashes and reanchor evidence."
+  "2026-10-07T16:18:16.075Z",codex-sol,"Preflight npm run release:check passed: 886/886 tests, zero skipped; configured authored TypeScript coverage 100% statements/branches/functions/lines; zero lint warnings and duplicated code; all 253 declarations documented; native TOON, stat-cache, self-host, production audit, identity, package dry-run, changelog and release-metadata gates passed. The tracker-linked focused run passed 45/45. Preparing one source/tracker/docs/bundle commit; final changelog/self-host and npm/Bun release gates will run against its exact HEAD and be reported in the PR. Item remains in progress for orchestrator review; event union does not replace PM hash-chain reconciliation."
+files[4]{path,scope}:
+  engine/records.ts,project
   engine/rewrite.ts,project
+  test/duplicate-events.test.ts,project
+  test/review-findings.test.ts,project
+tests[3]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/duplicate-events.test.ts test/records.test.ts test/review-findings.test.ts,project,240,codex-sol,"2026-10-07T16:05:02.535Z",local_mutation,fix/duplicate-event-semantics
+  "npm run release:check",project,1200,codex-sol,"2026-10-07T16:06:50.401Z",local_mutation,fix/duplicate-event-semantics
+  "bun run release:check",project,1200,codex-sol,"2026-10-07T16:06:51.298Z",local_mutation,fix/duplicate-event-semantics
+docs[3]{path,scope}:
+  ARCHITECTURE.md,project
+  docs/duplicate-event-semantics.md,project
+  README.md,project
 body: ""

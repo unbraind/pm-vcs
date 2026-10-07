@@ -231,10 +231,10 @@ export function mergeRecords(
  * strict prefix, byte for byte and in its own order — an appended entry with an
  * earlier timestamp cannot reorder history both sides already agreed on, which
  * would break the caller's append-only branch on the next merge. And the
- * entries each side appended are counted per side over the base, so an entry
- * that both sides appended once survives twice: two identical state
- * transitions recorded at the same instant are two events, not one, and the
- * highest-count rule this function used to apply would have collapsed them.
+ * entries each side appended are counted over the base using byte-exact line
+ * identity. The union keeps max(our extras, their extras) for each line: a
+ * cherry-picked event is replayed once, while repeated appends on one side
+ * retain their multiplicity. Identical blobs therefore agree with this union.
  * The appended entries are ordered by their timestamp field when they carry
  * one, inheriting the last timestamp seen on their own side, and otherwise keep
  * arrival order, ours before theirs.
@@ -258,7 +258,7 @@ export function mergeAppendOnlyLog(
     for (const line of lines) {
       const trimmed = line.trim();
       if (trimmed.length === 0) continue;
-      tally.set(trimmed, (tally.get(trimmed) ?? 0) + 1);
+      tally.set(line, (tally.get(line) ?? 0) + 1);
     }
     return tally;
   };
@@ -274,8 +274,8 @@ export function mergeAppendOnlyLog(
     for (const line of lines) {
       const trimmed = line.trim();
       if (trimmed.length === 0) continue;
-      const occurrence = seen.get(trimmed) ?? 0;
-      seen.set(trimmed, occurrence + 1);
+      const occurrence = seen.get(line) ?? 0;
+      seen.set(line, occurrence + 1);
       let parsed: unknown;
       try {
         parsed = JSON.parse(trimmed);
@@ -288,13 +288,23 @@ export function mergeAppendOnlyLog(
         const candidate = (parsed as Record<string, unknown>)[timestampField];
         if (typeof candidate === "string") lastTimestamp = candidate;
       }
-      if (occurrence >= (baseCounts.get(trimmed) ?? 0)) events.push({ line: trimmed, timestamp: lastTimestamp });
+      if (occurrence >= (baseCounts.get(line) ?? 0)) events.push({ line, timestamp: lastTimestamp });
     }
     return events;
   };
+  const ourAppends = appended(ours);
+  const overlap = counts(ourAppends.map((entry) => entry.line));
+  // Consume matching occurrences from theirs, keeping only its surplus. This
+  // retains every occurrence from ours and max(our extras, their extras) overall.
+  const theirSurplus = appended(theirs).filter((entry) => {
+    const remaining = overlap.get(entry.line) ?? 0;
+    if (remaining === 0) return true;
+    overlap.set(entry.line, remaining - 1);
+    return false;
+  });
   // Ties keep arrival order, ours before theirs, so the result is a function of
   // the inputs alone.
-  const ordered = [...appended(ours), ...appended(theirs)].sort((left, right) => (
+  const ordered = [...ourAppends, ...theirSurplus].sort((left, right) => (
     left.timestamp === right.timestamp
       ? 0
       : left.timestamp < right.timestamp ? -1 : 1

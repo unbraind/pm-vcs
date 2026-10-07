@@ -167,7 +167,7 @@ export function mergePath(
   const baseText = baseId === null ? "" : ctx.store.readTyped(baseId, "blob").toString("utf8");
   const ourText = ourObject.payload.toString("utf8");
   const theirText = theirObject.payload.toString("utf8");
-  // Native PM event histories are append-only; preserve both agents' events.
+  // Native PM histories use base-relative multiset union of byte-exact events.
   // A rewritten prefix keeps ordinary conflict handling rather than hiding edits.
   const keepsBaseLines = (text: string): boolean => text.startsWith(baseText)
     && (baseText.length === 0 || baseText.endsWith("\n") || text.length === baseText.length || text[baseText.length] === "\n");
@@ -200,7 +200,9 @@ export function mergePath(
  * A path both sides changed is merged by content — per field when both sides are
  * record objects, by diff3 otherwise. The merged tree is written and returned by
  * id, so both `merge` and a rebase replay receive one value rather than a path
- * map they then have to build themselves.
+ * map they then have to build themselves. Identical history blobs already
+ * contain the maximum appended multiplicity, so the identical-blob shortcut
+ * agrees with the append-only union used when the blobs differ.
  *
  * Conflicts are returned, not thrown: `merge` writes them into the working tree
  * so a human can resolve them, while a rebase treats them as fatal. Returning the
