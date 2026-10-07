@@ -9,13 +9,11 @@
 
 import {
   type BigIntStats,
-  chmodSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   readlinkSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, parse, relative, resolve, sep } from "node:path";
@@ -23,6 +21,8 @@ import { dirname, join, parse, relative, resolve, sep } from "node:path";
 import { type IgnoreRules, isControlPath, isIgnored, isRuntimeIgnored, isPrunableDirectory } from "./ignore.ts";
 import { compareByteOrder, type FileId, type FileMode, isFileId, type TreeEntry, readTree, writeTree } from "./model.ts";
 import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError, type StoredObject } from "./objects.ts";
+
+import { WorktreeMutation } from "./worktree-mutation.ts";
 
 const INDEX_HEADER = "pm-vcs-index 4";
 /** Conservative upper bound for one coarse filesystem timestamp tick. */
@@ -555,37 +555,35 @@ export function materializeTree(
     [...flattenTree(store, treeIdentifier)].filter(([path]) => visible(path) && !isIgnored(path, rules)
       && !isProtectedWorktreePath(root, path)),
   );
-  for (const existing of listWorkingTree(root, controlDirectory, rules)) {
-    if (!target.has(existing) && removablePaths.has(existing) && !isProtectedWorktreePath(root, existing)) {
-      rmSync(join(root, ...existing.split("/")), { force: true });
+  const mutation = new WorktreeMutation(root, controlDirectory);
+  try {
+    for (const existing of listWorkingTree(root, controlDirectory, rules)) {
+      if (!target.has(existing) && removablePaths.has(existing) && !isProtectedWorktreePath(root, existing)) {
+        mutation.remove(existing);
+      }
     }
+    const entries: IndexEntry[] = [];
+    for (const [path, value] of target) {
+      const content = render(path, store.read(value.id));
+      mutation.write(path, content, value.mode === "100755" ? 0o755 : 0o644);
+      const mode = value.mode === "100755" ? "100755" : "100644";
+      // A concurrent writer can race the write and chmod above. Do not pair the
+      // expected object id with metadata from bytes that were never verified.
+      entries.push({
+        path,
+        id: value.id,
+        mode,
+        ...(value.fileId === undefined ? {} : { fileId: value.fileId }),
+        ...(value.copiedFrom === undefined ? {} : { copiedFrom: value.copiedFrom }),
+      });
+    }
+    // Directories left empty by the removals above are pruned, so switching away
+    // from a branch that introduced a directory does not leave its skeleton.
+    mutation.prune();
+    return entries;
+  } finally {
+    mutation.close();
   }
-  const entries: IndexEntry[] = [];
-  for (const [path, value] of target) {
-    const absolute = join(root, ...path.split("/"));
-    const content = render(path, store.read(value.id));
-    mkdirSync(dirname(absolute), { recursive: true });
-    writeFileSync(absolute, content);
-    // chmod in addition to the write's mode: `writeFileSync` applies `mode` only
-    // on creation, so rewriting a pre-existing executable file with a 100644
-    // entry would otherwise leave the executable bit set and `status` would
-    // never see the tree it just materialised as clean.
-    chmodSync(absolute, value.mode === "100755" ? 0o755 : 0o644);
-    const mode = value.mode === "100755" ? "100755" : "100644";
-    // A concurrent writer can race the write and chmod above. Do not pair the
-    // expected object id with metadata from bytes that were never verified.
-    entries.push({
-      path,
-      id: value.id,
-      mode,
-      ...(value.fileId === undefined ? {} : { fileId: value.fileId }),
-      ...(value.copiedFrom === undefined ? {} : { copiedFrom: value.copiedFrom }),
-    });
-  }
-  // Directories left empty by the removals above are pruned, so switching away
-  // from a branch that introduced a directory does not leave its skeleton.
-  pruneEmptyDirectories(root, root, controlDirectory);
-  return entries;
 }
 
 /**
@@ -597,25 +595,12 @@ export function materializeTree(
  * @returns True when the directory is now empty of tracked content.
  */
 export function pruneEmptyDirectories(root: string, directory: string, controlDirectory: string): boolean {
-  let empty = true;
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (entry.name.toLowerCase() === controlDirectory.toLowerCase()) {
-      empty = false;
-      continue;
-    }
-    if (entry.isDirectory() && isPrunableDirectory(entry.name)) {
-      empty = false;
-      continue;
-    }
-    const absolute = join(directory, entry.name);
-    if (!entry.isDirectory()) {
-      empty = false;
-      continue;
-    }
-    if (pruneEmptyDirectories(root, absolute, controlDirectory)) rmSync(absolute, { recursive: true, force: true });
-    else empty = false;
+  const mutation = new WorktreeMutation(root, controlDirectory);
+  try {
+    return mutation.prune(relative(root, directory).split(sep).join("/"));
+  } finally {
+    mutation.close();
   }
-  return empty;
 }
 
 /**

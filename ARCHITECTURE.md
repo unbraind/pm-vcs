@@ -238,6 +238,20 @@ Materialization, mixed reset, restore and sparse-view changes apply the same bou
 so a legacy or hostile tree cannot write, remove or stage another repository's control
 state. Restore preflights the complete requested path set before mutating any file.
 
+Materialization, restore and directory pruning additionally pin the initial ordinary
+directory topology with `O_DIRECTORY | O_NOFOLLOW` descriptors. Each child syscall uses
+a single-component path under its parent's Linux procfs descriptor, so replacing a
+checked ancestor with a symlink cannot redirect that syscall. Device/inode checks around
+mutations refuse replacements with `worktree_path_changed`. Missing directories are
+created one at a time and opened without following links; files replace the previous
+leaf with exclusive no-follow creation, then write and chmod through the new descriptor.
+This also avoids truncating a hardlinked control file. Removal uses unlink or
+non-recursive rmdir, never a recursive pathname deletion. Descriptor support is required;
+an unavailable procfs backend refuses with `worktree_descriptor_unavailable` before
+mutation. A refusal can leave partial changes to ordinary worktree files, without
+publishing the replacement index. These handles pin the original objects, like openat;
+they do not sandbox an actor who can directly move or modify those objects.
+
 ---
 
 ## 6. Diff and merge

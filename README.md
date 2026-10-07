@@ -305,6 +305,13 @@ record an ordinary direct leaf link as target text; control targets, dangling co
 aliases and link chains are excluded. These protections cannot be negated. For a
 protected explicit add or restore, the command refuses with `path_ignored`.
 
+Materialization, restore and pruning require Linux procfs descriptor paths to pin
+directories across concurrent ancestor replacement. A replaced directory or leaf
+refuses with `worktree_path_changed`; unavailable descriptor support refuses with
+`worktree_descriptor_unavailable`. Writes and chmod use fresh file descriptors, and
+removals never recursively follow a pathname. A refused operation can leave ordinary
+worktree files partially changed; its replacement index is not published.
+
 `.pmvcsignore` adds project patterns with gitignore-like semantics: `#` comments, a trailing
 slash for a directory, a pattern without `/` matching by basename at any depth, and `!` to
 re-include. Staging an ignored path *by name* is refused rather than skipped — staging

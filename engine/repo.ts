@@ -86,6 +86,8 @@ import {
   sameIndexStat,
 } from "./worktree.ts";
 
+import { WorktreeMutation } from "./worktree-mutation.ts";
+
 /**
  * Every proper directory prefix of a repository path, longest first.
  *
@@ -2339,28 +2341,25 @@ export class Repository {
     const source = flattenTree(this.objects, readCommit(this.objects, this.resolve(revision)).tree);
     const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
     const restored: string[] = [];
-    for (const path of normalized) {
-      const entry = source.get(path);
-      const absolute = join(this.root, ...path.split("/"));
-      if (entry === undefined) {
-        if (existsSync(absolute) && statSync(absolute).isDirectory()) {
-          throw new ObjectStoreError(
-            "restore_directory_unsupported",
-            `Restore path ${path} is a directory, but restore accepts file paths. Name the files to restore instead.`,
-          );
+    const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+    try {
+      for (const path of normalized) {
+        const entry = source.get(path);
+        if (entry === undefined) {
+          mutation.remove(path);
+          index.delete(path);
+        } else {
+          const content = this.workingContent(path, this.objects.read(entry.id));
+          mutation.write(path, content, entry.mode === "100755" ? 0o755 : 0o644);
+          index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644" });
         }
-        index.delete(path);
-        rmSync(absolute, { force: true });
-      } else {
-        mkdirSync(dirname(absolute), { recursive: true });
-        writeFileSync(absolute, this.workingContent(path, this.objects.read(entry.id)));
-        chmodSync(absolute, entry.mode === "100755" ? 0o755 : 0o644);
-        index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644" });
+        restored.push(path);
       }
-      restored.push(path);
+      this.writeIndex([...index.values()]);
+      return restored.sort();
+    } finally {
+      mutation.close();
     }
-    this.writeIndex([...index.values()]);
-    return restored.sort();
   }
 
 }
