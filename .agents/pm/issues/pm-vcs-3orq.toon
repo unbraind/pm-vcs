@@ -6,9 +6,9 @@ status: open
 priority: 2
 tags[3]: history,merge,semantics
 created_at: "2026-10-07T00:14:49.678Z"
-updated_at: "2026-10-07T01:38:18.732Z"
+updated_at: "2026-10-07T02:41:00.117Z"
 author: claude-orchestrator
-acceptance_criteria: "Event identity is the byte-exact JSONL line. For a shared base and two sides: (1) an event present in the base appears exactly once; (2) an event appended on only one side appears exactly once; (3) a byte-identical event appended on both sides appears exactly once (cherry-pick or the same commit merged into both), whether or not the two blobs are otherwise identical; (4) distinct appended events from both sides all appear, base kept as a strict prefix. The identical-blob shortcut and mergeAppendOnlyLog produce the same result for every case. The rule is checked against the pm CLI's pm-history merge driver on hash-chain-valid pm-written events, and tests cover cases 1-4."
+acceptance_criteria: "Event identity is the byte-exact JSONL line; results are a multiset union over a shared base. (1) Base occurrences are kept exactly, including repeated identical lines, and the base stays a strict prefix. (2) Lines appended on only one side keep that side's multiplicity, so two identical appends on one side stay two (as test/review-findings.test.ts expects). (3) A line appended on both sides appears max(countA, countB) times, so a cherry-picked or doubly merged event appears once, not twice, whether or not the two blobs are otherwise identical. (4) Distinct appended events from both sides all appear. The identical-blob shortcut and mergeAppendOnlyLog produce the same result in every case; the rule is checked against the pm CLI's pm-history merge driver on hash-chain-valid pm-written events, and tests cover cases 1-4 including repeated lines in the base and on one side."
 files[1]{path,scope}:
   engine/rewrite.ts,project
 body: ""
