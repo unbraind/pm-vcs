@@ -43,6 +43,7 @@
 
 ### Fixed
 
+- Reconcile duplicate-event semantics between the identical-blob shortcut and the append-only history union ([pm-vcs-3orq](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-3orq.toon))
 - Exclude SDK tracker runtime caches from native VCS merges ([pm-vcs-bhsk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-bhsk.toon))
 - Keep served remote bearer credentials out of receipts and remote URLs ([pm-vcs-uzng](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-uzng.toon))
 - Include CDC benchmark source in the 100/100/100/100 coverage contract ([pm-vcs-tj07](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-tj07.toon))

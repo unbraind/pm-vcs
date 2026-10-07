@@ -2,11 +2,13 @@ id: pm-vcs-3orq
 title: Reconcile duplicate-event semantics between the identical-blob shortcut and the append-only history union
 description: "mergeTrees keeps one copy when both sides changed a history blob to the same id (git's identical-blob rule), while mergeAppendOnlyLog (since the PR #91 review fix for 4183822298) keeps one occurrence per side, so a byte-identical event appended on both sides survives twice when the sides differ elsewhere. The outcome therefore depends on unrelated edits. Byte-identical pm events (same ms timestamp, author, op, patch) on two branches realistically come from a cherry-pick or the same commit merged into both, where duplication would replay one event twice. Decide one rule (likely: dedupe byte-identical appended events) and apply it in both paths, validated against the pm CLI's own pm-history merge driver on real (hash-chain-valid) events."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags[3]: history,merge,semantics
 created_at: "2026-10-07T00:14:49.678Z"
-updated_at: "2026-10-07T16:18:16.625Z"
+updated_at: "2026-10-07T19:11:17.978Z"
+closed_at: "2026-10-07T19:11:17.483Z"
+completed_at: "2026-10-07T19:11:17.483Z"
 author: claude-orchestrator
 acceptance_criteria: "Event identity is the byte-exact JSONL line; results are a multiset union over a shared base. (1) Base occurrences are kept exactly, including repeated identical lines, and the base stays a strict prefix. (2) Lines appended on only one side keep that side's multiplicity, so two identical appends on one side stay two (as test/review-findings.test.ts expects). (3) A line appended on both sides appears max(countA, countB) times, so a cherry-picked or doubly merged event appears once, not twice, whether or not the two blobs are otherwise identical. (4) Distinct appended events from both sides all appear. The identical-blob shortcut and mergeAppendOnlyLog produce the same result in every case; the rule is checked against the pm CLI's pm-history merge driver on hash-chain-valid pm-written events, and tests cover cases 1-4 including repeated lines in the base and on one side."
 comments[3]{created_at,author,text}:
@@ -26,4 +28,5 @@ docs[3]{path,scope}:
   ARCHITECTURE.md,project
   docs/duplicate-event-semantics.md,project
   README.md,project
+close_reason: "Merged in #94 (6c6d5fc). One rule for byte-identical event lines in merges: base_count + max(left_extra, right_extra), so cherry-picked or double-merged events are kept once, events appended twice on one side are kept twice, and the identical-blob shortcut and the log union agree regardless of unrelated edits; byte-exact keys no longer trim appended lines. Orchestrator verification: with only engine/records.ts reverted, 4 of 5 new duplicate-event tests fail; restored 45/45 across duplicate-events, records and review-findings; npm+Bun release:check 886/886 at 100/100/100/100; CodeRabbit full review at 3ac17b1: no actionable comments."
 body: ""
