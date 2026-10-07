@@ -219,8 +219,9 @@ test("tracker discovery never walks the root .pmvcs object store", (context) => 
     const rules = readIgnoreRules(dir.root, ["**/*.toon"]);
     assert.equal(visited.some((path) => path === control || path.startsWith(`${control}/`)), false);
     assert.equal(isRuntimeIgnored(".pmvcs/objects/tracker/runtime/cache.json", rules), false);
-    // This change deliberately leaves nested control-directory policy alone.
-    assert.equal(isRuntimeIgnored("custom/.pmvcs/tracker/runtime/cache.json", rules), true);
+    assert.equal(visited.some((path) => path === visible || path.startsWith(`${visible}/`)), false);
+    assert.equal(isRuntimeIgnored("custom/.pmvcs/tracker/runtime/cache.json", rules), false);
+    assert.equal(isIgnored("custom/.pmvcs/tracker/runtime/cache.json", rules), true);
   } finally {
     context.mock.restoreAll();
     syncBuiltinESMExports();

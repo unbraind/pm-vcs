@@ -18,9 +18,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, parse, relative, resolve, sep } from "node:path";
 
-import { type IgnoreRules, isIgnored, isRuntimeIgnored, isPrunableDirectory } from "./ignore.ts";
+import { type IgnoreRules, isControlPath, isIgnored, isRuntimeIgnored, isPrunableDirectory } from "./ignore.ts";
 import { compareByteOrder, type FileId, type FileMode, isFileId, type TreeEntry, readTree, writeTree } from "./model.ts";
 import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError, type StoredObject } from "./objects.ts";
 
@@ -153,6 +153,37 @@ export function normalizeRepoPath(root: string, candidate: string): string {
     throw new ObjectStoreError("path_outside_repo", `"${candidate}" cannot be represented as a canonical path.`);
   }
   return normalized;
+}
+
+/**
+ * Fence control paths and filesystem aliases before reading, removing or writing content.
+ *
+ * Ancestor symlinks are never traversed. Writes also protect leaf symlinks so a
+ * stored tree cannot overwrite a linked control file. Staging may retain a leaf
+ * link's target text only when its target names no control segment and traverses
+ * no further symlink; this also fences dangling control aliases and link chains.
+ * Missing prefixes are safe to create; other filesystem errors propagate.
+ *
+ * @param root - Repository root, or filesystem anchor when inspecting a link target.
+ * @param path - Canonical relative path to inspect without reading file bytes.
+ * @param allowLeafLink - Whether a direct ordinary leaf link may be represented as text.
+ * @returns True when the path must remain outside the working-tree operation.
+ */
+export function isProtectedWorktreePath(root: string, path: string, allowLeafLink = false): boolean {
+  if (isControlPath(path)) return true;
+  const segments = path.split("/");
+  let absolute = root;
+  for (const [index, segment] of segments.entries()) {
+    absolute = join(absolute, segment);
+    const stat = lstatSync(absolute, { throwIfNoEntry: false });
+    if (stat === undefined) return false;
+    if (!stat.isSymbolicLink()) continue;
+    if (!allowLeafLink || index !== segments.length - 1) return true;
+    const target = resolve(dirname(absolute), readlinkSync(absolute));
+    const anchor = parse(target).root;
+    return isProtectedWorktreePath(anchor, relative(anchor, target).split(sep).join("/"));
+  }
+  return false;
 }
 
 /**
@@ -312,7 +343,7 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
   /** Descend through materializable entries without following symlinks or tool-owned directories. */
   const walk = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (directory === root && entry.name === controlDirectory) continue;
+      if (entry.name.toLowerCase() === controlDirectory.toLowerCase()) continue;
       // Pruning happens on the directory name, before descending: walking
       // node_modules only to discard every path it yields is the difference
       // between an instant status and a multi-second one.
@@ -324,7 +355,7 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
       }
       if (!entry.isFile() && !entry.isSymbolicLink()) continue;
       const path = relative(root, absolute).split(sep).join("/");
-      if (!isIgnored(path, rules)) found.push(path);
+      if (!isIgnored(path, rules) && !isProtectedWorktreePath(root, path, true)) found.push(path);
     }
   };
   walk(root);
@@ -521,10 +552,11 @@ export function materializeTree(
   visible: (path: string) => boolean = () => true,
 ): IndexEntry[] {
   const target = new Map(
-    [...flattenTree(store, treeIdentifier)].filter(([path]) => visible(path) && !isIgnored(path, rules)),
+    [...flattenTree(store, treeIdentifier)].filter(([path]) => visible(path) && !isIgnored(path, rules)
+      && !isProtectedWorktreePath(root, path)),
   );
   for (const existing of listWorkingTree(root, controlDirectory, rules)) {
-    if (!target.has(existing) && removablePaths.has(existing)) {
+    if (!target.has(existing) && removablePaths.has(existing) && !isProtectedWorktreePath(root, existing)) {
       rmSync(join(root, ...existing.split("/")), { force: true });
     }
   }
@@ -567,7 +599,7 @@ export function materializeTree(
 export function pruneEmptyDirectories(root: string, directory: string, controlDirectory: string): boolean {
   let empty = true;
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (directory === root && entry.name === controlDirectory) {
+    if (entry.name.toLowerCase() === controlDirectory.toLowerCase()) {
       empty = false;
       continue;
     }
@@ -625,7 +657,7 @@ export function computeStatus(
 
   const stagedChanges: Change[] = [];
   for (const path of new Set([...committed.keys(), ...staged.keys()])) {
-    if (isRuntimeIgnored(path, rules)) continue;
+    if (isRuntimeIgnored(path, rules) || isProtectedWorktreePath(root, path, true)) continue;
     const before = committed.get(path);
     const after = staged.get(path);
     if (!before && after) stagedChanges.push({ path, kind: "added" });
@@ -638,7 +670,7 @@ export function computeStatus(
   const present = new Set(listWorkingTree(root, controlDirectory, rules));
   const unstagedChanges: Change[] = [];
   for (const entry of index) {
-    if (isRuntimeIgnored(entry.path, rules)) continue;
+    if (isRuntimeIgnored(entry.path, rules) || isProtectedWorktreePath(root, entry.path, true)) continue;
     // A sparse entry's path is intentionally absent from this working tree — it
     // is outside the view — so absence is not a deletion. When the path *does*
     // hold a file, the entry compares like any other, because a file that exists

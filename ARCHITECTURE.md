@@ -227,6 +227,17 @@ would overwrite is still refused before mutation.
 Ignore rules are read on each use rather than cached, because `.pmvcsignore` is itself a
 tracked file that a switch can change underneath the running command.
 
+Control state is a non-negatable boundary: any case spelling of a `.pmvcs` path segment
+is reserved at every depth, including the leaf. The walker and directory pruner exclude
+these names before descending. Filesystem checks reject symlink ancestors and protect
+leaf symlinks from stored-tree writes. A direct ordinary leaf link can still be staged
+as target text, but control targets and further aliases cannot. Status omits protected
+entries from both comparisons; add sanitizes legacy indexes even outside a sparse view;
+ordinary and merge commits validate their index snapshot before constructing a tree.
+Materialization, mixed reset, restore and sparse-view changes apply the same boundary,
+so a legacy or hostile tree cannot write, remove or stage another repository's control
+state. Restore preflights the complete requested path set before mutating any file.
+
 ---
 
 ## 6. Diff and merge
