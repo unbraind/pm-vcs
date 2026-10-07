@@ -4,6 +4,8 @@
 
 ### Added
 
+- Cross-tenant denial without existence leakage ([pm-vcs-4ff1](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-4ff1.toon))
+- Served repository over the Phase 3 transport ([pm-vcs-ttc0](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ttc0.toon))
 - Resume an interrupted fragment transfer without advancing a ref early ([pm-vcs-yu9g](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-yu9g.toon))
 - Reuse unaffected fragments across an edit with content-defined chunking ([pm-vcs-lrdt](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-lrdt.toon))
 - Stream arbitrary large files through fragment and range storage ([pm-vcs-vmmx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-vmmx.toon))
@@ -41,6 +43,9 @@
 
 ### Fixed
 
+- Exclude SDK tracker runtime caches from native VCS merges ([pm-vcs-bhsk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-bhsk.toon))
+- Keep served remote bearer credentials out of receipts and remote URLs ([pm-vcs-uzng](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-uzng.toon))
+- Include CDC benchmark source in the 100/100/100/100 coverage contract ([pm-vcs-tj07](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-tj07.toon))
 - The changelog gate stamps an untagged version with the current date, so its verdict flips every midnight with no commit ([pm-vcs-q152](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-q152.toon))
 - Merge and rebase refuse to run when any untracked file exists, which is every real working tree ([pm-vcs-8rqk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8rqk.toon))
 - This repository has never produced a static analysis, because it runs no CodeQL workflow ([pm-vcs-zhlz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-zhlz.toon))

@@ -1,0 +1,14 @@
+id: pm-vcs-u4nv
+title: Emit an Unreleased changelog section until the first approved release
+description: "pm-vcs has never been released (no tags or GitHub releases; publishing waits for owner approval), but changelog:full passes --release-version-from-package and a fixed --date 2026-07-30. Every closed item therefore accrues under '## 2026.7.30 - 2026-07-30', which backdates October work (raised by CodeRabbit on PR #93). Generate an Unreleased section until a release tag exists, and keep verify-release-changelog-date and changelog:check consistent with that."
+type: Issue
+status: open
+priority: 3
+tags[2]: changelog,release
+created_at: "2026-10-07T02:41:00.664Z"
+updated_at: "2026-10-07T02:41:00.664Z"
+author: claude-orchestrator
+acceptance_criteria: "With no release tag, CHANGELOG.md lists closed work under Unreleased; the first approved release produces a dated section from the tag; changelog:check and verify-release-changelog-date pass in both states"
+files[1]{path,scope}:
+  package.json,project
+body: ""

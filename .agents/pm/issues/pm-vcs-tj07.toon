@@ -1,12 +1,14 @@
 id: pm-vcs-tj07
 title: Include CDC benchmark source in the 100/100/100/100 coverage contract
-description: "The coverage contract includes scripts/cdc-benchmark.ts and all authored executable TypeScript under the root, engine and scripts globs, with c8 --all --100 across statements, branches, functions and lines. Real benchmark fixtures exercise file/object-store I/O and boundary behavior. The former explicit benchmark exclusion has been removed; Node and Bun release invocations pass on the revised source. This issue remains in_progress for orchestrator verification and closure."
+description: "The coverage contract includes scripts/cdc-benchmark.ts and all authored executable TypeScript under the root, engine and scripts globs, with c8 --all --100 across statements, branches, functions and lines. Real benchmark fixtures exercise file/object-store I/O and boundary behavior. The former explicit benchmark exclusion has been removed; Node and Bun release invocations pass on the revised source. Verified and closed by the orchestrator after PR #91 merged (186adf1)."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags: []
 created_at: "2026-09-29T13:15:34.304Z"
-updated_at: "2026-10-06T15:13:17.873Z"
+updated_at: "2026-10-07T00:34:07.336Z"
+closed_at: "2026-10-07T00:25:37.546Z"
+completed_at: "2026-10-07T00:25:37.546Z"
 author: codex
 acceptance_criteria: "Inventory every authored executable TypeScript source file and reconcile the coverage and docstring scopes; include scripts/cdc-benchmark.ts or refactor its executable logic into measured source with real deterministic benchmark acceptance; measure statements, lines, branches and functions at 100% with no excludes, threshold reductions, skips or synthetic-only assertion; run the full release gate and real benchmark on the exact pushed head, then update the coverage evidence and PM links."
 expected_result: "Every executable authored TypeScript source is measured at 100% across statements, lines, branches and functions, and the benchmark still runs against real file/object-store I/O."
@@ -37,4 +39,5 @@ tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
 docs[2]{path,scope,note}:
   "https://github.com/unbraind/pm-vcs/pull/79",global,Current package certification candidate carrying this owner issue
   .agents/pm/features/pm-vcs-lrdt.toon,project,Prior feature decision that accepted the benchmark exclusion
+close_reason: "Verified by the orchestrator: PR #91 merged as 186adf1; required checks test (22)/(26) and both Windows acceptance launchers green, main CI and CodeQL green after merge, release:check under npm and bun at exact 100/100/100/100 (881 tests), Greptile 5/5 and every CodeRabbit finding fixed or answered."
 body: ""

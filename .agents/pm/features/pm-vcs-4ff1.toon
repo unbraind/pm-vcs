@@ -1,12 +1,14 @@
 id: pm-vcs-4ff1
 title: Cross-tenant denial without existence leakage
-description: "Repository-scoped bearer read/write grants are checked before repository access. Invalid tokens, missing repositories, wrong scopes and unsafe repository names receive identical complete HTTP denial bytes. Exception: a read-only grant receives a distinct 403 on write endpoints when its repository exists and is readable, because that caller can already establish existence. Request and object counts are bounded; traversal, symlink aliases and linked instances are refused. Adversarial real-socket Node/Bun tests and source coverage evidence are linked. Implementation awaits orchestrator closure after final release gates."
+description: "Repository-scoped bearer read/write grants are checked before repository access. Invalid tokens, missing repositories, wrong scopes and unsafe repository names receive identical complete HTTP denial bytes. Exception: a read-only grant receives a distinct 403 on write endpoints when its repository exists and is readable, because that caller can already establish existence. Request and object counts are bounded; traversal, symlink aliases and linked instances are refused. Adversarial real-socket Node/Bun tests and source coverage evidence are linked. Verified and closed by the orchestrator after PR #91 merged (186adf1)."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:14.362Z"
-updated_at: "2026-10-06T15:13:17.349Z"
+updated_at: "2026-10-07T00:34:05.291Z"
+closed_at: "2026-10-07T00:25:36.399Z"
+completed_at: "2026-10-07T00:25:36.399Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:42.163Z",claude,"cli:update:dep",detected
@@ -27,4 +29,5 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/serve.test.ts test/http-protocol.test.ts,project,codex-sol,"2026-10-05T06:53:48.395Z",local_mutation,feat/served-repository-http
 docs[1]{path,scope,note}:
   README.md,project,Read-only grant 403 exception agrees with the current authorization description
+close_reason: "Verified by the orchestrator: PR #91 merged as 186adf1; required checks test (22)/(26) and both Windows acceptance launchers green, main CI and CodeQL green after merge, release:check under npm and bun at exact 100/100/100/100 (881 tests), Greptile 5/5 and every CodeRabbit finding fixed or answered."
 body: ""
