@@ -6,7 +6,7 @@ status: in_progress
 priority: 0
 tags: []
 created_at: "2026-10-05T08:48:37.876Z"
-updated_at: "2026-10-07T22:54:31.013Z"
+updated_at: "2026-10-07T23:30:15.169Z"
 author: codex-sol
 parent: pm-vcs-5h6j
 repro_steps: "Initialize a scratch parent Repository and agent-a child Repository; add an authenticated origin to the child RemoteStore; call parent.stage([]); parent.readIndex() contains agent-a/.pmvcs/credentials.json."
@@ -15,7 +15,7 @@ actual_result: The synthetic reproduction at e131473 returned nestedControlTrack
 dependencies[2]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-aujy,related,"2026-10-05T08:48:37.876Z",codex-sol,"cli:create:dep",detected
   pm-vcs-ttc0,related,"2026-10-05T08:48:37.876Z",codex-sol,"cli:create:dep",detected
-comments[10]{created_at,author,text}:
+comments[14]{created_at,author,text}:
   "2026-10-07T19:55:43.949Z",codex-sol,"Built-package reproduction on the current base: initialized a real scratch PM tracker, a parent Repository and agent-a child Repository; configured a synthetic authenticated child origin; parent.stage([]) returned nestedControlTracked=true for agent-a/.pmvcs/credentials.json. Plan: a non-negatable case-insensitive control-name fence at every depth, filesystem alias protection, legacy index sanitation, and stored-tree defenses across materialize, restore and sparse views. Tests will preserve ordinary source and PM records and prove the regression by reverting behavior only."
   "2026-10-07T20:01:56.846Z",codex-sol,"Implemented the control boundary in ignore, working-tree and repository operations. Linked PM tests pass: 87 focused Node tests and 8 built-package scenarios under native Bun, with no skips. Tests use actual scratch PM trackers and synthetic credentials; no PM SDK mocks. A failing fixture exposed removal of ordinary leaf links after target filtering, now corrected by fencing the removal set as well. Direct ordinary leaf links remain stageable as target text; control aliases, symlink ancestors and link chains are protected. PM test-result tracking is disabled in the project, so the CLI returned successful run results without recording a result artifact; this comment records the receipt. Full coverage, behavioral revert proof and final committed-head gates follow."
   "2026-10-07T20:09:38.065Z",codex-sol,"Behavioral revert proof: rebuilt the base behavior in engine/ignore.ts, engine/worktree.ts and engine/repo.ts, retaining inert compatibility exports so the unchanged regression tests still load. The identical built-package suite returned 0 pass / 8 fail, with assertion failures including actual nested credentials in status, accepted protected explicit adds, unsafe legacy commits and control materialization. Restored the implementation, rebuilt and reran the identical suite: 8 pass / 0 fail / 0 skips. Added direct credential-path assertions independent of the implementation predicate, ordinary and sparse legacy commit refusal, alias commit refusal and missing protected blobs. Standard source imports let the release coverage gate measure these same scenarios."
@@ -26,15 +26,21 @@ comments[10]{created_at,author,text}:
   "2026-10-07T22:50:22.656Z",codex-sol,"Candidate bypass pass checked every changed helper and both API callers: each mutation has a pinned parent; unlink/rmdir cannot recursively traverse replacement links; write/chmod use the new file descriptor; missing/type-changing ancestors and leaf substitutions refuse. Added descriptor cleanup and hostile-path tests. The independent candidate-review CLI hit its execution timeout before a terminal verdict, so it is missing reviewer evidence, not approval; the orchestrator completed the separate bypass/compatibility pass and focused validation. Existing refs may already move in some higher-level callers before filesystem refusal; this patch preserves their existing failure semantics and does not promise whole-command rollback."
   "2026-10-07T22:52:40.685Z",codex-sol,"Behavioral revert proof completed: replacing only materializeTree with its HEAD function (plus temporary required imports) made all six unchanged ancestor-swap tests fail; replacing only Repository.restore made all six corresponding tests fail. Candidate functions were restored byte-for-byte after each run; the same full 30-scenario race suite then passed with zero skips. The exploratory full coverage run was interrupted after more than 385 passing tests; it is not counted as a full-suite pass. Both complete release gates will be run on the final committed head after tracker/changelog/self-host generation."
   "2026-10-07T22:53:53.625Z",codex-sol,"Strengthened the revert proof to inspect outside/control sentinels before asserting the typed refusal: both function-only reverts still fail all six cases each, now directly on overwritten sentinel bytes or a missing deleted sentinel. After restoring the candidate, all 30 unchanged race scenarios pass with zero skips. Full exact-head npm run release:check and bun run release:check are linked and remain pending until the single source/tracker/bundle commit. No review threads were replied to or resolved."
-files[7]{path,scope}:
+  "2026-10-07T23:16:20.287Z",codex-sol,"Portable materialization follow-up for PR #96: preserve descriptor-pinned Linux/procfs behavior and select a path-based fallback when descriptor paths are unavailable. Snapshot directory device/inode identities and verify every ancestor around each mutation, use exclusive no-follow leaf creation and descriptor identity checks, and retain non-recursive deletion. Run the same deterministic race scenarios against both strategies plus a fallback-check behavioral revert. Document the remaining final-verify/syscall gap on portable platforms; run both exact-head release gates after the required tracker/changelog/staging/bundle/single-commit sequence."
+  "2026-10-07T23:22:00.198Z",codex-sol,"Implemented injectable descriptor-path selection with automatic fallback for missing or identity-mismatched procfs; fallback retains the initial root identity across selection. Shared suite covers both backends and portable no-follow-disabled flags; Linux additionally retains final-syscall swaps. Focused mutation-module coverage passed 100/100/100/100. Behavioral revert disabled only portable verify/verifyLeaf: unchanged portable suites returned 50 pass / 20 fail / 0 skips; unchanged Linux syscall suite remained 35 pass / 0 fail / 0 skips. Restored all checks byte-for-byte and the complete 143-case matrix passed. Documentation explicitly distinguishes between-step refusal from the unavoidable portable final-check/syscall gap and limits platform claims to capability simulation."
+  "2026-10-07T23:27:16.355Z",codex-sol,"Linked runner receipt: pm test pm-vcs-nz10 --run --only-last --progress passed node --test test/worktree-races.test.ts with 144 pass / 0 fail / 0 skips. The unsupported none/source PM context combination was refused before test execution; default isolated PM context succeeded. The capability case now asserts zero directory opens when procfs and directory descriptors are unavailable. A native Bun disposable fixture passed actual materialize, restore, mode replacement, deletion and pruning for pinned, portable and portable-no-follow strategies. Full all-source coverage remains in progress; exact-head npm/Bun release checks follow the single source/tracker/bundle commit."
+  "2026-10-07T23:30:14.542Z",codex-sol,"Final pre-commit verification: npm run coverage passed 1038 tests, zero failures/skips, and exact 100/100/100/100 across all configured root, engine and script sources. Typecheck, lint, duplicate detection, docstrings, production audit (zero vulnerabilities) and Git identity audit passed. Repeated the behavioral revert on final source: portable 50 pass / 20 fail, Linux syscall 35 pass / 0 fail; restored SHA-256 d2648f31b8144e30b614e6ca6ab486eabb85c7d1bb4ab26981f26e3cfa7c24c7 and the unchanged complete matrix passed 144/144 with zero skips. Detailed docs preserve the portable final-check/syscall race and partial-worktree limits. Release this claim without closing; regenerate changelog, stage explicit source/tracker/docs/tests, regenerate the bundle, and make one SteveBot commit. Both linked release:check commands will then be run directly at that exact head and reported with the push receipt."
+files[9]{path,scope}:
+  docs/working-tree-mutations.md,project
   engine/ignore.ts,project
   engine/repo.ts,project
   engine/worktree-mutation.ts,project
   engine/worktree.ts,project
+  README.md,project
   test/control-directories.test.ts,project
   test/ignore.test.ts,project
   test/worktree-races.test.ts,project
-tests[5]:
+tests[6]:
   - command: "npm run build && npm run build:test && node --test test/control-directories.test.ts test/ignore.test.ts test/worktree.test.ts test/repo.test.ts"
     scope: project
     provenance:
@@ -72,7 +78,16 @@ tests[5]:
       created_at: "2026-10-07T22:53:52.023Z"
       source_kind: local_mutation
       source_ref: fix/nested-control-dirs
-docs[2]{path,scope}:
+  - command: node --test test/worktree-races.test.ts
+    scope: project
+    timeout_seconds: 240
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-07T23:21:29.440Z"
+      source_kind: local_mutation
+      source_ref: fix/nested-control-dirs
+docs[3]{path,scope}:
   ARCHITECTURE.md,project
+  docs/working-tree-mutations.md,project
   README.md,project
 body: ""
