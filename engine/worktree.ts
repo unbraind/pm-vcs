@@ -106,6 +106,10 @@ export interface Change {
 
 /** The full picture of what is staged, what is not, and what is untracked. */
 export interface StatusReport {
+  /** Private layer exclusions are visible without exposing their payloads. */
+  readonly excludedLayers?: readonly { readonly name: string; readonly paths: readonly string[] }[];
+  /** Intentional erasure is distinct from ordinary working-tree deletion. */
+  readonly obliterated?: readonly { readonly path: string; readonly tombstone: string }[];
   /** Differences between HEAD and the index. */
   readonly staged: readonly Change[];
   /** Differences between the index and the working tree. */
@@ -555,39 +559,41 @@ export function materializeTree(
   removablePaths: ReadonlySet<string> = new Set(),
   visible: (path: string) => boolean = () => true,
 ): IndexEntry[] {
-  const target = new Map(
-    [...flattenTree(store, treeIdentifier)].filter(([path]) => visible(path) && !isIgnored(path, rules)
-      && !isProtectedWorktreePath(root, path)),
-  );
-  const mutation = new WorktreeMutation(root, controlDirectory);
-  try {
-    for (const existing of listWorkingTree(root, controlDirectory, rules)) {
-      if (!target.has(existing) && removablePaths.has(existing) && !isProtectedWorktreePath(root, existing)) {
-        mutation.remove(existing);
+  return store.withWriteLock(/** Keep native reads and materialization inside the shared erasure lease. */ () => {
+    const target = new Map(
+      [...flattenTree(store, treeIdentifier)].filter(([path]) => visible(path) && !isIgnored(path, rules)
+        && !isProtectedWorktreePath(root, path)),
+    );
+    const mutation = new WorktreeMutation(root, controlDirectory);
+    try {
+      for (const existing of listWorkingTree(root, controlDirectory, rules)) {
+        if (!target.has(existing) && removablePaths.has(existing) && !isProtectedWorktreePath(root, existing)) {
+          mutation.remove(existing);
+        }
       }
+      const entries: IndexEntry[] = [];
+      for (const [path, value] of target) {
+        const content = render(path, store.read(value.id));
+        mutation.write(path, content, value.mode === "100755" ? 0o755 : 0o644);
+        const mode = value.mode === "100755" ? "100755" : "100644";
+        // A concurrent writer can race the write and chmod above. Do not pair the
+        // expected object id with metadata from bytes that were never verified.
+        entries.push({
+          path,
+          id: value.id,
+          mode,
+          ...(value.fileId === undefined ? {} : { fileId: value.fileId }),
+          ...(value.copiedFrom === undefined ? {} : { copiedFrom: value.copiedFrom }),
+        });
+      }
+      // Directories left empty by the removals above are pruned, so switching away
+      // from a branch that introduced a directory does not leave its skeleton.
+      mutation.prune();
+      return entries;
+    } finally {
+      mutation.close();
     }
-    const entries: IndexEntry[] = [];
-    for (const [path, value] of target) {
-      const content = render(path, store.read(value.id));
-      mutation.write(path, content, value.mode === "100755" ? 0o755 : 0o644);
-      const mode = value.mode === "100755" ? "100755" : "100644";
-      // A concurrent writer can race the write and chmod above. Do not pair the
-      // expected object id with metadata from bytes that were never verified.
-      entries.push({
-        path,
-        id: value.id,
-        mode,
-        ...(value.fileId === undefined ? {} : { fileId: value.fileId }),
-        ...(value.copiedFrom === undefined ? {} : { copiedFrom: value.copiedFrom }),
-      });
-    }
-    // Directories left empty by the removals above are pruned, so switching away
-    // from a branch that introduced a directory does not leave its skeleton.
-    mutation.prune();
-    return entries;
-  } finally {
-    mutation.close();
-  }
+  });
 }
 
 /**
@@ -640,6 +646,7 @@ export function computeStatus(
   read: typeof readWorkingFile = readWorkingFile,
   onVerified?: (path: string, stat: IndexStat) => void,
   forceContent: ReadonlySet<string> = new Set(),
+  excluded: ReadonlySet<string> = new Set(),
 ): StatusReport {
   const committed = flattenTree(store, headTree);
   const staged = new Map(index.map((entry) => [entry.path, entry]));
@@ -659,7 +666,7 @@ export function computeStatus(
   const present = new Set(listWorkingTree(root, controlDirectory, rules));
   const unstagedChanges: Change[] = [];
   for (const entry of index) {
-    if (isRuntimeIgnored(entry.path, rules) || isProtectedWorktreePath(root, entry.path, true)) continue;
+    if (excluded.has(entry.path) || isRuntimeIgnored(entry.path, rules) || isProtectedWorktreePath(root, entry.path, true)) continue;
     // A sparse entry's path is intentionally absent from this working tree — it
     // is outside the view — so absence is not a deletion. When the path *does*
     // hold a file, the entry compares like any other, because a file that exists
@@ -680,7 +687,7 @@ export function computeStatus(
     }
   }
 
-  const untracked = [...present].filter((path) => !staged.has(path)).sort(compareByteOrder);
+  const untracked = [...present].filter((path) => !staged.has(path) && !excluded.has(path)).sort(compareByteOrder);
   return {
     staged: stagedChanges.sort((left, right) => compareByteOrder(left.path, right.path)),
     unstaged: unstagedChanges.sort((left, right) => compareByteOrder(left.path, right.path)),

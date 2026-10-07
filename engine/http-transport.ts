@@ -180,6 +180,7 @@ export class HttpTransport implements Transport {
     const refs = decoded === null ? null : decoded.refs;
     const head = decoded === null ? undefined : decoded.head;
     const config = decoded === null ? undefined : decoded.config;
+    const repositoryId = decoded === null ? undefined : decoded.repositoryId;
     const formatVersion = decoded === null ? undefined : decoded.formatVersion;
     const capabilities = decoded === null ? undefined : decoded.capabilities;
     if (
@@ -190,6 +191,7 @@ export class HttpTransport implements Transport {
         || !isObjectId((entry as Record<string, unknown>).target as string))
       || (head !== null && typeof head !== "string")
       || config === null || typeof config !== "object" || Array.isArray(config)
+      || (repositoryId !== undefined && (typeof repositoryId !== "string" || !/^[0-9a-f]{32}$/.test(repositoryId)))
       || typeof formatVersion !== "string"
       || !Array.isArray(capabilities) || capabilities.some((capability) => typeof capability !== "string")
     ) {
@@ -214,6 +216,7 @@ export class HttpTransport implements Transport {
       );
     }
     return {
+      ...(repositoryId === undefined ? {} : { repositoryId: repositoryId as string }),
       refs: refs.map((entry) => {
         const record = entry as Record<string, unknown>;
         return { name: record.name as string, target: record.target as string };

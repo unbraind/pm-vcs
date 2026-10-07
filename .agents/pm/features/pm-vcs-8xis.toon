@@ -2,16 +2,189 @@ id: pm-vcs-8xis
 title: Design committed repository links local layers and typed obliteration
 description: "Add native repository composition and lifecycle operations: committed links pin authorized repository and revision identities, local layers overlay an instance without changing commits, and authorized obliteration produces a typed payload state distinct from garbage collection, missing data or corruption."
 type: Feature
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:34.077Z"
-updated_at: "2026-09-12T23:35:59.709Z"
+updated_at: "2026-10-08T01:45:16.326Z"
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
 parent: pm-vcs-b7cb
 risk: high
-comments[1]{created_at,author,text}:
+comments[37]{created_at,author,text}:
   "2026-09-12T23:35:59.709Z",pi-agent,"Audit 2026-09-13: EXISTS — committed repository links are implemented as sparse linked instances (engine/instances.ts: instance link, shared object store, sparse views; test/instances.test.ts: 'a linked instance materializes its view, shares objects and keeps private state', 'concurrent instances share objects but never overwrite each other's state'). REMAINS — local layers that overlay an instance without changing commit identity are not implemented (grep for local-layer/overlay returns no matches). Typed obliteration is not implemented (grep for obliterate/Obliteration in engine/ returns no matches). Checkout and verify distinguishing obliterated content from missing and corrupt objects is not implemented. Two of four acceptance criteria are not met."
+  "2026-10-07T20:55:16.467Z",codex-sol,"Baseline against the built package and a real disposable SDK tracker: a synthetic binary was staged and committed successfully; vcs link, vcs layer and vcs obliterate are absent, and the repository exposes no layer or obliteration API. Acceptance will pin a typed external repository revision and subset across a clone without transferring its payload or credentials; overlay tracked and new paths while preserving commit identity and excluding layers visibly from status and add; authorize FileId-scoped erasure across moves and revisions, byte-scan stored and decoded representations, distinguish obliterated/missing/corrupt state, and reject resurrection through stale fetch/import. The previous audit conflated local shared instances with committed external links. Full item, parent, linked research record and LORE.md were read; the removed historical research-doc link is superseded by LORE.md."
+  "2026-10-07T20:56:24.216Z",codex-sol,"Design recorded first in docs/links-layers-obliteration.md: canonical typed committed links with explicit target authorization; private layer snapshots masked from staging/status and preserved across materialization; authorized FileId erasure with durable typed denial, full-store historical inventory, deduplication refusal, byte removal and non-resurrection at every object arrival boundary. Remote tombstones cannot silently authorize deletion of locally held content. Verification and checkout preserve the distinction between intentional erasure, missing data and corruption."
+  "2026-10-07T21:01:09.761Z",codex-sol-implementation,"Implementation decision: typed link leaf objects carry only repository identity, exact commit ID and explicit file mappings. Resolution requires a separately authorized local target binding and creates a private layer. Layers preserve edited disk bytes across materialization and refuse removal without explicit edit discard. Erasure inventories all loose objects, indexes and registered instances under one store writer lock; unknown pack/cache artefacts and deduplication conflicts refuse before denial. Durable pending denial blocks all writes until authorized cleanup completes. After erasure, resumable payload-only batches refuse because they carry no FileId provenance; complete bundles preflight every tree and payload before publication."
+  "2026-10-07T21:18:28.147Z",codex-sol,"Independent adversarial review found a closure-validation defect in the feature candidate: a canonical forged payload tombstone for an absent commit allowed a bundle to publish a ref and verification to report intentional absence with no missing/corrupt failure. Required correction: only FileId-attributed payload leaves may be obliterated; commits, parent commits and trees must remain present and correctly typed. Add refusal tests that assert no ref publication, including mismatched leaf FileId denial. Independent real-tracker overlay checks passed for restore, view narrowing and conflicting merge preservation."
+  "2026-10-07T21:23:32.566Z",codex-sol-implementation,"Adversarial review exposed a role-confusion bug: denial addresses were accepted for absent commits or trees. Implementing one context-aware closure validator for publication and verification, requiring correctly typed structure and matching FileId/root attribution at intentionally absent payload leaves. Import preflight will validate before storage or ref publication. Canonical audit objects are reconstructed from received denial metadata for fresh clones."
+  "2026-10-07T21:26:31.396Z",codex-sol-implementation,"Role-aware closure regressions pass: absent denied refs/parents/trees and unrelated FileId leaves are refused before objects or refs publish. Fresh clones retain canonical tombstone audit objects and verify them outside the tree closure. Four real processes converge on one identity; empty clones preserve source identity. npm package.files now ships the README-linked design. Physical erasure requires directory fsync and explicitly refuses unsupported Windows durability before deleting bytes; ordinary metadata uses file fsync and atomic replacement with the documented Windows directory-flush limit."
+  "2026-10-07T21:31:37.979Z",codex-sol,"Independent storage-security review reproduced a retained-byte defect: after staging and committing a unique synthetic binary, its compressed loose-object representation was stored as another valid orphan blob. Obliteration reported success, but inflating the surviving blob and parsing the old frame recovered the exact erased payload. Required correction: scan every surviving object payload for supported raw/framed/zlib/base64 copies before durable denial and refuse ambiguous retained copies; arrival denial must recognize old object-frame digests as well as raw payload digests. Add byte-scan and stale-wrapper arrival regressions. The earlier forged-commit tombstone case now rejects before ref publication."
+  "2026-10-07T21:32:12.753Z",codex-sol-implementation,"Storage review found a valid orphan blob retaining an erased loose-object frame through zlib. Extending the erasure plan to inspect every surviving physical object payload before any denial or deletion and refuse ambiguous copies. Arrival denial will recursively compare both full-frame object IDs and type-independent payload digests. Recognizable supported encodings that exceed bounded inspection will fail closed. Adding raw framed, zlib framed and base64 framed regressions plus byte-scan receipts."
+  "2026-10-07T21:37:25.331Z",codex-sol-implementation,"Wrapped loose-object reproduction now refuses with erasure_retained_copy, erasureClaimedSuccess=false, recoverable=true and denialPersisted=false. Tracked tests cover raw/compressed/base64 framed orphan copies, preservation on refusal, explicit copy removal, successful negative decoded byte scan, unrelated bytes preserved, and rejected new attributed writes/bundles before storage. Supported representation inspection is bounded and fails closed. All six new production modules and command registration currently measure 100 percent focused lines/statements/functions/branches without exclusions."
+  "2026-10-07T21:43:01.917Z",codex-sol,"Independent shared-instance review scheduled a real registration at the boundary between erasure scope discovery and its writer lease. Erasure reported success and persisted denial, but the newly registered working instance retained the exact synthetic payload. Required correction: discover and inventory instances inside the writer transaction and serialize complete registration/unlink/materialization with erasure. Extend regressions to application writers so a successful receipt cannot exclude a supported concurrent worktree operation."
+  "2026-10-07T21:43:33.927Z",codex-sol-implementation,"Instance registration review exposed discovery outside the erasure lease, allowing a newly materialized shared instance to retain selected bytes. Moving discovery inside the store transaction and serializing complete registration/unlink/materialization and supported worktree writers. Shared ObjectStore handles for one physical root need synchronous common-lease reentrancy; cross-process exclusion must remain exclusive. Adding a deterministic transaction-boundary regression and checking view, restore and merge marker writes."
+  "2026-10-07T21:46:48.409Z",codex-sol,"Independent native-merge acceptance found two feature interactions using real trackers and commits. After erasing one identity, unrelated clean text edits refused with unattributed_arrival because merge output omitted known FileId provenance. Divergent link pin updates attempted blob diff3 and raised object_type_mismatch. Required correction: carry native merge/rewrite provenance without weakening denial, and make incompatible typed link updates an explicit atomic conflict before refs or private layers change; add regressions and documentation."
+  "2026-10-07T21:51:48.656Z",codex-sol,"Independent verification of all reproduced feature interactions now passes: forged structural denial refuses incomplete_bundle before ref publication; recoverable compressed object wrappers refuse erasure_retained_copy before denial; late shared-instance registration is included in successful cleanup with recoverable=false; clean unrelated edits merge after erasure; competing link pins refuse link_merge_conflict. These checks used real scratch trackers and native repository operations. Final approval still requires tracked behavioral revert proof and exact-HEAD npm/Bun release gates."
+  "2026-10-07T21:54:44.985Z",codex-sol-implementation,"Registration reproduction now reports successful erasure with recoverable=false and one registered instance. Discovery and complete native worktree/ref mutations hold one synchronous store lease; different handles share reentrancy while real child processes remain excluded. Registration publishes recovery scope before materializing payloads and cleans its entry after failed creation cleanup. Merge/replay output now carries reconciled FileId provenance for blob, record and PM-history merges. Competing typed link descriptors raise link_merge_conflict before ref/index/layer mutation; one-sided or agreed changes retain typed links. These are feature fixes, not SDK defects."
+  "2026-10-07T22:05:35.772Z",codex-sol-implementation,"Registration and erasure now share one application transaction: scope discovery occurs under the store lease, instances register before copying, and distinct synchronous store handles reuse the same physical-root lease. Real child-process contention refuses before materialization; restore, sparse widening and merge-marker writes cannot publish cached bytes across concurrent erasure. Native merge/replay output carries reconciled FileIds for blobs, records and histories; conflicting link pins refuse atomically as link_merge_conflict. Independent registration, merge, wrapper and structural-denial reproductions pass. Standalone commit/tree bundle arrivals also validate structural closure before storage."
+  "2026-10-07T22:06:49.892Z",codex-sol,"Independent shared-instance verification found one classification gap: deleting a held payload produces missing in the hub, but the shared-store reader translates that absence to missing_fragment and the new closure report labels it corrupt. The same physical absence must remain missing across both handles. Add a real linked-instance regression and include missing_fragment in the missing classification before final verification. This is an engine bug, not an SDK defect."
+  "2026-10-07T22:12:49.792Z",codex-sol,"Independent decoded-byte scan found a generated-audit leak: erasing a payload whose exact bytes equal the bounded reason incident reports success, but the newly persisted tombstone retains those bytes. Required correction: preflight proposed typed audit frame, durable denial metadata and operation receipt before any write, refusing ambiguous selected content without deleting bytes or publishing denial. Add a regression for refusal, safe-reason retry and zero decoded matches, plus a behavioral revert proof. The separate linked-instance missing_fragment classification also requires correction before final HEAD verification."
+  "2026-10-07T22:18:50.853Z",codex-sol-implementation,"Audit leak fixed: canonical tombstone frame, pending/completed denial JSON and planned receipt are inspected before the first audit or denial write; the exact assigned operation receipt is validated under its log lock. Conflicting selected bytes refuse erasure_audit_conflict without deleting bytes or persisting denial. Real reason/timestamp regressions retry with safe metadata and scan every raw/decoded storage file to zero matches. Shared hub/instance missing payloads now both classify missing; damaged bytes remain corrupt and validated absence remains obliterated. All seven behavior-only revert receipts produce exit 1 assertions with modules loaded, including the new audit preflight proof; the behavior is restored. No SDK defect was found."
+  "2026-10-07T22:23:13.761Z",codex-sol-implementation,"Linked PM tests ran with progress using schema PM context and the source workspace: node --test test/composition.test.ts passed 37/37; node --test test/composition-consumer.test.ts passed 1/1 and exercised built Node, npm-packed Node and native Bun consumers. Automatic linked-test result tracking is disabled in this tracker, so this comment records the sanitized results. Typecheck, build:test, ESLint, zero-duplication and docstrings pass; native TOON, stat-cache acceptance, production audit and approved Git-identity audit pass. Full source coverage and exact-HEAD release gates remain separate final checks."
+  "2026-10-07T22:25:14.290Z",codex-sol-implementation,"Immutable identities now initialize lazily under the common lease and an established identity cannot be overwritten by importing another archive, even into an empty repository. Fresh empty clones adopt the source identity before explicit creation. Erasure validates every stored commit closure, including unreachable history, before mutation; missing structure safely refuses. Link resolution holds both local publication and target-read leases, including self-targeted pins. Built consumers follow the existing child-coverage isolation helper; coverage remains measured through source engine imports with the original all-source thresholds."
+  "2026-10-07T22:37:09.791Z",codex-sol-implementation,"Final adversarial fixes are covered by real native regressions: audit-compatible payloads refuse before tombstone/denial publication and preserve old bytes, then safe authorized retry scans clean; shared missing_fragment is classified as missing while damaged bytes remain corrupt. Seven behavior-only revert receipts each exit 1 with an assertion failure and successful module loading, including audit preflight. Additional real filesystem and legacy/fragmented checkout regressions close measured coverage gaps; no thresholds, SDK behavior, or ignores changed. Typecheck, test typecheck, ESLint, zero duplication and 274 documented declarations pass. Full source coverage is running before final regeneration."
+  "2026-10-07T22:38:32.828Z",codex-sol-implementation,"Independent scratch reproductions rerun against current source with real trackers: audit-review refuses erasure_audit_conflict with recoverable old bytes and no denial; wrapped-review refuses erasure_retained_copy with no denial; registration-review completes with recoverable=false and the late registered instance included; tombstone-review refuses incomplete_bundle and publishes no ref; shared-missing-review reports missing and no corruption for both hub and instance; merge-review allows unrelated post-erasure merge and refuses competing pins with link_merge_conflict; overlay-review preserves bytes through restore, view and conflicting merge. Tracked behavioral regressions cover these scenarios. README now states precisely that layer removal restores underlying bytes, so desired changes must be reapplied before deliberate staging."
+  "2026-10-07T22:39:29.848Z",codex-sol-implementation,"Revert-proof receipts (each reverted only one production behavior, preserved tests/imports, exited 1 with AssertionError, and loaded modules successfully): target identity validation -> committed links retain exact identity; bulk layer masking -> private tracked and new overlays; physical deletion -> authorized erasure scrubs historical; arrival denial -> recoverable loose-frame wrappers; structural denial -> tombstones cannot launder; audit preflight -> proposed audit metadata; retained-copy inspection -> recoverable loose-frame wrappers. Each exact command was node --test --test-name-pattern=\"<listed pattern>\" test/composition.test.ts. Identity/masking/deletion failures were observable byte/index assertion differences; the four refusal checks failed with Missing expected exception. Production behavior was restored after every run. Existing proof receipts remain valid; the additional audit proof demonstrates the reported metadata leak is caught."
+  "2026-10-07T22:40:42.503Z",codex-sol-implementation,"pm test pm-vcs-8xis --run --progress passed all three linked commands with zero failures/skips: node --test test/composition.test.ts (41/41 real SDK source scenarios), node --test test/composition-consumer.test.ts (1/1 acceptance test exercising built Node, npm-packed Node and npm-packed Bun), and node --test test/self-host.test.ts (51/51). Linked commands use schema PM context and the source workspace, while each scenario creates its own real disposable tracker. Project automatic test-result tracking is disabled; this comment records the actual sanitized results without changing that policy. The packed consumer verifies the README-linked design ships in package.files. Independent native TOON, stat-cache, production dependency audit and identity audit gates also passed; no SDK defect was found."
+  "2026-10-07T22:47:53.228Z",codex-sol,"Final independent lifecycle review reproduced two remaining edge cases for orchestrator correction before PR publication. Canonical incoming denial JSON accepts null/boolean principal or reason fields and persists them despite the string contract. Erasing an empty file then blocks a normal empty-tree commit with object_obliterated, although that existing structural tree still verifies healthy. Add strict string checks at the audit codec boundary and avoid treating zero-byte structural payloads as erased file data; exact denied object IDs and FileIds must remain terminal. Real scratch trackers reproduced both cases. These are engine issues, not SDK bugs."
+  "2026-10-07T22:56:21.674Z",codex-sol-implementation,"Implementation is complete and ready for independent review. Final APIs: Repository.identity/setAuthority/stageLink/links/resolveLink, layers/addLayer/removeLayer, readFileState/obliteratedPaths/verify/obliterate; CLI authority, link, link resolve, layer and obliterate. All 930 full-suite tests passed with zero failures/skips. The initial full-source branch result was 99.97%; the only uncovered path was a healthy non-manifest historical read. Added real hub/shared assertions of its blob type and exact bytes, reran the linked 41-scenario source command successfully, and retained unchanged-production full-suite V8 data while executing that scenario under c8 --clean=false --all --100 with the same source includes/excludes: all four dimensions are now 100%. This cumulative diagnostic does not replace the mandatory clean npm and Bun release gates at final HEAD. Typecheck, test typecheck, lint, zero duplication, all 274 docstrings, byte scans, built/packed consumers and seven behavioral revert receipts pass. All changed implementation/tests/docs and generated artefacts are linked. No SDK bug was found and no out-of-scope defect requires a follow-up. Shipped limits: loose-store representations only, unknown storage/copies refuse; Windows physical erasure refuses unsupported directory durability; target resolution uses explicit local bindings; external backups/media/custom encryption and direct hostile filesystem writes are outside the application boundary. Releasing the claim while leaving this item in_progress; all PM writes precede changelog/bundle generation and the single SteveBot commit. Exact-HEAD clean gates will be reported in the final handoff."
+  "2026-10-07T23:04:39.314Z",codex-sol,"Final lifecycle regressions first failed as observable assertions on loaded modules: malformed inbound principal/reason accepted, and empty-file erasure blocked a healthy empty-tree commit. Strict string guards and nonempty representation digest matching now preserve typed audits and exact erased payload identity without denying empty structure. Individual behavioral reverts each reproduce the assertions; restored source passes. Added path-not-found classification evidence for hub and shared instances to complete the unchanged all-source branch coverage gate."
+  "2026-10-07T23:05:42.891Z",codex-sol,"Verification receipt: node --test test/composition.test.ts test/composition-consumer.test.ts passed 44/44 real-tracker scenarios, including built Node, npm-packed Node and native Bun consumers. pm test pm-vcs-8xis --run --progress passed all three linked suites (composition, consumers and self-host); tracker policy disables automatic result recording, so this sanitized receipt records the outcome. Typecheck, build:test, lint, zero-duplication and docstring gates passed. Nine isolated behavioral reverts produced loaded-module assertion failures and were restored. Final exact-HEAD npm and Bun release checks follow the required PM/changelog/staging/bundle/single-commit order; receipts will be attached to the PR."
+  "2026-10-07T23:20:02.068Z",codex-sol,"Typed-boundary review extended the audit regression to coercible JSON arrays and reproduced missing string checks for tombstone FileId and committed link repository/revision. Both loaded-module tests failed as Missing expected exception before correction. Explicit string checks now precede identity regex validation; rejected arrivals preserve the object inventory, index, refs and denial registry. These are native engine validation gaps, not SDK defects. The earlier npm release gate passed 932 tests at its previous candidate HEAD; final npm/Bun gates will be rerun after regeneration on the corrected single commit."
+  "2026-10-07T23:21:44.955Z",codex-sol,"Final corrected-source verification: 45/45 composition and consumer scenarios passed, including real built Node, npm-packed Node and native Bun. pm test pm-vcs-8xis --run --progress passed all three linked commands (44 composition, 1 consumer, 51 self-host scenarios); automatic recording remains disabled by existing policy. Twelve isolated production-behavior reverts were rerun and each exited 1 with AssertionError and successful module loading: identity pin, layer masking, physical deletion, arrival denial, structural role, audit preflight, retained copy, audit string type, empty structure, FileId string type, link repository string type and link revision string type. All source was restored and positive linked tests passed. Typecheck, build:test, lint, zero duplication and docstrings passed. The final required regeneration and exact-HEAD npm/Bun release receipts are supplied in the PR."
+  "2026-10-08T01:30:34.661Z",codex-sol,"Rebased PR 97 onto main after PR 96. Resolving composition and erasure mutations through WorktreeMutation while preserving shared writer locks, FileId metadata, nested control exclusions and root-canonical leaf-link protection. Will verify race, control, composition and byte-scan suites before exact-head release gates."
+  "2026-10-08T01:34:20.633Z",codex-sol,"Conflict resolution combines WorktreeMutation-backed checkout and restore with shared erasure locks and FileId/copy provenance. Private layer add/remove, typed descriptor writes, sparse view changes and per-instance obliteration removals use the mutation layer; raw deletion remains only for inventoried control-store objects. Composition rejects case variants of .pmvcs at all depths. Expanded race regression tests pass 226/226 on pinned and portable backends. Fixed store-lock cleanup so root replacement preserves the original refusal and cannot delete a foreign replacement lock."
+  "2026-10-08T01:36:33.088Z",codex-sol,"Linked race/control/composition command passed through pm test: 282 tests, zero failures/skips, including the original byte-scan regressions and packed Node/Bun consumer acceptance. Added a further forged nested control-path erasure regression and documented both mutation backends. Typecheck, lint, duplicate, docstring and physical Git identity checks pass. Full coverage and exact committed npm, Bun and isolated-HOME release gates remain pending."
+  "2026-10-08T01:38:58.454Z",codex-sol,"Final linked integration receipt: node --expose-gc --test test/worktree-races.test.ts test/control-directories.test.ts test/composition*.test.ts passes 283/283 with zero skips or failures, including expanded composition races, forged nested-control ownership refusal, byte scans and packed consumers. Implementation and documentation are complete. Releasing the claim before freezing PM state, generating CHANGELOG.md and selfhost.bundle, and amending the single PR commit. Push is conditional on npm, Bun and isolated-HOME release checks at the final committed head with 100 percent in all four coverage dimensions. The portable backend retains its documented final-check/use race."
+  "2026-10-08T01:44:31.509Z",codex-sol,Preliminary full coverage exposed a CLI contract branch newly bypassed because WorktreeMutation now types a widened-file collision. Added a real control-metadata publication fault regression to prove vcs view still preserves operational I/O errors and releases its writer lock. Earlier source edits during preliminary instrumentation invalidated the composition coverage mapping; final release gates will use frozen committed source.
+  "2026-10-08T01:45:15.725Z",codex-sol,"Final supplemental validation passes 284/284 race, control and composition tests with no skips or failures. A frozen-source c8 run limited to engine/composition.ts reports 100/100/100/100; this is component coverage, not the full release denominator. The real view.json directory collision confirms raw metadata I/O errors remain visible and the store lock is released. Typecheck and lint pass. Freeze tracker and source now; regenerate artifacts before the exact-head full release gates."
+files[28]:
+  - path: CHANGELOG.md
+    scope: project
+  - path: composition-commands.ts
+    scope: project
+    note: native engine-backed commands
+  - path: engine/bundle.ts
+    scope: project
+  - path: engine/closure.ts
+    scope: project
+    note: role and FileId validated history closure
+  - path: engine/composition.ts
+    scope: project
+    note: typed pins authorization and private layers
+  - path: engine/erasure.ts
+    scope: project
+    note: physical inventory and authorized deletion
+  - path: engine/fragments.ts
+    scope: project
+  - path: engine/http-transport.ts
+    scope: project
+  - path: engine/lifecycle.ts
+    scope: project
+    note: canonical denial and arrival preflight
+  - path: engine/objects.ts
+    scope: project
+  - path: engine/oplog.ts
+    scope: project
+  - path: engine/repo.ts
+    scope: project
+  - path: engine/representations.ts
+    scope: project
+    note: bounded recoverable representation inspection
+  - path: engine/rewrite.ts
+    scope: project
+  - path: engine/series.ts
+    scope: project
+  - path: engine/sync.ts
+    scope: project
+  - path: engine/transport.ts
+    scope: project
+  - path: engine/worktree-mutation.ts
+    scope: project
+  - path: engine/worktree.ts
+    scope: project
+  - path: package.json
+    scope: project
+  - path: selfhost.bundle
+    scope: project
+  - path: test/composition-consumer.test.ts
+    scope: project
+    note: built and packed Node Bun acceptance
+  - path: test/composition.test.ts
+    scope: project
+    note: real SDK behavioral and byte-erasure regressions
+  - path: test/control-directories.test.ts
+    scope: project
+  - path: test/self-host.test.ts
+    scope: project
+  - path: test/served-sync.test.ts
+    scope: project
+  - path: test/worktree-races.test.ts
+    scope: project
+  - path: vcs-commands.ts
+    scope: project
+tests[7]:
+  - command: node --test test/composition.test.ts
+    scope: project
+    timeout_seconds: 240
+    pm_context_mode: schema
+    workspace_context_mode: source
+    provenance:
+      author: codex-sol-implementation
+      created_at: "2026-10-07T22:21:33.533Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: node --test test/composition-consumer.test.ts
+    scope: project
+    timeout_seconds: 300
+    pm_context_mode: schema
+    workspace_context_mode: source
+    provenance:
+      author: codex-sol-implementation
+      created_at: "2026-10-07T22:21:33.533Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: node --test test/self-host.test.ts
+    scope: project
+    timeout_seconds: 240
+    pm_context_mode: schema
+    workspace_context_mode: source
+    provenance:
+      author: codex-sol-implementation
+      created_at: "2026-10-07T22:37:45.027Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: node --expose-gc --test test/worktree-races.test.ts test/control-directories.test.ts test/composition*.test.ts
+    scope: project
+    timeout_seconds: 2400
+    pm_context_mode: schema
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-08T01:35:07.424Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: "npm run release:check"
+    scope: project
+    timeout_seconds: 2400
+    pm_context_mode: schema
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-08T01:37:17.237Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: "bun run release:check"
+    scope: project
+    timeout_seconds: 2400
+    pm_context_mode: schema
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-08T01:37:18.447Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: "env HOME=$(mktemp -d) GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 npm run release:check"
+    scope: project
+    timeout_seconds: 2400
+    pm_context_mode: schema
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-08T01:37:19.865Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+docs[4]{path,scope}:
+  ARCHITECTURE.md,project
+  docs/links-layers-obliteration.md,project
+  LORE.md,project
+  README.md,project
 body: ""

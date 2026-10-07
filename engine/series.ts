@@ -230,22 +230,24 @@ export function applySeries(
   seriesId: ObjectId,
   committer: Signature,
 ): ObjectId {
-  const series = readSeries(store, seriesId);
-  if (series.patches.length === 0) {
-    throw new ObjectStoreError("empty_series", "The series contains no patches to apply.");
-  }
-  const context: RewriteContext = { store, config: DEFAULT_CONFIG, committer };
-  const head = refs.readHead();
-  let current: ObjectId | null = head.target;
-  for (const patch of series.patches) {
-    const onto = current ?? series.base;
-    const newCommit = planCherryPick(context, patch.commit, onto);
-    if (head.kind === "branch") {
-      refs.compareAndSwap(head.ref, current, newCommit);
-    } else {
-      refs.setHeadDetached(newCommit);
+  return store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
+    const series = readSeries(store, seriesId);
+    if (series.patches.length === 0) {
+      throw new ObjectStoreError("empty_series", "The series contains no patches to apply.");
     }
-    current = newCommit;
-  }
-  return current as ObjectId;
+    const context: RewriteContext = { store, config: DEFAULT_CONFIG, committer };
+    const head = refs.readHead();
+    let current: ObjectId | null = head.target;
+    for (const patch of series.patches) {
+      const onto = current ?? series.base;
+      const newCommit = planCherryPick(context, patch.commit, onto);
+      if (head.kind === "branch") {
+        refs.compareAndSwap(head.ref, current, newCommit);
+      } else {
+        refs.setHeadDetached(newCommit);
+      }
+      current = newCommit;
+    }
+    return current as ObjectId;
+  });
 }

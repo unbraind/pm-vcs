@@ -104,7 +104,9 @@ what makes the engine usable as a library and testable without the host.
 
 ## 3. The object store
 
-Four object kinds: `blob`, `tree`, `commit`, `record`.
+Eight object kinds: `blob`, `tree`, `commit`, `record`, `series`, `manifest`, `link`
+and `tombstone`. Links commit descriptors without importing target payloads. Tombstones
+retain identity and audit metadata after explicit permanent payload erasure.
 
 An object's id is `sha-256` over `<<type>> <<byte-length>>\0<<payload>>`. The framing is
 inside the hash on purpose: without it, a blob and a record holding identical bytes would
@@ -127,9 +129,13 @@ other errno is re-raised unchanged. Folding a permission denial into "no such ob
 tell an operator their history had lost content when the disk was merely unreadable, and those
 two conditions call for opposite responses.
 
-**Objects are never deleted.** Rewinding a ref makes a commit unreachable, not absent, which
-is what makes `undo` always possible. Reclaiming space is Phase 6, and it will be constrained
-by the operation log rather than by reachability alone.
+**Ordinary history remains immutable; authorized obliteration is terminal.** Rewinding a ref
+makes a commit unreachable. FileId-scoped obliteration permanently removes all attributed
+payloads and fragments after persisting a typed denial, while commits and trees remain intact.
+Undo can restore refs but cannot recover erased payloads. A retained copy in another loose
+object, control file or known working instance causes refusal before mutation. Verification
+requires present, correctly typed commits and trees; intentional absence applies only to a
+payload leaf with matching FileId and tombstone root.
 
 ### Canonical encoding
 
@@ -337,6 +343,36 @@ The complete Epic Lore research and the retain/adopt/adapt/reject map behind thi
 
 ---
 
+### Composition and lifecycle storage
+
+`engine/composition.ts` owns canonical typed links, separate local authorization and
+private overlay snapshots. `engine/lifecycle.ts` validates typed denial metadata and
+arrival provenance. `engine/erasure.ts` inventories all loose payloads and FileId owners,
+checks shared-instance bytes, persists pending denial, deletes physical copies, fsyncs
+deletions and completes the audit. `ObjectStore.withWriteLock` serializes object writes,
+staging, overlay mutation, materialization and erasure. Reads retain explicit present,
+obliterated, missing and corrupt states.
+
+A link is a leaf descriptor, never the existing shared-instance `link.json`. A clone
+preserves its target identity, exact revision and file mappings without target payloads
+or credentials. Explicit authorized resolution materializes selected bytes in a local
+layer. Layers store snapshots only in private `layers.json`; they mask staging and
+working status while preserving the complete underlying index. Checkout never overwrites
+edited overlays. Removing an edited layer needs explicit discard; view changes and
+individual restore refuse while layers are present.
+
+Obliteration scopes every historical root and manifest fragment to a FileId. Shared
+ownership refuses before mutation. All registered and previously unlinked instance
+worktrees are in the deletion scope; missing instances or ambiguous retained copies
+refuse. Typed tombstones contain only addresses, FileId, principal, timestamp and reason
+code. Immutable commits retain their addresses and intentional absence travels in bundles.
+Undo cannot recover erased bytes. Unknown packs/caches and unverifiable temporary copies
+refuse rather than being excluded from a successful receipt. Interrupted cleanup remains
+persistently denied; explicit authorized retry completes it. The trusted filesystem
+operator excludes concurrent direct filesystem mutation, backups and snapshots from this
+application-level guarantee. Full details are in
+[links, layers and obliteration](docs/links-layers-obliteration.md).
+
 ## 7. The operation log
 
 Every command that changes a ref appends one entry: what ran, when, and every ref transition
@@ -392,9 +428,11 @@ started from the defaults would store records as blobs and merge them by line â€
 repositories sharing commit ids while disagreeing about what those commits contain, each
 internally consistent and therefore undetectable.
 
-**Deferred to Phase 5.** A network transport. Committing to a wire format now would fix a
-serialization before the forge has said what a served repository exposes, and the two would
-have to agree retroactively. The interface is the commitment; the implementation follows it.
+**Shipped:** filesystem and HTTP transports use the same receiver policy. Bundles carry
+optional immutable repository identity and canonical typed denial metadata. Denied object
+addresses and novel payloads under denied FileIds refuse before arrival writes. Remote
+tombstones affecting locally held bytes require local erasure authority. Payload-only
+resumable uploads fail closed after erasure because their envelope lacks FileId provenance.
 
 ---
 
@@ -498,7 +536,7 @@ on every commit.
 
 | capability | comparable to | state |
 | --- | --- | --- |
-| content-addressed store, four object kinds | git objects | **shipped** |
+| content-addressed loose store, eight object kinds | git objects | **shipped** |
 | canonical tree/commit/record encoding | git objects | **shipped** |
 | refs, HEAD, compare-and-swap updates | git refs + `--force-with-lease`, always on | **shipped** |
 | index, three-way status, safe checkout | git index / `switch` | **shipped** |
@@ -524,7 +562,9 @@ on every commit.
 | packed storage, reachability index | git packfiles | **Phase 6** |
 | shallow / partial history | git `--depth` / partial clone | **Phase 6** |
 | garbage collection bounded by the oplog | `git gc`, but oplog-aware | **Phase 6** |
-| fragmented large files, sparse/lazy instances | Epic Games Lore | **Phase 6** |
+| fragmented large files, sparse/lazy shared instances | Epic Games Lore | **shipped** |
+| committed pinned links and private local layers | Epic Games Lore | **shipped** |
+| authorized FileId-scoped permanent erasure | Epic Games Lore | **shipped for loose storage** |
 | conflicts stored in commits | `jj` conflict objects | **considered, not scheduled** |
 | signed commits | git signing | **considered, not scheduled** |
 | submodules / large-file offloading | git submodules / LFS | **rejected for now** |

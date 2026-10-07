@@ -25,6 +25,8 @@ import { HttpTransport } from "./http-transport.ts";
 
 /** What a remote repository says about itself when first contacted. */
 export interface Advertisement {
+  /** Clone-stable opaque repository identity when supported by this peer. */
+  readonly repositoryId?: string;
   /** Every branch and tag the remote publishes, with the commit each points at. */
   readonly refs: readonly RefEntry[];
   /**
@@ -317,6 +319,7 @@ export class FileTransport implements Transport {
     const repository = this.open();
     const head = repository.refs.readHead();
     return {
+      repositoryId: repository.identity(),
       refs: [...repository.refs.list(BRANCH_PREFIX), ...repository.refs.list(TAG_PREFIX)],
       head: head.kind === "branch" ? head.ref : null,
       config: repository.config,
@@ -418,6 +421,7 @@ export class FileTransport implements Transport {
   /** Store each arriving object after verifying its content hashes to the id the sender claimed. */
   async uploadObjects(objects: readonly TransferObject[]): Promise<void> {
     const repository = this.open();
+    repository.objects.preflight(objects, false);
     for (const object of objects) {
       // The claim is checked before anything is written. Storing first and
       // hashing later would put tampered or corrupted bytes under an id that

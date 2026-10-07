@@ -5,9 +5,9 @@
 // "what did I just do" survives a lost transcript, and "put it back" is one
 // command rather than a reasoning problem about which id was the old tip.
 //
-// Undo is always possible because objects are never removed. Rewinding a ref
-// makes a commit unreachable, not absent, so the same undo record can move it
-// forward again.
+// Ordinary undo restores refs and HEAD. Authorized FileId obliteration removes
+// payload bytes permanently; undo can restore a pointer but cannot restore its
+// intentionally absent content.
 
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
@@ -126,6 +126,7 @@ export class OperationLog {
    * @param refs - Every ref the operation moved.
    * @param now - Timestamp to record, injected so callers control it.
    * @param head - How the operation moved HEAD itself, when it did.
+   * @param validate - Optional pre-publication validation of the exact assigned receipt.
    * @returns The recorded operation, including its assigned sequence number.
    * @throws ObjectStoreError When another process holds the log's lock.
    */
@@ -135,6 +136,7 @@ export class OperationLog {
     refs: readonly RefTransition[],
     now: Date,
     head?: HeadTransition,
+    validate?: (operation: Operation) => void,
   ): Operation {
     mkdirSync(dirname(this.path), { recursive: true });
     const lockPath = `${this.path}.lock`;
@@ -153,6 +155,7 @@ export class OperationLog {
         refs,
         ...(head === undefined ? {} : { head }),
       };
+      validate?.(operation);
       appendFileSync(this.path, `${JSON.stringify(operation)}\n`);
       return operation;
     } finally {

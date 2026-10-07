@@ -155,7 +155,9 @@ export async function fetchFrom(
   }
 
   if (wanted.length === 0) {
-    return { remote: remoteName, url: remote.url, updated: [], conflictingTags, added: [], upToDate: true };
+    // Tombstones can change while every immutable ref remains unchanged.
+    const { added } = importBundleObjects(repository.objects, await wire.fetch([], localTips(repository)));
+    return { remote: remoteName, url: remote.url, updated: [], conflictingTags, added, upToDate: true };
   }
 
   const bundle = await wire.fetch(wanted.map((item) => item.remoteRef), localTips(repository));
@@ -353,6 +355,7 @@ export async function cloneFrom(
   const repository = Repository.init(root, branch ?? DEFAULT_BRANCH, advertisement.config);
   let fetched: FetchReport;
   try {
+    if (advertisement.repositoryId !== undefined) repository.objects.adoptIdentity(advertisement.repositoryId);
     repository.remotes.add(remoteName, location);
     fetched = await fetchFrom(repository, remoteName, now, wire);
   } catch (error) {

@@ -14,6 +14,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
+import { registerCompositionCommands } from "./composition-commands.ts";
 import { VcsError } from "./git.ts";
 import {
   type ImportReport,
@@ -274,7 +275,7 @@ function readServeGrants(authPath: string | undefined, workingRoot: string): Tok
  * @returns The trimmed value.
  * @throws VcsError When the argument is absent or blank.
  */
-function requiredArgument(
+export function requiredArgument(
   context: CommandHandlerContext,
   index: number,
   name: string,
@@ -356,6 +357,7 @@ function remoteListing(repository: Repository, head: ObjectId | null): RemoteBra
  * @param api - The host-supplied extension API.
  */
 export function registerVcsCommands(api: ExtensionApi): void {
+  registerCompositionCommands(api);
   api.registerCommand({
     name: "vcs init",
     description:
@@ -1142,46 +1144,14 @@ export function registerVcsCommands(api: ExtensionApi): void {
       "Re-read every object reachable from any ref and check it against its own id. A content-addressed store's one unacceptable failure is returning altered content silently, so this makes that detectable on demand.",
     run(context: CommandHandlerContext): VcsEnvelope & { verified: number; corrupt: readonly string[] } {
       const repository = openRepository(context);
-      const corrupt: string[] = [];
-      let verified = 0;
-      // Walk the full object closure from every ref, not only the commits: a
-      // corrupted blob or tree is the corruption most likely to occur in
-      // practice, and reading only commits (what allReachable yields) would miss
-      // it entirely. Reading each object re-hashes it, which is the check.
-      const seen = new Set<string>();
-      const queue: string[] = [
-        ...repository.refs.list(BRANCH_PREFIX),
-        ...repository.refs.list(TAG_PREFIX),
-      ].map((entry) => entry.target);
-      while (queue.length > 0) {
-        const id = queue.pop() as string;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        try {
-          const object = repository.objects.read(id);
-          verified += 1;
-          if (object.type === "commit") {
-            const commit = decodeCommit(object.payload);
-            queue.push(commit.tree, ...commit.parents);
-          } else if (object.type === "tree") {
-            for (const entry of decodeTree(object.payload)) queue.push(entry.id);
-          }
-        } catch (error) {
-          // Only ObjectStoreError is caught. `read` raises nothing else, and
-          // labelling an unexpected failure "unreadable" would report a bug in
-          // this process as corruption in the user's repository.
-          if (!(error instanceof ObjectStoreError)) throw error;
-          corrupt.push(`${id}: ${error.code}`);
-        }
+      const result = repository.verify();
+      const failures = [...result.missing, ...result.corrupt];
+      if (failures.length > 0) {
+        throw new VcsError("corrupt_objects", `${failures.length} reachable objects did not verify: ${failures.join("; ")}.`,
+          "Repair missing or corrupt history from a trusted peer; incomplete erasure requires authorized cleanup.");
       }
-      if (corrupt.length > 0) {
-        throw new VcsError(
-          "corrupt_objects",
-          `${corrupt.length} of ${corrupt.length + verified} reachable objects did not verify: ${corrupt.join("; ")}.`,
-          "Re-import the affected history from a bundle or another copy of the repository.",
-        );
-      }
-      return { ok: true, verified, corrupt };
+      return { ok: true, ...result };
+
     },
   });
 

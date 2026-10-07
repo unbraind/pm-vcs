@@ -12,8 +12,8 @@
 // `Repository` method) applies that plan in one operation-log entry, so a rewrite
 // that discovers a conflict halfway through has changed no ref and no file. The
 // objects it wrote along the way are unreferenced and therefore harmless: a
-// content-addressed store never removes anything, so half-built history costs
-// only disk and never correctness.
+// ordinary content-addressed writes preserve live history. Authorized erasure
+// remains terminal, and replayed payloads retain FileId provenance.
 //
 // Descendant rewriting is mandatory and is the hard part. Rewriting a commit that
 // has descendants replays every descendant reachable from any branch or tag, and
@@ -124,7 +124,7 @@ export class RewriteConflictError extends Error {
 }
 
 /**
- * Merges one path's three blobs.
+ * Merges one attributed payload path; competing repository links refuse atomically.
  *
  * Record objects take the per-field path; native PM append-only histories union
  * their events. Other blobs and rewritten history prefixes take diff3. The
@@ -137,6 +137,7 @@ export class RewriteConflictError extends Error {
  * @param ourId - Our blob.
  * @param theirId - Their blob.
  * @param labels - Names written into conflict markers.
+ * @param fileId - Stable identity selected by the enclosing tree merge.
  * @returns The merged blob's id and any conflict.
  */
 export function mergePath(
@@ -146,51 +147,60 @@ export function mergePath(
   ourId: ObjectId,
   theirId: ObjectId,
   labels?: ConflictLabels,
+  fileId?: FileId,
 ): { id: ObjectId; conflict?: MergeConflict } {
-  const ourObject = ctx.store.read(ourId);
-  const theirObject = ctx.store.read(theirId);
-  if (ourObject.type === "record" && theirObject.type === "record") {
-    const baseDocument = baseId === null ? {} : decodeRecord(ctx.store.readTyped(baseId, "record"));
-    const result = mergeRecords(
-      baseDocument,
-      decodeRecord(ourObject.payload),
-      decodeRecord(theirObject.payload),
-      ctx.config.recordPolicy,
+  return ctx.store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
+    const ourObject = ctx.store.read(ourId);
+    const theirObject = ctx.store.read(theirId);
+    const baseObject = baseId === null ? null : ctx.store.read(baseId);
+    if (ourObject.type === "link" || theirObject.type === "link" || baseObject?.type === "link") {
+      throw new ObjectStoreError("link_merge_conflict", `Competing link descriptors at ${path} require explicit pin reconciliation before merging.`);
+    }
+    const records = ourObject.type === "record" && theirObject.type === "record";
+    if (baseObject !== null && baseObject.type !== (records ? "record" : "blob")) throw new ObjectStoreError("object_type_mismatch", "Merge base has an incompatible payload kind.");
+    if (records) {
+      const baseDocument = baseObject === null ? {} : decodeRecord(baseObject.payload);
+      const result = mergeRecords(
+        baseDocument,
+        decodeRecord(ourObject.payload),
+        decodeRecord(theirObject.payload),
+        ctx.config.recordPolicy,
+      );
+      return {
+        id: ctx.store.write("record", encodeRecord(result.document), fileId),
+        conflict: result.clean
+          ? undefined
+          : { path, reason: "record", fields: result.conflicts.map((conflict) => conflict.field) },
+      };
+    }
+    const baseText = baseObject === null ? "" : baseObject.payload.toString("utf8");
+    const ourText = ourObject.payload.toString("utf8");
+    const theirText = theirObject.payload.toString("utf8");
+    // Native PM histories use base-relative multiset union of byte-exact events.
+    // A rewritten prefix keeps ordinary conflict handling rather than hiding edits.
+    const keepsBaseLines = (text: string): boolean => text.startsWith(baseText)
+      && (baseText.length === 0 || baseText.endsWith("\n") || text.length === baseText.length || text[baseText.length] === "\n");
+    if (/^\.agents\/pm\/history\/[^/]+\.jsonl$/.test(path)
+      && keepsBaseLines(ourText) && keepsBaseLines(theirText)) {
+      const baseLines = baseText.split("\n");
+      const lines = mergeAppendOnlyLog(baseLines, ourText.split("\n"), theirText.split("\n"), "ts");
+      const appended = lines.slice(baseLines.length);
+      // Preserve the agreed prefix byte for byte, including whitespace and blanks.
+      const separator = baseText.length > 0 && !baseText.endsWith("\n") ? "\n" : "";
+      const text = baseText + (appended.length === 0 ? "" : `${separator}${appended.join("\n")}\n`);
+      return { id: ctx.store.write("blob", Buffer.from(text, "utf8"), fileId) };
+    }
+    const result: ContentMergeResult = mergeContent(
+      baseText,
+      ourText,
+      theirText,
+      labels,
     );
     return {
-      id: ctx.store.write("record", encodeRecord(result.document)),
-      conflict: result.clean
-        ? undefined
-        : { path, reason: "record", fields: result.conflicts.map((conflict) => conflict.field) },
+      id: ctx.store.write("blob", Buffer.from(result.text, "utf8"), fileId),
+      conflict: result.clean ? undefined : { path, reason: "content" },
     };
-  }
-  const baseText = baseId === null ? "" : ctx.store.readTyped(baseId, "blob").toString("utf8");
-  const ourText = ourObject.payload.toString("utf8");
-  const theirText = theirObject.payload.toString("utf8");
-  // Native PM histories use base-relative multiset union of byte-exact events.
-  // A rewritten prefix keeps ordinary conflict handling rather than hiding edits.
-  const keepsBaseLines = (text: string): boolean => text.startsWith(baseText)
-    && (baseText.length === 0 || baseText.endsWith("\n") || text.length === baseText.length || text[baseText.length] === "\n");
-  if (/^\.agents\/pm\/history\/[^/]+\.jsonl$/.test(path)
-    && keepsBaseLines(ourText) && keepsBaseLines(theirText)) {
-    const baseLines = baseText.split("\n");
-    const lines = mergeAppendOnlyLog(baseLines, ourText.split("\n"), theirText.split("\n"), "ts");
-    const appended = lines.slice(baseLines.length);
-    // Preserve the agreed prefix byte for byte, including whitespace and blanks.
-    const separator = baseText.length > 0 && !baseText.endsWith("\n") ? "\n" : "";
-    const text = baseText + (appended.length === 0 ? "" : `${separator}${appended.join("\n")}\n`);
-    return { id: ctx.store.write("blob", Buffer.from(text, "utf8")) };
-  }
-  const result: ContentMergeResult = mergeContent(
-    baseText,
-    ourText,
-    theirText,
-    labels,
-  );
-  return {
-    id: ctx.store.write("blob", Buffer.from(result.text, "utf8")),
-    conflict: result.clean ? undefined : { path, reason: "content" },
-  };
+  });
 }
 
 /**
@@ -222,108 +232,111 @@ export function mergeTrees(
   theirTree: ObjectId | null,
   labels?: ConflictLabels,
 ): { tree: ObjectId; merged: string[]; conflicts: MergeConflict[] } {
-  const base = flattenTree(ctx.store, baseTree);
-  const ours = flattenTree(ctx.store, ourTree);
-  const theirs = flattenTree(ctx.store, theirTree);
-  const files = new Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId }>();
-  const merged: string[] = [];
-  const conflicts: MergeConflict[] = [];
+  return ctx.store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
+    const base = flattenTree(ctx.store, baseTree);
+    const ours = flattenTree(ctx.store, ourTree);
+    const theirs = flattenTree(ctx.store, theirTree);
+    const files = new Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId }>();
+    const merged: string[] = [];
+    const conflicts: MergeConflict[] = [];
 
-  /** Preserve compatible file identity and surface deterministic conflicts when both sides disagree. */
-  const reconcileIdentity = (
-    path: string,
-    ourEntry: { fileId?: FileId; copiedFrom?: FileId },
-    theirEntry: { fileId?: FileId; copiedFrom?: FileId },
-  ): { fileId?: FileId; copiedFrom?: FileId } => {
-    const fileIdsDiffer = ourEntry.fileId !== undefined && theirEntry.fileId !== undefined
-      && ourEntry.fileId !== theirEntry.fileId;
-    const provenanceDiffers = ourEntry.copiedFrom !== undefined && theirEntry.copiedFrom !== undefined
-      && ourEntry.copiedFrom !== theirEntry.copiedFrom;
-    if (fileIdsDiffer || provenanceDiffers) conflicts.push({ path, reason: "identity" });
-    if (fileIdsDiffer) {
-      const selected = compareByteOrder(ourEntry.fileId as FileId, theirEntry.fileId as FileId) <= 0
-        ? ourEntry : theirEntry;
+    /** Preserve compatible file identity and surface deterministic conflicts when both sides disagree. */
+    const reconcileIdentity = (
+      path: string,
+      ourEntry: { fileId?: FileId; copiedFrom?: FileId },
+      theirEntry: { fileId?: FileId; copiedFrom?: FileId },
+    ): { fileId?: FileId; copiedFrom?: FileId } => {
+      const fileIdsDiffer = ourEntry.fileId !== undefined && theirEntry.fileId !== undefined
+        && ourEntry.fileId !== theirEntry.fileId;
+      const provenanceDiffers = ourEntry.copiedFrom !== undefined && theirEntry.copiedFrom !== undefined
+        && ourEntry.copiedFrom !== theirEntry.copiedFrom;
+      if (fileIdsDiffer || provenanceDiffers) conflicts.push({ path, reason: "identity" });
+      if (fileIdsDiffer) {
+        const selected = compareByteOrder(ourEntry.fileId as FileId, theirEntry.fileId as FileId) <= 0
+          ? ourEntry : theirEntry;
+        return {
+          fileId: selected.fileId as FileId,
+          ...(selected.copiedFrom === undefined ? {} : { copiedFrom: selected.copiedFrom }),
+        };
+      }
+      const fileId = ourEntry.fileId ?? theirEntry.fileId;
+      const copiedFrom = provenanceDiffers
+        ? ([ourEntry.copiedFrom, theirEntry.copiedFrom] as FileId[]).sort(compareByteOrder)[0]
+        : ourEntry.copiedFrom ?? theirEntry.copiedFrom;
       return {
-        fileId: selected.fileId as FileId,
-        ...(selected.copiedFrom === undefined ? {} : { copiedFrom: selected.copiedFrom }),
+        ...(fileId === undefined ? {} : { fileId }),
+        ...(copiedFrom === undefined ? {} : { copiedFrom }),
       };
-    }
-    const fileId = ourEntry.fileId ?? theirEntry.fileId;
-    const copiedFrom = provenanceDiffers
-      ? ([ourEntry.copiedFrom, theirEntry.copiedFrom] as FileId[]).sort(compareByteOrder)[0]
-      : ourEntry.copiedFrom ?? theirEntry.copiedFrom;
-    return {
-      ...(fileId === undefined ? {} : { fileId }),
-      ...(copiedFrom === undefined ? {} : { copiedFrom }),
     };
-  };
 
-  for (const path of [...new Set([...base.keys(), ...ours.keys(), ...theirs.keys()])].sort(compareByteOrder)) {
-    const baseEntry = base.get(path);
-    const ourEntry = ours.get(path);
-    const theirEntry = theirs.get(path);
-    const ourChanged = (ourEntry?.id ?? null) !== (baseEntry?.id ?? null)
-      || (ourEntry?.mode ?? null) !== (baseEntry?.mode ?? null)
-      || ourEntry?.fileId !== baseEntry?.fileId
-      || ourEntry?.copiedFrom !== baseEntry?.copiedFrom;
-    const theirChanged = (theirEntry?.id ?? null) !== (baseEntry?.id ?? null)
-      || (theirEntry?.mode ?? null) !== (baseEntry?.mode ?? null)
-      || theirEntry?.fileId !== baseEntry?.fileId
-      || theirEntry?.copiedFrom !== baseEntry?.copiedFrom;
+    for (const path of [...new Set([...base.keys(), ...ours.keys(), ...theirs.keys()])].sort(compareByteOrder)) {
+      const baseEntry = base.get(path);
+      const ourEntry = ours.get(path);
+      const theirEntry = theirs.get(path);
+      const ourChanged = (ourEntry?.id ?? null) !== (baseEntry?.id ?? null)
+        || (ourEntry?.mode ?? null) !== (baseEntry?.mode ?? null)
+        || ourEntry?.fileId !== baseEntry?.fileId
+        || ourEntry?.copiedFrom !== baseEntry?.copiedFrom;
+      const theirChanged = (theirEntry?.id ?? null) !== (baseEntry?.id ?? null)
+        || (theirEntry?.mode ?? null) !== (baseEntry?.mode ?? null)
+        || theirEntry?.fileId !== baseEntry?.fileId
+        || theirEntry?.copiedFrom !== baseEntry?.copiedFrom;
 
-    if (!theirChanged) {
-      if (ourEntry) files.set(path, ourEntry);
-      continue;
-    }
-    if (!ourChanged) {
-      if (theirEntry) files.set(path, theirEntry);
-      continue;
-    }
-    if (ourEntry && theirEntry && ourEntry.id === theirEntry.id && ourEntry.mode === theirEntry.mode) {
+      if (!theirChanged) {
+        if (ourEntry) files.set(path, ourEntry);
+        continue;
+      }
+      if (!ourChanged) {
+        if (theirEntry) files.set(path, theirEntry);
+        continue;
+      }
+      if (ourEntry && theirEntry && ourEntry.id === theirEntry.id && ourEntry.mode === theirEntry.mode) {
+        files.set(path, {
+          id: ourEntry.id,
+          mode: ourEntry.mode,
+          ...reconcileIdentity(path, ourEntry, theirEntry),
+        });
+        continue;
+      }
+      // Both sides changed it. A delete on one side against an edit on the other
+      // has no content to merge, so our side is kept and the clash is reported.
+      if (!ourEntry || !theirEntry) {
+        conflicts.push({ path, reason: "content" });
+        if (ourEntry) files.set(path, ourEntry);
+        continue;
+      }
+      if (ourEntry.mode !== theirEntry.mode) {
+        conflicts.push({ path, reason: "mode" });
+        files.set(path, ourEntry);
+        continue;
+      }
+      const identity = reconcileIdentity(path, ourEntry, theirEntry);
+      const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels, identity.fileId);
       files.set(path, {
-        id: ourEntry.id,
+        id: resolution.id,
         mode: ourEntry.mode,
-        ...reconcileIdentity(path, ourEntry, theirEntry),
+        ...identity,
       });
-      continue;
+      if (resolution.conflict) conflicts.push(resolution.conflict);
+      else merged.push(path);
     }
-    // Both sides changed it. A delete on one side against an edit on the other
-    // has no content to merge, so our side is kept and the clash is reported.
-    if (!ourEntry || !theirEntry) {
-      conflicts.push({ path, reason: "content" });
-      if (ourEntry) files.set(path, ourEntry);
-      continue;
+    const identities = new Map<string, string>();
+    for (const [path, entry] of files) {
+      if (entry.fileId === undefined) continue;
+      const previous = identities.get(entry.fileId);
+      if (previous !== undefined && previous !== path) {
+        conflicts.push({ path, reason: "identity" });
+        const replacement = createHash("sha256")
+          .update("pm-vcs-merge-identity\0").update(entry.fileId).update("\0").update(path)
+          .digest("hex").slice(0, 32) as FileId;
+        files.set(path, { ...entry, fileId: replacement, copiedFrom: entry.fileId });
+        identities.set(replacement, path);
+        continue;
+      }
+      identities.set(entry.fileId, path);
     }
-    if (ourEntry.mode !== theirEntry.mode) {
-      conflicts.push({ path, reason: "mode" });
-      files.set(path, ourEntry);
-      continue;
-    }
-    const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels);
-    files.set(path, {
-      id: resolution.id,
-      mode: ourEntry.mode,
-      ...reconcileIdentity(path, ourEntry, theirEntry),
-    });
-    if (resolution.conflict) conflicts.push(resolution.conflict);
-    else merged.push(path);
-  }
-  const identities = new Map<string, string>();
-  for (const [path, entry] of files) {
-    if (entry.fileId === undefined) continue;
-    const previous = identities.get(entry.fileId);
-    if (previous !== undefined && previous !== path) {
-      conflicts.push({ path, reason: "identity" });
-      const replacement = createHash("sha256")
-        .update("pm-vcs-merge-identity\0").update(entry.fileId).update("\0").update(path)
-        .digest("hex").slice(0, 32) as FileId;
-      files.set(path, { ...entry, fileId: replacement, copiedFrom: entry.fileId });
-      identities.set(replacement, path);
-      continue;
-    }
-    identities.set(entry.fileId, path);
-  }
-  return { tree: buildTree(ctx.store, files), merged, conflicts };
+    return { tree: buildTree(ctx.store, files), merged, conflicts };
+  });
 }
 
 /**

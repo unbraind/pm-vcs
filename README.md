@@ -102,8 +102,9 @@ was already reverted.
 uncommitted edit refuses *before writing anything*. A half-applied switch leaves an agent
 with a tree matching no commit and no way to describe what it has.
 
-**Objects are never removed**, so `undo` is always possible. Rewinding a ref makes a commit
-unreachable, not absent.
+Ordinary operations retain objects, so rewinding a ref preserves history. Explicit authorized
+`obliterate` permanently removes selected payloads; `undo` can restore a pointer but cannot
+recover obliterated bytes.
 
 ---
 
@@ -145,6 +146,77 @@ pm vcs diff main feature
 | `pm vcs files <item-id>` | Resolve a PM item's linked arbitrary files to stable identities and changes. |
 | `pm vcs changes <item-id>` | Report explicit and file-derived stable ChangeIds for a PM item. |
 | `pm vcs items [from..to]` | Report PM items explicitly associated with, or linked to files changed by, native revisions. |
+
+### Repository links, private layers and permanent erasure
+
+A committed link is a typed descriptor, distinct from `vcs instance` and its shared
+local store. Obtain the target's `Repository.identity()` and an exact commit ID, then
+write a canonical JSON spec with `encodeLink`:
+
+```json
+{"version":1,"repository":"0123456789abcdef0123456789abcdef","revision":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","mappings":[{"source":"assets/model.bin","destination":"vendor/model.bin"}]}
+```
+
+The descriptor commits metadata only. Exact file mappings declare the subset;
+branch movement cannot change the pin. Resolution requires the separately configured
+target read credential and creates an instance-private layer. Local target bindings
+and credentials are supplied at resolution and never appear in enclosing bundles.
+This implementation resolves local target repositories; it does not resolve HTTP
+pins or recursively follow nested descriptors.
+
+| command | behavior |
+| --- | --- |
+| `pm vcs authority --principal operator --read-token-file read.token --erase-token-file erase.token` | Configure two distinct clone-local salted credential hashes. Token files should live outside tracked content. |
+| `pm vcs link dependency.link --spec link.json` | Stage a canonical typed descriptor; commit normally. |
+| `pm vcs link --list` | List descriptors without accessing target repositories. |
+| `pm vcs link resolve dependency.link --target ../target --read-token-file read.token --layer dependency` | Verify separate authority, target identity and exact revision, then overlay the mapped files privately. |
+| `pm vcs layer local destination.bin source.bin` | Snapshot one file privately; engine `addLayer` accepts multiple exact paths. `--executable` records private mode. |
+| `pm vcs layer --list` | Show names and excluded paths without printing private bytes. |
+| `pm vcs layer local --remove` | Restore the current underlying index; edited or missing overlays require `--discard-edits`. |
+| `pm vcs obliterate <FileId-or-indexed-path> --erase-token-file erase.token --reason incident` | Erase every historical payload and fragment of the stable identity, with a durable typed audit. Authorized retry resumes pending cleanup. |
+
+One-sided link changes retain their typed descriptor during merge. Competing pins
+raise `link_merge_conflict`; explicitly stage and commit an agreed descriptor, then
+retry the merge. Resolution never silently selects a pin or changes a private layer.
+
+`status` reports `excludedLayers` and `obliterated` separately. Bulk staging skips
+layers; explicit staging refuses them. Checkout preserves edited layer bytes while
+changing the underlying index. Sparse-view changes and individual restore operations
+refuse while layers exist. Removing a layer restores its underlying staged bytes
+or removes overlay-only paths. To commit desired overlay changes, remove the layer,
+reapply those changes and stage them deliberately.
+
+Erasure inventories unreachable trees, indexes, fragments, valid loose temporary
+copies and every registered or previously unlinked shared instance. It refuses
+ambiguous copies, affected layers, deduplicated payloads owned by another identity,
+missing inventory and unsupported pack/cache artefacts before mutation. Pending denial
+is fsynced before deletion and blocks writes until cleanup completes. A crashed
+writer's lock requires explicit `--recover-lock`; a live or unknown owner refuses.
+Fresh bundles/clones reproduce intentional absence. Remote tombstones cannot erase
+held local bytes without local authorization. Stale bundles and novel payloads under
+a denied FileId fail preflight before storing bytes or moving refs.
+
+The guarantee covers application-visible loose storage and known shared worktrees;
+it excludes external backups, independently owned clones, filesystem snapshots and
+physical-media recovery. The filesystem operator must exclude concurrent direct edits
+outside pm-vcs. There is no genuine pack backend: unknown storage is a refusal, never
+a successful erasure. Payload-only resumable upload batches refuse after erasure
+because that protocol carries no FileId provenance. Direct `ObjectStore.write` calls
+must then supply a non-denied FileId for new blob/record/manifest payloads.
+
+Physical erasure inspects retained loose-object copies, including raw frames,
+zlib and base64 wrappers, before publishing denial. Supported encodings exceeding
+bounded inspection cause refusal. Windows erasure refuses before deletion because
+Node cannot provide directory fsync; ordinary metadata uses fsynced atomic replacement
+with that directory-durability limit. See the shipped
+[composition and erasure design](docs/links-layers-obliteration.md) for exact bounds.
+
+Engine APIs live in `engine/repo.ts`: `identity`, `setAuthority`, `stageLink`, `links`,
+`resolveLink`, `addLayer`, `layers`, `removeLayer`, `obliterate`, `obliteratedPaths`,
+`readFileState` and `verify`. `ObjectStore.state` returns the discriminated states
+`present`, `obliterated`, `missing` and `corrupt`; an erased read throws
+`ObliteratedObjectError` with its tombstone ID. See the
+[shipped design](docs/links-layers-obliteration.md) for format and security boundaries.
 
 ### Git interoperability
 
@@ -267,7 +339,7 @@ engine/repo.ts       The porcelain.
   oplog.jsonl     append-only operation log
 ```
 
-### The four object kinds
+### Object kinds
 
 | kind | holds |
 | --- | --- |
@@ -275,6 +347,10 @@ engine/repo.ts       The porcelain.
 | `tree` | sorted entries with mode, object id, stable file identity and copy provenance |
 | `commit` | a tree, parents, author, committer, message, stable change id and PM item associations |
 | `record` | **a structured document as canonically ordered fields** |
+| `manifest` | fixed or content-defined fragment addresses and byte lengths |
+| `series` | portable patch-series metadata |
+| `link` | immutable target repository identity, commit ID and exact file mappings |
+| `tombstone` | terminal FileId, affected addresses and bounded audit metadata |
 
 `record` is the one git does not have, and the reason this system exists.
 
@@ -540,6 +616,7 @@ Everything below is tracked as an epic in this repository's own tracker, under
 - `@unbrained/pm-cli` ≥ 2026.8.1 (peer dependency and host-bound SDK runtime)
 - Works under `npm`/`npx` and `bun`/`bunx`
 - No runtime dependencies beyond the Node standard library
+
 
 ## Development
 

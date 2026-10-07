@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, test } from "node:test";
 
+import { type ObjectArrival } from "../engine/lifecycle.ts";
 import { type ObjectId, ObjectStore } from "../engine/objects.ts";
 import { type Signature, readCommit, writeCommit } from "../engine/model.ts";
 import { RefStore } from "../engine/refs.ts";
@@ -1031,4 +1032,23 @@ test("resolveBundleTarget refuses to overwrite an existing untracked file", () =
   // So is an ignored local secret.
   writeFileSync(join(repo, ".env"), "SECRET=1");
   assert.throws(() => resolveBundleTarget(repo, ".env"), /not tracked by git/);
+});
+
+test("self-host verification reports physical history loss after a validated import", /** Actual loose-object disappearance still fails verification after publication preflight succeeded. */ () => {
+  const { bytes } = bundleFor([["a.txt", "x"]]); const { store } = own(); const sourceTree = buildSourceTree(store, files([["a.txt", "x"]]));
+  const original = ObjectStore.prototype.accept;
+  /** Keep the real verified import and remove one actual isolated commit only after it publishes. */
+  ObjectStore.prototype.accept = function (objects: readonly ObjectArrival[], attributed: boolean): void {
+    original.call(this, objects, attributed);
+    const commit = objects.find(/** Select one real commit carried by this archive. */ (object) => object.type === "commit")!;
+    const physical = this.inventory().find(/** Locate the verified loose file through the public inventory. */ (entry) => entry.id === commit.id)!;
+    rmSync(physical.path);
+  };
+  try { const result = verifySelfHost(store, bytes, ref, sourceTree); assert.equal(result.ok, false); assert.ok(result.problems.some(/** Classify a post-import history read failure explicitly. */ (problem) => problem.includes("history") && problem.includes("not fully carried"))); }
+  finally { ObjectStore.prototype.accept = original; }
+});
+
+test("self-host comparison names one missing payload without truncating its diagnostic", /** Validate a physically incomplete comparison store separately from complete-bundle publication. */ () => {
+  const { store } = own(); const tree = buildSourceTree(store, files([["one.txt", "payload"]])); const target = own(); target.store.write("tree", store.readTyped(tree, "tree"));
+  const result = compareTrees(store, target.store, tree, tree); assert.equal(result.ok, false); assert.ok(result.problems.some(/** A short missing-path list must remain complete and readable. */ (problem) => problem.includes("one.txt") && !problem.includes("…")));
 });

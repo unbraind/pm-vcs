@@ -638,7 +638,7 @@ test("real responders with malformed successful envelopes fail closed", async ()
   const wire = new HttpTransport(`http://127.0.0.1:${address.port}/repo`);
   try {
     const advertisement = { refs: [], head: null, config: {}, formatVersion: "1", capabilities: [] };
-    for (const malformed of [null, [], {}, { ...advertisement, refs: [null] }, { ...advertisement, refs: [[]] }, { ...advertisement, refs: [{}] }, { ...advertisement, refs: [{ name: "main", target: 1 }] }, { ...advertisement, head: 1 }, { ...advertisement, config: null }, { ...advertisement, config: [] }, { ...advertisement, config: "bad" }, { ...advertisement, config: { recordPaths: "x" } }, { ...advertisement, config: { recordPolicy: [] } }, { ...advertisement, formatVersion: 1 }, { ...advertisement, capabilities: [1] }]) {
+    for (const malformed of [null, [], {}, { ...advertisement, refs: [null] }, { ...advertisement, refs: [[]] }, { ...advertisement, refs: [{}] }, { ...advertisement, refs: [{ name: "main", target: 1 }] }, { ...advertisement, head: 1 }, { ...advertisement, config: null }, { ...advertisement, config: [] }, { ...advertisement, config: "bad" }, { ...advertisement, config: { recordPaths: "x" } }, { ...advertisement, config: { recordPolicy: [] } }, { ...advertisement, formatVersion: 1 }, { ...advertisement, capabilities: [1] }, { ...advertisement, repositoryId: null }, { ...advertisement, repositoryId: 1 }, { ...advertisement, repositoryId: "invalid" }]) {
       answer = malformed;
       await assert.rejects(wire.advertise(), { code: "unreachable_remote" });
     }

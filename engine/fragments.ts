@@ -259,33 +259,35 @@ export function readFragmentedToFile(
   id: ObjectId,
   destinationPath: string,
 ): void {
-  const manifest = readManifest(store, id);
-  const fd = openSync(destinationPath, "wx");
-  let complete = false;
-  try {
-    for (const fragment of manifest.fragments) {
-      const data = readFragmentBlob(store, fragment);
-      // writeSync returns the bytes actually written and is not guaranteed to
-      // transfer the whole buffer in one call. Ignoring the return value
-      // truncates the output on a short write while reporting success, which
-      // for a restore path means silent corruption of the restored file.
-      let written = 0;
-      while (written < data.length) {
-        written += writeSync(fd, data, written, data.length - written);
+  return store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
+    const manifest = readManifest(store, id);
+    const fd = openSync(destinationPath, "wx");
+    let complete = false;
+    try {
+      for (const fragment of manifest.fragments) {
+        const data = readFragmentBlob(store, fragment);
+        // writeSync returns the bytes actually written and is not guaranteed to
+        // transfer the whole buffer in one call. Ignoring the return value
+        // truncates the output on a short write while reporting success, which
+        // for a restore path means silent corruption of the restored file.
+        let written = 0;
+        while (written < data.length) {
+          written += writeSync(fd, data, written, data.length - written);
+        }
       }
+      fsyncSync(fd);
+      complete = true;
+    } finally {
+      closeSync(fd);
+      // A fragment read can throw partway through - a missing blob, or one whose
+      // length disagrees with its manifest entry - and the bytes written before
+      // that point are already on disk. Leaving them behind is worse than the
+      // failure itself: the file looks like a restore, and a caller retrying
+      // meets EEXIST from the exclusive open rather than a clean second attempt.
+      // The destination only survives a run that completed.
+      if (!complete) rmSync(destinationPath, { force: true });
     }
-    fsyncSync(fd);
-    complete = true;
-  } finally {
-    closeSync(fd);
-    // A fragment read can throw partway through - a missing blob, or one whose
-    // length disagrees with its manifest entry - and the bytes written before
-    // that point are already on disk. Leaving them behind is worse than the
-    // failure itself: the file looks like a restore, and a caller retrying
-    // meets EEXIST from the exclusive open rather than a clean second attempt.
-    // The destination only survives a run that completed.
-    if (!complete) rmSync(destinationPath, { force: true });
-  }
+  });
 }
 
 /**

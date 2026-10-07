@@ -1,19 +1,24 @@
 // Content-addressed object store.
 //
-// Four object kinds are framed identically — `<type> <byteLength>\0<payload>` —
+// Eight object kinds are framed identically — `<type> <byteLength>\0<payload>` —
 // and named by the SHA-256 of that whole frame. Including the type and length in
 // the hashed bytes is what stops a blob whose content happens to spell a valid
 // tree from colliding with that tree: the frames differ, so the ids differ.
 //
-// Objects are immutable and never removed. That is what makes `undo` always
-// possible (see oplog.ts) and what lets a write of already-present content be
-// skipped rather than repeated.
+// Ordinary writes are immutable. Authorized FileId obliteration permanently
+// removes payloads and preserves typed intentional absence; undo restores refs
+// but cannot restore erased bytes. Existing live objects still deduplicate.
 
 import { constants as zlibConstants, deflateSync, inflateSync } from "node:zlib";
 import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
   fsyncSync,
+  fstatSync,
+  existsSync,
+  lstatSync,
+  readdirSync,
+  unlinkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -22,12 +27,18 @@ import {
   statSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { decodeManifest, decodeTree } from "./model.ts";
+import { encodeTombstone, assertArrivalsAllowed, readDenials, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
+import { writePrivateJson } from "./composition.ts";
+
+/** Synchronous store handles addressing one root share reentrancy; independent processes still use the exclusive filesystem lease. */
+const activeLeases = new Set<string>();
 
 /** The kinds of object the store can hold. */
-export const OBJECT_TYPES = ["blob", "tree", "commit", "record", "series", "manifest"] as const;
+export const OBJECT_TYPES = ["blob", "tree", "commit", "record", "series", "manifest", "link", "tombstone"] as const;
 
-/** One of the four object kinds. */
+/** One of the eight object kinds. */
 export type ObjectType = (typeof OBJECT_TYPES)[number];
 
 /** A 64-character lowercase hex SHA-256 digest naming an object. */
@@ -76,6 +87,7 @@ export class ObjectStoreError extends Error {
 export function readControlJson(path: string, code: string, what: string): unknown {
   let contents: string;
   try {
+    if (lstatSync(path).isSymbolicLink()) throw new ObjectStoreError(code, `The ${what} cannot be a symbolic link.`);
     contents = readFileSync(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -256,7 +268,19 @@ export class ObjectStore {
    * @param payload - The object's raw content.
    * @returns The id the content is stored under.
    */
-  write(type: ObjectType, payload: Buffer): ObjectId {
+  write(type: ObjectType, payload: Buffer, fileId?: string): ObjectId {
+    return this.withWriteLock(/** Check permanent denial while holding the publication lock. */ () => {
+      const id = hashObject(type, payload);
+      this.preflight([{ type, payload, id }], fileId !== undefined);
+      if (fileId !== undefined && this.denials().some(/** Refuse attribution to a terminal file identity. */ (denial) => denial.tombstone.fileId === fileId)) {
+        throw new ObjectStoreError("file_obliterated", "This FileId is permanently denied.");
+      }
+      return this.writeRaw(type, payload);
+    });
+  }
+
+  /** Publish preflighted bytes while a transaction already holds the store lock. */
+  private writeRaw(type: ObjectType, payload: Buffer): ObjectId {
     const id = hashObject(type, payload);
     if (this.has(id)) return id;
     const destination = this.pathFor(id);
@@ -306,6 +330,8 @@ export class ObjectStore {
    */
   read(id: ObjectId): StoredObject {
     this.assertId(id);
+    const denial = this.denial(id);
+    if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
     let compressed: Buffer;
     try {
       compressed = readFileSync(this.pathFor(id));
@@ -343,6 +369,145 @@ export class ObjectStore {
     return object.payload;
   }
 
+  /** Immutable repository identity, created once on the first explicit request. */
+  identity(): string {
+    return this.withWriteLock(/** Concurrent explicit identity requests share one atomic creation. */ () => {
+      const path = join(dirname(this.root), "identity");
+      if (!existsSync(path)) writePrivateJson(path, randomBytes(16).toString("hex"));
+      const identity = readControlJson(path, "bad_identity", "repository identity");
+      if (typeof identity !== "string" || !/^[0-9a-f]{32}$/.test(identity)) throw new ObjectStoreError("bad_identity", "Repository identity is corrupt.");
+      return identity;
+    });
+  }
+
+  /** Read an existing identity without introducing nondeterminism into standalone archives. */
+  recordedIdentity(): string | undefined {
+    return existsSync(join(dirname(this.root), "identity")) ? this.identity() : undefined;
+  }
+
+  /** Adopt an exported identity only into an empty store without an established local identity. */
+  adoptIdentity(identity: string): void {
+    if (!/^[0-9a-f]{32}$/.test(identity)) throw new ObjectStoreError("bad_identity", "Received repository identity is invalid.");
+    this.withWriteLock(/** Empty clones adopt their source identity under the same creation lease. */ () => {
+      if (this.inventory().length === 0 && !existsSync(join(dirname(this.root), "identity"))) writePrivateJson(join(dirname(this.root), "identity"), identity);
+    });
+  }
+
+  /** Read every durable terminal identity and incomplete cleanup record. */
+  denials(): ErasureDenial[] { return readDenials(dirname(this.root)); }
+
+  /** Find intentional absence independently of physical object presence. */
+  denial(id: ObjectId): ErasureDenial | undefined {
+    return this.denials().find(/** Match every historical root or fragment address. */ (entry) => entry.tombstone.objects.includes(id));
+  }
+
+  /** Inspect present, intentionally absent, missing and damaged content without conflating states. */
+  state(id: ObjectId, read: () => StoredObject = /** Default inspection verifies the loose object itself. */ () => this.read(id)): PayloadState {
+    try { return { kind: "present", object: read() }; } catch (error) {
+      if (error instanceof ObliteratedObjectError) return { kind: "obliterated", tombstone: error.tombstone };
+      if (!(error instanceof ObjectStoreError)) throw error;
+      return { kind: error.code === "object_not_found" || error.code === "missing_fragment" ? "missing" : "corrupt", code: error.code };
+    }
+  }
+
+  /** Preflight a complete arrival before storing even its first payload. */
+  preflight(objects: readonly ObjectArrival[], attributed: boolean): void {
+    assertArrivalsAllowed(this.denials(), objects, attributed);
+  }
+
+  /** Store a batch that has passed whole-batch provenance validation under the same lock. */
+  accept(objects: readonly ObjectArrival[], attributed: boolean): void {
+    this.withWriteLock(/** Prevent erasure from interleaving with arrival preflight and publication. */ () => {
+      this.preflight(objects, attributed);
+      for (const object of objects) this.writeRaw(object.type, object.payload);
+    });
+  }
+
+  /** Persist denial durably before deletion; pending cleanup closes every writer. */
+  recordDenials(denials: readonly ErasureDenial[]): void {
+    this.withWriteLock(/** The durable denial and canonical audit objects publish under the same store lease. */ () => {
+      writePrivateJson(join(dirname(this.root), "denials.json"), denials);
+      for (const denial of denials) this.writeRaw("tombstone", encodeTombstone(denial.tombstone));
+    });
+  }
+
+  /** Inventory every loose object and valid loose temporary copy; unknown backends refuse. */
+  inventory(): { id: ObjectId; path: string; object: StoredObject }[] {
+    const result: { id: ObjectId; path: string; object: StoredObject }[] = [];
+    if (!existsSync(this.root)) return result;
+    if (!lstatSync(this.root).isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Object storage cannot follow a symlink.");
+    for (const directory of readdirSync(this.root, { withFileTypes: true })) {
+      if (!directory.isDirectory() || !/^[0-9a-f]{2}$/.test(directory.name)) {
+        throw new ObjectStoreError("unsupported_erasure_storage", "Unknown object storage must be removed or supported before erasure.");
+      }
+      for (const file of readdirSync(join(this.root, directory.name), { withFileTypes: true })) {
+        if (!file.isFile() || !/^[0-9a-f]{62}(?:\.[0-9]+\.[0-9a-f]{12}\.tmp)?$/.test(file.name)) {
+          throw new ObjectStoreError("unsupported_erasure_storage", "Unindexed storage artefacts prevent a complete erasure inventory.");
+        }
+        const id = directory.name + file.name.slice(0, 62);
+        const path = join(this.root, directory.name, file.name);
+        const object = parseFramedObject(inflateSync(readFileSync(path)));
+        if (hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("corrupt_object", "Inventory found a mismatched loose object.");
+        result.push({ id, path, object });
+      }
+    }
+    return result;
+  }
+
+  /** Hold a synchronous, reentrant store transaction across publication, worktree mutation and physical erasure; callbacks must not return asynchronous work. */
+  withWriteLock<T>(action: () => T): T {
+    const lease = resolve(this.root);
+    if (activeLeases.has(lease)) return action();
+    if (!existsSync(dirname(this.root))) mkdirSync(dirname(this.root), { recursive: true });
+    const path = join(dirname(this.root), "objects.lock");
+    let fd: number;
+    for (let attempt = 0; ; attempt += 1) {
+      try { fd = openSync(path, "wx", 0o600); break; } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (attempt === 200) {
+          throw new ObjectStoreError("store_locked", "Another writer holds the store lock; interrupted locks require explicit recovery.");
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      }
+    }
+    const locked = fstatSync(fd, { bigint: true });
+    let result: T;
+    let lockChanged = false;
+    try {
+      writeSync(fd, String(process.pid));
+      fsyncSync(fd);
+      activeLeases.add(lease);
+      result = action();
+    } finally {
+      activeLeases.delete(lease);
+      closeSync(fd);
+      // A moved root must neither hide the mutation refusal nor unlink a foreign lock.
+      const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+      if (observed !== undefined && observed.dev === locked.dev && observed.ino === locked.ino) unlinkSync(path);
+      else lockChanged = true;
+    }
+    if (lockChanged) throw new ObjectStoreError("worktree_path_changed", "Store lock identity changed during mutation.");
+    return result;
+  }
+
+  /** Explicitly recover a crashed writer's lock, refusing a live or unidentifiable owner. */
+  recoverWriterLock(): void {
+    const path = join(dirname(this.root), "objects.lock");
+    let content: string;
+    try { content = readFileSync(path, "utf8"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    const pid = Number(content);
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new ObjectStoreError("store_locked", "Lock owner is unknown.");
+    try { process.kill(pid, 0); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      rmSync(path);
+      return;
+    }
+    throw new ObjectStoreError("store_locked", "Lock owner is still running.");
+  }
+
   /**
    * Rejects an id that is not 64 lowercase hex characters.
    *
@@ -355,3 +520,21 @@ export class ObjectStore {
     }
   }
 }
+
+/** Distinct terminal absence carrying the audit record rather than claiming corruption. */
+export class ObliteratedObjectError extends ObjectStoreError {
+  /** Immutable audit tombstone identity. */
+  readonly tombstone: ObjectId;
+  /** Construct the typed read refusal without exposing erased payloads. */
+  constructor(id: ObjectId, tombstone: ObjectId) {
+    super("object_obliterated", `Object ${id} was permanently obliterated; tombstone ${tombstone}.`);
+    this.tombstone = tombstone;
+  }
+}
+
+/** Four mutually exclusive content states; intentional absence remains auditable. */
+export type PayloadState =
+  | { readonly kind: "present"; readonly object: StoredObject }
+  | { readonly kind: "obliterated"; readonly tombstone: ObjectId }
+  | { readonly kind: "missing"; readonly code: string }
+  | { readonly kind: "corrupt"; readonly code: string };

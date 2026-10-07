@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "files": [
     "dist/",
+    "docs/",
     "manifest.json",
     "README.md",
     "ARCHITECTURE.md",
