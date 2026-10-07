@@ -1,0 +1,14 @@
+id: pm-vcs-3orq
+title: Reconcile duplicate-event semantics between the identical-blob shortcut and the append-only history union
+description: "mergeTrees keeps one copy when both sides changed a history blob to the same id (git's identical-blob rule), while mergeAppendOnlyLog (since the PR #91 review fix for 4183822298) keeps one occurrence per side, so a byte-identical event appended on both sides survives twice when the sides differ elsewhere. The outcome therefore depends on unrelated edits. Byte-identical pm events (same ms timestamp, author, op, patch) on two branches realistically come from a cherry-pick or the same commit merged into both, where duplication would replay one event twice. Decide one rule (likely: dedupe byte-identical appended events) and apply it in both paths, validated against the pm CLI's own pm-history merge driver on real (hash-chain-valid) events."
+type: Issue
+status: open
+priority: 2
+tags[3]: history,merge,semantics
+created_at: "2026-10-07T00:14:49.678Z"
+updated_at: "2026-10-07T00:14:49.678Z"
+author: claude-orchestrator
+acceptance_criteria: Same-input merges give the same history whether or not the two blobs are identical; the chosen rule is checked against pm's pm-history driver on real pm-written events; tests cover cherry-picked events and genuinely distinct events with equal content
+files[1]{path,scope}:
+  engine/rewrite.ts,project
+body: ""

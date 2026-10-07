@@ -2,11 +2,13 @@ id: pm-vcs-bhsk
 title: Exclude SDK tracker runtime caches from native VCS merges
 description: PR #91 hands-on two-agent real pm update merge conflicted only on runtime context usage. Resolve tracker roots through the SDK and exclude its runtime fence in status and staging; prove clean merge and verification on server and clones.
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags: []
 created_at: "2026-10-05T07:29:52.383Z"
-updated_at: "2026-10-05T08:51:19.207Z"
+updated_at: "2026-10-07T00:25:39.420Z"
+closed_at: "2026-10-07T00:25:39.388Z"
+completed_at: "2026-10-07T00:25:39.388Z"
 author: codex-sol
 parent: pm-vcs-5h6j
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
@@ -53,4 +55,5 @@ tests[3]:
       source_ref: feat/served-repository-http
 docs[1]{path,scope}:
   README.md,project
+close_reason: "Verified by the orchestrator: PR #91 merged as 186adf1; required checks test (22)/(26) and both Windows acceptance launchers green, main CI and CodeQL green after merge, release:check under npm and bun at exact 100/100/100/100 (881 tests), Greptile 5/5 and every CodeRabbit finding fixed or answered."
 body: ""

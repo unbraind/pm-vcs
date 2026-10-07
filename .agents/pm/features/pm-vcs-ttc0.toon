@@ -2,11 +2,13 @@ id: pm-vcs-ttc0
 title: Served repository over the Phase 3 transport
 description: "Serve one repository or a directory of repositories through the existing async Phase 3 transport over node:http. Includes ref advertisement, verified fetch/upload, atomic push/publication, standalone series object download, review records, HTTP(S) client clone/fetch/push and capability negotiation. Unauthenticated serving is read-only by default and permits writes only when --allow-unauthenticated-writes is set. Real socket, packed Node/Bun and multi-process PM record acceptance evidence is linked in comments and tests. Implementation awaits orchestrator closure after final release gates."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:10.824Z"
-updated_at: "2026-10-06T22:13:36.842Z"
+updated_at: "2026-10-07T00:25:35.415Z"
+closed_at: "2026-10-07T00:25:35.376Z"
+completed_at: "2026-10-07T00:25:35.376Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:38.277Z",claude,"cli:update:dep",detected
@@ -212,4 +214,5 @@ tests[14]:
       source_ref: feat/served-repository-http
 docs[1]{path,scope}:
   README.md,project
+close_reason: "Verified by the orchestrator: PR #91 merged as 186adf1; required checks test (22)/(26) and both Windows acceptance launchers green, main CI and CodeQL green after merge, release:check under npm and bun at exact 100/100/100/100 (881 tests), Greptile 5/5 and every CodeRabbit finding fixed or answered."
 body: ""
