@@ -1,0 +1,926 @@
+// Serving a repository over HTTP: the same transport, on a socket.
+//
+// Every policy a repository enforces lives in `FileTransport` — the fast-forward
+// refusal, `--force`, compare-and-swap publication, re-hashing every arriving
+// object — and this server adds none of its own. What it adds is the wire:
+// authorization before any repository byte is touched, a bound on what it will
+// buffer, refusal of browser-shaped requests (a served repository is an agent
+// transport, not a web service — so no cross-site page may reach an endpoint
+// and no rebound host may read one), and the tenancy rule that every refusal a
+// caller may not learn from is the same bytes. The engine functions this module
+// calls are the same ones `pm vcs push` runs against a directory.
+
+import { isIP } from "node:net";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import type { AddressInfo } from "node:net";
+import { resolve } from "node:path";
+
+import { parseBundle } from "./bundle.ts";
+import { ObjectStoreError } from "./objects.ts";
+import { BRANCH_PREFIX, TAG_PREFIX } from "./refs.ts";
+import { FileTransport } from "./transport.ts";
+import { isServableRepositoryDirectory, ServedRepositoryDirectories } from "./served-repositories.ts";
+import {
+  ADVERTISE_ENDPOINT,
+  BAD_REQUEST_STATUS,
+  BODY_TOO_LARGE_STATUS,
+  BUNDLE_CONTENT_TYPE,
+  decodeFetchRequest,
+  decodeMissingRequest,
+  decodePushUpdates,
+  decodeUploadRequest,
+  decodeWireDate,
+  decodeWireObject,
+  DEFAULT_SERVE_LIMITS,
+  DENIED_BODY,
+  DENIED_STATUS,
+  encodeErrorBody,
+  encodeMissingResponse,
+  encodePushReceipt,
+  FETCH_ENDPOINT,
+  FORBIDDEN_BODY,
+  FORBIDDEN_STATUS,
+  INTERNAL_ERROR_STATUS,
+  isServedRepositoryName,
+  isLoopbackHostname,
+  isWriteEndpoint,
+  JSON_CONTENT_TYPE,
+  MISSING_ENDPOINT,
+  OBJECT_FETCH_ENDPOINT,
+  PUBLISH_ENDPOINT,
+  PUSH_ENDPOINT,
+  type ServeLimits,
+  splitServedPathCandidates,
+  UPLOAD_ENDPOINT,
+} from "./http-protocol.ts";
+
+/** Access levels a token may hold for one repository. */
+export type TokenAccess = "read" | "write";
+
+/** One granted entry from the tokens file, in the shape it is filed in. */
+interface StoredToken {
+  /** The bearer secret. */
+  readonly token: string;
+  /** The repository name it reaches. */
+  readonly repository: string;
+  /** What it may do there. */
+  readonly access: TokenAccess;
+}
+
+/**
+ * Bearer tokens and what each may reach.
+ *
+ * Grants are read once when the server starts, so a served repository answers
+ * from one snapshot rather than re-reading a file on every request: an edited
+ * tokens file takes effect at the next start, which is also the one moment the
+ * operator knows the answer for every connection still open.
+ */
+export class TokenGrants {
+  /** Token to repository to access. */
+  private readonly scopes: Map<string, Map<string, TokenAccess>>;
+
+  /**
+   * @param tokens - The grants to hold.
+   */
+  constructor(tokens: readonly StoredToken[] = []) {
+    this.scopes = new Map();
+    for (const entry of tokens) {
+      const repositories = this.scopes.get(entry.token) ?? new Map();
+      // Write is the wider of the two grants, so a token filed twice for one
+      // repository keeps the union of what it was given rather than whichever
+      // entry a map iteration happened to visit last.
+      if (repositories.get(entry.repository) !== "write") repositories.set(entry.repository, entry.access);
+      this.scopes.set(entry.token, repositories);
+    }
+  }
+
+  /**
+   * What one token may do to one repository.
+   *
+   * The answer is computed from the grant alone, never from whether the
+   * repository exists, which is what keeps a missing repository and a
+   * wrong-tenant one indistinguishable from the wire.
+   *
+   * @param token - The bearer secret as presented.
+   * @param repository - The repository name being addressed.
+   * @returns The access granted, or null when the token reaches nothing there.
+   */
+  scope(token: string, repository: string): TokenAccess | null {
+    return this.scopes.get(token)?.get(repository) ?? null;
+  }
+
+  /**
+   * Whether any token is held at all.
+   *
+   * @returns True when no grant exists, which is how a served root with an
+   *   empty tokens file is detected and refused rather than silently open.
+   */
+  isEmpty(): boolean {
+    return this.scopes.size === 0;
+  }
+}
+
+/**
+ * Reads the tokens file a served repository authorizes with.
+ *
+ * The file is operator-owned configuration, so a malformed one is refused at
+ * startup rather than at the first request: a server that started and then
+ * denied everything would look healthy while serving nothing.
+ *
+ * @param path - The tokens file to read.
+ * @returns The grants it describes.
+ * @throws ObjectStoreError With code `bad_auth_file` when the file cannot be
+ *   read, or holds an entry that is not a token grant.
+ */
+export function readTokenFile(path: string): TokenGrants {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    throw new ObjectStoreError(
+      "bad_auth_file",
+      `The tokens file at ${path} cannot be read. Serve with a readable file, or without --auth.`,
+    );
+  }
+  const tokens = parseTokenText(text);
+  if (tokens === null) {
+    throw new ObjectStoreError("bad_auth_file", `The tokens file at ${path} is not a valid token list.`);
+  }
+  return new TokenGrants(tokens);
+}
+
+/**
+ * Parses tokens-file text.
+ *
+ * The accepted shape is a JSON array of
+ * `{ "token": "…", "repository": "…", "access": "read" | "write" }` entries.
+ * Every field is validated rather than trusted, and a repository name that
+ * could not exist under a served root is refused here — a grant that can never
+ * match is a typo, and a typo in an authorization file is worth a startup
+ * failure rather than a silent lack of access.
+ *
+ * @param text - The file's contents.
+ * @returns The grants, or null when the text is not a valid token list.
+ */
+export function parseTokenText(text: string): readonly StoredToken[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const tokens: StoredToken[] = [];
+  for (const entry of parsed) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const record = entry as Record<string, unknown>;
+    const token = record.token;
+    const repository = record.repository;
+    const access = record.access;
+    if (typeof token !== "string" || !/^[!-~]+$/.test(token)) return null;
+    if (typeof repository !== "string" || (repository !== "" && !isServedRepositoryName(repository))) return null;
+    if (access !== "read" && access !== "write") return null;
+    tokens.push({ token, repository, access });
+  }
+  return tokens;
+}
+
+/**
+ * Extracts the bearer secret from an Authorization header.
+ *
+ * Only the one spelling is accepted — `Bearer` with exactly one space — because
+ * every other spelling is a client this server did not authorize, and the
+ * answer to an unauthorized client must not depend on how close it got.
+ *
+ * @param header - The Authorization header as presented, or its absence.
+ * @returns The token, or null when the header is not a bearer token.
+ */
+export function bearerToken(header: string | undefined): string | null {
+  if (header === undefined) return null;
+  const match = /^Bearer ([^ ]+)$/.exec(header);
+  return match === null ? null : match[1];
+}
+
+/**
+ * The body answering a write sent to an unauthenticated server that is read-only.
+ *
+ * Serving without `--auth` is open for reads, so a repository's existence is
+ * already public to anyone who can reach the port; naming the reason costs no
+ * tenancy and saves the operator the confusion of a push answered with the
+ * missing-repository denial.
+ */
+const READONLY_BODY = Buffer.from(
+  `${JSON.stringify({ error: { code: "forbidden", message: "This served repository accepts reads without a token. A write needs --auth, or the operator's explicit open-writes override." } })}\n`,
+  "utf8",
+);
+
+/** A running served repository root. */
+export interface ServeHandle {
+  /** The host the server bound. */
+  readonly host: string;
+  /** The port the server bound; `0` was replaced by an ephemeral one. */
+  readonly port: number;
+  /** Stops the server and forgets every upload session. */
+  close(): Promise<void>;
+}
+
+/** Everything `startRepositoryServer` needs to serve one root. */
+export interface ServeOptions {
+  /** Repository directory, or a parent holding immediate and nested repositories. */
+  readonly root: string;
+  /** Host to bind. */
+  readonly host: string;
+  /** Port to bind; `0` chooses an ephemeral one. */
+  readonly port: number;
+  /** Token grants, or null to serve every repository readable. */
+  readonly grants?: TokenGrants | null;
+  /**
+   * Whether writes are accepted without a token when no grants are configured.
+   *
+   * The default is read-only: an unauthenticated server is reachable by any
+   * process on the host, and a page in a browser is one of those. The override
+   * exists for operators who have fenced the port another way and want the
+   * pre-hardening behaviour back.
+   */
+  readonly unauthenticatedWrites?: boolean;
+  /** Bounds to apply; defaults to {@link DEFAULT_SERVE_LIMITS}. */
+  readonly limits?: ServeLimits;
+  /** Response hooks; defaults to none. */
+  readonly hooks?: ServeHooks | null;
+}
+
+/**
+ * Observability hooks a server caller can attach to a running server.
+ *
+ * They see what a request was answered with, not what it asked for: the push has
+ * already landed by the time the hook runs, which is exactly the window real
+ * concurrency lives in — the remote has accepted, and its answer is still in
+ * flight. Tests use the hook to hold one answer open while the world moves on
+ * around it; an operator's monitoring can use it to observe the same window.
+ */
+export interface ServeHooks {
+  /**
+   * Called after a request's outcome is decided and before it is written.
+   *
+   * The repository operation has already completed, so awaiting this hook
+   * delays the response — never the work — and never changes what the caller
+   * receives. A hook that throws or rejects is ignored and the decided
+   * response is still written.
+   *
+   * @param repository - The repository name the request addressed.
+   * @param endpoint - The endpoint the request addressed.
+   */
+  holdResponse(repository: string, endpoint: string): Promise<void> | void;
+}
+
+/**
+ * One upload session: the transport that reports its receipts, and what it has
+ * been charged with since its last publication.
+ *
+ * The charge is cumulative rather than per request, because the memory it
+ * bounds is too: a reused session keeps every receipt it accepted until it
+ * publishes, so per-request bounds alone would leave its delivery receipts free
+ * to grow without end while every individual request passes them.
+ */
+interface UploadSession {
+  /** The transport whose receipts this session reports. */
+  readonly transport: FileTransport;
+  /** Objects accepted across every upload since the last publication. */
+  objects: number;
+  /** Decoded object bytes accepted across every upload since the last publication. */
+  bytes: number;
+}
+
+/**
+ * One repository being served, holding the upload sessions it has open.
+ *
+ * A session is a `FileTransport` — the same object a local push holds — so the
+ * resumable-upload semantics are the transport's own: objects a session
+ * verified and the receiver lacked are reported by that session's publication,
+ * and cleared on every publication attempt, refused ones included, exactly as
+ * a local connection would clear them. The cumulative charge below is cleared
+ * with them, because the memory it bounds is the receipts themselves.
+ */
+class ServedRepository {
+  /** Transport for ordinary, connectionless requests. */
+  private readonly main: FileTransport;
+
+  /** Absolute path to the repository, kept for opening session transports. */
+  private readonly path: string;
+
+  /** Upload session state per session id, insertion-ordered so the oldest evicts first. */
+  private readonly sessions: Map<string, UploadSession> = new Map();
+
+  /**
+   * @param url - Token-free URL for messages and the operation log.
+   * @param path - Absolute path to the repository's working tree root.
+   */
+  constructor(url: string, path: string) {
+    this.main = new FileTransport(url, path);
+    this.path = path;
+  }
+
+  /**
+   * The transport serving requests that carry their objects with them.
+   *
+   * @returns The repository's shared transport.
+   */
+  transport(): FileTransport {
+    return this.main;
+  }
+
+  /**
+   * The session one upload should use, opening a session on demand.
+   *
+   * The session count is bounded rather than trusted: a client that opened
+   * sessions without publishing would otherwise grow the map without end, and
+   * the memory a server commits to one caller is a bound the server owns.
+   *
+   * @param session - The session id the client presented. An absent or empty
+   *   one opens a session that will be reported by no receipt, which is also
+   *   how a publication after a server restart reads.
+   * @param maxSessions - Bound on open sessions for this repository.
+   * @returns The session's state, transport and charge.
+   */
+  uploadSession(session: string, maxSessions: number): UploadSession {
+    const existing = this.sessions.get(session);
+    if (existing !== undefined) {
+      // Re-inserting moves the key to the end, so eviction order is
+      // least-recently-used rather than first-opened — reuse alone cannot
+      // release what a session has been charged with, which is why the
+      // cumulative bounds below exist.
+      this.sessions.delete(session);
+      this.sessions.set(session, existing);
+      return existing;
+    }
+    while (this.sessions.size >= maxSessions) {
+      this.sessions.delete(this.sessions.keys().next().value as string);
+    }
+    const fresh: UploadSession = { transport: new FileTransport(this.main.url, this.path), objects: 0, bytes: 0 };
+    this.sessions.set(session, fresh);
+    return fresh;
+  }
+
+  /**
+   * Charges one upload to a session's cumulative bounds.
+   *
+   * Every uploaded object counts, whether or not the receiver already held it:
+   * the charge bounds what a session may ask the server to hold at its next
+   * publication, and the request has already asked for all of it.
+   *
+   * @param session - The session id the upload named.
+   * @param state - The session's state, from {@link ServedRepository.uploadSession}.
+   * @param objects - Object count the upload carries.
+   * @param bytes - Decoded object bytes the upload carries.
+   * @param limits - Bounds in force.
+   * @returns True when the upload fits. False past either bound, with the
+   *   session released so its receipts — the memory the bound is for — are
+   *   dropped rather than held by a caller that has just been told to stop.
+   */
+  chargeUpload(session: string, state: UploadSession, objects: number, bytes: number, limits: ServeLimits): boolean {
+    if (state.objects + objects > limits.maxSessionObjects || state.bytes + bytes > limits.maxSessionBytes) {
+      this.sessions.delete(session);
+      return false;
+    }
+    state.objects += objects;
+    state.bytes += bytes;
+    return true;
+  }
+
+  /**
+   * Clears a session's charge when publication clears its receipts.
+   *
+   * Publication reports and drops the session's delivery receipts on every
+   * attempt, refused ones included, so the memory the cumulative bound guards
+   * is already gone — and the charge with it.
+   *
+   * @param state - The session that just attempted a publication.
+   */
+  settlePublication(state: UploadSession): void {
+    state.objects = 0;
+    state.bytes = 0;
+  }
+}
+
+/**
+ * Starts serving the repositories under one root.
+ *
+ * The server is the transport, not a second implementation of it: every
+ * repository operation is delegated to a `FileTransport` opened on a discovered
+ * catalogue directory, so the fast-forward rules, compare-and-swap publication and
+ * verified arrival of objects are the receiving side's own code — the same code
+ * that answers a local push.
+ *
+ * @param options - Root to serve, address to bind, grants and bounds.
+ * @returns The bound server.
+ * @throws ObjectStoreError When the root is not a directory.
+ */
+export function startRepositoryServer(options: ServeOptions): Promise<ServeHandle> {
+  let root = resolve(options.root);
+  try {
+    if (!statSync(root).isDirectory()) {
+      throw new ObjectStoreError(
+        "not_a_serve_root",
+        `${root} is not a directory, so no repository can be served under it. Pass a directory with --root.`,
+      );
+    }
+  } catch (error) {
+    // An absent or unreadable root is the operator's --root spelled wrong, and a
+    // raw filesystem error would name the syscall rather than the decision.
+    if (error instanceof ObjectStoreError) throw error;
+    throw new ObjectStoreError(
+      "not_a_serve_root",
+      `${root} cannot be read as a directory, so no repository can be served under it. Pass a directory with --root.`,
+    );
+  }
+  root = realpathSync(root);
+  const limits = options.limits ?? DEFAULT_SERVE_LIMITS;
+  for (const value of Object.values(limits)) {
+    if (!Number.isSafeInteger(value) || value < 1) throw new ObjectStoreError("bad_limits", "Server limits must be positive safe integers.");
+  }
+  const grants = options.grants ?? null;
+  const hooks = options.hooks ?? null;
+  const unauthenticatedWrites = options.unauthenticatedWrites ?? false;
+  const directories = new ServedRepositoryDirectories(root);
+  const repositories = new Map<string, ServedRepository>();
+  // The port is only known once the socket is listening; the handler cannot run
+  // before then, so the holder below hands the bound address to every request.
+  const boundAddress = { host: options.host, port: 0 };
+  const server = createServer((request, response) => {
+    void handleServedRequest(request, response, { directories, grants, hooks, limits, repositories, unauthenticatedWrites, boundAddress });
+  });
+  return new Promise((resolveListen, rejectListen) => {
+    server.once("error", (error) => rejectListen(error));
+    server.listen(options.port, options.host, () => {
+      // A successful TCP listen callback always carries the bound TCP address.
+      const port = (server.address() as AddressInfo).port;
+      boundAddress.port = port;
+      resolveListen({
+        host: options.host,
+        port,
+        close: () => closeServer(server, repositories),
+      } satisfies ServeHandle);
+    });
+  });
+}
+
+/**
+ * Stops a served root, forgetting its sessions before its socket.
+ *
+ * @param server - The bound server.
+ * @param repositories - The per-repository holders to forget.
+ * @returns Resolves once the server no longer accepts connections.
+ */
+async function closeServer(server: Server, repositories: Map<string, ServedRepository>): Promise<void> {
+  repositories.clear();
+  await new Promise<void>((resolveClose, rejectClose) => {
+    server.close((error) => {
+      // A second close of an already-closed server reports `ERR_SERVER_NOT_RUNNING`,
+      // which is the caller's double-stop and reaches it as a rejection.
+      if (error === undefined) resolveClose();
+      else rejectClose(error);
+    });
+  });
+}
+
+/** Everything one request needs, shared between the server and its handlers. */
+interface ServeContext {
+  /** Repository paths discovered independently of all request names. */
+  readonly directories: ServedRepositoryDirectories;
+  /** Token grants, or null when serving without authorization. */
+  readonly grants: TokenGrants | null;
+  /** Whether writes are accepted without a token when grants are null. */
+  readonly unauthenticatedWrites: boolean;
+  /** The address the server bound, for the Host header check. */
+  readonly boundAddress: { host: string; port: number };
+  /** Response hooks, or null when serving without any. */
+  readonly hooks: ServeHooks | null;
+  /** Bounds in force. */
+  readonly limits: ServeLimits;
+  /** One repository holder per repository name, holding its upload sessions. */
+  readonly repositories: Map<string, ServedRepository>;
+}
+
+/** The outcome one served request is answered with. */
+interface ServedResponse {
+  /** HTTP status to answer with. */
+  readonly status: number;
+  /** Exact bytes to answer with. */
+  readonly body: Buffer;
+  /** Content type the bytes carry. */
+  readonly contentType: string;
+}
+
+/** A routed request: the answer to write, and the target it addressed. */
+interface RoutedServedRequest {
+  /** The status, body and content type to answer with. */
+  readonly response: ServedResponse;
+  /** The repository and endpoint the request was routed to, or null when the
+   * path named no endpoint this root accepts. */
+  readonly addressed: { repository: string; endpoint: string } | null;
+}
+
+/**
+ * Answers one served request, or the one denial answer.
+ *
+ * Order is the security property: the path names a repository and an endpoint
+ * first; then authorization decides; only then is the body read and any
+ * repository touched. A request that fails before authorization succeeds is
+ * answered with the fixed denial bytes and its body is never read, so neither
+ * a repository's existence nor anything about its content can be learned from
+ * the difference between two refusals.
+ *
+ * @param request - The incoming request.
+ * @param response - The response the outcome is written to.
+ * @param context - The server's shared state.
+ */
+async function handleServedRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  context: ServeContext,
+): Promise<void> {
+  const candidates = splitServedPathCandidates((request.url as string).split("?")[0]);
+  let routed: RoutedServedRequest;
+  try {
+    routed = await routeServedRequest(request, candidates, context);
+  } catch (error) {
+    routed = {
+      response: error instanceof ObjectStoreError
+        ? {
+          // A body past the bound is refused with the status that names it, so a
+          // client sizing its retries can distinguish "send less" from "send right".
+          status: error.code === "body_too_large" ? BODY_TOO_LARGE_STATUS : BAD_REQUEST_STATUS,
+          body: encodeErrorBody(error.code, error.message),
+          contentType: JSON_CONTENT_TYPE,
+        }
+        : {
+          status: INTERNAL_ERROR_STATUS,
+          body: encodeErrorBody("internal_error", "The server failed to answer the request."),
+          contentType: JSON_CONTENT_TYPE,
+        },
+      addressed: candidates[0],
+    };
+  }
+  // The work is done; only the answer is still unsent. Holding here — an
+  // observability hook, or a test recreating a slow wire — delays the response
+  // without changing it, which is the one window real concurrency can be
+  // observed in.
+  // A hook that throws or rejects is discarded: the work it observes has
+  // already happened, so its failure must neither withhold the decided answer
+  // nor escape as an unhandled rejection that would take the server down.
+  if (routed.addressed !== null) {
+    try {
+      await context.hooks?.holdResponse(routed.addressed.repository, routed.addressed.endpoint);
+    } catch {
+      // Deliberately ignored; see above.
+    }
+  }
+  response.sendDate = false;
+  response.setHeader("connection", "close");
+  response.statusCode = routed.response.status;
+  response.setHeader("content-type", routed.response.contentType);
+  response.setHeader("content-length", String(routed.response.body.length));
+  // A request whose body was refused is never drained: Node closes its
+  // connection once the response is flushed, so a refused client cannot hold a
+  // slot by streaming a body nobody will read.
+  response.end(routed.response.body);
+}
+
+/**
+ * Routes one request to authorization, bounds and the transport.
+ *
+ * A served repository is an agent transport, not a web service, so three
+ * browser-shaped requests are refused with the same fixed denial as any other
+ * unauthorized request, before authorization has anything to say: a request
+ * that carries an `Origin` header (only browsers send one, and a same-origin
+ * browser client is not a client this server has); a request whose `Host` is
+ * not the address the server bound (which is how a DNS-rebound page would read
+ * an answer no origin policy would otherwise let it read); and, on the
+ * mutating endpoints, a request that is not JSON (a browser can only send
+ * those without a CORS preflight, which this server never answers — so a
+ * cross-site page cannot write even to a server an operator left open).
+ *
+ * @param request - The incoming request.
+ * @param candidates - Every repository/endpoint split of the request path,
+ *   deepest repository first, as {@link splitServedPathCandidates} ordered them.
+ * @param context - The server's shared state.
+ * @returns The response to answer with, and the request's resolved target.
+ */
+async function routeServedRequest(
+  request: IncomingMessage,
+  candidates: readonly { repository: string; endpoint: string }[],
+  context: ServeContext,
+): Promise<RoutedServedRequest> {
+  if (request.method !== "POST" || candidates.length === 0 || !isAcceptableHost(request.headers.host, context.boundAddress)
+    || request.headers.origin !== undefined) {
+    return { response: denial(), addressed: null };
+  }
+  // Every candidate split of one path classifies the request identically, so
+  // the content-type rule for mutating endpoints is checked once, up front.
+  const mutating = isWriteEndpoint(candidates[0].endpoint);
+  const declared = request.headers["content-type"];
+  const contentType = (declared === undefined ? "" : declared).split(";")[0].trim().toLowerCase();
+  if (mutating && contentType !== JSON_CONTENT_TYPE) return { response: denial(), addressed: null };
+  if (context.grants === null) {
+    const addressed = catalogueCandidate(candidates, context) ?? candidates[0];
+    if (mutating && !context.unauthenticatedWrites) return { response: { status: FORBIDDEN_STATUS, body: READONLY_BODY, contentType: JSON_CONTENT_TYPE }, addressed: null };
+    const served = openServedRepository(context, addressed.repository);
+    if (served === null) return { response: denial(), addressed };
+    const body = await readBoundedBody(request, mutating ? context.limits.maxBodyBytes : Math.min(context.limits.maxBodyBytes, context.limits.maxReadBodyBytes));
+    return { response: await dispatchServedRequest(served, addressed.endpoint, body, context), addressed };
+  }
+  const token = bearerToken(request.headers.authorization) ?? "";
+  const grants = context.grants;
+  // Only names this token may read take part in resolution. Refusing when none
+  // is in scope happens before any filesystem work, and an out-of-scope deeper
+  // repository can never change the answer to an in-scope one, so whether it
+  // exists is not observable. The deepest catalogued in-scope name still wins.
+  const scoped = candidates.flatMap((candidate) => {
+    const access = grants.scope(token, candidate.repository);
+    return access === null ? [] : [{ ...candidate, access }];
+  });
+  if (scoped.length === 0) return { response: denial(), addressed: null };
+  const addressed = catalogueCandidate(scoped, context) ?? scoped[0];
+  const access = addressed.access;
+  const served = openServedRepository(context, addressed.repository);
+  if (served === null) return { response: denial(), addressed };
+  if (mutating && access !== "write") {
+    return { response: { status: FORBIDDEN_STATUS, body: FORBIDDEN_BODY, contentType: JSON_CONTENT_TYPE }, addressed };
+  }
+  const body = await readBoundedBody(request, mutating ? context.limits.maxBodyBytes : Math.min(context.limits.maxBodyBytes, context.limits.maxReadBodyBytes));
+  return { response: await dispatchServedRequest(served, addressed.endpoint, body, context), addressed };
+}
+
+/**
+ * The candidate a request addresses, resolved by catalogue after scope preflight.
+ *
+ * The repository the caller means is the one
+ * the root actually serves: a name that also reads as an endpoint suffix —
+ * `tenant/objects`, `objects` — is only routed to its endpoint spelling when
+ * no served repository answers to the longer name.
+ *
+ * @param candidates - Every split of the request path, deepest repository first.
+ * @param context - The server's shared state.
+ * @returns The first candidate whose repository the catalogue holds, or null.
+ */
+function catalogueCandidate<T extends { repository: string; endpoint: string }>(
+  candidates: readonly T[],
+  context: ServeContext,
+): T | null {
+  for (const candidate of candidates) {
+    const path = context.directories.lookup(candidate.repository);
+    if (path !== undefined) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Whether a request's `Host` header names the address the server bound.
+ *
+ * The authority must use the bound port (an omitted port means HTTP's default
+ * 80). Loopback binds accept loopback spellings; wildcard binds accept address
+ * literals. Other binds accept only their configured hostname or address.
+ * Malformed authorities are refused before comparing names.
+ *
+ * Exported for the adversarial tests: a bind to a hostname no test machine
+ * shares is the one shape a real socket cannot cheaply produce.
+ *
+ * @param host - The `Host` header as presented, or its absence.
+ * @param bound - The host and port the server bound.
+ * @returns True when the header names the bound address.
+ */
+export function isAcceptableHost(host: string | undefined, bound: { host: string; port: number }): boolean {
+  if (host === undefined) return false;
+  const authority = /^(?:\[([^\]]+)\]|([^:\s/[\]@?#]+))(?::([0-9]+))?$/.exec(host);
+  if (authority === null) return false;
+  const name = (authority[1] ?? authority[2]).toLowerCase();
+  if (authority[1] !== undefined && isIP(name) !== 6) return false;
+  const port = authority[3] === undefined ? 80 : Number(authority[3]);
+  if (port !== bound.port) return false;
+  const boundHost = bound.host.toLowerCase();
+  if (name === boundHost) return true;
+  if (isLoopbackHostname(boundHost)) return isLoopbackHostname(name);
+  if (boundHost === "0.0.0.0" || boundHost === "::") return isIP(name) !== 0 || name === "localhost";
+  return false;
+}
+
+/**
+ * The one denial answer, with its fixed status, type and bytes.
+ *
+ * @returns The response to every refusal a caller may not learn from.
+ */
+function denial(): ServedResponse {
+  return { status: DENIED_STATUS, body: DENIED_BODY, contentType: JSON_CONTENT_TYPE };
+}
+
+/**
+ * Opens the served repository a request addressed.
+ *
+ * Request text is only a catalogue key. Unknown names may cause a rate-limited
+ * scan, whose filesystem paths are independent of that key. Revalidation uses
+ * the catalogue value and refuses stores replaced by aliases after discovery.
+ *
+ * @param context - The server's shared state.
+ * @param repository - The validated repository name.
+ * @returns The repository holder, or null for the fixed denial response.
+ */
+function openServedRepository(context: ServeContext, repository: string): ServedRepository | null {
+  const path = context.directories.lookup(repository);
+  if (path === undefined || !isServableRepositoryDirectory(path)) {
+    context.repositories.delete(repository);
+    return null;
+  }
+  const existing = context.repositories.get(repository);
+  if (existing !== undefined) return existing;
+  const served = new ServedRepository(`http://served/${repository}`, path);
+  context.repositories.set(repository, served);
+  return served;
+}
+
+/**
+ * Reads one request body up to the configured bound.
+ *
+ * The bound is checked before the first byte is buffered when the client stated
+ * a length, and again while the bytes arrive, so a client that lies about its
+ * length — or omits it — meets the same ceiling.
+ *
+ * @param request - The request whose body is being read.
+ * @param maxBytes - The bound in force.
+ * @returns The body bytes.
+ * @throws ObjectStoreError With code `body_too_large` when the bound is exceeded.
+ */
+function readBoundedBody(request: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  const declared = request.headers["content-length"];
+  if (declared !== undefined && Number(declared) > maxBytes) {
+    return Promise.reject(new ObjectStoreError("body_too_large", "The request body exceeds the bound this server accepts."));
+  }
+  return new Promise<Buffer>((resolveBody, rejectBody) => {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    request.on("data", (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > maxBytes) {
+        // The rest of the body is left unread on purpose: draining it would
+        // commit the server's memory to a size the bound just refused, and the
+        // response flush below ends the connection either way. Detaching the
+        // listener and pausing makes that true while the 413 is written —
+        // an attached listener would keep the stream flowing and discard.
+        request.removeAllListeners("data");
+        request.pause();
+        rejectBody(new ObjectStoreError("body_too_large", "The request body exceeds the bound this server accepts."));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => resolveBody(Buffer.concat(chunks)));
+    request.on("error", (error) => rejectBody(error));
+  });
+}
+
+/**
+ * Performs the transport operation one authorized request asks for.
+ *
+ * Every branch delegates to a `FileTransport`, so the policies — closure checks,
+ * fast-forward, compare-and-swap, re-hashing on arrival — are the same code a
+ * local push runs, and a refusal reads the same over the wire.
+ *
+ * @param served - The repository being addressed.
+ * @param endpoint - The endpoint suffix the request path ended with.
+ * @param body - The authorized, bounded request body.
+ * @param context - The server's shared state.
+ * @returns The status, body and content type to answer with.
+ * @throws ObjectStoreError With code `bad_request` when the body does not hold
+ *   the endpoint's request; with code `limit_exceeded` when a count bound is
+ *   exceeded; with the transport's own codes when the operation is refused.
+ */
+async function dispatchServedRequest(
+  served: ServedRepository,
+  endpoint: string,
+  body: Buffer,
+  context: ServeContext,
+): Promise<ServedResponse> {
+  const limits = context.limits;
+  if (endpoint === ADVERTISE_ENDPOINT) {
+    const advertisement = await served.transport().advertise();
+    return { status: 200, body: Buffer.from(`${JSON.stringify(advertisement)}\n`, "utf8"), contentType: JSON_CONTENT_TYPE };
+  }
+  if (endpoint === MISSING_ENDPOINT || endpoint === OBJECT_FETCH_ENDPOINT) {
+    const request = decodeWireObject(body);
+    const ids = request === null ? null : decodeMissingRequest(request);
+    if (ids === null) throw new ObjectStoreError("bad_request", "The request does not hold a well-formed object list.");
+    if (ids.length > limits.maxUploadObjects) throw limitExceeded(`An object query may name at most ${limits.maxUploadObjects} objects.`);
+    if (endpoint === OBJECT_FETCH_ENDPOINT) {
+      const bundle = await served.transport().fetchObjects(ids);
+      return { status: 200, body: bundle, contentType: BUNDLE_CONTENT_TYPE };
+    }
+    const missing = await served.transport().missingObjects(ids);
+    return { status: 200, body: Buffer.from(encodeMissingResponse(missing), "utf8"), contentType: JSON_CONTENT_TYPE };
+  }
+  if (endpoint === UPLOAD_ENDPOINT) {
+    const request = decodeWireObject(body);
+    const upload = request === null ? null : decodeUploadRequest(request);
+    if (upload === null) throw new ObjectStoreError("bad_request", "The request does not hold a well-formed object upload.");
+    if (upload.objects.length > limits.maxUploadObjects) throw limitExceeded(`An upload may carry at most ${limits.maxUploadObjects} objects.`);
+    const objects = upload.objects.map((object) => ({
+      id: object.id,
+      type: object.type,
+      payload: Buffer.from(object.payload, "base64"),
+    }));
+    const bytes = objects.reduce((total, object) => total + object.payload.length, 0);
+    const state = served.uploadSession(upload.session, limits.maxSessions);
+    // Cumulative, not per request: a reused session keeps every receipt it has
+    // accepted since its last publication, so per-request bounds alone cannot
+    // stop one caller growing that memory without end. Past either bound the
+    // refusal releases the session's receipts with it, so the caller that is
+    // told to stop is not the one left holding them.
+    if (!served.chargeUpload(upload.session, state, objects.length, bytes, limits)) {
+      throw limitExceeded(
+        `An upload session may accept at most ${limits.maxSessionObjects} objects and ${limits.maxSessionBytes} object bytes `
+        + "before it publishes, and this session has reached one of them. Publish, then resume with a fresh session.",
+      );
+    }
+    await state.transport.uploadObjects(objects);
+    return { status: 200, body: Buffer.from(`${JSON.stringify({ received: upload.objects.length })}\n`, "utf8"), contentType: JSON_CONTENT_TYPE };
+  }
+  const request = decodeWireObject(body);
+  if (request === null) throw new ObjectStoreError("bad_request", `The ${endpoint} request body is not a JSON object.`);
+  if (endpoint === FETCH_ENDPOINT) {
+    const fetchRequest = decodeFetchRequest(request);
+    if (fetchRequest === null) throw new ObjectStoreError("bad_request", "The fetch request does not hold a well-formed ref and have list.");
+    if (fetchRequest.refs.length > limits.maxFetchRefs) throw limitExceeded(`A fetch may name at most ${limits.maxFetchRefs} refs.`);
+    if (fetchRequest.haves.length > limits.maxFetchHaves) throw limitExceeded(`A fetch may offer at most ${limits.maxFetchHaves} haves.`);
+    // Ref names resolve under the control directory, so anything outside the
+    // published branch and tag namespaces (config.json, HEAD, the oplog,
+    // remote-tracking refs) is refused before it is read. Pushes already
+    // carry the same rule. Checked after the count bounds, so an oversized
+    // list is refused without being scanned.
+    if (fetchRequest.refs.some((ref) => !ref.startsWith(BRANCH_PREFIX) && !ref.startsWith(TAG_PREFIX))) {
+      throw new ObjectStoreError("bad_request", "A fetch may name only branch and tag refs.");
+    }
+    const bundle = await served.transport().fetch(fetchRequest.refs, fetchRequest.haves);
+    return { status: 200, body: bundle, contentType: BUNDLE_CONTENT_TYPE };
+  }
+  // The path splitter admits only known endpoints; the remaining two move refs.
+  return await dispatchRefMoves(served, endpoint, request, context);
+}
+
+/**
+ * Performs a whole push, or a publication after a resumable upload.
+ *
+ * The two share every check the transport makes; they differ only in how the
+ * objects arrive — inside the request for a push, ahead of it for a publish —
+ * and in which transport instance reports the deliveries, which is the session.
+ *
+ * @param served - The repository being addressed.
+ * @param endpoint - `push` or `publish`.
+ * @param request - The decoded request object.
+ * @param context - The server's shared state.
+ * @returns The status, body and content type to answer with.
+ * @throws ObjectStoreError With code `bad_request` when the request is malformed,
+ *   with code `limit_exceeded` when a count bound is exceeded, or with the
+ *   transport's own refusal codes.
+ */
+async function dispatchRefMoves(
+  served: ServedRepository,
+  endpoint: string,
+  request: Record<string, unknown>,
+  context: ServeContext,
+): Promise<ServedResponse> {
+  const updates = decodePushUpdates(request, "updates");
+  const force = request.force === true;
+  const now = decodeWireDate(request, "now");
+  if (updates === null) throw new ObjectStoreError("bad_request", `The ${endpoint} request does not name well-formed ref moves.`);
+  if (now === null) throw new ObjectStoreError("bad_request", `The ${endpoint} request does not carry a timestamp.`);
+  if (updates.length > context.limits.maxUpdates) throw limitExceeded(`A ${endpoint} may move at most ${context.limits.maxUpdates} refs.`);
+  if (endpoint === PUSH_ENDPOINT) {
+    const encoded = request.bundle;
+    if (typeof encoded !== "string") throw new ObjectStoreError("bad_request", "The push request does not carry a bundle.");
+    const bundle = Buffer.from(encoded, "base64");
+    // Count the object lines the importer would store, not the header's object
+    // list: the header is the sender's claim and nothing ties the two together.
+    if (parseBundle(bundle).lines.length > context.limits.maxUploadObjects) throw limitExceeded(`A push may carry at most ${context.limits.maxUploadObjects} objects.`);
+    const receipt = await served.transport().push(bundle, updates, force, now);
+    return { status: 200, body: Buffer.from(encodePushReceipt(receipt), "utf8"), contentType: JSON_CONTENT_TYPE };
+  }
+  const session = typeof request.session === "string" ? request.session : "";
+  const state = served.uploadSession(session, context.limits.maxSessions);
+  try {
+    const receipt = await state.transport.publish(updates, force, now);
+    return { status: 200, body: Buffer.from(encodePushReceipt(receipt), "utf8"), contentType: JSON_CONTENT_TYPE };
+  } finally {
+    // Publication clears the session's receipts on every attempt, refused ones
+    // included, so the charge that bounds them clears with them.
+    served.settlePublication(state);
+  }
+}
+
+/**
+ * Builds the refusal a count bound produces.
+ *
+ * @param message - The bound the request exceeded, in the caller's words.
+ * @returns The error to answer with.
+ */
+function limitExceeded(message: string): ObjectStoreError {
+  return new ObjectStoreError("limit_exceeded", `${message} Split the request, or ask the operator to raise the bound.`);
+}

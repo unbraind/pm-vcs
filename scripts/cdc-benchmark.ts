@@ -11,16 +11,13 @@
 //
 // Run with: npm run benchmark:cdc
 //
-// This script is excluded from the coverage gate (see package.json) because it
-// is a reproducibility tool, not production code: it performs real I/O on a
-// temp directory and its output is human-readable text. It still carries
-// docstrings so the docstring gate passes.
+// The coverage gate includes this script and exercises its real object-store I/O.
 
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { isMainInvocation } from "./pm-environment.ts";
 
 import { ObjectStore } from "../engine/objects.ts";
 import { type CdcParams } from "../engine/model.ts";
@@ -39,7 +36,7 @@ import {
  * @param seed - Seed for the LCG.
  * @returns A buffer of deterministic pseudo-random bytes.
  */
-function seededBytes(length: number, seed: number): Buffer {
+export function seededBytes(length: number, seed: number): Buffer {
   const buf = Buffer.allocUnsafe(length);
   let state = seed;
   for (let i = 0; i < length; i++) {
@@ -57,7 +54,7 @@ function seededBytes(length: number, seed: number): Buffer {
  * @param root - The store root directory.
  * @returns The number of object files on disk.
  */
-function countObjects(root: string): number {
+export function countObjects(root: string): number {
   let count = 0;
   for (const dir of readdirSync(join(root, "objects"), { withFileTypes: true })) {
     if (!dir.isDirectory()) continue;
@@ -81,7 +78,7 @@ function countObjects(root: string): number {
  * @param writeFn - The write function (CDC or fixed-size).
  * @returns Reuse statistics including reused, new, total, and fraction.
  */
-function measureReuseByObjects(
+export function measureReuseByObjects(
   store: ObjectStore,
   root: string,
   content: Buffer,
@@ -125,7 +122,7 @@ function measureReuseByObjects(
  * @param writeFn - The write function (CDC or fixed-size).
  * @returns Reuse statistics including reused, new, total, and fraction.
  */
-function measureReuse(
+export function measureReuse(
   store: ObjectStore,
   content: Buffer,
   pos: number,
@@ -168,7 +165,7 @@ function fmt(n: number): string {
  * Runs the benchmark: measures reuse, chunk size, and throughput for CDC and
  * fixed-size chunking across candidate parameters on a deterministic corpus.
  */
-function main(): void {
+export function main(): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), "cdc-bench-"));
   try {
     const corpusSize = 256 * 1024;
@@ -267,8 +264,8 @@ function main(): void {
 
     // Object-count-based reuse (same method the tests use) for CDC default vs fixed-size.
     console.log("\n--- Object-count reuse (CDC default vs fixed-size 4K) ---");
-    console.log("Mode        | Pos   | ObjectsBefore | ObjectsAfter | NewObjects | ReuseByObjects");
-    console.log("------------|-------|---------------|--------------|------------|---------------");
+    console.log("Mode        | Pos   | Fragments | NewFragments | Reused | ReuseByObjects");
+    console.log("------------|-------|-----------|--------------|--------|---------------");
     for (const [label, writeFn] of [
       ["CDC default", (s: ObjectStore, c: Buffer) => writeCdcFragmented(s, c, DEFAULT_CDC_PARAMS)] as const,
       ["Fixed 4K", (s: ObjectStore, c: Buffer) => writeFragmented(s, c, 4096)] as const,
@@ -280,19 +277,20 @@ function main(): void {
       ] as const) {
         const dir = mkdtempSync(join(tmpRoot, "obj-"));
         const store = new ObjectStore(join(dir, "objects"));
-        writeFn(store, corpus);
-        const before = countObjects(dir);
-        const edited = Buffer.concat([corpus.subarray(0, pos), randomBytes(editSize), corpus.subarray(pos)]);
-        writeFn(store, edited);
-        const after = countObjects(dir);
-        const newObjs = after - before;
-        const reuseByObjs = before > 0 ? Math.max(0, (before - 1 - (newObjs - 1)) / (before - 1)) : 1;
+        // The tested measurement produces the table, so the published numbers
+        // cannot drift from the code the reuse tests exercise.
+        const { totalFragments, newFragments, reused, reuseFraction } = measureReuseByObjects(store, dir, corpus, pos, editSize, writeFn);
         console.log(
-          `${label.padEnd(12)} | ${posLabel.padEnd(5)} | ${String(before).padStart(13)} | ${String(after).padStart(12)} | ${String(newObjs).padStart(10)} | ${fmt(reuseByObjs * 100).padStart(13)}%`,
+          `${label.padEnd(12)} | ${posLabel.padEnd(5)} | ${String(totalFragments).padStart(9)} | ${String(newFragments).padStart(12)} | ${String(reused).padStart(6)} | ${fmt(reuseFraction * 100).padStart(13)}%`,
         );
         rmSync(dir, { recursive: true, force: true });
       }
     }
+
+    const measuredDir = mkdtempSync(join(tmpRoot, "measured-"));
+    const measuredStore = new ObjectStore(join(measuredDir, "objects"));
+    const measured = measureReuseByObjects(measuredStore, measuredDir, corpus, 0, editSize, (store, bytes) => { writeFragmented(store, bytes, 4096); });
+    console.log(`Measured fixed-size reuse: ${fmt(measured.reuseFraction * 100)}%`);
 
     console.log("\n=== Conclusion ===");
     console.log("DEFAULT_CDC_PARAMS: min=512, max=65536, mask=0x1fff (13-bit)");
@@ -300,13 +298,6 @@ function main(): void {
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
-}
-
-/** Whether this module's caller is the process entry point rather than an import. */
-function isMainInvocation(argv: readonly string[], moduleUrl: string): boolean {
-  const entry = argv[1];
-  if (entry === undefined) return false;
-  return realpathSync(entry) === realpathSync(fileURLToPath(moduleUrl));
 }
 
 if (isMainInvocation(process.argv, import.meta.url)) main();

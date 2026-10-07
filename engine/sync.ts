@@ -10,14 +10,15 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 
 import { assertClosurePresent, exportBundle, importBundleObjects } from "./bundle.ts";
+import { isAncestor } from "./merge.ts";
 import type { ObjectId } from "./objects.ts";
 import { ObjectStoreError } from "./objects.ts";
 import type { RefTransition } from "./oplog.ts";
 import { BRANCH_PREFIX, TAG_PREFIX } from "./refs.ts";
+import { environmentToken, redactRemoteUrl } from "./credentials.ts";
 import { REMOTE_PREFIX, trackingRef } from "./remotes.ts";
 import { DEFAULT_BRANCH, Repository } from "./repo.ts";
 import {
-  FileTransport,
   assertCompatiblePeer,
   type PushUpdate,
   type Transport,
@@ -126,17 +127,17 @@ function localNameFor(remote: string, name: string): string | null {
  * @returns What moved and what was transferred.
  * @throws ObjectStoreError When the remote is not configured or cannot be reached.
  */
-export function fetchFrom(
+export async function fetchFrom(
   repository: Repository,
   remoteName: string,
   now: Date,
   transport?: Transport,
-): FetchReport {
+): Promise<FetchReport> {
   const remote = repository.remotes.require(remoteName);
-  const wire = transport ?? openTransport(remote.url, repository.root);
+  const wire = transport ?? openTransport(remote.url, repository.root, /^https?:/i.test(remote.url) ? repository.remotes.token(remoteName) : null);
   // The handshake runs before anything else: an incompatible peer must be
   // refused while nothing has moved, not after a bundle has been transferred.
-  const advertisement = wire.advertise();
+  const advertisement = await wire.advertise();
   assertCompatiblePeer(advertisement);
 
   const wanted: { remoteRef: string; localRef: string; target: ObjectId; before: ObjectId | null }[] = [];
@@ -157,7 +158,7 @@ export function fetchFrom(
     return { remote: remoteName, url: remote.url, updated: [], conflictingTags, added: [], upToDate: true };
   }
 
-  const bundle = wire.fetch(wanted.map((item) => item.remoteRef), localTips(repository));
+  const bundle = await wire.fetch(wanted.map((item) => item.remoteRef), localTips(repository));
   const { added } = importBundleObjects(repository.objects, bundle);
   for (const item of wanted) assertClosurePresent(repository.objects, item.localRef, item.target);
 
@@ -187,7 +188,10 @@ export function fetchFrom(
  * enough history for the decision to be answerable and to report the value it
  * observed so a concurrent pusher cannot be overwritten. Tracking refs are
  * advanced only after the remote has accepted, so a refused push leaves no local
- * trace suggesting it landed.
+ * trace suggesting it landed, and a tracking ref that another operation advanced
+ * while the answer was in flight is never moved backward: the push compares
+ * against the values it captured before sending and lands only what still holds
+ * them, or what the pushed commit descends from.
  *
  * @param repository - Repository to push from.
  * @param remoteName - Which configured remote to write to.
@@ -199,16 +203,16 @@ export function fetchFrom(
  * @throws ObjectStoreError When a named branch does not exist, HEAD is detached and
  *   no branch was named, or the remote refuses a move.
  */
-export function pushTo(
+export async function pushTo(
   repository: Repository,
   remoteName: string,
   branches: readonly string[],
   force: boolean,
   now: Date,
   transport?: Transport,
-): PushReport {
+): Promise<PushReport> {
   const remote = repository.remotes.require(remoteName);
-  const wire = transport ?? openTransport(remote.url, repository.root);
+  const wire = transport ?? openTransport(remote.url, repository.root, /^https?:/i.test(remote.url) ? repository.remotes.token(remoteName) : null);
 
   // Deduplicated here rather than left to the remote. A repeated name produces two
   // updates for one ref, and the receiving transaction rejects that as
@@ -229,7 +233,7 @@ export function pushTo(
 
   // Same handshake discipline as fetch: capabilities and format are agreed
   // before any history is serialized for the wire.
-  const advertisement = wire.advertise();
+  const advertisement = await wire.advertise();
   assertCompatiblePeer(advertisement);
   const remoteRefs = new Map(advertisement.refs.map((entry) => [entry.name, entry.target]));
   const updates: PushUpdate[] = [];
@@ -252,15 +256,37 @@ export function pushTo(
   // naming an absent commit fails the export outright.
   const since = [...remoteRefs.values()].filter((id) => repository.objects.has(id));
   const bundle = exportBundle(repository.objects, repository.refs, updates.map((update) => update.ref), since);
-  const receipt = wire.push(bundle, updates, force, now);
+  // The tracking refs are captured *before* the push leaves. The remote may take
+  // an arbitrarily long time to answer — over HTTP its response can be delayed
+  // well past its acceptance — and everything this repository learns in the
+  // meantime belongs to the operation that learned it. Comparing against the
+  // value observed at send time is what keeps a late answer from overwriting a
+  // newer tip another fetch or push recorded while this wire was busy: the remote
+  // can accept commit A, accept commit B on top of it, and only then answer A.
+  const captured = updates.map((update) => {
+    const name = trackingRef(remoteName, update.ref.slice(BRANCH_PREFIX.length));
+    return { name, before: repository.refs.read(name), next: update.next };
+  });
+  const receipt = await wire.push(bundle, updates, force, now);
 
   // The remote accepted, so its branches are now where this side just put them and
-  // the tracking refs can say so without another round trip.
-  const tracking = updates.map((update) => ({
-    name: trackingRef(remoteName, update.ref.slice(BRANCH_PREFIX.length)),
-    expected: repository.refs.read(trackingRef(remoteName, update.ref.slice(BRANCH_PREFIX.length))),
-    next: update.next,
-  }));
+  // the tracking refs can say so without another round trip — but only when
+  // nothing newer arrived in the meantime. A tracking ref that still holds its
+  // captured value moves as this push owns it; one that already holds the pushed
+  // commit needs nothing; one that moved forward to an ancestor of the pushed
+  // commit is advanced, not overwritten. Anything else — a newer tip, or a value
+  // this push cannot prove it is ahead of — is left exactly where the other
+  // operation put it, because writing this push's commit over it would move the
+  // tracking ref backward while the remote itself has moved on.
+  const tracking = captured.flatMap((entry) => {
+    const current = repository.refs.read(entry.name);
+    if (current === entry.before) return [{ name: entry.name, expected: current, next: entry.next }];
+    if (current === entry.next) return [];
+    if (current === null || isAncestor(repository.objects, current, entry.next)) {
+      return [{ name: entry.name, expected: current, next: entry.next }];
+    }
+    return [];
+  });
   repository.refs.transaction(tracking);
   const updated: RefTransition[] = updates.map((update) => ({
     ref: update.ref,
@@ -301,19 +327,19 @@ export function pushTo(
  * @throws ObjectStoreError When `root` already holds a repository, or the source
  *   cannot be reached.
  */
-export function cloneFrom(
+export async function cloneFrom(
   url: string,
   root: string,
   now: Date,
   remoteName = "origin",
   base: string = process.cwd(),
   transport?: Transport,
-): CloneReport {
+): Promise<CloneReport> {
   const location = resolveRemoteLocation(url, base);
-  const wire = transport ?? new FileTransport(url, location);
+  const wire = transport ?? openTransport(url, base, environmentToken(remoteName, null) ?? undefined);
   // Refusing an incompatible source here means before the destination
   // directory is created, so a failed clone is still just a retry away.
-  const advertisement = wire.advertise();
+  const advertisement = await wire.advertise();
   assertCompatiblePeer(advertisement);
   const branch = advertisement.head === null || !advertisement.head.startsWith(BRANCH_PREFIX)
     ? null
@@ -328,23 +354,23 @@ export function cloneFrom(
   let fetched: FetchReport;
   try {
     repository.remotes.add(remoteName, location);
-    fetched = fetchFrom(repository, remoteName, now, wire);
+    fetched = await fetchFrom(repository, remoteName, now, wire);
   } catch (error) {
     rmSync(preexisting ? repository.controlDirectory : root, { recursive: true, force: true });
     throw error;
   }
 
-  if (branch === null) return { root, url, branch: null, fetched };
+  if (branch === null) return { root, url: redactRemoteUrl(url), branch: null, fetched };
   const tracked = repository.refs.read(trackingRef(remoteName, branch));
   // A source whose HEAD names a branch that has no commits yet is a legitimate
   // state — `init` then nothing. The clone reproduces it as an unborn branch
   // rather than failing, so cloning an empty repository is how you start working
   // in one rather than an error to work around.
-  if (tracked === null) return { root, url, branch: null, fetched };
+  if (tracked === null) return { root, url: redactRemoteUrl(url), branch: null, fetched };
   repository.createBranch(branch, tracked, now);
   // HEAD already names this branch, so the switch is a materialization rather than
   // a move. It goes through `switchTo` anyway to keep one code path responsible for
   // writing a tree into a working directory.
   repository.switchTo(branch, now);
-  return { root, url, branch, fetched };
+  return { root, url: redactRemoteUrl(url), branch, fetched };
 }

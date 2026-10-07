@@ -11,15 +11,17 @@
 // the caller. The repository being written to is the one with something to lose,
 // and a check the sender performs is a check a sender can skip.
 
+import { redactRemoteUrl } from "./credentials.ts";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve } from "node:path";
 
-import { exportBundle, importBundleObjects, assertClosurePresent } from "./bundle.ts";
+import { serializeBundle, exportBundle, importBundleObjects, assertClosurePresent } from "./bundle.ts";
 import { isAncestor } from "./merge.ts";
 import { type ObjectId, type ObjectType, ObjectStoreError, hashObject } from "./objects.ts";
 import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./refs.ts";
 import type { RepositoryConfig } from "./config.ts";
 import { REPOSITORY_FORMAT, Repository } from "./repo.ts";
+import { HttpTransport } from "./http-transport.ts";
 
 /** What a remote repository says about itself when first contacted. */
 export interface Advertisement {
@@ -54,7 +56,7 @@ export interface Advertisement {
 }
 
 /** Capabilities this build's transports speak. */
-export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival"] as const;
+export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival", "object-fetch"] as const;
 
 /** Capabilities a peer must offer before this build will transfer anything. */
 export const REQUIRED_TRANSPORT_CAPABILITIES: readonly string[] = ["fetch", "push", "resumable-upload", "verified-arrival"];
@@ -128,15 +130,22 @@ export interface TransferObject {
  * different product, not a different transport.
  */
 export interface Transport {
+  /** Fetch individually named verified objects, including standalone series; optional for older peers. */
+  fetchObjects?(ids: readonly ObjectId[]): Promise<Buffer>;
   /** Where this transport points, as the remote was configured. */
   readonly url: string;
 
   /**
    * Asks the remote what it has.
    *
+   * The operations are asynchronous because a wire is: a filesystem can be read
+   * synchronously, but a socket cannot, and the fetch/push/clone algorithms are
+   * written against this interface precisely so they do not care which one
+   * they are talking to.
+   *
    * @returns Its refs, the branch its HEAD names, and its record configuration.
    */
-  advertise(): Advertisement;
+  advertise(): Promise<Advertisement>;
 
   /**
    * Asks the remote for the history behind some of its refs.
@@ -147,7 +156,7 @@ export interface Transport {
    *   is the whole of the negotiation.
    * @returns A bundle carrying the objects the caller is missing.
    */
-  fetch(refNames: readonly string[], haves: readonly ObjectId[]): Buffer;
+  fetch(refNames: readonly string[], haves: readonly ObjectId[]): Promise<Buffer>;
 
   /**
    * Sends history and asks the remote to move refs onto it.
@@ -160,7 +169,7 @@ export interface Transport {
    * @throws ObjectStoreError When a move is not a fast-forward and `force` is
    *   false, or when another writer changed a ref between observation and write.
    */
-  push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): PushReceipt;
+  push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt>;
 
   /**
    * Asks the receiver which of the offered objects it still lacks.
@@ -173,7 +182,7 @@ export interface Transport {
    * @param ids - Object ids the sender intends to transfer.
    * @returns The subset the receiver does not hold, in the order offered.
    */
-  missingObjects(ids: readonly ObjectId[]): readonly ObjectId[];
+  missingObjects(ids: readonly ObjectId[]): Promise<readonly ObjectId[]>;
 
   /**
    * Streams objects into the receiver's store, each verified on arrival.
@@ -186,7 +195,7 @@ export interface Transport {
    * @param objects - The objects to transfer.
    * @throws ObjectStoreError When any object's content does not hash to its id.
    */
-  uploadObjects(objects: readonly TransferObject[]): void;
+  uploadObjects(objects: readonly TransferObject[]): Promise<void>;
 
   /**
    * Publishes ref moves after an object upload, refusing until the closure is complete.
@@ -206,7 +215,7 @@ export interface Transport {
    *   observation and this publication; with the {@link Transport.push} refusal
    *   codes for non-fast-forward moves and unpushable refs.
    */
-  publish(updates: readonly PushUpdate[], force: boolean, now: Date): PushReceipt;
+  publish(updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt>;
 }
 
 /**
@@ -279,7 +288,7 @@ export class FileTransport implements Transport {
    * @param path - Absolute path to the remote repository's root.
    */
   constructor(url: string, path: string) {
-    this.url = url;
+    this.url = redactRemoteUrl(url);
     this.path = path;
   }
 
@@ -304,7 +313,7 @@ export class FileTransport implements Transport {
   }
 
   /** Read the receiver's public refs, attached branch, history-shaping record configuration, and peer description. */
-  advertise(): Advertisement {
+  async advertise(): Promise<Advertisement> {
     const repository = this.open();
     const head = repository.refs.readHead();
     return {
@@ -316,8 +325,14 @@ export class FileTransport implements Transport {
     };
   }
 
+  /** Return a verified bundle of named objects without publishing any refs. */
+  async fetchObjects(ids: readonly ObjectId[]): Promise<Buffer> {
+    const repository = this.open();
+    return serializeBundle(repository.objects, { refs: {}, prerequisites: [], objects: [...new Set(ids)].sort() });
+  }
+
   /** Export requested reachable history while honoring only caller tips the receiver actually possesses. */
-  fetch(refNames: readonly string[], haves: readonly ObjectId[]): Buffer {
+  async fetch(refNames: readonly string[], haves: readonly ObjectId[]): Promise<Buffer> {
     const repository = this.open();
     // The offer is filtered rather than trusted. A caller's tips include commits
     // this repository has never seen — its own local work, and the tips of other
@@ -329,7 +344,7 @@ export class FileTransport implements Transport {
   }
 
   /** Verify incoming closure and fast-forward policy before atomically publishing requested receiver refs. */
-  push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): PushReceipt {
+  async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
     const repository = this.open();
     const { added } = importBundleObjects(repository.objects, bundle);
     for (const update of updates) {
@@ -395,13 +410,13 @@ export class FileTransport implements Transport {
   }
 
   /** Report the offered ids the store does not hold yet, so a resume resends only those. */
-  missingObjects(ids: readonly ObjectId[]): readonly ObjectId[] {
+  async missingObjects(ids: readonly ObjectId[]): Promise<readonly ObjectId[]> {
     const repository = this.open();
     return ids.filter((id) => !repository.objects.has(id));
   }
 
   /** Store each arriving object after verifying its content hashes to the id the sender claimed. */
-  uploadObjects(objects: readonly TransferObject[]): void {
+  async uploadObjects(objects: readonly TransferObject[]): Promise<void> {
     const repository = this.open();
     for (const object of objects) {
       // The claim is checked before anything is written. Storing first and
@@ -424,7 +439,7 @@ export class FileTransport implements Transport {
   }
 
   /** Verify the uploaded closure, then publish every ref move as one compare-and-swap transaction. */
-  publish(updates: readonly PushUpdate[], force: boolean, now: Date): PushReceipt {
+  async publish(updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
     const repository = this.open();
     // Claimed at entry and cleared on every attempt, refused ones included:
     // an accumulator that survives a refusal would report this attempt's
@@ -487,9 +502,11 @@ export class FileTransport implements Transport {
  * it is read from, so the repository that recorded it and the repository that
  * later fetches from it would disagree about where the remote is.
  *
- * @param url - The remote's configured location: a path, or a `file:` URL.
+ * @param url - The remote's configured location: a path, a `file:` URL, or an
+ *   `http:` / `https:` URL naming a served repository.
  * @param base - Directory a relative path is resolved against.
- * @returns An absolute path to the remote repository's root.
+ * @returns An absolute path to the remote repository's root, or the URL itself
+ *   when it already names a location — the wire form persists as typed.
  * @throws ObjectStoreError When the URL names an unsupported scheme, or is a
  *   `file:` URL that names no local path.
  */
@@ -498,11 +515,26 @@ export function resolveRemoteLocation(url: string, base: string): string {
   // and not a scheme called "c".
   const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]+):/.exec(url);
   if (scheme === null) return isAbsolute(url) ? url : resolve(base, url);
+  if (scheme[1].toLowerCase() === "http" || scheme[1].toLowerCase() === "https") {
+    // A wire location already names where it is, so it persists exactly as
+    // typed the way a resolved path does — resolving it against the reader's
+    // directory would move the remote every time it was read from a different
+    // clone. Malformed ones are refused here rather than at the first fetch,
+    // for the same reason an unsupported scheme is.
+    try {
+      return new URL(url).toString();
+    } catch {
+      throw new ObjectStoreError(
+        "unsupported_transport",
+        `${redactRemoteUrl(url)} is an ${scheme[1]}: URL that does not parse. Use http://host:port/repository.`,
+      );
+    }
+  }
   if (scheme[1].toLowerCase() !== "file") {
     throw new ObjectStoreError(
       "unsupported_transport",
       `This build cannot reach a remote over "${scheme[1]}". `
-      + "Supported locations are filesystem paths and file: URLs.",
+      + "Supported locations are filesystem paths, file: URLs, and http: or https: URLs of served repositories.",
     );
   }
   try {
@@ -513,7 +545,7 @@ export function resolveRemoteLocation(url: string, base: string): string {
     // a remote this build cannot reach.
     throw new ObjectStoreError(
       "unsupported_transport",
-      `${url} is a file: URL that names no local path. `
+      `${redactRemoteUrl(url)} is a file: URL that names no local path. `
       + "Use a host-less URL over an unescaped path, for example file:///srv/project.",
     );
   }
@@ -522,11 +554,18 @@ export function resolveRemoteLocation(url: string, base: string): string {
 /**
  * Opens a transport for a configured remote URL.
  *
- * @param url - The remote's configured location: a path, or a `file:` URL.
+ * @param url - The remote's configured location: a path, a `file:` URL, or an
+ *   `http:` / `https:` URL naming a served repository.
  * @param base - Directory a relative path is resolved against.
+ * @param token - Separately resolved HTTP bearer credential.
  * @returns A transport for it.
- * @throws ObjectStoreError When the URL cannot be resolved to a local repository.
+ * @throws ObjectStoreError When the URL cannot be resolved to a reachable
+ *   repository.
  */
-export function openTransport(url: string, base: string): Transport {
+export function openTransport(url: string, base: string, token?: string | null): Transport {
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]+):/.exec(url);
+  if (scheme !== null && (scheme[1].toLowerCase() === "http" || scheme[1].toLowerCase() === "https")) {
+    return new HttpTransport(resolveRemoteLocation(url, base), { token });
+  }
   return new FileTransport(url, resolveRemoteLocation(url, base));
 }

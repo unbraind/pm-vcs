@@ -43,6 +43,37 @@ test("read returns null for a name that is not configured", () => {
   assert.equal(fresh().store.read("origin"), null);
 });
 
+test("a credential-free remote never inherits an orphaned token for its name", () => {
+  const { store, path } = fresh();
+  store.add("origin", "https://old-secret@old.example/repo");
+  store.add("upstream", "https://other-secret@upstream.example/repo");
+  // Recreate interruption between remove's remote and credential writes.
+  writeFileSync(path, JSON.stringify({ upstream: "https://upstream.example/repo" }));
+  assert.equal(store.token("origin"), "old-secret");
+  store.add("origin", "https://new.example/repo");
+  const reopened = new RemoteStore(path);
+  assert.equal(reopened.require("origin").url, "https://new.example/repo");
+  assert.equal(reopened.token("origin"), null);
+  assert.equal(reopened.token("upstream"), "other-secret");
+});
+
+test("file remotes never touch credentials, and a failed HTTP removal leaves the remote map unchanged", () => {
+  const { store, path } = fresh();
+  store.add("web", "https://secret@web.example/repo");
+  // An unreadable credentials file (another user's, or corrupt) must not stop
+  // an agent managing remotes that never use a bearer token.
+  const credentials = join(dir!.root, "credentials.json");
+  writeFileSync(credentials, "{ not json");
+  store.add("backup", "/srv/backup");
+  store.remove("backup");
+  assert.deepEqual(new RemoteStore(path).list().map((remote) => remote.name), ["web"]);
+  // Removing an HTTP(S) remote does need the credentials file. When it cannot
+  // be read, the removal fails as a whole: the remote is still configured,
+  // rather than gone while the command reports failure.
+  assert.throws(() => store.remove("web"), (error: ObjectStoreError) => error.code === "bad_credentials");
+  assert.deepEqual(new RemoteStore(path).list().map((remote) => remote.name), ["web"]);
+});
+
 test("require names the configured remotes when the one asked for is absent", () => {
   const { store } = fresh();
   assert.throws(() => store.require("origin"), (error: ObjectStoreError) => {

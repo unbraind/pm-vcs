@@ -11,7 +11,16 @@ import { BRANCH_PREFIX, TAG_PREFIX } from "../engine/refs.ts";
 import { REMOTE_PREFIX, trackingRef } from "../engine/remotes.ts";
 import { Repository } from "../engine/repo.ts";
 import { cloneFrom, fetchFrom, pushTo } from "../engine/sync.ts";
-import { FileTransport, type Transport, openTransport, resolveRemoteLocation } from "../engine/transport.ts";
+import {
+  type Advertisement,
+  FileTransport,
+  type PushReceipt,
+  type PushUpdate,
+  type TransferObject,
+  type Transport,
+  openTransport,
+  resolveRemoteLocation,
+} from "../engine/transport.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const handles: Array<{ root: string; cleanup(): void }> = [];
@@ -60,7 +69,7 @@ function commitFile(repository: Repository, path: string, text: string): ObjectI
   return repository.commit({ message: `add ${path}\n`, author }, now);
 }
 
-test("clone reproduces the source's history, branch and record configuration", () => {
+test("clone reproduces the source's history, branch and record configuration", async () => {
   const config: RepositoryConfig = { recordPaths: [".agents/pm/**/*.toon"], recordPolicy: { fields: {} } };
   const source = freshRepo(config);
   const first = commitFile(source, "a.txt", "one");
@@ -68,7 +77,7 @@ test("clone reproduces the source's history, branch and record configuration", (
   source.refs.compareAndSwap(`${TAG_PREFIX}v1`, null, first);
 
   const destination = join(tempRoot(), "clone");
-  const report = cloneFrom(source.root, destination, now);
+  const report = await cloneFrom(source.root, destination, now);
 
   assert.equal(report.branch, "main");
   const clone = Repository.open(destination);
@@ -85,21 +94,21 @@ test("clone reproduces the source's history, branch and record configuration", (
   assert.equal(readFileSync(join(destination, "b.txt"), "utf8"), "two");
 });
 
-test("cloning a repository with no commits yields an empty working tree, not an error", () => {
+test("cloning a repository with no commits yields an empty working tree, not an error", async () => {
   const source = freshRepo();
   const destination = join(tempRoot(), "clone");
-  const report = cloneFrom(source.root, destination, now);
+  const report = await cloneFrom(source.root, destination, now);
   assert.equal(report.branch, null);
   assert.equal(report.fetched.upToDate, true);
   assert.equal(Repository.open(destination).refs.readHead().target, null);
 });
 
-test("cloning from a source whose HEAD is detached checks out nothing", () => {
+test("cloning from a source whose HEAD is detached checks out nothing", async () => {
   const source = freshRepo();
   const first = commitFile(source, "a.txt", "one");
   source.refs.setHeadDetached(first);
   const destination = join(tempRoot(), "clone");
-  const report = cloneFrom(source.root, destination, now);
+  const report = await cloneFrom(source.root, destination, now);
   assert.equal(report.branch, null);
   // The branch still arrived as a tracking ref, so nothing was lost — only the
   // choice of what to check out was left to the agent.
@@ -107,30 +116,30 @@ test("cloning from a source whose HEAD is detached checks out nothing", () => {
   assert.equal(existsSync(join(destination, "a.txt")), false);
 });
 
-test("cloning into a directory that already holds a repository is refused", () => {
+test("cloning into a directory that already holds a repository is refused", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
   const destination = freshRepo().root;
-  assert.throws(() => cloneFrom(source.root, destination, now), (error: ObjectStoreError) => {
+  await assert.rejects(cloneFrom(source.root, destination, now), (error: ObjectStoreError) => {
     assert.equal(error.code, "already_initialised");
     return true;
   });
 });
 
-test("clone accepts a file URL and a custom remote name", () => {
+test("clone accepts a file URL and a custom remote name", async () => {
   const source = freshRepo();
   const tip = commitFile(source, "a.txt", "one");
   const destination = join(tempRoot(), "clone");
-  const report = cloneFrom(pathToFileURL(source.root).href, destination, now, "upstream");
+  const report = await cloneFrom(pathToFileURL(source.root).href, destination, now, "upstream");
   assert.equal(report.branch, "main");
   const clone = Repository.open(destination);
   assert.equal(clone.refs.read(trackingRef("upstream", "main")), tip);
 });
 
-test("fetch leaves a diverged local branch alone and lands only on tracking refs", () => {
+test("fetch leaves a diverged local branch alone and lands only on tracking refs", async () => {
   const source = freshRepo();
   const shared = commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
 
   // Both sides commit on main. This is the case a plain bundle import gets wrong:
   // the bundle names `refs/heads/main`, so importing it would move the clone's own
@@ -139,7 +148,7 @@ test("fetch leaves a diverged local branch alone and lands only on tracking refs
   const remoteTip = commitFile(source, "b.txt", "two");
   const localTip = commitFile(clone, "c.txt", "three");
 
-  const report = fetchFrom(clone, "origin", now);
+  const report = await fetchFrom(clone, "origin", now);
   assert.equal(clone.refs.read(`${BRANCH_PREFIX}main`), localTip, "fetch moved the local branch");
   assert.equal(clone.refs.read(trackingRef("origin", "main")), remoteTip);
   assert.deepEqual(report.updated, [
@@ -149,28 +158,28 @@ test("fetch leaves a diverged local branch alone and lands only on tracking refs
   assert.equal(clone.operations.read().at(-1)?.command, "fetch");
 });
 
-test("a second fetch with nothing new transfers no objects at all", () => {
+test("a second fetch with nothing new transfers no objects at all", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
-  const report = fetchFrom(clone, "origin", now);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
+  const report = await fetchFrom(clone, "origin", now);
   assert.deepEqual(report, {
     remote: "origin", url: source.root, updated: [], conflictingTags: [], added: [], upToDate: true,
   });
 });
 
-test("negotiation excludes history the fetching repository already holds", () => {
+test("negotiation excludes history the fetching repository already holds", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
   commitFile(source, "b.txt", "two");
 
   const cold = Repository.init(tempRoot(), "main");
   cold.remotes.add("origin", source.root);
-  const coldReport = fetchFrom(cold, "origin", now);
+  const coldReport = await fetchFrom(cold, "origin", now);
 
-  const warm = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const warm = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   commitFile(source, "c.txt", "three");
-  const warmReport = fetchFrom(warm, "origin", now);
+  const warmReport = await fetchFrom(warm, "origin", now);
 
   // The whole point of negotiation: the warm repository shares two commits with
   // the source and must be sent strictly less than a repository that shares none.
@@ -181,7 +190,7 @@ test("negotiation excludes history the fetching repository already holds", () =>
   assert.equal(warm.refs.read(trackingRef("origin", "main")), source.refs.read(`${BRANCH_PREFIX}main`));
 });
 
-test("a candidate the remote does not hold is dropped rather than failing the fetch", () => {
+test("a candidate the remote does not hold is dropped rather than failing the fetch", async () => {
   const source = freshRepo();
   const remoteTip = commitFile(source, "a.txt", "one");
   const clone = Repository.init(tempRoot(), "main");
@@ -191,12 +200,12 @@ test("a candidate the remote does not hold is dropped rather than failing the fe
   const localOnly = commitFile(clone, "local.txt", "local");
   assert.equal(source.objects.has(localOnly), false);
 
-  const report = fetchFrom(clone, "origin", now);
+  const report = await fetchFrom(clone, "origin", now);
   assert.equal(clone.refs.read(trackingRef("origin", "main")), remoteTip);
   assert.equal(report.upToDate, false);
 });
 
-test("a tag the local repository already uses at another value is reported, not moved", () => {
+test("a tag the local repository already uses at another value is reported, not moved", async () => {
   const source = freshRepo();
   const sourceTip = commitFile(source, "a.txt", "one");
   source.refs.compareAndSwap(`${TAG_PREFIX}v1`, null, sourceTip);
@@ -206,12 +215,12 @@ test("a tag the local repository already uses at another value is reported, not 
   const localTip = commitFile(clone, "local.txt", "local");
   clone.refs.compareAndSwap(`${TAG_PREFIX}v1`, null, localTip);
 
-  const report = fetchFrom(clone, "origin", now);
+  const report = await fetchFrom(clone, "origin", now);
   assert.deepEqual(report.conflictingTags, ["v1"]);
   assert.equal(clone.refs.read(`${TAG_PREFIX}v1`), localTip);
 });
 
-test("a ref kind fetch does not understand is ignored rather than fetched somewhere arbitrary", () => {
+test("a ref kind fetch does not understand is ignored rather than fetched somewhere arbitrary", async () => {
   const source = freshRepo();
   const tip = commitFile(source, "a.txt", "one");
   const clone = Repository.init(tempRoot(), "main");
@@ -223,30 +232,30 @@ test("a ref kind fetch does not understand is ignored rather than fetched somewh
   // repository cannot interpret into its own namespace.
   const extended = new FileTransport(source.root, source.root);
   const advertiseBranches = extended.advertise.bind(extended);
-  extended.advertise = () => {
-    const advertisement = advertiseBranches();
+  extended.advertise = async () => {
+    const advertisement = await advertiseBranches();
     return { ...advertisement, refs: [...advertisement.refs, { name: "refs/notes/commits", target: tip }] };
   };
 
-  const report = fetchFrom(clone, "origin", now, extended);
+  const report = await fetchFrom(clone, "origin", now, extended);
   assert.deepEqual(report.updated.map((entry) => entry.ref), [trackingRef("origin", "main")]);
   assert.equal(clone.refs.read("refs/notes/commits"), null);
 });
 
-test("fetch from a remote that is not configured names the remote", () => {
-  assert.throws(() => fetchFrom(freshRepo(), "origin", now), (error: ObjectStoreError) => {
+test("fetch from a remote that is not configured names the remote", async () => {
+  await assert.rejects(fetchFrom(freshRepo(), "origin", now), (error: ObjectStoreError) => {
     assert.equal(error.code, "unknown_remote");
     return true;
   });
 });
 
-test("push fast-forwards the remote branch and advances the tracking ref", () => {
+test("push fast-forwards the remote branch and advances the tracking ref", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   const pushed = commitFile(clone, "b.txt", "two");
 
-  const report = pushTo(clone, "origin", [], false, now);
+  const report = await pushTo(clone, "origin", [], false, now);
   assert.equal(source.refs.read(`${BRANCH_PREFIX}main`), pushed);
   assert.equal(clone.refs.read(trackingRef("origin", "main")), pushed);
   assert.equal(report.upToDate, false);
@@ -257,26 +266,173 @@ test("push fast-forwards the remote branch and advances the tracking ref", () =>
   assert.ok(report.added.length > 0);
 });
 
-test("push creates a branch the remote does not have", () => {
+test("push creates a branch the remote does not have", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   clone.createBranch("feature", "main", now);
   clone.switchTo("feature", now);
   const tip = commitFile(clone, "b.txt", "two");
 
-  pushTo(clone, "origin", ["feature"], false, now);
+  await pushTo(clone, "origin", ["feature"], false, now);
   assert.equal(source.refs.read(`${BRANCH_PREFIX}feature`), tip);
 });
 
-test("a push that would discard commits the remote has is refused", () => {
+/**
+ * A transport whose push answer is held until the test releases it.
+ *
+ * The remote has already accepted by the time the hold begins — `push` has run
+ * and `accepted` has resolved — so this reproduces the one window real
+ * concurrency lives in: the work has landed, and its answer is still in flight.
+ */
+class HeldAnswerTransport implements Transport {
+  /** The transport doing the real work. */
+  private readonly inner: FileTransport;
+
+  /** Resolved by the test when the held answer may go out. */
+  private readonly hold: Promise<void>;
+
+  /** The URL of the transport being delegated to. */
+  readonly url: string;
+
+  /** Resolves once the remote has accepted and the answer is being held. */
+  private readonly resolveAccepted: () => void;
+
+  /** Resolved once the remote has accepted and the answer is being held. */
+  readonly accepted: Promise<void>;
+
+  /**
+   * @param inner - The transport to delegate every operation to.
+   * @param hold - A promise that keeps the push answer in flight until the test
+   *   resolves it.
+   */
+  constructor(inner: FileTransport, hold: Promise<void>) {
+    this.inner = inner;
+    this.hold = hold;
+    this.url = inner.url;
+    let signal: () => void = () => {};
+    this.accepted = new Promise<void>((resolveAccepted) => { signal = resolveAccepted; });
+    this.resolveAccepted = signal;
+  }
+
+  /** Delegates: the remote's description of itself. */
+  advertise(): Promise<Advertisement> {
+    return this.inner.advertise();
+  }
+
+  /** Delegates: history behind named refs. */
+  fetch(refNames: readonly string[], haves: readonly ObjectId[]): Promise<Buffer> {
+    return this.inner.fetch(refNames, haves);
+  }
+
+  /** Delegates: standalone objects by id. */
+  fetchObjects(ids: readonly ObjectId[]): Promise<Buffer> {
+    return this.inner.fetchObjects(ids);
+  }
+
+  /** Delegates, then holds the answer: the push has landed, `pushTo` has not heard. */
+  async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
+    const receipt = await this.inner.push(bundle, updates, force, now);
+    this.resolveAccepted();
+    await this.hold;
+    return receipt;
+  }
+
+  /** Delegates: which offered objects the receiver lacks. */
+  missingObjects(ids: readonly ObjectId[]): Promise<readonly ObjectId[]> {
+    return this.inner.missingObjects(ids);
+  }
+
+  /** Delegates: verified object upload. */
+  uploadObjects(objects: readonly TransferObject[]): Promise<void> {
+    return this.inner.uploadObjects(objects);
+  }
+
+  /** Delegates: publication after uploads. */
+  publish(updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
+    return this.inner.publish(updates, force, now);
+  }
+}
+
+test("a push answer that arrives late moves a tracking ref only where nothing newer arrived", async () => {
+  // One push per scenario: the remote accepts, the answer is held, and while it
+  // is held the tracking ref moves the way another operation — a concurrent
+  // fetch or push — would move it. What the completion then records is the
+  // whole question: it may never move the tracking ref backward over what the
+  // other operation learned.
+  const latePush = async (
+    whileHeld: (state: {
+      source: Repository;
+      clone: Repository;
+      base: ObjectId;
+      intermediate: ObjectId;
+      pushed: ObjectId;
+    }) => Promise<void> | void,
+  ): Promise<Repository> => {
+    const source = freshRepo();
+    const base = commitFile(source, "a.txt", "one");
+    const cloneRoot = join(tempRoot(), "clone");
+    await cloneFrom(source.root, cloneRoot, now);
+    const clone = Repository.open(cloneRoot);
+    // Two commits, so a scenario can move the tracking ref to a point strictly
+    // between the base and the push.
+    const intermediate = commitFile(clone, "b1.txt", "mid");
+    const pushed = commitFile(clone, "b2.txt", "top");
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolveHold) => { release = resolveHold; });
+    const wire = new HeldAnswerTransport(new FileTransport(source.root, source.root), hold);
+    const push = pushTo(clone, "origin", ["main"], false, now, wire);
+    await wire.accepted;
+    await whileHeld({ source, clone, base, intermediate, pushed });
+    release();
+    await push;
+    return clone;
+  };
+
+  // Another operation already recorded this very push: the completion records
+  // nothing, and the operation log says the same.
+  const recorded = await latePush(({ clone, base, pushed }) => {
+    clone.refs.compareAndSwap(trackingRef("origin", "main"), base, pushed);
+  });
+  assert.equal(recorded.refs.read(trackingRef("origin", "main")), recorded.refs.read(`${BRANCH_PREFIX}main`));
+  assert.deepEqual(recorded.operations.read().at(-1)?.refs, []);
+
+  // The tracking ref advanced to an ancestor of the pushed commit: the
+  // completion fast-forwards it, comparing against what it finds, not what it
+  // captured.
+  const advanced = await latePush(({ clone, base, intermediate }) => {
+    clone.refs.compareAndSwap(trackingRef("origin", "main"), base, intermediate);
+  });
+  assert.equal(advanced.refs.read(trackingRef("origin", "main")), advanced.refs.read(`${BRANCH_PREFIX}main`));
+
+  // A concurrent fetch learned the remote has moved past the pushed commit —
+  // another client pushed on top of this push, and the fetch recorded that tip:
+  // the completion leaves the newer tip exactly where the fetch put it.
+  let fetchedTip: ObjectId = "".repeat(64);
+  const fetchedPast = await latePush(async ({ source, clone }) => {
+    fetchedTip = commitFile(source, "c.txt", "newer");
+    await fetchFrom(clone, "origin", now);
+    assert.equal(clone.refs.read(trackingRef("origin", "main")), fetchedTip);
+  });
+  assert.equal(fetchedPast.refs.read(trackingRef("origin", "main")), fetchedTip);
+  assert.notEqual(fetchedTip, fetchedPast.refs.read(`${BRANCH_PREFIX}main`));
+
+  // The tracking ref was deleted while the answer was in flight: the push
+  // recreates it at the commit the remote accepted.
+  const deleted = await latePush(({ clone, base }) => {
+    clone.refs.transaction([{ name: trackingRef("origin", "main"), expected: base, next: null }]);
+  });
+  assert.equal(deleted.refs.read(trackingRef("origin", "main")), deleted.refs.read(`${BRANCH_PREFIX}main`));
+});
+
+test("a push that would discard commits the remote has is refused", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   const remoteTip = commitFile(source, "remote.txt", "remote");
   const localTip = commitFile(clone, "local.txt", "local");
 
-  assert.throws(() => pushTo(clone, "origin", [], false, now), (error: ObjectStoreError) => {
+  await assert.rejects(pushTo(clone, "origin", [], false, now), (error: ObjectStoreError) => {
     assert.equal(error.code, "non_fast_forward");
     assert.match(error.message, /refs\/heads\/main/);
     return true;
@@ -287,7 +443,7 @@ test("a push that would discard commits the remote has is refused", () => {
   assert.notEqual(clone.refs.read(trackingRef("origin", "main")), localTip);
 });
 
-test("the refusal points a branch at its tracking ref and a tag somewhere a tag can go", () => {
+test("the refusal points a branch at its tracking ref and a tag somewhere a tag can go", async () => {
   const source = freshRepo();
   const base = commitFile(source, "a.txt", "one");
   const onMain = commitFile(source, "b.txt", "two");
@@ -298,10 +454,10 @@ test("the refusal points a branch at its tracking ref and a tag somewhere a tag 
 
   const transport = new FileTransport(source.root, source.root);
   const emptyBundle = Buffer.from('pmvcs-bundle-1\n{"refs":{},"prerequisites":[],"objects":[]}\n');
-  const refuse = (ref: string, next: ObjectId, expected: ObjectId): ObjectStoreError => {
+  const refuse = async (ref: string, next: ObjectId, expected: ObjectId): Promise<ObjectStoreError> => {
     let thrown: ObjectStoreError | null = null;
     try {
-      transport.push(emptyBundle, [{ ref, expected, next }], false, now);
+      await transport.push(emptyBundle, [{ ref, expected, next }], false, now);
     } catch (error) {
       thrown = error as ObjectStoreError;
     }
@@ -312,44 +468,44 @@ test("the refusal points a branch at its tracking ref and a tag somewhere a tag 
   // A branch is told the one name a fetch will actually write, in the shorthand
   // `resolve` accepts. Naming only "fetch and merge" leaves the caller to guess a
   // ref layout, which is how the remediation became unfollowable.
-  const branch = refuse(`${BRANCH_PREFIX}side`, onMain, onSide);
+  const branch = await refuse(`${BRANCH_PREFIX}side`, onMain, onSide);
   assert.match(branch.message, /<remote>\/side/);
   assert.match(branch.message, /branch --remotes/);
 
   // A tag keeps its own name on the receiving side and gets no tracking ref, so
   // the same sentence would send a tag pusher after a ref no fetch ever writes.
-  const tag = refuse(`${TAG_PREFIX}v1`, onSide, onMain);
+  const tag = await refuse(`${TAG_PREFIX}v1`, onSide, onMain);
   assert.doesNotMatch(tag.message, /<remote>\//);
   assert.match(tag.message, /move the tag deliberately/);
 });
 
-test("force overrides the refusal and the remote can still undo it", () => {
+test("force overrides the refusal and the remote can still undo it", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   const remoteTip = commitFile(source, "remote.txt", "remote");
   const localTip = commitFile(clone, "local.txt", "local");
 
-  pushTo(clone, "origin", [], true, now);
+  await pushTo(clone, "origin", [], true, now);
   assert.equal(source.refs.read(`${BRANCH_PREFIX}main`), localTip);
   const received = Repository.open(source.root).operations.read().at(-1);
   assert.deepEqual(received?.refs, [{ ref: `${BRANCH_PREFIX}main`, before: remoteTip, after: localTip }]);
 });
 
-test("a push of a branch already at the remote's value transfers nothing", () => {
+test("a push of a branch already at the remote's value transfers nothing", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
-  const report = pushTo(clone, "origin", [], false, now);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
+  const report = await pushTo(clone, "origin", [], false, now);
   assert.deepEqual(report, { remote: "origin", url: source.root, updated: [], added: [], upToDate: true });
 });
 
-test("a push decided against a stale observation is refused rather than landing on it", () => {
+test("a push decided against a stale observation is refused rather than landing on it", async () => {
   const source = freshRepo();
   const first = commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   const second = commitFile(clone, "b.txt", "two");
-  pushTo(clone, "origin", [], false, now);
+  await pushTo(clone, "origin", [], false, now);
   const third = commitFile(clone, "c.txt", "three");
 
   // The remote moved from `first` to `second` after this pusher looked. Pushing
@@ -359,8 +515,8 @@ test("a push decided against a stale observation is refused rather than landing 
   // is what makes the check's verdict apply to the state it was computed against.
   const stale = new FileTransport(source.root, source.root);
   const truthful = stale.advertise.bind(stale);
-  stale.advertise = () => {
-    const advertisement = truthful();
+  stale.advertise = async () => {
+    const advertisement = await truthful();
     return {
       ...advertisement,
       refs: advertisement.refs.map((entry) => (
@@ -369,7 +525,7 @@ test("a push decided against a stale observation is refused rather than landing 
     };
   };
 
-  assert.throws(() => pushTo(clone, "origin", [], false, now, stale), (error: ObjectStoreError) => {
+  await assert.rejects(pushTo(clone, "origin", [], false, now, stale), (error: ObjectStoreError) => {
     assert.equal(error.code, "ref_changed");
     return true;
   });
@@ -377,38 +533,38 @@ test("a push decided against a stale observation is refused rather than landing 
   assert.notEqual(source.refs.read(`${BRANCH_PREFIX}main`), third);
 });
 
-test("pushing a branch that does not exist names it", () => {
+test("pushing a branch that does not exist names it", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
-  assert.throws(() => pushTo(clone, "origin", ["nope"], false, now), (error: ObjectStoreError) => {
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
+  await assert.rejects(pushTo(clone, "origin", ["nope"], false, now), (error: ObjectStoreError) => {
     assert.equal(error.code, "unknown_branch");
     return true;
   });
 });
 
-test("pushing from a detached HEAD without naming a branch is refused", () => {
+test("pushing from a detached HEAD without naming a branch is refused", async () => {
   const source = freshRepo();
   const tip = commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   clone.refs.setHeadDetached(tip);
-  assert.throws(() => pushTo(clone, "origin", [], false, now), (error: ObjectStoreError) => {
+  await assert.rejects(pushTo(clone, "origin", [], false, now), (error: ObjectStoreError) => {
     assert.equal(error.code, "detached_head");
     return true;
   });
 });
 
-test("a transport pointing at a directory that holds no repository says so", () => {
+test("a transport pointing at a directory that holds no repository says so", async () => {
   const repository = freshRepo();
   repository.remotes.add("origin", tempRoot());
-  assert.throws(() => fetchFrom(repository, "origin", now), (error: ObjectStoreError) => {
+  await assert.rejects(fetchFrom(repository, "origin", now), (error: ObjectStoreError) => {
     assert.equal(error.code, "unreachable_remote");
     assert.match(error.message, /does not hold a repository/);
     return true;
   });
 });
 
-test("an unreadable remote surfaces its own failure rather than an unreachable one", () => {
+test("an unreadable remote surfaces its own failure rather than an unreachable one", async () => {
   // A file where the repository root belongs: `format` cannot be read because the
   // path is not a directory, and the store must not rewrite every failure as a
   // missing repository.
@@ -416,50 +572,71 @@ test("an unreadable remote surfaces its own failure rather than an unreachable o
   writeFileSync(path, "");
   const repository = freshRepo();
   repository.remotes.add("origin", path);
-  assert.throws(() => fetchFrom(repository, "origin", now), (error: ObjectStoreError) => {
+  await assert.rejects(fetchFrom(repository, "origin", now), (error: ObjectStoreError) => {
     assert.equal(error.code, "unreachable_remote");
     return true;
   });
 });
 
-test("a URL naming a scheme this build cannot serve is refused by name", () => {
-  for (const url of ["https://example.com/repo", "ssh://host/repo", "git://host/repo"]) {
+test("a URL naming a scheme this build cannot serve is refused by name", async () => {
+  // http and https name served repositories now; the schemes refused are the
+  // ones no transport in this build speaks.
+  for (const url of ["ssh://host/repo", "git://host/repo"]) {
     assert.throws(() => openTransport(url, "/tmp"), (error: ObjectStoreError) => {
       assert.equal(error.code, "unsupported_transport");
-      assert.match(error.message, /filesystem paths and file: URLs/);
+      assert.match(error.message, /http: or https: URLs/);
       return true;
     }, url);
   }
 });
 
-test("a relative remote URL resolves against the repository, not the process cwd", () => {
+test("a relative remote URL resolves against the repository, not the process cwd", async () => {
   const base = tempRoot();
   const source = Repository.init(join(base, "source"), "main");
   const tip = commitFile(source, "a.txt", "one");
   const clone = Repository.init(join(base, "clone"), "main");
   clone.remotes.add("origin", "../source");
-  fetchFrom(clone, "origin", now);
+  await fetchFrom(clone, "origin", now);
   assert.equal(clone.refs.read(trackingRef("origin", "main")), tip);
 });
 
-test("an absolute path and a file URL reach the same repository", () => {
+test("an absolute path and a file URL reach the same repository", async () => {
   const source = freshRepo();
   const tip = commitFile(source, "a.txt", "one");
   for (const url of [source.root, pathToFileURL(source.root).href]) {
-    assert.equal(openTransport(url, "/tmp").advertise().refs[0]?.target, tip);
+    assert.equal((await openTransport(url, "/tmp").advertise()).refs[0]?.target, tip);
   }
 });
 
-test("push refuses a ref whose history the bundle did not carry", () => {
+test("file fetch and push never read unrelated bearer credentials", async () => {
+  const source = freshRepo();
+  const first = commitFile(source, "a.txt", "one");
+  for (const url of [source.root, pathToFileURL(source.root).href]) {
+    const clone = freshRepo();
+    clone.remotes.add("origin", url);
+    // A real corrupt secret file proves both operations avoid the token store.
+    writeFileSync(join(clone.controlDirectory, "credentials.json"), "not a secret map");
+    await fetchFrom(clone, "origin", now);
+    assert.equal(clone.refs.read(trackingRef("origin", "main")), first);
+    clone.refs.compareAndSwap(`${BRANCH_PREFIX}main`, null, first);
+    const next = commitFile(clone, "b.txt", "two");
+    const pushed = await pushTo(clone, "origin", [], false, now);
+    assert.equal(pushed.upToDate, false);
+    assert.equal(source.refs.read(`${BRANCH_PREFIX}main`), next);
+    source.refs.compareAndSwap(`${BRANCH_PREFIX}main`, next, first);
+  }
+});
+
+test("push refuses a ref whose history the bundle did not carry", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   const orphan = commitFile(clone, "b.txt", "two");
   // An empty bundle with a ref update naming a commit the remote cannot reach:
   // publishing it would leave the remote advertising a branch pointing at nothing.
   const transport = new FileTransport(source.root, source.root);
-  assert.throws(
-    () => transport.push(Buffer.from('pmvcs-bundle-1\n{"refs":{},"prerequisites":[],"objects":[]}\n'), [
+  await assert.rejects(
+    transport.push(Buffer.from('pmvcs-bundle-1\n{"refs":{},"prerequisites":[],"objects":[]}\n'), [
       { ref: `${BRANCH_PREFIX}main`, expected: source.refs.read(`${BRANCH_PREFIX}main`), next: orphan },
     ], false, now),
     (error: ObjectStoreError) => {
@@ -469,7 +646,7 @@ test("push refuses a ref whose history the bundle did not carry", () => {
   );
 });
 
-test("a Windows drive letter is a path, not a scheme this build cannot serve", () => {
+test("a Windows drive letter is a path, not a scheme this build cannot serve", async () => {
   // `C:\repo` matches the shape of a URL closely enough that a one-character
   // scheme rule would refuse it as a remote over "c". The path itself need not
   // exist on this platform: resolution is what is under test, not reachability.
@@ -479,7 +656,7 @@ test("a Windows drive letter is a path, not a scheme this build cannot serve", (
   assert.equal(resolveRemoteLocation("C:\\repo", "/tmp"), resolve("/tmp", "C:\\repo"));
 });
 
-test("a file URL that names no local path is refused as a remote, not as a crash", () => {
+test("a file URL that names no local path is refused as a remote, not as a crash", async () => {
   // Node rejects both of these from `fileURLToPath`, and an unwrapped TypeError
   // reads as a bug in this build rather than as a remote it cannot reach.
   for (const url of ["file://server/repo", "file:///a%2Fb"]) {
@@ -491,7 +668,7 @@ test("a file URL that names no local path is refused as a remote, not as a crash
   }
 });
 
-test("a push may only move branches and tags", () => {
+test("a push may only move branches and tags", async () => {
   const source = freshRepo();
   const tip = commitFile(source, "a.txt", "one");
   const transport = new FileTransport(source.root, source.root);
@@ -499,8 +676,8 @@ test("a push may only move branches and tags", () => {
   // moving it would rewrite this repository's record of another remote's state and
   // be logged as an ordinary push.
   for (const ref of [trackingRef("other", "main"), "refs/notes/commits"]) {
-    assert.throws(
-      () => transport.push(Buffer.from('pmvcs-bundle-1\n{"refs":{},"prerequisites":[],"objects":[]}\n'), [
+    await assert.rejects(
+      transport.push(Buffer.from('pmvcs-bundle-1\n{"refs":{},"prerequisites":[],"objects":[]}\n'), [
         { ref, expected: null, next: tip },
       ], false, now),
       (error: ObjectStoreError) => {
@@ -514,28 +691,26 @@ test("a push may only move branches and tags", () => {
   assert.equal(source.refs.read(trackingRef("other", "main")), null);
 });
 
-test("a branch named twice in one push is pushed once", () => {
+test("a branch named twice in one push is pushed once", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   const tip = commitFile(clone, "b.txt", "two");
   // Left undeduplicated this reaches the remote as two updates for one ref and is
   // refused there as a ref transaction fault, long after the bundle was built.
-  const report = pushTo(clone, "origin", ["main", "main"], false, now);
+  const report = await pushTo(clone, "origin", ["main", "main"], false, now);
   assert.deepEqual(report.updated.map((update) => update.ref), [`${BRANCH_PREFIX}main`]);
   assert.equal(source.refs.read(`${BRANCH_PREFIX}main`), tip);
 });
 
-test("a clone whose fetch fails leaves nothing behind for the retry to trip over", () => {
+test("a clone whose fetch fails leaves nothing behind for the retry to trip over", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
   const reachable = new FileTransport(source.root, source.root);
   const failing: Transport = {
     url: reachable.url,
     advertise: () => reachable.advertise(),
-    fetch: () => {
-      throw new ObjectStoreError("unreachable_remote", "the source went away mid-clone");
-    },
+    fetch: () => Promise.reject(new ObjectStoreError("unreachable_remote", "the source went away mid-clone")),
     push: reachable.push.bind(reachable),
     missingObjects: reachable.missingObjects.bind(reachable),
     uploadObjects: reachable.uploadObjects.bind(reachable),
@@ -543,25 +718,23 @@ test("a clone whose fetch fails leaves nothing behind for the retry to trip over
   };
 
   const destination = join(tempRoot(), "clone");
-  assert.throws(() => cloneFrom(source.root, destination, now, "origin", process.cwd(), failing));
+  await assert.rejects(cloneFrom(source.root, destination, now, "origin", process.cwd(), failing));
   // Not merely "no repository": the directory this call created is gone, so the
   // retry is an ordinary clone rather than a clone into an existing directory.
   assert.equal(existsSync(destination), false);
 
-  const report = cloneFrom(source.root, destination, now);
+  const report = await cloneFrom(source.root, destination, now);
   assert.equal(report.branch, "main");
 });
 
-test("a failed clone into a directory that already existed removes only what it created", () => {
+test("a failed clone into a directory that already existed removes only what it created", async () => {
   const source = freshRepo();
   commitFile(source, "a.txt", "one");
   const reachable = new FileTransport(source.root, source.root);
   const failing: Transport = {
     url: reachable.url,
     advertise: () => reachable.advertise(),
-    fetch: () => {
-      throw new ObjectStoreError("unreachable_remote", "the source went away mid-clone");
-    },
+    fetch: () => Promise.reject(new ObjectStoreError("unreachable_remote", "the source went away mid-clone")),
     push: reachable.push.bind(reachable),
     missingObjects: reachable.missingObjects.bind(reachable),
     uploadObjects: reachable.uploadObjects.bind(reachable),
@@ -574,16 +747,16 @@ test("a failed clone into a directory that already existed removes only what it 
   mkdirSync(destination, { recursive: true });
   writeFileSync(join(destination, "notes.txt"), "mine");
 
-  assert.throws(() => cloneFrom(source.root, destination, now, "origin", process.cwd(), failing));
+  await assert.rejects(cloneFrom(source.root, destination, now, "origin", process.cwd(), failing));
   assert.equal(readFileSync(join(destination, "notes.txt"), "utf8"), "mine");
   assert.equal(existsSync(join(destination, ".pmvcs")), false);
 
-  const report = cloneFrom(source.root, destination, now);
+  const report = await cloneFrom(source.root, destination, now);
   assert.equal(report.branch, "main");
   assert.equal(readFileSync(join(destination, "notes.txt"), "utf8"), "mine");
 });
 
-test("a clone records where it came from, not the relative path it was given", () => {
+test("a clone records where it came from, not the relative path it was given", async () => {
   const base = tempRoot();
   const source = Repository.init(join(base, "source"), "main");
   const tip = commitFile(source, "a.txt", "one");
@@ -591,21 +764,21 @@ test("a clone records where it came from, not the relative path it was given", (
   // Recorded as typed, `../source` would later resolve against the clone's own
   // root — naming a sibling of the clone rather than the repository it came from.
   const destination = join(base, "nested", "clone");
-  const report = cloneFrom("../source", destination, now, "origin", join(base, "nested"));
+  const report = await cloneFrom("../source", destination, now, "origin", join(base, "nested"));
   assert.equal(report.branch, "main");
 
   const clone = Repository.open(destination);
   assert.equal(clone.remotes.require("origin").url, join(base, "source"));
   commitFile(source, "b.txt", "two");
-  const fetched = fetchFrom(clone, "origin", now);
+  const fetched = await fetchFrom(clone, "origin", now);
   assert.equal(fetched.upToDate, false);
   assert.notEqual(clone.refs.read(trackingRef("origin", "main")), tip);
 });
 
-test("removing a remote keeps the tracking refs that remember where it was", () => {
+test("removing a remote keeps the tracking refs that remember where it was", async () => {
   const source = freshRepo();
   const tip = commitFile(source, "a.txt", "one");
-  const clone = Repository.open(cloneFrom(source.root, join(tempRoot(), "clone"), now).root);
+  const clone = Repository.open((await cloneFrom(source.root, join(tempRoot(), "clone"), now)).root);
   assert.equal(clone.refs.read(trackingRef("origin", "main")), tip);
 
   clone.remotes.remove("origin");

@@ -1,0 +1,23 @@
+id: pm-vcs-w3yi
+title: Disambiguate parent object-fetch endpoints from nested objects repositories
+description: "Served paths resolve among the candidates the caller may read, deepest catalogued first (7341b0d). A token granted only the parent therefore reaches the parent's objects/fetch endpoint at tenant/objects/fetch, and the answer does not depend on whether tenant/objects exists. A residual wire-layout ambiguity remains in two cases: a server without --auth (every candidate is in scope), and a token granted both tenant and tenant/objects. In both, the nested repository takes precedence at tenant/objects/fetch, so the parent's object-fetch endpoint is unreachable at that URL while the nested repository exists."
+type: Issue
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-06T11:15:21.827Z"
+updated_at: "2026-10-06T23:09:24.225Z"
+author: codex-sol
+estimated_minutes: 120
+acceptance_criteria: "An explicit wire address or compatible negotiation makes parent fetchObjects and nested repository fetch reachable together; regression tests cover no-auth, parent-only, nested-only and multi-repository grants; unauthorized requests retain the fixed denial shape."
+parent: pm-vcs-ttc0
+repro_steps: "Serve repositories tenant and tenant/objects (a) without --auth, or (b) with one token granted read on both. Request POST /tenant/objects/fetch: it resolves to repository tenant/objects, endpoint fetch. HttpTransport.fetchObjects for the parent uses the same path, so the parent's object fetch is shadowed."
+expected_result: "Both repositories and every supported endpoint can be addressed unambiguously, including with a grant that reaches both repositories and without authentication."
+actual_result: "Without --auth, or for a token scoped to both repositories, the nested repository shadows the parent's objects/fetch endpoint at their shared URL path. Parent-only tokens are not affected since 7341b0d."
+files[3]{path,scope}:
+  engine/http-transport.ts,project
+  engine/serve.ts,project
+  test/serve.test.ts,project
+docs[1]{path,scope}:
+  README.md,project
+body: ""

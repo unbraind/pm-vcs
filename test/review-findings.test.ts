@@ -12,7 +12,7 @@
 // failure somewhere in the object store.
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -24,10 +24,11 @@ import { mergeContent } from "../engine/merge.ts";
 import { decodeCommit, decodeRecord, decodeTree, encodeCommit, type Signature } from "../engine/model.ts";
 import { ObjectStore, ObjectStoreError } from "../engine/objects.ts";
 import { OperationLog } from "../engine/oplog.ts";
+import { mergePath } from "../engine/rewrite.ts";
 import { mergeAppendOnlyLog } from "../engine/records.ts";
 import { BRANCH_PREFIX, RefStore, TAG_PREFIX } from "../engine/refs.ts";
 import { CONTROL_DIRECTORY, Repository } from "../engine/repo.ts";
-import { makeTempDir } from "./helpers/tmp.ts";
+import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const sandboxes: Array<{ cleanup(): void }> = [];
 
@@ -114,7 +115,8 @@ test("an unreadable ignore file fails loudly instead of silently ignoring nothin
   );
   // An absent file remains the ordinary case.
   const empty = tempRoot();
-  assert.deepEqual(readIgnoreRules(empty), { patterns: [], negations: [] });
+  const rules = readIgnoreRules(empty);
+  assert.deepEqual({ patterns: rules.patterns, negations: rules.negations }, { patterns: [], negations: [] });
 });
 
 test("an unreadable operation log fails loudly instead of reporting no operations", () => {
@@ -437,11 +439,99 @@ test("an append-only log union keeps a line that legitimately occurs twice", () 
   // A line both sides merely inherited from the base is still not duplicated.
   assert.equal(merged.filter((line) => line.includes('"start"')).length, 1);
 
-  // Blank lines carry no event and are dropped from both the tally and the output,
-  // so a trailing newline on one side does not read as a change to the log.
+  // Blank base lines remain verbatim; appended blank lines carry no event.
   const padded = mergeAppendOnlyLog(["", ...base, ""], ["  ", ...ours], theirs);
-  assert.deepEqual(padded, merged);
-  assert.ok(padded.every((line) => line.trim().length > 0));
+  assert.deepEqual(padded, ["", base[0], "", ...merged.slice(1)]);
+});
+
+test("an append-only log union keeps events both sides appended and the base as its prefix", () => {
+  // The highest-count rule kept only the higher of two appended counts, so a
+  // line each side appended once survived once — one event of two lost.
+  const base = ['{"at":"1","event":"start"}'];
+  const both = '{"at":"5","event":"ping"}';
+  const ours = [...base, both];
+  const theirs = [...base, both];
+  const merged = mergeAppendOnlyLog(base, ours, theirs);
+  assert.equal(merged.filter((line) => line === both).length, 2);
+  assert.equal(merged.length, 3);
+
+  // The base is the merged log's strict prefix, whatever the appended events'
+  // timestamps are: an earlier timestamp on one side used to sort the appended
+  // event ahead of base events both sides already agreed on, breaking the
+  // append-only branch on the next merge against that base.
+  const early = '{"at":"0","event":"early"}';
+  const prefixed = mergeAppendOnlyLog(base, [...base, early], [...base, early]);
+  assert.deepEqual(prefixed.slice(0, base.length), base);
+  assert.deepEqual(prefixed.slice(base.length), [early, early]);
+});
+
+test("an append-only log union preserves the base and both sides' appends over random interleavings", () => {
+  // A property, not a fixture: random histories, random duplicate identical
+  // events, and appended timestamps that can precede the base's own. Whatever
+  // the interleaving, the merged log is exactly the shared base followed by
+  // both sides' appended events in timestamp order — and merging the same
+  // inputs twice answers the same way.
+  let seed = 0x2a636f6e; // deterministic: every run probes the same interleavings
+  const random = (): number => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  const counts = (lines: readonly string[]): Map<string, number> => {
+    const tally = new Map<string, number>();
+    for (const line of lines) tally.set(line, (tally.get(line) ?? 0) + 1);
+    return tally;
+  };
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const eventCount = 1 + Math.floor(random() * 6);
+    const events: string[] = [];
+    for (let index = 0; index < eventCount; index += 1) {
+      // Identical events can be appended repeatedly — that is the loss the
+      // occurrence counting exists to prevent.
+      const timestamp = String(Math.floor(random() * 10));
+      const event = `{"at":"${timestamp}","v":${index}}`;
+      events.push(event, ...random() < 0.3 ? [event] : []);
+    }
+    const baseLength = Math.floor(random() * (events.length + 1));
+    const shuffled = [...events];
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(random() * (index + 1));
+      [shuffled[index], shuffled[swap]] = [shuffled[swap], shuffled[index]];
+    }
+    const base = shuffled.slice(0, baseLength);
+    const interleave = (): string[] => {
+      const suffix = shuffled.slice(baseLength).filter(() => random() < 0.7);
+      for (let index = suffix.length - 1; index > 0; index -= 1) {
+        const swap = Math.floor(random() * (index + 1));
+        [suffix[index], suffix[swap]] = [suffix[swap], suffix[index]];
+      }
+      return [...base, ...suffix];
+    };
+    const ours = interleave();
+    const theirs = interleave();
+    const merged = mergeAppendOnlyLog(base, ours, theirs);
+    // Each side's appended occurrences are the ones past the base's count, and
+    // the merged count is the base count plus both sides' appends.
+    const baseTally = counts(base);
+    const expected = new Map(baseTally);
+    for (const side of [ours, theirs]) {
+      for (const [line, count] of counts(side)) {
+        expected.set(line, (expected.get(line) ?? 0) + Math.max(0, count - (baseTally.get(line) ?? 0)));
+      }
+    }
+    // The base is a strict prefix of the merged log, in its own order.
+    assert.deepEqual(merged.slice(0, base.length), base);
+    // Every line's merged count is the base count plus both sides' appends.
+    assert.deepEqual(counts(merged), expected);
+    for (const [line, count] of counts(merged)) {
+      assert.equal(count, expected.get(line) ?? 0, line);
+    }
+    // The appended region is ordered by timestamp, and the merge is a function
+    // of its inputs alone.
+    const appended = merged.slice(base.length);
+    const timestamps = appended.map((line) => String(JSON.parse(line).at));
+    assert.deepEqual([...timestamps].sort(), timestamps);
+    assert.deepEqual(mergeAppendOnlyLog(base, ours, theirs), merged);
+  }
 });
 
 test("a merge does not invent a trailing newline no side wrote", () => {
@@ -567,4 +657,71 @@ test("a decoder refuses a payload its own return type says cannot exist", () => 
     () => decodeRecord(Buffer.from('{"ratio":1e999}', "utf8")),
     (error: unknown) => error instanceof ObjectStoreError && /non-finite number/.test(error.message),
   );
+});
+
+
+test("Distribution documents both shipped transports", () => {
+  const readme = readFileSync(join(packageRoot, "README.md"), "utf8");
+  // Only the Distribution section itself: later sections must not satisfy or break it.
+  const distribution = readme.split("## Distribution")[1].split(/\n## /)[0];
+  assert.match(distribution, /filesystem transport/);
+  assert.match(distribution, /HttpTransport/);
+  assert.match(distribution, /pm vcs serve/);
+  assert.doesNotMatch(distribution, /served implementation lands/);
+});
+
+
+test("merging native history preserves the raw base through subsequent merges", () => {
+  const repo = Repository.init(tempRoot());
+  const base = '  {"ts":"9","event":"base"}  \n\n';
+  const early = '{"ts":"1","event":"early"}\n';
+  const later = '{"ts":"5","event":"later"}\n';
+  const blob = (text: string): string => repo.objects.write("blob", Buffer.from(text));
+  const context = { store: repo.objects, config: repo.config, committer: SIGNATURE };
+  const path = ".agents/pm/history/example.jsonl";
+  const baseId = blob(base);
+  const result = mergePath(context, path, baseId, blob(base + early), blob(base + early));
+  const text = repo.objects.readTyped(result.id, "blob").toString("utf8");
+  assert.equal(result.conflict, undefined);
+  assert.equal(text, base + early + early);
+  const next = mergePath(context, path, baseId, result.id, blob(base + later));
+  assert.equal(next.conflict, undefined);
+  assert.equal(repo.objects.readTyped(next.id, "blob").toString("utf8"), base + early + early + later);
+  const unchanged = mergePath(context, path, baseId, baseId, baseId);
+  assert.equal(repo.objects.readTyped(unchanged.id, "blob").toString("utf8"), base);
+  // An unterminated ancestor still needs a line separator before new events.
+  const unterminated = base.trim();
+  const withoutNewline = mergePath(context, path, blob(unterminated), blob(unterminated + "\n" + early), blob(unterminated + "\n" + later));
+  assert.equal(repo.objects.readTyped(withoutNewline.id, "blob").toString("utf8"), unterminated + "\n" + early + later);
+  const empty = mergePath(context, path, null, blob(early), blob(later));
+  assert.equal(repo.objects.readTyped(empty.id, "blob").toString("utf8"), early + later);
+});
+
+
+test("unterminated history line edits use ordinary content merge instead of append union", () => {
+  const repo = Repository.init(tempRoot());
+  const base = '{"ts":"1"}';
+  const joined = base + '{"ts":"2"}\n';
+  const separated = base + '\n{"ts":"3"}\n';
+  const blob = (text: string): string => repo.objects.write("blob", Buffer.from(text));
+  const context = { store: repo.objects, config: repo.config, committer: SIGNATURE };
+  for (const [ours, theirs] of [[joined, separated], [separated, joined], [joined, joined], [joined, base]]) {
+    const expected = mergeContent(base, ours, theirs);
+    const result = mergePath(context, ".agents/pm/history/example.jsonl", blob(base), blob(ours), blob(theirs));
+    assert.equal(repo.objects.readTyped(result.id, "blob").toString("utf8"), expected.text);
+    assert.equal(result.conflict?.reason, expected.clean ? undefined : "content");
+  }
+  // Exact, unterminated sides still preserve the base and accept separated appends.
+  for (const [ours, theirs] of [[base, base], [base, separated], [separated, base]]) {
+    const result = mergePath(context, ".agents/pm/history/example.jsonl", blob(base), blob(ours), blob(theirs));
+    assert.equal(result.conflict, undefined);
+    assert.equal(repo.objects.readTyped(result.id, "blob").toString("utf8"), ours === theirs ? base : separated);
+  }
+});
+
+test("an earlier appended timestamp never moves an event ahead of the base", () => {
+  const base = ['{"at":"9","event":"base"}'];
+  const early = '{"at":"0","event":"early"}';
+  const late = '{"at":"a","event":"late"}';
+  assert.deepEqual(mergeAppendOnlyLog(base, [...base, early], [...base, late]), [...base, early, late]);
 });

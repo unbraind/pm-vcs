@@ -44,7 +44,7 @@ import {
   mergeContent,
   reachable,
 } from "./merge.ts";
-import { mergeRecords } from "./records.ts";
+import { mergeAppendOnlyLog, mergeRecords } from "./records.ts";
 import { type RepositoryConfig, isRecordPath, matchesGlob } from "./config.ts";
 import { buildTree, flattenTree } from "./worktree.ts";
 
@@ -126,7 +126,8 @@ export class RewriteConflictError extends Error {
 /**
  * Merges one path's three blobs.
  *
- * Record objects take the per-field path; everything else takes diff3. The
+ * Record objects take the per-field path; native PM append-only histories union
+ * their events. Other blobs and rewritten history prefixes take diff3. The
  * distinction is made on the stored object's type rather than on the path's
  * extension, so what a file is called never decides how it merges.
  *
@@ -163,10 +164,27 @@ export function mergePath(
         : { path, reason: "record", fields: result.conflicts.map((conflict) => conflict.field) },
     };
   }
+  const baseText = baseId === null ? "" : ctx.store.readTyped(baseId, "blob").toString("utf8");
+  const ourText = ourObject.payload.toString("utf8");
+  const theirText = theirObject.payload.toString("utf8");
+  // Native PM event histories are append-only; preserve both agents' events.
+  // A rewritten prefix keeps ordinary conflict handling rather than hiding edits.
+  const keepsBaseLines = (text: string): boolean => text.startsWith(baseText)
+    && (baseText.length === 0 || baseText.endsWith("\n") || text.length === baseText.length || text[baseText.length] === "\n");
+  if (/^\.agents\/pm\/history\/[^/]+\.jsonl$/.test(path)
+    && keepsBaseLines(ourText) && keepsBaseLines(theirText)) {
+    const baseLines = baseText.split("\n");
+    const lines = mergeAppendOnlyLog(baseLines, ourText.split("\n"), theirText.split("\n"), "ts");
+    const appended = lines.slice(baseLines.length);
+    // Preserve the agreed prefix byte for byte, including whitespace and blanks.
+    const separator = baseText.length > 0 && !baseText.endsWith("\n") ? "\n" : "";
+    const text = baseText + (appended.length === 0 ? "" : `${separator}${appended.join("\n")}\n`);
+    return { id: ctx.store.write("blob", Buffer.from(text, "utf8")) };
+  }
   const result: ContentMergeResult = mergeContent(
-    baseId === null ? "" : ctx.store.readTyped(baseId, "blob").toString("utf8"),
-    ourObject.payload.toString("utf8"),
-    theirObject.payload.toString("utf8"),
+    baseText,
+    ourText,
+    theirText,
     labels,
   );
   return {

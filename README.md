@@ -135,10 +135,11 @@ pm vcs diff main feature
 | `pm vcs oplog` | Every operation, with the refs it moved and where from. |
 | `pm vcs export <file>` | Write refs and their history to a bundle. |
 | `pm vcs import <file>` | Import a bundle, verifying every object against its own id. |
-| `pm vcs remote [name] [url]` | List remotes, add one, or remove one (`--remove`). |
+| `pm vcs remote [name] [url]` | List remotes, add a file or HTTP(S) remote, or remove one (`--remove`). `remote add <name> <url>` is also accepted. |
 | `pm vcs clone <url> [dir]` | Create a repository from another one, adopting its record configuration. |
 | `pm vcs fetch [remote]` | Bring a remote's branches onto `refs/remotes/<remote>/`. Touches no local branch. |
 | `pm vcs push [remote]` | Send branches (`--branch`). Refuses a non-fast-forward unless `--force`. |
+| `pm vcs serve` | Serve one repository or a directory of repositories over HTTP. `--listen`, `--root` and `--auth` configure the address, root and bearer grants. |
 | `pm vcs verify` | Re-read every reachable object and check it against its id. |
 | `pm vcs trace <path-or-file-id>` | Trace one logical file across edits, moves, copies and deletion. |
 | `pm vcs files <item-id>` | Resolve a PM item's linked arbitrary files to stable identities and changes. |
@@ -245,6 +246,10 @@ engine/config.ts     Which paths hold records and how their fields merge — per
                      so two agents cannot disagree about it.
 engine/oplog.ts      Append-only operation log; `undo`.
 engine/bundle.ts     Export and import, verifying every object against its own id.
+engine/transport.ts Async transport interface, capability negotiation and filesystem receiver policy.
+engine/http-protocol.ts Shared HTTP envelopes, validation, denial bytes and transfer bounds.
+engine/http-transport.ts HTTP(S) client implementing the same transport.
+engine/serve.ts      node:http server delegating authorized operations to FileTransport.
 engine/repo.ts       The porcelain.
 ```
 
@@ -290,6 +295,130 @@ deliberately hostile commit naming `.git/HEAD` and asserts it materializes to no
 slash for a directory, a pattern without `/` matching by basename at any depth, and `!` to
 re-include. Staging an ignored path *by name* is refused rather than skipped — staging
 nothing while reporting success is how a commit ends up missing a file.
+
+Served pushes re-hash every arriving object and verify the complete reachable closure before
+publishing refs. The same fast-forward and compare-and-swap rules apply to file and HTTP
+remotes. Native `.agents/pm/history/*.jsonl` histories that preserve their base prefix merge
+through the existing append-only event union; rewritten prefixes retain conflict handling.
+
+Authorization runs before repository access. Missing repositories, invalid tokens, wrong
+repository scopes and unsafe names return identical HTTP response bytes, including headers.
+A read-only token receives 403 on write endpoints only when its repository exists and is
+readable. Traversal spellings, symlink repository/control aliases and linked instances are
+refused. Operators own the served filesystem: this is a repository authorization boundary,
+not protection against an operator changing the filesystem during a request.
+
+Requests are limited to 512 MiB on write endpoints and 16 MiB on read endpoints, 10,000 fetch refs or ref updates, 100,000 haves or objects,
+and 4,096 upload sessions per repository. Old sessions are evicted; objects remain available
+for retry, but an evicted session loses its delivery receipt. Upload sessions are also bounded
+cumulatively — 1,000,000 accepted objects and 4 GiB of decoded object bytes between publications,
+configurable through the server's limits — because a reused session keeps every receipt it has
+accepted until it publishes. Past either cumulative bound the upload is refused with
+`limit_exceeded`, the session's receipts are released with it, and a publication under that
+session id afterwards reports a fresh session's empty receipt. A publication clears the charge
+with the receipts, refused publications included. Tokens load at startup and
+require a restart to rotate. Without `--auth`, served repositories are read-only unless
+`--allow-unauthenticated-writes` is passed.
+Keep the default loopback binding for local use; use TLS termination when carrying bearer
+tokens beyond loopback. The TLS-terminating proxy must forward `Host` as the bound server
+address and port, for example nginx `proxy_set_header Host 127.0.0.1:<port>;` for a loopback
+bind. Replace `<port>` with the server's listening port; forwarding the public hostname
+instead fails host validation and returns the fixed denial. Token-bearing remote URLs are
+sensitive local configuration; do not publish them. Client connection errors redact
+credentials and redirects are refused.
+
+---
+
+## Serving a repository
+
+Serve an existing repository in the foreground:
+
+```console
+pm vcs serve --root project --listen 127.0.0.1:0 --auth tokens.json
+```
+
+The command reports the chosen ephemeral port and runs until stopped. A repository passed
+as `--root` is available at the base URL. A parent root exposes its repositories by relative
+name, including nested names such as `tenant/project`. At startup the server enumerates
+repository directories into a catalogue of canonical names and real paths. Requests resolve
+only by exact catalogue lookup; request text is never joined into a filesystem path. With
+authentication enabled, requests without any candidate repository in scope are denied before
+catalogue access. A request
+path that also reads as an endpoint — `tenant/objects/fetch` is either the repository
+`tenant/objects` with endpoint `fetch` or the repository `tenant` with endpoint `objects/fetch` —
+resolves among the candidates the token is in scope for (every candidate without
+`--auth`), and the deepest catalogued one wins. A repository whose name shares a segment
+with an endpoint suffix is therefore reachable under its own name, and an out-of-scope
+nested repository never changes the answer to an in-scope parent. An
+authorized lookup of an unknown name triggers at most one rescan per second. Each scan
+examines at most 10,000 directory entries and descends at most 32 levels; repositories beyond
+those bounds receive the same denial as unknown names. Use a narrower root for larger trees.
+Symlink aliases, escaping symlinks and linked instances are refused, including aliases
+introduced after discovery. The tokens file is a JSON array:
+
+```json
+[
+  { "token": "example-read-token", "repository": "", "access": "read" },
+  { "token": "example-write-token", "repository": "", "access": "write" },
+  { "token": "example-tenant-token", "repository": "tenant/project", "access": "write" }
+]
+```
+
+The empty repository name grants the root repository. A write grant includes read access;
+all other repositories are denied. Replace the example tokens with private random secrets.
+
+Without `--auth`, every repository is served **readable**: fetch and clone work for anyone who
+can reach the port, and every mutating endpoint refuses until the operator passes
+`--allow-unauthenticated-writes` — the explicit override for a port fenced another way. The
+server is an agent transport, not a web service, so it also refuses requests a browser would
+send: any request carrying an `Origin` header, any request whose `Host` is not the bound
+address and port (which is how a DNS-rebound page would read an answer it is not allowed to read), and
+any mutating request whose content type is not JSON (the one shape a cross-site page can send
+without a preflight this server never answers). A wildcard bind accepts address literals
+in `Host` at the bound port; reach such a server by its address, or bind to the name you use.
+
+For a reported port of 43210, another agent uses the usual commands:
+
+```console
+PM_VCS_TOKEN="$WRITE_TOKEN" pm vcs clone http://127.0.0.1:43210 agent-a
+pm vcs remote add upstream http://127.0.0.1:43210
+PM_VCS_TOKEN_UPSTREAM="$READ_TOKEN" pm vcs fetch upstream
+pm vcs merge upstream/main
+PM_VCS_TOKEN="$WRITE_TOKEN" pm vcs push origin
+pm vcs verify
+```
+
+Use environment variables populated from your secret manager. `PM_VCS_TOKEN_<REMOTE>`
+(uppercase remote name, punctuation replaced with underscores) overrides `PM_VCS_TOKEN`,
+which overrides the stored credential. Environment credentials are never persisted.
+A non-empty `PM_VCS_TOKEN` is not host-scoped: a clone sends it to the host in the supplied URL
+(it takes precedence over URL userinfo), so set it only when every clone target is trusted; prefer
+the per-remote `PM_VCS_TOKEN_<REMOTE>` form.
+A non-empty bearer token is only ever sent to `https://` remotes, or to a loopback `http://`
+remote — a token on plain `http://` to any other host is refused with an error naming the
+fix, because it would be a credential handed to every observer on the wire.
+For compatibility, URL userinfo supplied to clone or remote add is moved into the local
+`.pmvcs/credentials.json`; `.pmvcs/remotes.json`, receipts and diagnostics contain clean URLs.
+Existing credential-bearing remote maps migrate on first read. The credentials file is
+created with mode 0600 and existing permissions are repaired on read. If repair fails with
+EPERM or EROFS, reading is allowed only when no group or world permission bits are set;
+otherwise the error is raised. File fetch/push does not read bearer credentials. Windows does not
+enforce POSIX mode bits; restrict access with filesystem ACLs or use environment tokens.
+Removing a remote also removes its stored credential. Rotate any previously exposed tokens;
+migration cannot erase old transcripts or operation logs.
+
+The native VCS always excludes the PM tracker's runtime caches, search indexes, locks,
+transactions and checkpoints using the SDK's runtime fence and resolved tracker root.
+`search/eval-queries.json` remains eligible for tracking. These exclusions apply to status,
+staging and materialization and cannot be overridden by `.pmvcsignore` negations; the next
+add removes runtime entries left in an older index. Item records and history remain tracked.
+
+Clone adopts the same record configuration as a file clone. Ref advertisement, bundle fetch,
+verified object upload and publication use the existing transport capabilities. The optional
+`object-fetch` capability adds `Transport.fetchObjects(ids)`, returning a verified bundle of
+individually named objects, including standalone patch series. Review records travel with
+ordinary trees and commits. A series consumer fetches its base and patch history as well as
+its series object before importing the series bundle.
 
 ---
 
@@ -340,10 +469,9 @@ that started from the defaults would store the same paths as blobs rather than r
 merge them line by line: two repositories sharing commit ids while disagreeing about what
 those commits mean, each internally consistent and therefore undetectable.
 
-The transport is an interface. The implementation that ships reaches a repository through the
-filesystem, which is the case that occurs today — several agents, several working trees, one
-host. A served implementation lands with the forge in Phase 5, when there is a repository
-service for it to speak to.
+The transport is an interface with two shipped implementations: a filesystem transport, which
+is the case that occurs today — several agents, several working trees, one host — and `HttpTransport`, an HTTP
+transport that speaks to `pm vcs serve` (see [Serving a repository](#serving-a-repository)).
 
 Bundles remain, for the times a file is the transport you have:
 

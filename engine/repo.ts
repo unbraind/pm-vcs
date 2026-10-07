@@ -113,7 +113,7 @@ function migratedFileId(entry: Pick<IndexEntry, "path" | "id">): FileId {
     .slice(0, 32);
 }
 import { splitLines, unifiedDiff } from "./diff.ts";
-import { type IgnoreRules, isIgnored, readIgnoreRules } from "./ignore.ts";
+import { type IgnoreRules, isIgnored, isRuntimeIgnored, readIgnoreRules } from "./ignore.ts";
 import { parseWorkingRecord, renderWorkingRecord } from "./record-format.ts";
 import {
   type HeadSnapshot,
@@ -666,6 +666,13 @@ export class Repository {
       ? [...new Set([...listWorkingTree(this.root, CONTROL_DIRECTORY, rules), ...index.keys()])]
       : paths.map((path) => normalizeRepoPath(this.root, path));
     const changed: string[] = [];
+    // Drop runtime entries inherited from an older index on the next add. A
+    // sparse entry is kept: its path is outside this working tree's view, and
+    // dropping it would let the next commit delete a path the committer cannot
+    // see. A working tree whose view includes it drops it on its next add.
+    for (const [path, entry] of index) {
+      if (entry.sparse !== true && isRuntimeIgnored(path, rules)) { index.delete(path); changed.push(path); }
+    }
     for (const path of targets) {
       // An explicitly named ignored path is refused rather than silently
       // skipped: the caller asked for something specific, and staging nothing
@@ -675,7 +682,9 @@ export class Repository {
         throw new ObjectStoreError(
           "path_ignored",
           `"${path}" is ignored, so it cannot be staged. `
-          + "Remove the rule from .pmvcsignore, or stage a path the rules allow.",
+          + (isRuntimeIgnored(path, rules)
+            ? "PM runtime state cannot be tracked. Stage item records and history instead."
+            : "Remove the rule from .pmvcsignore, or stage a path the rules allow."),
         );
       }
       let content: Buffer;
@@ -760,7 +769,7 @@ export class Repository {
    * @returns The compiled rules.
    */
   private ignoreRules(): IgnoreRules {
-    return readIgnoreRules(this.root);
+    return readIgnoreRules(this.root, this.config.recordPaths);
   }
 
   /**

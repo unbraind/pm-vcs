@@ -1,0 +1,57 @@
+id: pm-vcs-uzng
+title: Keep served remote bearer credentials out of receipts and remote URLs
+description: "PR #91 hands-on clone persisted and displayed URL userinfo. Store secrets separately at mode 0600, migrate legacy remotes, prefer environment tokens, and prove output and oplog redaction."
+type: Issue
+status: in_progress
+priority: 0
+tags: []
+created_at: "2026-10-05T07:29:51.722Z"
+updated_at: "2026-10-06T15:13:16.905Z"
+author: codex-sol
+parent: pm-vcs-5h6j
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-ttc0,related,"2026-10-05T07:29:51.722Z",codex-sol,"cli:create:dep",detected
+comments[8]{created_at,author,text}:
+  "2026-10-05T07:30:20.185Z",codex-sol,"Plan: separate per-remote credentials, environment precedence, legacy migration, and sanitized transport diagnostics and receipts. Adversarial command tests will scan output, oplog and remotes and verify credential mode."
+  "2026-10-05T07:49:25.347Z",codex-sol,"Packed global CLI testing exposed a second credential sink: the host recovery envelope repeats raw argv even when engine errors are sanitized. Host-native errors bypass renderer services; VCS invocation output is therefore guarded at final stream writes. Node acceptance now passes success, duplicate remote, malformed URL, unreachable peer, environment precedence, migration, private mode and oplog/remotes scans. Bun and parser-error regressions are being completed."
+  "2026-10-05T07:56:12.756Z",codex-sol,"Independent boundary review added control-whitespace URL cases: URL parsing normalizes tabs, so credentials must be stripped from the entire raw authority as well as normalized URLs. The final-write guard handles both raw text and JSON-escaped argv. The first linked packed run hit the default 120-second wrapper limit under shared-host contention; its timeout is now explicitly 600 seconds and a rerun will record the result."
+  "2026-10-05T08:01:27.422Z",codex-sol,"Final candidate includes private atomic credential storage, legacy migration, environment precedence, raw/encoded/control-whitespace URL redaction, HTTP error-echo sanitization, and a CLI final-write guard for host recovery envelopes. Native Bun focused regressions pass 21/21. Packed command tests use the registered vcs oplog command and scan all success/failure outputs and local logs/maps. Full candidate release verification follows the committed self-host snapshot."
+  "2026-10-05T08:38:12.279Z",codex-sol,"npm run release:check passes at e131473: 842/842 tests, zero skipped; all 45 authored sources have 100 statements/branches/functions/lines (18212/18212 lines, 549/549 functions, 3940/3940 branches). Typecheck, lint, zero duplication, 246 documented declarations, native TOON, stat-cache installed CLI acceptance, committed self-host, production audit, identity audit, pack, changelog and release-attestation gates pass. Packed adversarial npm/Node and Bun flows pass with no credential in output, oplogs or remote maps; credential mode is 0600."
+  "2026-10-05T08:48:58.946Z",codex-sol,"Independent final review confirmed the requested credential persistence and output protections. A separate existing own-control-directory traversal defect was reproduced with synthetic data: unrestricted staging by an enclosing repository includes a nested clone control directory, including its new credentials file. Tracked as open follow-up pm-vcs-nz10, related to the earlier fence item pm-vcs-aujy. Until that general fence is fixed, use environment tokens or keep clones outside another pm-vcs working tree. No source changes were added for that separate defect."
+  "2026-10-05T08:50:42.136Z",codex-sol,"Bun run release:check also passed at e131473, matching the npm gate: 100/100/100/100 over all 45 authored sources and all release checks green. Linked node --test test/credentials.test.ts test/served-defects.test.ts passed all 9 tests with no skips. The packed globally installed Node and Bun CLI adversarial scenarios cover credential URL cloning, remote add/list, fetch/push, malformed and unavailable remotes, parser recovery errors, server token echoes, legacy migration and env precedence; token strings are absent from stdout, stderr, oplog and remotes.json and credentials mode is 0600 on POSIX. Windows permission limitations and rotation of formerly exposed tokens are documented. Claims will be released without closing these issues for orchestrator verification."
+  "2026-10-06T14:58:20.804Z",codex-sol,"Review 4196796946 accepted. Credential reads still repair existing modes, tolerate EPERM/EROFS only with no group/world bits, and propagate other errors. The regression uses real secret files at 0600/0400/0640/0604 under a non-writable parent and injects only chmod failures (EPERM, EROFS, EACCES). This host denies unprivileged mount namespaces, so a real read-only bind mount and non-owner syscall were not established. File path and file URL fetch/push both succeed with a real corrupt unrelated credential file; reverting fetch and push token guards separately makes the regression fail."
+files[12]:
+  - path: credential-output.ts
+    scope: project
+  - path: engine/credentials.ts
+    scope: project
+    note: Best-effort private-file repair on EPERM/EROFS without accepting group or world permissions
+  - path: engine/http-protocol.ts
+    scope: project
+  - path: engine/http-transport.ts
+    scope: project
+  - path: engine/remotes.ts
+    scope: project
+  - path: engine/sync.ts
+    scope: project
+    note: File fetch and push avoid bearer token resolution
+  - path: engine/transport.ts
+    scope: project
+  - path: index.ts
+    scope: project
+  - path: test/credentials.test.ts
+    scope: project
+    note: Real-file private and exposed modes with injected chmod failures
+  - path: test/served-defects.test.ts
+    scope: project
+  - path: test/sync.test.ts
+    scope: project
+    note: Real file path and file URL fetch/push with unusable unrelated credentials
+  - path: vcs-commands.ts
+    scope: project
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/credentials.test.ts test/served-defects.test.ts,project,600,codex-sol,"2026-10-05T07:53:22.898Z",local_mutation,feat/served-repository-http
+  "npm run release:check",project,2400,codex-sol,"2026-10-05T08:01:44.267Z",local_mutation,feat/served-repository-http
+docs[1]{path,scope,note}:
+  README.md,project,Explicit credential repair failure and file-remote behavior contract
+body: ""
