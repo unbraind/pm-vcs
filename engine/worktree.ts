@@ -14,9 +14,10 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, parse, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { type IgnoreRules, isControlPath, isIgnored, isRuntimeIgnored, isPrunableDirectory } from "./ignore.ts";
 import { compareByteOrder, type FileId, type FileMode, isFileId, type TreeEntry, readTree, writeTree } from "./model.ts";
@@ -160,11 +161,12 @@ export function normalizeRepoPath(root: string, candidate: string): string {
  *
  * Ancestor symlinks are never traversed. Writes also protect leaf symlinks so a
  * stored tree cannot overwrite a linked control file. Staging may retain a leaf
- * link's target text only when its target names no control segment and traverses
- * no further symlink; this also fences dangling control aliases and link chains.
+ * link's target text only when its target stays within the canonical root, names
+ * no control segment and traverses no further symlink; this also fences dangling
+ * control aliases and link chains.
  * Missing prefixes are safe to create; other filesystem errors propagate.
  *
- * @param root - Repository root, or filesystem anchor when inspecting a link target.
+ * @param root - Repository root, which may be reached through a symlinked parent.
  * @param path - Canonical relative path to inspect without reading file bytes.
  * @param allowLeafLink - Whether a direct ordinary leaf link may be represented as text.
  * @returns True when the path must remain outside the working-tree operation.
@@ -179,9 +181,11 @@ export function isProtectedWorktreePath(root: string, path: string, allowLeafLin
     if (stat === undefined) return false;
     if (!stat.isSymbolicLink()) continue;
     if (!allowLeafLink || index !== segments.length - 1) return true;
-    const target = resolve(dirname(absolute), readlinkSync(absolute));
-    const anchor = parse(target).root;
-    return isProtectedWorktreePath(anchor, relative(anchor, target).split(sep).join("/"));
+    const canonicalRoot = realpathSync(root);
+    const target = resolve(canonicalRoot, ...segments.slice(0, -1), readlinkSync(absolute));
+    const inside = relative(canonicalRoot, target);
+    if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return true;
+    return isProtectedWorktreePath(canonicalRoot, inside.split(sep).join("/"));
   }
   return false;
 }

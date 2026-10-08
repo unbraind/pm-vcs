@@ -1,13 +1,13 @@
 /** Real-tracker regressions for nested control state, filesystem aliases and hostile stored trees. */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { Repository } from "../engine/repo.ts";
 import { writeCommit, type Signature } from "../engine/model.ts";
 import { isControlPath, isIgnored, isPrunableDirectory, parseIgnore } from "../engine/ignore.ts";
-import { buildTree, flattenTree, isProtectedWorktreePath, pruneEmptyDirectories } from "../engine/worktree.ts";
+import { buildTree, flattenTree, isProtectedWorktreePath, listWorkingTree, pruneEmptyDirectories } from "../engine/worktree.ts";
 import { runPm } from "../scripts/pm-environment.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
@@ -18,10 +18,18 @@ const now = new Date(1);
 afterEach(() => { fixture?.cleanup(); fixture = undefined; });
 
 /** Initialize an actual PM tracker and the VCS engine in one disposable working tree. */
-function repository(): Repository {
+function repository(symlinkedParent = false): Repository {
   fixture = makeTempDir();
-  runPm(fixture.root, ["init", "control-fence", "--yes", "--agent-guidance", "skip"]);
-  return Repository.init(fixture.root);
+  let root = fixture.root;
+  if (symlinkedParent) {
+    const parent = join(root, "parent");
+    mkdirSync(parent);
+    symlinkSync(parent, join(root, "linked-parent"), "junction");
+    root = join(root, "linked-parent", "repo");
+    mkdirSync(root);
+  }
+  runPm(root, ["init", "control-fence", "--yes", "--agent-guidance", "skip"]);
+  return Repository.init(root);
 }
 
 /** Construct stored content without the staging fence, as a legacy or malicious tree would arrive. */
@@ -131,6 +139,76 @@ test("symlink aliases cannot stage control content or receive writes from hostil
   assert.deepEqual(repo.readIndex().map((entry) => entry.path), ["safe/new.txt"]);
   repo.materialize(hostileTree(repo, ["alias"]));
   assert.equal(readlinkSync(join(repo.root, "alias")), child.controlDirectory);
+});
+
+test("ordinary leaf links under a symlinked parent stay listed, staged and committed", () => {
+  const repo = repository(true);
+  writeFileSync(join(repo.root, "b.txt"), "ordinary\n");
+  mkdirSync(join(repo.root, "nested"));
+  const links = new Map([
+    ["a", "b.txt"],
+    ["nested/relative", "../b.txt"],
+    ["absolute", join(realpathSync(repo.root), "b.txt")],
+    ["dangling", "missing.txt"],
+    ["root-link", "."],
+  ]);
+  for (const [path, target] of links) symlinkSync(target, join(repo.root, path));
+  const listed = listWorkingTree(repo.root, ".pmvcs", parseIgnore(""));
+  for (const path of links.keys()) assert.ok(listed.includes(path), path);
+  repo.stage([]);
+  const first = repo.commit({ message: "ordinary links\n", author }, now);
+  const before = repo.readIndex().find((entry) => entry.path === "a")!;
+  assert.ok(before.fileId);
+  writeFileSync(join(repo.root, "b.txt"), "changed\n");
+  repo.stage([]);
+  const after = repo.readIndex().find((entry) => entry.path === "a")!;
+  assert.equal(after.fileId, before.fileId);
+  assert.equal(after.id, before.id);
+  assert.equal(after.mode, before.mode);
+  const second = repo.commit({ message: "retain ordinary links\n", author }, now);
+  assert.notEqual(second, first);
+  const tree = flattenTree(repo.objects, repo.headTree());
+  for (const [path, target] of links) {
+    assert.ok(tree.has(path), path);
+    assert.equal(repo.objects.read(tree.get(path)!.id).payload.toString(), target);
+  }
+  assert.equal(repo.status().clean, true);
+});
+
+test("control and outside leaf links under a symlinked parent stay protected", () => {
+  const repo = repository(true);
+  const canonicalRoot = realpathSync(repo.root);
+  writeFileSync(join(repo.controlDirectory, "sentinel"), "control\n");
+  writeFileSync(join(canonicalRoot, "..", "outside.txt"), "outside\n");
+  mkdirSync(join(repo.root, "nested/.PMVCS"), { recursive: true });
+  writeFileSync(join(repo.root, "nested/.PMVCS/sentinel"), "nested control\n");
+  writeFileSync(join(repo.root, "ordinary.txt"), "ordinary\n");
+  const links = new Map([
+    ["control", ".pmvcs/sentinel"],
+    ["nested-control", "nested/.PMVCS/sentinel"],
+    ["absolute-control", join(canonicalRoot, ".pmvcs/sentinel")],
+    ["dangling-control", "missing/.pmvcs/sentinel"],
+    ["outside-relative", "../outside.txt"],
+    ["outside-absolute", join(canonicalRoot, "..", "outside.txt")],
+    ["outside-dangling", "../missing.txt"],
+    ["chain", "ordinary-alias"],
+    ["ancestor/file", "ordinary.txt"],
+  ]);
+  symlinkSync("ordinary.txt", join(repo.root, "ordinary-alias"));
+  symlinkSync("nested", join(repo.root, "ancestor"), "junction");
+  for (const [path, target] of links) symlinkSync(target, join(repo.root, path));
+  const listed = listWorkingTree(repo.root, ".pmvcs", parseIgnore(""));
+  for (const path of links.keys()) {
+    assert.equal(isProtectedWorktreePath(repo.root, path, true), true, path);
+    assert.equal(listed.includes(path), false, path);
+    assert.throws(() => repo.stage([path]), { code: "path_ignored" }, path);
+  }
+  repo.stage([]);
+  repo.commit({ message: "protect aliases\n", author }, now);
+  const tree = flattenTree(repo.objects, repo.headTree());
+  for (const path of links.keys()) assert.equal(tree.has(path), false, path);
+  assert.equal(readFileSync(join(repo.controlDirectory, "sentinel"), "utf8"), "control\n");
+  assert.equal(readFileSync(join(canonicalRoot, "..", "outside.txt"), "utf8"), "outside\n");
 });
 
 test("stored control trees cannot write, remove or prune nested control state or enter sparse indexes", () => {

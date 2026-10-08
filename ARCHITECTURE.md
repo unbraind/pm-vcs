@@ -231,26 +231,30 @@ Control state is a non-negatable boundary: any case spelling of a `.pmvcs` path 
 is reserved at every depth, including the leaf. The walker and directory pruner exclude
 these names before descending. Filesystem checks reject symlink ancestors and protect
 leaf symlinks from stored-tree writes. A direct ordinary leaf link can still be staged
-as target text, but control targets and further aliases cannot. Status omits protected
-entries from both comparisons; add sanitizes legacy indexes even outside a sparse view;
-ordinary and merge commits validate their index snapshot before constructing a tree.
+as target text, but targets outside the canonical root, control targets and further
+aliases cannot. Status omits protected entries from both comparisons; add sanitizes
+legacy indexes even outside a sparse view; ordinary and merge commits validate their
+index snapshot before constructing a tree.
 Materialization, mixed reset, restore and sparse-view changes apply the same boundary,
 so a legacy or hostile tree cannot write, remove or stage another repository's control
 state. Restore preflights the complete requested path set before mutating any file.
 
-Materialization, restore and directory pruning additionally pin the initial ordinary
-directory topology with `O_DIRECTORY | O_NOFOLLOW` descriptors. Each child syscall uses
-a single-component path under its parent's Linux procfs descriptor, so replacing a
-checked ancestor with a symlink cannot redirect that syscall. Device/inode checks around
-mutations refuse replacements with `worktree_path_changed`. Missing directories are
-created one at a time and opened without following links; files replace the previous
-leaf with exclusive no-follow creation, then write and chmod through the new descriptor.
+On Linux with usable procfs, materialization, restore and directory pruning additionally
+pin the initial ordinary directory topology with `O_DIRECTORY | O_NOFOLLOW` descriptors.
+Each child syscall uses a single-component path under its parent's Linux procfs
+descriptor, so replacing a checked ancestor with a symlink cannot redirect that syscall.
+Device/inode checks around mutations refuse replacements with `worktree_path_changed`.
+Missing directories are created one at a time and opened without following links;
+files replace the previous leaf with exclusive no-follow creation, then write and chmod
+through the new descriptor.
 This also avoids truncating a hardlinked control file. Removal uses unlink or
-non-recursive rmdir, never a recursive pathname deletion. Descriptor support is required;
-an unavailable procfs backend refuses with `worktree_descriptor_unavailable` before
-mutation. A refusal can leave partial changes to ordinary worktree files, without
-publishing the replacement index. These handles pin the original objects, like openat;
-they do not sandbox an actor who can directly move or modify those objects.
+non-recursive rmdir, never a recursive pathname deletion. Elsewhere, including Linux
+without usable procfs, a portable fallback verifies directory and leaf identities around
+each syscall but cannot close the final check/use race (see
+[working-tree mutation protection](docs/working-tree-mutations.md)). A refusal can leave
+partial changes to ordinary worktree files, without publishing the replacement index.
+The Linux handles pin the original objects, like openat; they do not sandbox an actor
+who can directly move or modify those objects.
 
 ---
 
