@@ -285,11 +285,38 @@ engine/repo.ts       The porcelain.
 pm-vcs is usually initialised *inside* an existing checkout, so it treats the working tree as
 something it shares rather than owns.
 
-`.git`, `.hg`, `.svn`, `.bzr`, `_darcs`, `CVS` and `node_modules` are **always** ignored and
+`.pmvcs`, `.git`, `.hg`, `.svn`, `.bzr`, `_darcs`, `CVS` and `node_modules` are **always** ignored and
 **cannot be re-included** — not by `.pmvcsignore`, and not by a commit whose tree names a path
 inside them. Materialization filters the target tree, so history recorded before the rules
 existed still cannot write over another tool's state. This is pinned by a test that builds a
 deliberately hostile commit naming `.git/HEAD` and asserts it materializes to nothing.
+
+The `.pmvcs` name is reserved at **every depth**, including a leaf entry, and in every
+case spelling (`.PMVCS`, `.PmVcS`). A parent repository tracks a child repository's source
+and PM records, while keeping the child's credentials, objects, refs and private state
+out of staging, commits and status. Add removes legacy control entries from the index,
+including sparse entries; ordinary commits and merge continuation refuse such entries
+until they are removed. Stored trees cannot write or remove control paths through
+checkout, restore or sparse-view changes, and empty control directories survive pruning.
+
+Filesystem aliases are fenced before content access: ancestor symlinks are never
+traversed, and materialization and restore never overwrite a leaf symlink. Staging can
+record an ordinary direct leaf link as target text; control targets, dangling control
+aliases and link chains are excluded. These protections cannot be negated. For a
+protected explicit add or restore, the command refuses with `path_ignored`.
+
+On Linux with available procfs descriptor paths, materialization, restore and pruning
+pin directories across concurrent ancestor replacement. Other platforms, and Linux
+without usable procfs, use a portable fallback that verifies every captured ancestor's
+device/inode identity with `lstat` immediately before and after each mutation. A detected
+directory or leaf replacement refuses with `worktree_path_changed`. Exclusive file
+creation uses `O_NOFOLLOW` where available; leaf checks and descriptor identity checks
+also apply on Windows. Writes and chmod use fresh file descriptors, and deletions are
+non-recursive. The portable fallback narrows but **cannot close the race between the
+final verification and a pathname syscall**, because Node exposes no `openat`; a refusal
+can occur after a redirected mutation. A refused operation can leave ordinary worktree
+files partially changed; its replacement index is not published. See
+[working-tree mutation protection](docs/working-tree-mutations.md) for the exact limits.
 
 `.pmvcsignore` adds project patterns with gitignore-like semantics: `#` comments, a trailing
 slash for a directory, a pattern without `/` matching by basename at any depth, and `!` to

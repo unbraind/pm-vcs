@@ -76,6 +76,7 @@ import {
   decodeIndex,
   encodeIndex,
   flattenTree,
+  isProtectedWorktreePath,
   listWorkingTree,
   materializeTree,
   pruneEmptyDirectories,
@@ -84,6 +85,8 @@ import {
   readWorkingStat,
   sameIndexStat,
 } from "./worktree.ts";
+
+import { WorktreeMutation } from "./worktree-mutation.ts";
 
 /**
  * Every proper directory prefix of a repository path, longest first.
@@ -601,6 +604,28 @@ export class Repository {
     return this.readIndexSnapshot().entries;
   }
 
+  /** Refuse legacy or externally supplied control entries before an ordinary or merge commit writes a tree. */
+  private committableIndex(): IndexEntry[] {
+    const index = this.readIndex();
+    const protectedPaths = index.filter((entry) => isProtectedWorktreePath(this.root, entry.path, true));
+    if (protectedPaths.length > 0) {
+      throw new ObjectStoreError("path_ignored",
+        `Protected control or alias paths cannot be committed: ${protectedPaths.map((entry) => entry.path).join(", ")}. Run add to remove them from the index.`);
+    }
+    return index;
+  }
+
+
+  /** Build the ordinary and merge commit tree from the same validated index snapshot. */
+  private indexTree(index: readonly IndexEntry[]): ObjectId {
+    return buildTree(this.objects, new Map(index.map((entry) => [entry.path, {
+      id: entry.id,
+      mode: entry.mode as FileMode,
+      fileId: entry.fileId,
+      copiedFrom: entry.copiedFrom,
+    }])));
+  }
+
   /**
    * Replaces the index atomically while holding its shared writer lock.
    *
@@ -666,25 +691,27 @@ export class Repository {
       ? [...new Set([...listWorkingTree(this.root, CONTROL_DIRECTORY, rules), ...index.keys()])]
       : paths.map((path) => normalizeRepoPath(this.root, path));
     const changed: string[] = [];
+    // Control and alias entries are dropped even outside the sparse view.
     // Drop runtime entries inherited from an older index on the next add. A
-    // sparse entry is kept: its path is outside this working tree's view, and
+    // sparse runtime entry is kept: its path is outside this working tree's view, and
     // dropping it would let the next commit delete a path the committer cannot
     // see. A working tree whose view includes it drops it on its next add.
     for (const [path, entry] of index) {
-      if (entry.sparse !== true && isRuntimeIgnored(path, rules)) { index.delete(path); changed.push(path); }
+      if (isProtectedWorktreePath(this.root, path, true)
+        || (entry.sparse !== true && isRuntimeIgnored(path, rules))) { index.delete(path); changed.push(path); }
     }
     for (const path of targets) {
       // An explicitly named ignored path is refused rather than silently
       // skipped: the caller asked for something specific, and staging nothing
       // while reporting success is how a commit ends up missing a file.
-      if (isIgnored(path, rules)) {
+      if (isIgnored(path, rules) || isProtectedWorktreePath(this.root, path, true)) {
         if (paths.length === 0) continue;
         throw new ObjectStoreError(
           "path_ignored",
           `"${path}" is ignored, so it cannot be staged. `
           + (isRuntimeIgnored(path, rules)
             ? "PM runtime state cannot be tracked. Stage item records and history instead."
-            : "Remove the rule from .pmvcsignore, or stage a path the rules allow."),
+            : "Control state and filesystem aliases cannot be re-included; otherwise adjust .pmvcsignore or stage an allowed path."),
         );
       }
       let content: Buffer;
@@ -866,7 +893,7 @@ export class Repository {
    */
   private indexEntriesForTree(tree: ObjectId | null): IndexEntry[] {
     const view = this.view();
-    return [...flattenTree(this.objects, tree)].map(([path, value]) => ({
+    return [...flattenTree(this.objects, tree)].filter(([path]) => !isProtectedWorktreePath(this.root, path)).map(([path, value]) => ({
       path,
       id: value.id,
       mode: value.mode === "100755" ? "100755" : "100644",
@@ -1159,7 +1186,7 @@ export class Repository {
     this.assertNoMergeInProgress();
     const view = include === null || include.length === 0 ? null : parseView({ include: [...include] });
     const entryVisible = (path: string): boolean => view === null || viewIncludes(view, path);
-    const index = this.readIndex();
+    const index = this.readIndex().filter((entry) => !isProtectedWorktreePath(this.root, entry.path));
     const widened: string[] = [];
     const narrowed: string[] = [];
     const next: IndexEntry[] = [];
@@ -1252,7 +1279,7 @@ export class Repository {
    *   hint the filesystem disagreed with.
    */
   scan(read: typeof readWorkingFile = readWorkingFile): ScanReport {
-    const index = this.readIndex();
+    const index = this.readIndex().filter((entry) => !isProtectedWorktreePath(this.root, entry.path, true));
     const hints = readHints(this.controlDirectory);
     const dirty = new Set<string>();
     let checked = 0;
@@ -1299,6 +1326,7 @@ export class Repository {
    */
   commit(options: CommitOptions, now: Date): ObjectId {
     this.assertNoMergeInProgress();
+    const index = this.committableIndex();
     const head = this.refs.readHead();
     const parent = head.target;
     // A sparse entry whose content differs from HEAD describes a change to a
@@ -1308,7 +1336,7 @@ export class Repository {
     // commit that changes files the committer cannot see is exactly the silent
     // drop this engine refuses to perform.
     const committedPaths = new Map(flattenTree(this.objects, parent === null ? null : readCommit(this.objects, parent).tree));
-    const unseen = this.readIndex().filter((entry) => entry.sparse === true
+    const unseen = index.filter((entry) => entry.sparse === true
       && (committedPaths.get(entry.path)?.id !== entry.id || committedPaths.get(entry.path)?.mode !== entry.mode))
       .map((entry) => entry.path)
       .sort(compareByteOrder);
@@ -1319,15 +1347,7 @@ export class Repository {
         + "Widen the view with `pm vcs view <patterns>`, review the change, and commit it from a working tree that can see it.",
       );
     }
-    const tree = buildTree(
-      this.objects,
-      new Map(this.readIndex().map((entry) => [entry.path, {
-        id: entry.id,
-        mode: entry.mode as FileMode,
-        fileId: entry.fileId,
-        copiedFrom: entry.copiedFrom,
-      }])),
-    );
+    const tree = this.indexTree(index);
     if (!options.allowEmpty && parent !== null && readCommit(this.objects, parent).tree === tree) {
       throw new ObjectStoreError(
         "empty_commit",
@@ -1781,7 +1801,7 @@ export class Repository {
         "There is no merge in progress to continue. Run `pm vcs merge <revision>` to start one.",
       );
     }
-    const index = this.readIndex();
+    const index = this.committableIndex();
     const marked = index
       .filter((entry) => this.blobHasConflictMarkers(entry.id))
       .map((entry) => entry.path)
@@ -1792,15 +1812,7 @@ export class Repository {
         `Cannot complete the merge: ${marked.join(", ")} still contain conflict markers. Edit the listed paths to remove the markers, stage them with \`pm vcs add\`, then run \`pm vcs merge --continue\` again.`,
       );
     }
-    const tree = buildTree(
-      this.objects,
-      new Map(index.map((entry) => [entry.path, {
-        id: entry.id,
-        mode: entry.mode as FileMode,
-        fileId: entry.fileId,
-        copiedFrom: entry.copiedFrom,
-      }])),
-    );
+    const tree = this.indexTree(index);
     const draft = {
       tree,
       parents: [state.ours, state.theirs],
@@ -2319,32 +2331,35 @@ export class Repository {
    * @returns The paths that were restored.
    */
   restore(paths: readonly string[], revision: string): string[] {
+    const normalized = paths.map((candidate) => normalizeRepoPath(this.root, candidate));
+    const rules = this.ignoreRules();
+    for (const path of normalized) {
+      if (isIgnored(path, rules) || isProtectedWorktreePath(this.root, path)) {
+        throw new ObjectStoreError("path_ignored", `"${path}" is protected or ignored, so it cannot be restored.`);
+      }
+    }
     const source = flattenTree(this.objects, readCommit(this.objects, this.resolve(revision)).tree);
     const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
     const restored: string[] = [];
-    for (const candidate of paths) {
-      const path = normalizeRepoPath(this.root, candidate);
-      const entry = source.get(path);
-      const absolute = join(this.root, ...path.split("/"));
-      if (entry === undefined) {
-        if (existsSync(absolute) && statSync(absolute).isDirectory()) {
-          throw new ObjectStoreError(
-            "restore_directory_unsupported",
-            `Restore path ${path} is a directory, but restore accepts file paths. Name the files to restore instead.`,
-          );
+    const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+    try {
+      for (const path of normalized) {
+        const entry = source.get(path);
+        if (entry === undefined) {
+          mutation.remove(path);
+          index.delete(path);
+        } else {
+          const content = this.workingContent(path, this.objects.read(entry.id));
+          mutation.write(path, content, entry.mode === "100755" ? 0o755 : 0o644);
+          index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644" });
         }
-        index.delete(path);
-        rmSync(absolute, { force: true });
-      } else {
-        mkdirSync(dirname(absolute), { recursive: true });
-        writeFileSync(absolute, this.workingContent(path, this.objects.read(entry.id)));
-        chmodSync(absolute, entry.mode === "100755" ? 0o755 : 0o644);
-        index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644" });
+        restored.push(path);
       }
-      restored.push(path);
+      this.writeIndex([...index.values()]);
+      return restored.sort();
+    } finally {
+      mutation.close();
     }
-    this.writeIndex([...index.values()]);
-    return restored.sort();
   }
 
 }

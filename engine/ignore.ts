@@ -25,7 +25,12 @@ import { matchesGlob } from "./config.ts";
  * reconstructible from a lockfile and large enough that staging it by accident
  * is its own failure — but the effect is the same.
  */
-export const ALWAYS_IGNORED = [".git", ".hg", ".svn", ".bzr", "_darcs", "CVS", "node_modules"] as const;
+export const ALWAYS_IGNORED = [".pmvcs", ".git", ".hg", ".svn", ".bzr", "_darcs", "CVS", "node_modules"] as const;
+
+/** Reserve every case spelling of the control name at any path depth, including the leaf. */
+export function isControlPath(path: string): boolean {
+  return path.split("/").some((segment) => segment.toLowerCase() === ".pmvcs");
+}
 
 /** Name of the per-project ignore file, read from the repository root. */
 export const IGNORE_FILE = ".pmvcsignore";
@@ -69,8 +74,7 @@ function discoverTrackerRootsBelow(root: string, start: string, candidates: Set<
     }
     for (const entry of entries) {
       // A symlinked directory is not `isDirectory`, so aliases cannot escape.
-      if (!entry.isDirectory() || isPrunableDirectory(entry.name)
-        || (current === root && entry.name === ".pmvcs")) continue;
+      if (!entry.isDirectory() || isPrunableDirectory(entry.name)) continue;
       const child = join(current, entry.name);
       const tracker = resolvePmRoot(root, child);
       if (existsSync(getSettingsPath(tracker))) candidates.add(tracker);
@@ -195,6 +199,7 @@ export function readIgnoreRules(root: string, recordPaths: readonly string[] = [
  * @returns True when the path must not be tracked.
  */
 export function isIgnored(path: string, rules: IgnoreRules): boolean {
+  if (isControlPath(path)) return true;
   if (isRuntimeIgnored(path, rules)) return true;
   for (const prefix of ALWAYS_IGNORED) {
     if (path === prefix || path.startsWith(`${prefix}/`) || path.includes(`/${prefix}/`)) return true;
@@ -225,5 +230,5 @@ export function isRuntimeIgnored(path: string, rules: IgnoreRules): boolean {
  * @returns True when the walk should not descend into it.
  */
 export function isPrunableDirectory(name: string): boolean {
-  return (ALWAYS_IGNORED as readonly string[]).includes(name);
+  return isControlPath(name) || (ALWAYS_IGNORED as readonly string[]).includes(name);
 }
