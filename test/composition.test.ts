@@ -1448,6 +1448,16 @@ test("renewed retired inventory refuses malformed paths and classifies broken bi
   refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "unbound_instance");
   repo.pruneRetiredInstance("../retired", "erase-fixture", "invalid_binding", new Date());
   assert.equal(readFileSync(join(root, "secret.bin"), "utf8"), "retired-validation-selected-marker-528913");
+  rmSync(root, { recursive: true });
+  const foreignHub = Repository.init(join(parent, "foreign-hub"));
+  commit(foreignHub, "foreign.txt", Buffer.from("foreign linked instance sentinel"));
+  foreignHub.linkInstance("foreign", root);
+  const config = join(foreignHub.controlDirectory, "config.json"); const configBytes = readFileSync(config); rmSync(config); mkdirSync(config);
+  writeFileSync(inventory, JSON.stringify(["../retired"]));
+  refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "unbound_instance");
+  repo.pruneRetiredInstance("../retired", "erase-fixture", "foreign_hub", new Date());
+  assert.equal(readFileSync(join(root, "foreign.txt"), "utf8"), "foreign linked instance sentinel");
+  rmSync(config, { recursive: true }); writeFileSync(config, configBytes);
   writeFileSync(inventory, JSON.stringify(["../retired"])); rmSync(link); mkdirSync(link);
   assert.throws(() => repo.pruneRetiredInstance("../retired", "erase-fixture", "retired", new Date()), error => (error as NodeJS.ErrnoException).code === "EISDIR");
   assert.deepEqual(JSON.parse(readFileSync(inventory, "utf8")), ["../retired"]);

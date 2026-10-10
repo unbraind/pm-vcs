@@ -317,7 +317,9 @@ bounded by the remaining time. A live owner is never recovered or displaced.
 Contention reports retry guidance and reserves recovery for interrupted writers.
 The previous one-second budget can reject ordinary overlapping materialization;
 a real owner held longer than one second now lets a waiting writer complete.
-Existing subprocess deadlines remain unchanged.
+Existing subprocess deadlines remain unchanged. The suggested 6,000 retries
+with waits rising to 50 ms would total about 299 seconds, despite its proposed
+30-second message; the elapsed deadline makes the actual bound explicit.
 
 Link listing uses at most 64 compressed prefix bytes per unrelated index object.
 The prefix is only a listing hint. A recognized link still receives complete
@@ -339,7 +341,9 @@ payload trust cache is introduced.
 Ordinary no-op fetch uses the existing object endpoint to exchange identity and
 denial metadata. It still validates the receiver's held closure, including missing
 or corrupt payloads; a cold no-op costs one pass over those bytes. Legacy transports
-without that endpoint retain their full-bundle fallback. Real process traces cover
+without that endpoint or its advertised capability retain their full-bundle
+fallback. A real HTTP peer without the optional capability exercises that fallback
+without requesting the unsupported endpoint. Real process traces cover
 an incompressible 4 MiB payload, one open per held object, no source loose-object
 opens and compressed read bytes bounded by the held inventory. Shared-leaf import
 traces cover two FileIds, a standalone series base/patch and an advertised ref,
@@ -368,13 +372,14 @@ binary data that happens to contain a recognizable malformed encoded candidate
 can still receive a conservative refusal; that availability boundary is explicit
 and does not certify uninspected content as clean.
 
-
-Renewed behavioral proof consists of nineteen isolated production-only reversions:
+Renewed behavioral proof consists of twenty-one isolated production-only reversions:
 manifest/kind handling; switch, hard reset, undo and rewrite preflight; retired
 binding; link prefix reads; scan/status snapshots; the writer wait; closure read
 reuse; prune authority, bound-scope refusal and audit recording; repeat series
 walks; held-duplicate validation; metadata no-op exchange; article grammar; and
-the unsafe base64-zlib suggestion. Every case exits nonzero with an assertion
+the unsafe base64-zlib suggestion; legacy HTTP capability handling; and physical
+hub binding before opening a foreign repository's configuration. Every case exits
+nonzero with an assertion
 failure after successful module loading. Production files are restored before
 positive validation. The concurrency fixture preloads the waiter and coordinates
 real processes through standard I/O, so module startup does not consume the lease

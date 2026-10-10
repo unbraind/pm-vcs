@@ -16,14 +16,14 @@ import { afterEach, test } from "node:test";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension from "../index.ts";
-import type { CloneReport, PushReport } from "../engine/sync.ts";
+import type { CloneReport, FetchReport, PushReport } from "../engine/sync.ts";
 import { cloneFrom, fetchFrom, pushTo } from "../engine/sync.ts";
 import { parseBundle } from "../engine/bundle.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
 import { ObjectStoreError, type ObjectId } from "../engine/objects.ts";
 import { readCommit, readSeries, readTree } from "../engine/model.ts";
 import { createSeries } from "../engine/series.ts";
-import { FileTransport, openTransport, TRANSPORT_CAPABILITIES } from "../engine/transport.ts";
+import { type Advertisement, FileTransport, openTransport, TRANSPORT_CAPABILITIES } from "../engine/transport.ts";
 import { readTokenFile, startRepositoryServer, type ServeHandle } from "../engine/serve.ts";
 import { Repository } from "../engine/repo.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -740,4 +740,39 @@ test("malformed wire URLs and occupied listen sockets fail through the command s
   assert.match(String(rejected.errorMessage), /EADDRINUSE|port \d+ in use/);
   const malformed = await harness.runCommand({ command: "vcs remote", args: ["wire", "http://[broken"], pmRoot: served.repository.root });
   assert.match(String(malformed.errorMessage), /does not parse/);
+});
+
+test("renewed no-op fetch falls back for a real HTTP peer without object-fetch capability", async () => {
+  const served = await serveSeededRepo();
+  const routes: string[] = [];
+  const legacy = createServer(async (request, response) => {
+    const route = request.url ?? "/"; routes.push(route);
+    if (route.endsWith("/objects/fetch")) { request.resume(); response.writeHead(404); response.end("unsupported endpoint"); return; }
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const upstream = await fetch(new URL(route, `http://127.0.0.1:${served.server.port}`), {
+      method: request.method,
+      headers: { "Content-Type": "application/json" },
+      ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks).toString("utf8") }),
+    });
+    let body = await upstream.text();
+    if (route.endsWith("/advertise")) {
+      const advertisement = JSON.parse(body) as Advertisement;
+      body = JSON.stringify({ ...advertisement, capabilities: advertisement.capabilities.filter(capability => capability !== "object-fetch") });
+    }
+    response.writeHead(upstream.status, { "Content-Type": upstream.headers.get("Content-Type") ?? "application/octet-stream" }); response.end(body);
+  });
+  await new Promise<void>(resolve => { legacy.listen(0, "127.0.0.1", resolve); });
+  const address = legacy.address(); assert.ok(address && typeof address !== "string");
+  try {
+    const root = tempRoot();
+    await cloneFrom(`http://127.0.0.1:${address.port}/${served.name}`, root, now);
+    const clone = Repository.open(root); const before = clone.operations.read();
+    let report: FetchReport | undefined;
+    await assert.doesNotReject(async () => { report = await fetchFrom(clone, "origin", now); });
+    assert.ok(report); assert.equal(report.upToDate, true); assert.deepEqual(report.added, []);
+    assert.equal(routes.filter(route => route.endsWith("/fetch")).length, 2);
+    assert.equal(routes.some(route => route.endsWith("/objects/fetch")), false);
+    assert.deepEqual(clone.operations.read(), before); assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "one");
+  } finally { legacy.closeAllConnections(); await new Promise<void>(resolve => { legacy.close(() => resolve()); }); }
 });

@@ -156,7 +156,7 @@ export async function fetchFrom(
 
   if (wanted.length === 0) {
     // Tombstones can change while every immutable ref remains unchanged.
-    const metadata = wire.fetchObjects === undefined
+    const metadata = wire.fetchObjects === undefined || !advertisement.capabilities.includes("object-fetch")
       ? await wire.fetch([], localTips(repository))
       : await wire.fetchObjects([]);
     const { added } = importBundleObjects(repository.objects, metadata, localTips(repository));
