@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
 import { afterEach, test } from "node:test";
 
@@ -748,11 +748,15 @@ test("renewed no-op fetch falls back for a real HTTP peer without object-fetch c
   const legacy = createServer(async (request, response) => {
     const route = request.url ?? "/"; routes.push(route);
     if (route.endsWith("/objects/fetch")) { request.resume(); response.writeHead(404); response.end("unsupported endpoint"); return; }
+    const upstreamUrl = route === `/${served.name}/advertise`
+      ? `http://127.0.0.1:${served.server.port}/${served.name}/advertise`
+      : route === `/${served.name}/fetch` ? `http://127.0.0.1:${served.server.port}/${served.name}/fetch` : undefined;
+    if (upstreamUrl === undefined) { request.resume(); response.writeHead(404); response.end("unsupported endpoint"); return; }
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
-    const upstream = await fetch(new URL(route, `http://127.0.0.1:${served.server.port}`), {
+    const upstream = await fetch(upstreamUrl, {
       method: request.method,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Connection: "close" },
       ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks).toString("utf8") }),
     });
     let body = await upstream.text();
@@ -765,6 +769,13 @@ test("renewed no-op fetch falls back for a real HTTP peer without object-fetch c
   await new Promise<void>(resolve => { legacy.listen(0, "127.0.0.1", resolve); });
   const address = legacy.address(); assert.ok(address && typeof address !== "string");
   try {
+    const absoluteTargetStatus = await new Promise<number | undefined>((resolve, reject) => {
+      const client = httpRequest({ hostname: "127.0.0.1", port: address.port, method: "POST", agent: false, path: `http://127.0.0.1:${served.server.port}/${served.name}/advertise` }, response => {
+        response.resume(); response.once("end", () => resolve(response.statusCode));
+      });
+      client.once("error", reject); client.end();
+    });
+    assert.equal(absoluteTargetStatus, 404, "an absolute request target must not override the fixture origin");
     const root = tempRoot();
     await cloneFrom(`http://127.0.0.1:${address.port}/${served.name}`, root, now);
     const clone = Repository.open(root); const before = clone.operations.read();
@@ -774,5 +785,5 @@ test("renewed no-op fetch falls back for a real HTTP peer without object-fetch c
     assert.equal(routes.filter(route => route.endsWith("/fetch")).length, 2);
     assert.equal(routes.some(route => route.endsWith("/objects/fetch")), false);
     assert.deepEqual(clone.operations.read(), before); assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "one");
-  } finally { legacy.closeAllConnections(); await new Promise<void>(resolve => { legacy.close(() => resolve()); }); }
+  } finally { await new Promise<void>(resolve => { legacy.close(() => resolve()); legacy.closeAllConnections(); }); }
 });
