@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { authorize, readLayers, assertCompositionPath, syncDirectory } from "./composition.ts";
 import { payloadDigest, encodeTombstone, type ErasureDenial } from "./lifecycle.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
-import { frameObject, hashObject, ObjectStoreError, type ObjectId, type ObjectStore, type StoredObject } from "./objects.ts";
+import { frameObject, hashObject, ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
 import { inspectClosure } from "./closure.ts";
 import { inspectRepresentations } from "./representations.ts";
 import { ALWAYS_IGNORED } from "./ignore.ts";
@@ -22,8 +22,14 @@ export interface ErasureReceipt {
   readonly removed: readonly ObjectId[];
 }
 
+/** Whole-store planning metadata excludes leaf buffers and retains only decoded ownership/fragment structure. */
+type InventoryObject =
+  | { readonly type: "manifest"; readonly digest: string; readonly fragments: ReturnType<typeof decodeManifest>["fragments"] }
+  | { readonly type: "tree"; readonly digest: string; readonly entries: ReturnType<typeof decodeTree> }
+  | { readonly type: Exclude<ObjectType, "manifest" | "tree">; readonly digest: string };
+
 /** Close one payload over all manifest fragments, failing on incomplete inventory. */
-function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, StoredObject>, store: ObjectStore): Set<ObjectId> {
+function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, InventoryObject>, store: ObjectStore): Set<ObjectId> {
   const selected = new Set<ObjectId>();
   const pending = [id];
   while (pending.length > 0) {
@@ -35,7 +41,7 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, StoredObj
       if (store.denial(current) !== undefined) continue;
       throw new ObjectStoreError("incomplete_erasure_inventory", "History or index names payloads absent from the complete inventory.");
     }
-    if (object.type === "manifest") pending.push(...decodeManifest(object.payload).fragments.map(/** Include every fragment even outside current refs. */ (fragment) => fragment.id));
+    if (object.type === "manifest") pending.push(...object.fragments.map(/** Include every fragment even outside current refs. */ (fragment) => fragment.id));
     else if (object.type !== "blob" && object.type !== "record" && object.type !== "link") {
       throw new ObjectStoreError("incomplete_erasure_inventory", "A file entry names a non-payload object.");
     }
@@ -82,13 +88,20 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     const existing = local.find(/** Retry uses the original immutable audit metadata. */ (entry) => entry.tombstone.fileId === fileId);
     for (const instance of instances) assertSupportedControl(instance.controlDirectory);
     assertSupportedControl(control);
-    const physical = store.inventory();
-    const inventory = new Map(physical.map(/** Deduplicate canonical files and valid temporary copies by content ID. */ (entry) => [entry.id, entry.object]));
+    const physical = new Map<string, ObjectId>();
+    const inventory = new Map<ObjectId, InventoryObject>();
+    for (const { id, path, object } of store.walkInventory()) {
+      const digest = payloadDigest(object.payload);
+      physical.set(path, id);
+      if (object.type === "manifest") inventory.set(id, { type: object.type, digest, fragments: decodeManifest(object.payload).fragments });
+      else if (object.type === "tree") inventory.set(id, { type: object.type, digest, entries: decodeTree(object.payload) });
+      else inventory.set(id, { type: object.type, digest });
+    }
     const history = inspectClosure(store, [...inventory].filter(/** Every unreachable commit still requires a real structural closure. */ ([_id, object]) => object.type === "commit").map(/** Inspect all commit roots, not merely advertised refs. */ ([id]) => id), [], local.map(/** Pending payload absence is legitimate during an authorized cleanup retry. */ (denial) => ({ ...denial, pending: false })));
     if (history.missing.length + history.corrupt.length > 0) throw new ObjectStoreError("incomplete_erasure_inventory", "Complete historical structure is required before erasure.");
     const entries: { id: string; fileId?: string }[] = [];
     for (const object of inventory.values()) {
-      if (object.type === "tree") entries.push(...decodeTree(object.payload).filter(/** Directory identities belong to structure, never file payload. */ (entry) => entry.mode !== "40000"));
+      if (object.type === "tree") entries.push(...object.entries.filter(/** Directory identities belong to structure, never file payload. */ (entry) => entry.mode !== "40000"));
     }
     const indexes = new Map<Repository, IndexEntry[]>();
     for (const instance of instances) {
@@ -111,19 +124,30 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     // be erased under someone else's FileId or silently left recoverable.
     for (const [id, object] of inventory) {
       if (object.type === "manifest" && !selected.has(id)
-        && decodeManifest(object.payload).fragments.some(/** Refuse unknown fragment owners before mutation. */ (fragment) => selected.has(fragment.id))) {
+        && object.fragments.some(/** Refuse unknown fragment owners before mutation. */ (fragment) => selected.has(fragment.id))) {
         throw new ObjectStoreError("erasure_dedup_conflict", "An unrelated manifest shares fragments selected for erasure.");
       }
     }
-    const payloads = [...selected].flatMap(/** Only nonempty physical payloads can occur in worktree copies. */ (id) => {
-      const object = inventory.get(id);
-      return object !== undefined && object.type !== "manifest" && object.payload.length > 0 ? [object.payload] : [];
-    });
-    for (const object of physical) {
-      if (!selected.has(object.id) && containsSelectedBytes(object.object.payload, payloads)) {
+    const payloads: Buffer[] = [];
+    const loaded = new Set<ObjectId>();
+    for (const [path, id] of physical) {
+      if (!selected.has(id) || loaded.has(id)) continue;
+      const object = store.readInventoryObject(id, path);
+      loaded.add(id);
+      if (object.type !== "manifest" && object.payload.length > 0) payloads.push(object.payload);
+    }
+    // A second complete verified pass inspects copies without retaining unrelated leaves.
+    const inspected = new Set<string>();
+    for (const { id, path, object } of store.walkInventory()) {
+      if (!physical.has(path)) {
+        throw new ObjectStoreError("incomplete_erasure_inventory", "Physical inventory changed between verified passes.");
+      }
+      inspected.add(path);
+      if (!selected.has(id) && containsSelectedBytes(object.payload, payloads)) {
         throw new ObjectStoreError("erasure_retained_copy", "A surviving physical object retains selected bytes; remove the explicit copy before retrying.");
       }
     }
+    if (inspected.size !== physical.size) throw new ObjectStoreError("incomplete_erasure_inventory", "Physical inventory lost a copy between verified passes.");
     for (const instance of instances) {
       for (const entry of readdirSync(instance.controlDirectory, { withFileTypes: true })) {
         if (entry.isFile() && entry.name !== "layers.json" && containsSelectedBytes(readFileSync(join(instance.controlDirectory, entry.name)), payloads)) {
@@ -166,7 +190,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
           }
         }
       }
-      const tombstone = existing?.tombstone ?? { version: 1 as const, fileId, roots: [...roots], objects: [...selected], payloads: [...selected].map(/** Hash actual physical payloads without copying them into audit metadata. */ (id) => payloadDigest(inventory.get(id)!.payload)), principal, timestamp: now.toISOString(), reason };
+      const tombstone = existing?.tombstone ?? { version: 1 as const, fileId, roots: [...roots], objects: [...selected], payloads: [...selected].map(/** Hash actual physical payloads without copying them into audit metadata. */ (id) => inventory.get(id)!.digest), principal, timestamp: now.toISOString(), reason };
       const payload = encodeTombstone(tombstone);
       const id = hashObject("tombstone", payload);
       const denial: ErasureDenial = { id, tombstone, pending: true };
@@ -185,7 +209,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
           directories.add(dirname(join(instance.root, ...path.split("/"))));
         }
       }
-      for (const path of new Set(physical.filter(/** Delete every canonical and temporary representation. */ (entry) => selected.has(entry.id)).map(/** Retain only the deletion target, never payload bytes in the receipt. */ (entry) => entry.path))) {
+      for (const [path, objectId] of physical) {
+        if (!selected.has(objectId)) continue;
         rmSync(path, { force: true });
         directories.add(dirname(path));
       }

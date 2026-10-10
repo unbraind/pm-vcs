@@ -26,7 +26,7 @@ import { writeManifest, encodeRecord, migratedFileId } from "pm-vcs/dist/engine/
 import { mergeTrees } from "pm-vcs/dist/engine/rewrite.js";
 import { buildTree, flattenTree } from "pm-vcs/dist/engine/worktree.js";
 import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
-import { cloneFrom } from "pm-vcs/dist/engine/sync.js";
+import { cloneFrom, fetchFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
 import { exportBundle, importBundleObjects, serializeBundle } from "pm-vcs/dist/engine/bundle.js";
 const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
@@ -180,6 +180,24 @@ for (let repeat = 0; repeat < 2; repeat += 1) {
 await new FileTransport(root, root).push(repeatedBundle, [], false, new Date());
 assert.deepEqual(durableSnapshot(), durableBefore); assert.equal(repo.objects.denials()[0], warmedDenial);
 assert.deepEqual(clone.objects.denials(), repo.objects.denials());
+assert.deepEqual([...repo.objects.walkInventory()], repo.objects.inventory());
+const legacyWire = new FileTransport(root, root); const legacyRequests = [];
+const legacyAdapter = { url: legacyWire.url,
+  advertise: async () => { const result = await legacyWire.advertise(); return { ...result, capabilities: result.capabilities.filter(capability => capability !== "object-fetch") }; },
+  fetch: async (refs, haves) => { legacyRequests.push([...refs]); return legacyWire.fetch(refs, haves); },
+  push: (...args) => legacyWire.push(...args), missingObjects: (...args) => legacyWire.missingObjects(...args),
+  uploadObjects: (...args) => legacyWire.uploadObjects(...args), publish: (...args) => legacyWire.publish(...args) };
+const localTag = clone.commit({ message: "local tag", author, allowEmpty: true }, new Date());
+repo.refs.compareAndSwap("refs/tags/legacy-conflict", null, revision); clone.refs.compareAndSwap("refs/tags/legacy-conflict", null, localTag);
+const beforeLegacyRefs = clone.refs.list("refs/"); const beforeLegacyLog = clone.operations.read(); const beforeLegacyIndex = clone.readIndex();
+for (let repeat = 0; repeat < 2; repeat++) {
+  const report = await fetchFrom(clone, "origin", new Date(), legacyAdapter);
+  assert.equal(report.upToDate, true); assert.deepEqual(report.added, []); assert.deepEqual(report.conflictingTags, ["legacy-conflict"]);
+}
+const expectedLegacyRefs = [...repo.refs.list("refs/heads/"), ...repo.refs.list("refs/tags/")].map(entry => entry.name).filter(name => name !== "refs/tags/legacy-conflict");
+assert.deepEqual(legacyRequests, [expectedLegacyRefs, expectedLegacyRefs]);
+assert.deepEqual(clone.refs.list("refs/"), beforeLegacyRefs); assert.deepEqual(clone.operations.read(), beforeLegacyLog); assert.deepEqual(clone.readIndex(), beforeLegacyIndex);
+
 for (const caller of ["hub", "linked"]) {
   const hub = join(process.cwd(), process.argv[2] + "-custom-" + caller); mkdirSync(hub);
   const tracker = join(hub, "custom/team");

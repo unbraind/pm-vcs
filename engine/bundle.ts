@@ -296,7 +296,6 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
   }
   const combined = [...local, ...received.filter(/** Preserve all local denials, including identities omitted by a stale peer. */ (denial) => !local.some(/** Deduplicate identical audit records. */ (entry) => entry.id === denial.id))];
   assertArrivalsAllowed(combined, lines, true);
-  store.preflight(lines, true);
   const carried = new Set(lines.map((line) => line.id));
   const checked = new Set<ObjectId>();
   for (const line of lines) {

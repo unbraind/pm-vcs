@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 
-import { exportBundle, importBundleObjects } from "./bundle.ts";
+import { exportBundle, importBundleObjects, serializeBundle } from "./bundle.ts";
 import { isAncestor } from "./merge.ts";
 import type { ObjectId } from "./objects.ts";
 import { ObjectStoreError } from "./objects.ts";
@@ -43,7 +43,7 @@ export interface FetchReport {
   readonly conflictingTags: readonly string[];
   /** Objects transferred and stored. */
   readonly added: readonly ObjectId[];
-  /** True when the remote had nothing the local repository lacked. */
+  /** True when fetch changes no eligible refs, stored objects or exchanged denial metadata. */
   readonly upToDate: boolean;
 }
 
@@ -155,12 +155,20 @@ export async function fetchFrom(
   }
 
   if (wanted.length === 0) {
-    // Tombstones can change while every immutable ref remains unchanged.
-    const metadata = wire.fetchObjects === undefined || !advertisement.capabilities.includes("object-fetch")
-      ? await wire.fetch([], localTips(repository))
-      : await wire.fetchObjects([]);
-    const { added } = importBundleObjects(repository.objects, metadata, localTips(repository));
-    return { remote: remoteName, url: remote.url, updated: [], conflictingTags, added, upToDate: true };
+    // Empty legacy fetch means ALL refs, so it cannot express metadata-only exchange.
+    const eligible = advertisement.refs.filter((entry) => localNameFor(remoteName, entry.name) !== null
+      && (!entry.name.startsWith(TAG_PREFIX) || !conflictingTags.includes(entry.name.slice(TAG_PREFIX.length)))).map((entry) => entry.name);
+    const haves = localTips(repository);
+    let metadata: Buffer | undefined;
+    if (wire.fetchObjects !== undefined && advertisement.capabilities.includes("object-fetch")) metadata = await wire.fetchObjects([]);
+    else if (eligible.length > 0) metadata = await wire.fetch(eligible, haves);
+    return repository.objects.withWriteLock(/** Even a peer without eligible transfer refs must validate held closure and local audits. */ () => {
+      const beforeDenials = repository.objects.denials().length;
+      const bytes = metadata ?? serializeBundle(repository.objects, { refs: {}, prerequisites: [], objects: [] });
+      const { added } = importBundleObjects(repository.objects, bytes, haves);
+      const changed = added.length > 0 || repository.objects.denials().length !== beforeDenials;
+      return { remote: remoteName, url: remote.url, updated: [], conflictingTags, added, upToDate: !changed };
+    });
   }
 
   const bundle = await wire.fetch(wanted.map((item) => item.remoteRef), localTips(repository));

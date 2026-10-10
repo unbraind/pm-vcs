@@ -12,6 +12,7 @@
 import { constants as zlibConstants, deflateSync, inflateSync } from "node:zlib";
 import { createHash, randomBytes } from "node:crypto";
 import {
+  constants as fsConstants,
   closeSync,
   fsyncSync,
   fstatSync,
@@ -30,7 +31,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { decodeManifest, decodeTree } from "./model.ts";
 import { encodeTombstone, assertArrivalsAllowed, readDenials, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { writePrivateJson } from "./composition.ts";
@@ -520,10 +521,20 @@ export class ObjectStore {
     });
   }
 
-  /** Inventory every loose object and valid loose temporary copy; unknown backends refuse. */
+  /** Materialize the verified physical inventory for callers that deliberately retain every payload. */
   inventory(): { id: ObjectId; path: string; object: StoredObject }[] {
-    const result: { id: ObjectId; path: string; object: StoredObject }[] = [];
-    if (!existsSync(this.root)) return result;
+    return [...this.walkInventory()];
+  }
+
+  /**
+   * Yield one hash-checked loose object or recognized temporary copy at a time.
+   * The walker retains directory listings and its current decoded object, never
+   * prior leaf buffers. Consumers determine retention; inventory() still collects
+   * all payloads. Hold the store lease across multiple passes when planning erasure.
+   * Denied physical copies remain visible so pending authorized cleanup can resume.
+   */
+  *walkInventory(): Generator<{ id: ObjectId; path: string; object: StoredObject }> {
+    if (!existsSync(this.root)) return;
     if (!lstatSync(this.root).isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Object storage cannot follow a symlink.");
     for (const directory of readdirSync(this.root, { withFileTypes: true })) {
       if (!directory.isDirectory() || !/^[0-9a-f]{2}$/.test(directory.name)) {
@@ -535,15 +546,49 @@ export class ObjectStore {
         }
         const id = directory.name + file.name.slice(0, 62);
         const path = join(this.root, directory.name, file.name);
-        const compressed = readFileSync(path);
-        let framed: Buffer;
-        try { framed = inflateSync(compressed); } catch { throw new ObjectStoreError("corrupt_object", "Inventory found an unreadable compressed object."); }
-        const object = parseFramedObject(framed);
-        if (hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("corrupt_object", "Inventory found a mismatched loose object.");
-        result.push({ id, path, object });
+        yield { id, path, object: this.readInventoryObject(id, path) };
       }
     }
-    return result;
+  }
+
+  /**
+   * Re-read one inventoried physical location without hiding pending denied bytes.
+   * Only canonical or recognized temporary locations for this ID are accepted.
+   * Real directory/leaf identities, no-follow open, frame and hash checks precede
+   * return. Native I/O errors propagate; unsupported layout and corruption refuse.
+   */
+  readInventoryObject(id: ObjectId, path: string): StoredObject {
+    this.assertId(id);
+    const canonical = this.pathFor(id);
+    if (dirname(path) !== dirname(canonical) || (basename(path) !== id.slice(2)
+      && !new RegExp(`^${id.slice(2)}\\.[0-9]+\\.[0-9a-f]{12}\\.tmp$`).test(basename(path)))) {
+      throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory location does not belong to this object.");
+    }
+    const root = lstatSync(this.root, { bigint: true });
+    const parent = lstatSync(dirname(path), { bigint: true });
+    const leaf = lstatSync(path, { bigint: true });
+    if (!root.isDirectory() || !parent.isDirectory() || !leaf.isFile()) {
+      throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory cannot follow directory or leaf links.");
+    }
+    const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    let compressed: Buffer;
+    try {
+      const opened = fstatSync(fd, { bigint: true });
+      compressed = readFileSync(fd);
+      const current = lstatSync(path, { bigint: true });
+      const currentRoot = lstatSync(this.root, { bigint: true });
+      const currentParent = lstatSync(dirname(path), { bigint: true });
+      if (opened.dev !== leaf.dev || opened.ino !== leaf.ino || current.dev !== leaf.dev || current.ino !== leaf.ino
+        || current.mtimeNs !== leaf.mtimeNs || current.ctimeNs !== leaf.ctimeNs || current.size !== leaf.size
+        || currentRoot.dev !== root.dev || currentRoot.ino !== root.ino || currentParent.dev !== parent.dev || currentParent.ino !== parent.ino) {
+        throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory identity changed during its verified read.");
+      }
+    } finally { closeSync(fd); }
+    let framed: Buffer;
+    try { framed = inflateSync(compressed); } catch { throw new ObjectStoreError("corrupt_object", "Inventory found an unreadable compressed object."); }
+    const object = parseFramedObject(framed);
+    if (hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("corrupt_object", "Inventory found a mismatched loose object.");
+    return object;
   }
 
   /** Hold a synchronous, reentrant store transaction across publication, worktree mutation and physical erasure; callbacks must not return asynchronous work. */

@@ -188,7 +188,7 @@ use a denial to hide missing data. Imports validate advertised, series and every
 before object storage or ref publication. Standalone object fetch carries denial
 metadata; a structural object imports only with its closure already held or carried. Fresh import reconstructs the canonical
 typed audit object even when no tree names it, and verification checks that audit.
-Fetch exchanges metadata even when refs are unchanged. Empty clones preserve the
+Peers with object-fetch exchange metadata even when refs are unchanged. Empty clones preserve the
 source identity and denial registry. Concurrent explicit identity requests serialize
 creation under the store writer lease. Advertisement and archive export read
 existing identity without mutation or a writer lease; legacy sources without an
@@ -219,6 +219,25 @@ or zlib that is malformed, or a supported encoding exceeding a bound, causes
 uninspected content is clean. Small fragments shared incidentally with metadata
 also cause conservative refusal. Unsupported pack/cache artefacts are refused by
 physical inventory; this release does not implement a pack backend.
+
+`ObjectStore.walkInventory()` yields one frame- and hash-verified loose object or
+recognized temporary copy at a time, using no-follow leaf opens and captured
+root/directory/leaf identities. `inventory()` preserves its collecting API and
+retains every payload for callers explicitly choosing that behavior.
+`readInventoryObject(id, path)` re-reads only a canonical or recognized temporary
+location for that address, including denied physical copies needed for pending
+cleanup. These physical reads do not grant publication authority.
+
+Erasure retains address/path/kind/digest metadata and decoded tree/manifest
+structure during its first complete pass. After determining FileId closure and
+refusing deduplication, it re-reads only selected payload locations. A second
+complete verified pass inspects each surviving payload individually for retained
+copies and verifies the physical path set before durable denial. Deletion uses
+only those verified selected locations. Metadata, directory listings, decoded
+structure and selected payload memory still scale with their respective scopes;
+one decoded object's size and representation inspection also remain allocation
+bounds. Whole-repository constant memory and production-scale readiness are not
+established. The shared writer lease covers all passes and publication.
 
 The application boundary includes supported loose storage, private control metadata,
 current/retired registered working instances, and overlays. The active tracker
@@ -354,6 +373,9 @@ receipt. Resolution cannot use an omitted descriptor. Full verification and ever
 publication closure continue reading and hashing complete required payloads.
 Scan and status each validate one private-layer metadata snapshot per operation.
 
+Import checks all arrivals against combined local/received denials before any
+publication; the same inputs under the same lease make another immediate local
+preflight redundant. Locked `ObjectStore.accept` retains its own final preflight.
 Import preflight validates each held object once within one closure walk, retaining
 role and FileId checks for every reference. Carried bytes are independently hashed;
 a held duplicate is also read and hashed before deduplication can substitute it
@@ -362,11 +384,20 @@ preflight. Series bases/patches and separately advertised fetch roots join that
 preflight instead of repeating whole walks after publication. No cross-operation
 payload trust cache is introduced.
 
-Ordinary no-op fetch uses the existing object endpoint to exchange identity and
-denial metadata. It still validates the receiver's held closure, including missing
-or corrupt payloads; a cold no-op costs one pass over those bytes. Legacy transports
-without that endpoint or its advertised capability retain their full-bundle
-fallback. Constant-byte cold no-op sync is not claimed.
+Ordinary no-op fetch uses an implemented and advertised object-fetch endpoint to
+exchange identity and denial metadata. Legacy fallback requests only advertised
+branches/tags that map to local refs and are not conflicting tags. An empty
+legacy fetch request means all refs; it is never used to mean metadata only.
+When no refs are eligible and object-fetch is unsupported, transfer is skipped.
+Such an old peer cannot exchange a new denial in that case; a peer supporting
+object-fetch still exchanges metadata even for conflicting-only advertisements.
+
+Every no-op path validates the receiver's held closure and local immutable audits,
+including missing or corrupt payloads and pending denial, under the store lease.
+A cold no-op costs one pass over those bytes. No-op fetch changes no refs, index
+or operation log. `FetchReport.upToDate` is false when actual imported objects or
+exchanged denial metadata change, even with no ref movements; unsupported peer
+metadata is not evidence of its absence. Constant-byte cold no-op sync is not claimed.
 
 Import preserves the durable denial registry and existing tombstone files when
 received metadata adds no terminal identity, including stale peers omitting local
