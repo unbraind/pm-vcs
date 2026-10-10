@@ -1161,6 +1161,107 @@ test("review short owner writes cannot publish a lease", /** A real per-process 
 });
 
 
+for (const deniedSide of ["base", "ours", "theirs"] as const) {
+  for (const basePresent of deniedSide === "base" ? [true] : [false, true]) {
+    test(`denied merge preserves our complete entry with denied ${deniedSide} and base ${basePresent}`, /** Intentional absence is produced by authorized erasure, never by reopening a terminal identity. */ async () => {
+      const { repo } = await fixture();
+      commit(repo, "p", Buffer.from("terminal selected payload 763952\n"));
+      const terminal = repo.readIndex().find(entry => entry.path === "p")!;
+      repo.obliterate("p", "erase-fixture", "incident", new Date());
+      const denial = readFileSync(join(repo.controlDirectory, "denials.json"));
+      const ourId = deniedSide === "ours" ? terminal.id : repo.objects.write("blob", Buffer.from("our surviving bytes\n"), "e".repeat(32));
+      const theirId = deniedSide === "theirs" ? terminal.id : repo.objects.write("blob", Buffer.from("their surviving bytes\n"), "b".repeat(32));
+      const baseId = !basePresent ? null : deniedSide === "base" ? terminal.id : repo.objects.write("blob", Buffer.from("unrelated live base\n"), "f".repeat(32));
+      const context = { store: repo.objects, config: repo.config, committer: signature };
+      let resolution: ReturnType<typeof mergePath> | undefined;
+      assert.doesNotThrow(() => { resolution = mergePath(context, "p", baseId, ourId, theirId); });
+      assert.deepEqual(resolution, { id: ourId, conflict: { path: "p", reason: "content" } });
+      const ours = deniedSide === "ours" ? terminal : { id: ourId, mode: "100644" as const, fileId: "e".repeat(32), copiedFrom: "a".repeat(32) };
+      const theirs = deniedSide === "theirs" ? terminal : { id: theirId, mode: "100644" as const, fileId: "b".repeat(32), copiedFrom: "d".repeat(32) };
+      const tree = (entry: { id: ObjectId; mode: "100644" | "100755"; fileId?: string; copiedFrom?: string }): ObjectId => writeTree(repo.objects, [{ name: "p", ...entry }]);
+      const merged = mergeTrees(context, baseId === null ? null : tree({ id: baseId, mode: "100644", fileId: baseId === terminal.id ? terminal.fileId : "f".repeat(32) }), tree(ours), tree(theirs));
+      assert.ok(merged.conflicts.some(conflict => conflict.path === "p" && conflict.reason === "content"));
+      assert.deepEqual(merged.merged, []);
+      const retained = flattenTree(repo.objects, merged.tree).get("p")!;
+      assert.equal(retained.id, ours.id); assert.equal(retained.mode, ours.mode); assert.equal(retained.fileId, ours.fileId); assert.equal(retained.copiedFrom, ours.copiedFrom);
+      repo.materialize(merged.tree);
+      if (deniedSide === "ours") assert.equal(existsSync(join(repo.root, "p")), false);
+      else assert.equal(readFileSync(join(repo.root, "p"), "utf8"), "our surviving bytes\n");
+      assert.deepEqual(readFileSync(join(repo.controlDirectory, "denials.json")), denial);
+      refuses(() => repo.objects.read(terminal.id), "object_obliterated");
+    });
+  }
+}
+
+test("denied merge validates every surviving object before returning a conflict", /** Damage real compressed store bytes and require typed refusal without collateral state changes. */ async () => {
+  const { repo } = await fixture(); commit(repo, "p", Buffer.from("denied integrity marker 984372\n"));
+  const fragmented = writeFragmented(repo.objects, Buffer.from("surviving fragmented bytes\n".repeat(10)), 32);
+  const terminal = repo.readIndex().find(entry => entry.path === "p")!; repo.obliterate("p", "erase-fixture", "incident", new Date());
+  const context = { store: repo.objects, config: repo.config, committer: signature };
+  const survivor = repo.objects.write("blob", Buffer.from("surviving integrity bytes\n"), "e".repeat(32));
+  const original = readFileSync(objectPath(repo, survivor));
+  const before = { head: repo.refs.readHead(), refs: repo.refs.list("refs/heads/"), index: repo.readIndex(), denials: readFileSync(join(repo.controlDirectory, "denials.json")) };
+  for (const ids of [[terminal.id, survivor, terminal.id], [terminal.id, terminal.id, survivor], [survivor, terminal.id, terminal.id]] as const) {
+    writeFileSync(objectPath(repo, survivor), deflateSync(frameObject("blob", Buffer.from("wrong hash bytes\n"))));
+    refuses(() => mergePath(context, "p", ids[0], ids[1], ids[2]), "corrupt_object");
+    rmSync(objectPath(repo, survivor)); refuses(() => mergePath(context, "p", ids[0], ids[1], ids[2]), "object_not_found");
+    writeFileSync(objectPath(repo, survivor), original);
+  }
+  const structural = readCommit(repo.objects, repo.refs.resolveHead()!).tree;
+  refuses(() => mergePath(context, "p", terminal.id, survivor, structural), "object_type_mismatch");
+  const fragment = fragmented.manifest.fragments[0].id; const fragmentBytes = readFileSync(objectPath(repo, fragment));
+  writeFileSync(objectPath(repo, fragment), deflateSync(frameObject("blob", Buffer.from("corrupt surviving fragment\n"))));
+  refuses(() => mergePath(context, "p", terminal.id, survivor, fragmented.manifestId), "corrupt_object");
+  writeFileSync(objectPath(repo, fragment), fragmentBytes);
+  assert.deepEqual(mergePath(context, "p", terminal.id, fragmented.manifestId, survivor), { id: fragmented.manifestId, conflict: { path: "p", reason: "content" } });
+  const target = Repository.init(join(repo.root, "..", "target")); const pin = commit(target, "asset", Buffer.from("linked bytes\n"));
+  const link = repo.objects.write("link", encodeLink({ version: 1, repository: target.identity(), revision: pin, mappings: [{ source: "asset", destination: "asset" }] }), "b".repeat(32));
+  refuses(() => mergePath(context, "p", terminal.id, survivor, link), "link_merge_conflict");
+  assert.deepEqual({ head: repo.refs.readHead(), refs: repo.refs.list("refs/heads/"), index: repo.readIndex(), denials: readFileSync(join(repo.controlDirectory, "denials.json")) }, before);
+});
+
+for (const scenario of ["base", "ours", "theirs"] as const) {
+  test(`denied merge real branch merge preserves ours with denied ${scenario}`, /** Explicitly replace terminal index identities through the supported API before staging unrelated replacement bytes. */ async () => {
+    const { repo } = await fixture();
+    if (scenario === "base") commit(repo, "p", Buffer.from("terminal branch base 638925\n"));
+    const base = repo.refs.resolveHead()!;
+    repo.createBranch("left", base, new Date()); repo.createBranch("right", base, new Date());
+    if (scenario !== "base") { repo.switchTo(scenario === "ours" ? "left" : "right", new Date()); commit(repo, "p", Buffer.from("terminal branch side 638925\n")); }
+    const terminal = repo.readIndex().find(entry => entry.path === "p")!; repo.obliterate("p", "erase-fixture", "incident", new Date());
+    const denials = readFileSync(join(repo.controlDirectory, "denials.json"));
+    for (const branch of ["left", "right"]) {
+      if (scenario === "ours" && branch === "left" || scenario === "theirs" && branch === "right") continue;
+      repo.switchTo(branch, new Date());
+      if (scenario === "base") {
+        writeFileSync(join(repo.root, "p"), "replacement refused on terminal identity\n");
+        refuses(() => repo.stage(["p"]), "file_obliterated"); rmSync(join(repo.root, "p"));
+        repo.writeIndex([...repo.readIndex().values()].filter(entry => entry.path !== "p"));
+      }
+      commit(repo, "p", Buffer.from(`unrelated ${branch} bytes\n`));
+      assert.notEqual(repo.readIndex().find(entry => entry.path === "p")!.fileId, terminal.fileId);
+    }
+    repo.switchTo("left", new Date());
+    const ours = repo.readIndex().find(entry => entry.path === "p")!; const refs = repo.refs.list("refs/heads/"); const head = repo.refs.readHead(); const index = repo.readIndex();
+    if (scenario === "base") {
+      const theirs = flattenTree(repo.objects, readCommit(repo.objects, repo.resolve("right")).tree).get("p")!;
+      const original = readFileSync(objectPath(repo, theirs.id));
+      writeFileSync(objectPath(repo, theirs.id), deflateSync(frameObject("blob", Buffer.from("corrupt branch survivor\n"))));
+      refuses(() => repo.merge("right", { message: "refuse corruption", author: signature }, new Date()), "corrupt_object");
+      assert.deepEqual(repo.refs.list("refs/heads/"), refs); assert.deepEqual(repo.refs.readHead(), head); assert.deepEqual(repo.readIndex(), index); assert.equal(repo.readMergeState(), null);
+      assert.equal(readFileSync(join(repo.root, "p"), "utf8"), "unrelated left bytes\n");
+      writeFileSync(objectPath(repo, theirs.id), original);
+    }
+    let result: ReturnType<Repository["merge"]> | undefined;
+    assert.doesNotThrow(() => { result = repo.merge("right", { message: "intentional absence conflict", author: signature }, new Date()); });
+    assert.equal(result?.clean, false); assert.ok(result?.conflicts.some(conflict => conflict.path === "p" && conflict.reason === "content"));
+    const retained = repo.readIndex().find(entry => entry.path === "p")!;
+    assert.equal(retained.id, ours.id); assert.equal(retained.fileId, ours.fileId); assert.equal(retained.copiedFrom, ours.copiedFrom); assert.equal(retained.mode, ours.mode);
+    if (scenario === "ours") assert.equal(existsSync(join(repo.root, "p")), false);
+    else assert.equal(readFileSync(join(repo.root, "p"), "utf8"), "unrelated left bytes\n");
+    assert.deepEqual(readFileSync(join(repo.controlDirectory, "denials.json")), denials); refuses(() => repo.objects.read(terminal.id), "object_obliterated");
+  });
+}
+
 for (const kinds of [
   ["manifest", "manifest", "manifest"], ["blob", "manifest", "manifest"],
   [null, "manifest", "blob"], ["manifest", "blob", "blob"],

@@ -291,6 +291,17 @@ mixed record/blob changes return a per-path content conflict and preserve our
 complete typed object; manifest metadata is never text-merged into a blob.
 Agreed and one-sided changes keep the existing tree-merge behavior.
 
+When a competing payload merge encounters an intentionally obliterated address,
+it returns a per-path content conflict and retains our complete entry, including
+mode, FileId and copy provenance. Every surviving input still undergoes frame,
+kind and hash verification under the shared store lease; missing or corrupt
+objects refuse. Surviving link descriptors retain explicit pin reconciliation.
+An obliterated entry on our side remains absent during marker inspection and
+materialization, and merging never changes the denial registry. A terminal
+FileId cannot receive replacement bytes through ordinary staging. Reusing its
+path for an unrelated identity requires explicitly removing the old entry from
+the index before staging the new file; this does not reopen the erased identity.
+
 Before erasure opens another inventoried worktree, its link must resolve to this
 hub's physical shared control directory. Matching clone identity alone cannot
 establish that binding. Missing or reused locations refuse instead of being

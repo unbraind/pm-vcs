@@ -31,7 +31,10 @@ const extensionManifest = JSON.parse(
 test("the extension manifest uses only keys the pm CLI recognizes", () => {
   const pin = packageJson.devDependencies?.["@unbrained/pm-cli"] ?? "";
   assert.match(pin, /^\d+\.\d+\.\d+$/, "the pinned CLI version must be an exact three-part version");
-  const result = checkExtensionManifestCompatibility(extensionManifest, { pmVersion: pin });
+  const installed = JSON.parse(readFileSync(resolve(repoRoot, "node_modules/@unbrained/pm-cli/package.json"), "utf8")) as { version: string };
+  assert.equal(installed.version, pin, "metadata checks must use the actual installed SDK matching the dev pin");
+  assert.equal(extensionManifest.pm_min_version, "2026.8.1", "the extension compatibility floor is independent of the dev pin");
+  const result = checkExtensionManifestCompatibility(extensionManifest, { pmVersion: installed.version });
   const unknownKeyFindings = result.findings.filter((finding) => finding.code === "manifest_unknown_key");
   assert.deepStrictEqual(
     unknownKeyFindings,

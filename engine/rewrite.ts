@@ -47,6 +47,7 @@ import {
 import { mergeAppendOnlyLog, mergeRecords } from "./records.ts";
 import { type RepositoryConfig, isRecordPath, matchesGlob } from "./config.ts";
 import { buildTree, flattenTree } from "./worktree.ts";
+import { readFragmented } from "./fragments.ts";
 
 /** One path that could not be merged automatically. */
 export interface MergeConflict {
@@ -126,7 +127,7 @@ export class RewriteConflictError extends Error {
 /**
  * Merges one attributed payload path; competing repository links refuse atomically.
  *
- * Manifest or mixed-kind changes preserve our complete object and return a
+ * Intentional absence, manifest or mixed-kind changes preserve our complete object and return a
  * content conflict for explicit resolution. Record objects take the per-field path; native PM append-only histories union
  * their events. Other blobs and rewritten history prefixes take diff3. The
  * distinction is made on the stored object's type rather than on the path's
@@ -151,11 +152,22 @@ export function mergePath(
   fileId?: FileId,
 ): { id: ObjectId; conflict?: MergeConflict } {
   return ctx.store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
-    const ourObject = ctx.store.read(ourId);
-    const theirObject = ctx.store.read(theirId);
-    const baseObject = baseId === null ? null : ctx.store.read(baseId);
-    if (ourObject.type === "link" || theirObject.type === "link" || baseObject?.type === "link") {
+    // Only a durable denial means intentional absence. Verify every surviving
+    // frame and hash before returning a conflict; missing or damaged bytes refuse.
+    const ourObject = ctx.store.denial(ourId) === undefined ? ctx.store.read(ourId) : null;
+    const theirObject = ctx.store.denial(theirId) === undefined ? ctx.store.read(theirId) : null;
+    const baseObject = baseId === null || ctx.store.denial(baseId) !== undefined ? null : ctx.store.read(baseId);
+    for (const [id, object] of [[ourId, ourObject], [theirId, theirObject], [baseId, baseObject]] as const) {
+      if (object !== null && !["blob", "record", "manifest", "link"].includes(object.type)) {
+        throw new ObjectStoreError("object_type_mismatch", `Merge payload at ${path} has structural object kind ${object.type}.`);
+      }
+      if (id !== null && object?.type === "manifest") readFragmented(ctx.store, id);
+    }
+    if (ourObject?.type === "link" || theirObject?.type === "link" || baseObject?.type === "link") {
       throw new ObjectStoreError("link_merge_conflict", `Competing link descriptors at ${path} require explicit pin reconciliation before merging.`);
+    }
+    if (ourObject === null || theirObject === null || (baseId !== null && baseObject === null)) {
+      return { id: ourId, conflict: { path, reason: "content" } };
     }
     const records = ourObject.type === "record" && theirObject.type === "record";
     // Manifest metadata is not file text. Kind transitions need an explicit
@@ -319,7 +331,7 @@ export function mergeTrees(
       }
       const identity = reconcileIdentity(path, ourEntry, theirEntry);
       const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels, identity.fileId);
-      files.set(path, {
+      files.set(path, resolution.id === ourEntry.id && resolution.conflict?.reason === "content" ? ourEntry : {
         id: resolution.id,
         mode: ourEntry.mode,
         ...identity,

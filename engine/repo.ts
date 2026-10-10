@@ -593,6 +593,7 @@ export class Repository {
    * @returns True when the object is a blob whose text contains a marker line.
    */
   private blobHasConflictMarkers(id: ObjectId): boolean {
+    if (this.objects.denial(id) !== undefined) return false;
     const object = this.objects.read(id);
     if (object.type !== "blob") return false;
     return CONFLICT_MARKER.test(object.payload.toString("utf8"));
