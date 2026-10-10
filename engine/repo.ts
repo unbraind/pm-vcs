@@ -85,6 +85,7 @@ import {
   decodeIndex,
   encodeIndex,
   flattenTree,
+  isCanonicalRepoPath,
   isProtectedWorktreePath,
   listWorkingTree,
   materializeTree,
@@ -1220,11 +1221,19 @@ export class Repository {
   /** Permanently erase all payloads of a FileId, including every shared instance. */
   obliterate(selector: string, credential: string, reason: string, now: Date): ErasureReceipt {
     return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      let pmRoot = this.pmRoot;
+      if (pmRoot !== undefined && pmRoot !== "") {
+        const absolute = resolve(this.root, pmRoot);
+        const coordinate = relative(this.root, absolute).split(sep).join("/");
+        // Only the caller's known in-tree tracker is rebased into other instances.
+        // An external tracker keeps its absolute boundary, never a guessed basename.
+        pmRoot = coordinate === "" || (isCanonicalRepoPath(coordinate) && !isAbsolute(coordinate)) ? coordinate || "." : absolute;
+      }
       const paths = [this.hubRoot, ...readInstances(this.sharedControlDirectory).map(/** Registered instances share this denial and physical cleanup scope. */ (entry) => resolve(this.hubRoot, entry.path))];
       paths.push(...this.retiredInstances().map(/** Unlink never silently relinquishes held private or working bytes. */ (path) => resolve(this.hubRoot, path)));
       const instances = [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
         if (path !== this.hubRoot && !this.instanceIsBound(path)) throw new ObjectStoreError("unbound_instance", "An inventoried instance is missing or no longer linked to this hub; explicitly prune retired paths before erasure.");
-        return Repository.open(path, this.pmRoot);
+        return Repository.open(path, pmRoot);
       });
       return eraseFile(this, instances, selector, credential, reason, now);
     });

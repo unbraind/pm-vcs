@@ -73,6 +73,31 @@ assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
 assert.equal(repo.readFileState(revision, "secret.bin").kind, "obliterated"); assert.deepEqual(repo.verify().corrupt, []);
 const clone = Repository.open((await cloneFrom(root, join(process.cwd(), process.argv[2] + "-clone"), new Date())).root);
 assert.equal(clone.identity(), repo.identity()); assert.equal(clone.readFileState(revision, "secret.bin").kind, "obliterated"); assert.equal(clone.links()[0].link.revision, pin);
+for (const caller of ["hub", "linked"]) {
+  const hub = join(process.cwd(), process.argv[2] + "-custom-" + caller); mkdirSync(hub);
+  const tracker = join(hub, "custom/team");
+  await new PmClient({ cwd: hub, pmRoot: tracker, noExtensions: true }).init("custom", { defaults: true, author: "fixture" });
+  Repository.init(hub); const custom = Repository.open(hub, tracker);
+  custom.setAuthority("fixture", "custom-read", "custom-erase"); assert.deepEqual(custom.config.recordPaths, []);
+  const selected = Buffer.from("packed-custom-" + caller + "-selected-marker-928463");
+  writeFileSync(join(hub, "secret.bin"), selected); custom.stage(["secret.bin"]); custom.commit({ message: "custom", author }, new Date());
+  const sibling = hub + "-sibling"; custom.linkInstance("shared", sibling);
+  const siblingTracker = join(sibling, "custom/team");
+  await new PmClient({ cwd: sibling, pmRoot: siblingTracker, noExtensions: true }).init("custom", { defaults: true, author: "fixture" });
+  const runtimePaths = ["runtime/cache", "search/cache", "locks/item.lock", "transactions/state", "checkpoints/point"];
+  for (const root of [tracker, siblingTracker]) for (const path of runtimePaths) {
+    mkdirSync(join(root, path, ".."), { recursive: true }); writeFileSync(join(root, path), selected);
+  }
+  const invoked = Repository.open(caller === "hub" ? hub : sibling, caller === "hub" ? tracker : siblingTracker);
+  for (const root of [hub, sibling]) {
+    const copy = join(root, "unrelated/custom/team/runtime/cache"); mkdirSync(join(copy, ".."), { recursive: true }); writeFileSync(copy, selected);
+    assert.throws(/** Ordinary same-named folders cannot inherit the active tracker exemption. */ () => invoked.obliterate("secret.bin", "custom-erase", "incident", new Date()), /** Verify the typed pre-denial refusal. */ error => error.code === "erasure_worktree_conflict");
+    assert.deepEqual(custom.objects.denials(), []); assert.deepEqual(readFileSync(copy), selected); rmSync(join(root, "unrelated"), { recursive: true });
+  }
+  invoked.obliterate("secret.bin", "custom-erase", "incident", new Date());
+  for (const root of [hub, sibling]) assert.equal(existsSync(join(root, "secret.bin")), false);
+  for (const root of [tracker, siblingTracker]) for (const path of runtimePaths) assert.deepEqual(readFileSync(join(root, path)), selected);
+}
 process.stdout.write(JSON.stringify({ runtime: process.argv[2], linked: true, layers: true, erased: true, clone: true }));
 `;
 

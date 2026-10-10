@@ -1774,6 +1774,73 @@ test("grant repair custom SDK and configured tracker fences preserve runtime byt
   for (const path of paths) assert.deepEqual(readFileSync(join(repo.root, path)), selected);
 });
 
+for (const caller of ["hub", "linked"] as const) {
+  test(`grant repair linked custom tracker fences rebase from ${caller}`, /** Real SDK trackers preserve runtime bytes in every shared instance while ordinary copies still refuse. */ async () => {
+    const { repo, parent } = await fixture();
+    const tracker = join(repo.root, "custom/team");
+    const client = new PmClient({ cwd: repo.root, pmRoot: tracker, noExtensions: true });
+    await client.init("custom", { defaults: true, author: "fixture" });
+    const active = Repository.open(repo.root, tracker);
+    assert.deepEqual(active.config.recordPaths, []);
+    const selected = Buffer.from(`linked-custom-${caller}-selected-marker-628431`);
+    const revision = commit(active, "secret.bin", selected);
+    const sibling = join(parent, "sibling"); active.linkInstance("shared", sibling);
+    const siblingTracker = join(sibling, "custom/team");
+    const linkedClient = new PmClient({ cwd: sibling, pmRoot: siblingTracker, noExtensions: true });
+    await linkedClient.init("custom", { defaults: true, author: "fixture" });
+    const runtimePaths = ["runtime/cache", "search/cache", "locks/item.lock", "transactions/state", "checkpoints/point"];
+    for (const root of [tracker, siblingTracker]) for (const path of runtimePaths) {
+      mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), selected);
+    }
+    const invoked = openRepository({ command: "vcs obliterate", args: [], options: {}, global: { json: true, quiet: true, noPager: true },
+      repo_root: caller === "hub" ? repo.root : sibling, pm_root: caller === "hub" ? tracker : siblingTracker });
+    // The same names outside the active tracker remain ordinary project paths.
+    for (const root of [repo.root, sibling]) {
+      const copy = join(root, "unrelated/custom/team/runtime/cache");
+      mkdirSync(dirname(copy), { recursive: true }); writeFileSync(copy, selected);
+      refuses(() => invoked.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "erasure_worktree_conflict");
+      assert.deepEqual(active.objects.denials(), []); assert.deepEqual(readFileSync(copy), selected);
+      for (const instance of [repo.root, sibling]) assert.deepEqual(readFileSync(join(instance, "secret.bin")), selected);
+      rmSync(join(root, "unrelated"), { recursive: true });
+    }
+    assert.doesNotThrow(() => invoked.obliterate("secret.bin", "erase-fixture", "incident", new Date()));
+    for (const root of [repo.root, sibling]) assert.equal(existsSync(join(root, "secret.bin")), false);
+    for (const root of [tracker, siblingTracker]) for (const path of runtimePaths) assert.deepEqual(readFileSync(join(root, path)), selected);
+    assert.equal(active.readFileState(revision, "secret.bin").kind, "obliterated");
+  });
+}
+
+test("grant repair tracker coordinates retain root empty and external boundaries", /** Rebasing is limited to a known internal tracker, including a repository-root tracker. */ async () => {
+  for (const coordinate of ["", ".", "../outside", "absolute-outside"]) {
+    const { repo, parent } = await fixture();
+    const selected = Buffer.from(`tracker-coordinate-${coordinate}-marker-628934`); commit(repo, "secret.bin", selected);
+    const sibling = join(parent, "sibling"); repo.linkInstance("shared", sibling);
+    const pmRoot = coordinate === "absolute-outside" ? join(parent, "outside") : coordinate;
+    if (coordinate === ".") {
+      // A root tracker reserves root runtime, without reserving unrelated nested runtime.
+      for (const root of [repo.root, sibling]) {
+        rmSync(join(root, ".agents/pm"), { recursive: true });
+        await new PmClient({ cwd: root, pmRoot: root, noExtensions: true }).init("root", { defaults: true, author: "fixture" });
+        mkdirSync(join(root, "runtime"), { recursive: true }); writeFileSync(join(root, "runtime/cache"), selected);
+      }
+    } else if (coordinate !== "") {
+      const client = new PmClient({ cwd: repo.root, pmRoot: join(parent, "outside"), noExtensions: true });
+      await client.init("external", { defaults: true, author: "fixture" });
+      for (const root of [repo.root, sibling]) {
+        mkdirSync(join(root, "outside/runtime"), { recursive: true }); writeFileSync(join(root, "outside/runtime/cache"), selected);
+        const active = Repository.open(repo.root, pmRoot);
+        refuses(() => active.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "erasure_worktree_conflict");
+        assert.deepEqual(repo.objects.denials(), []); rmSync(join(root, "outside"), { recursive: true });
+      }
+    }
+    Repository.open(repo.root, pmRoot).obliterate("secret.bin", "erase-fixture", "incident", new Date());
+    for (const root of [repo.root, sibling]) {
+      assert.equal(existsSync(join(root, "secret.bin")), false);
+      if (coordinate === ".") assert.deepEqual(readFileSync(join(root, "runtime/cache")), selected);
+    }
+  }
+});
+
 test("grant repair installed CLI parses separate current and legacy flags and preserves ordinary paths", /** Exercise the actual installed host CLI with a packed extension and disposable token files. */ async () => {
   const { repo, parent } = await fixture(); installPackedExtension(repo.root);
   const authorityPath = join(repo.controlDirectory, "authority.json"); rmSync(authorityPath);

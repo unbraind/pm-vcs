@@ -207,8 +207,11 @@ also cause conservative refusal. Unsupported pack/cache artefacts are refused by
 physical inventory; this release does not implement a pack backend.
 
 The application boundary includes supported loose storage, private control metadata,
-current/retired registered working instances, and overlays. Tracker runtime fences
-are excluded from worktree inspection and cannot be erased through a forged owned
+current/retired registered working instances, and overlays. The active tracker
+coordinate inside the caller's repository is rebased into each registered instance;
+an external tracker retains its absolute boundary. Only the corresponding tracker
+runtime paths are excluded, so same-named ordinary project directories remain
+inspected. Tracker runtime fences cannot be erased through a forged owned
 path. Ordinary project ignore rules cannot hide owned files from erasure. Standard tool directories
 excluded from repository tracking, external backups, independently owned clones,
 filesystem snapshots, media recovery and novel custom encryption are outside it.
