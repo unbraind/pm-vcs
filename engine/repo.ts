@@ -13,7 +13,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // so `undo` never has to reconstruct one.
 
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
@@ -29,6 +29,7 @@ import {
   effectiveChangeId,
   encodeRecord,
   identityWithoutChangeLine,
+  migratedFileId,
   readCommit,
   writeCommit,
 } from "./model.ts";
@@ -114,16 +115,6 @@ function prefixesOf(path: string): string[] {
   return prefixes;
 }
 
-/** Derive one migration-safe identity from a legacy index entry. */
-function migratedFileId(entry: Pick<IndexEntry, "path" | "id">): FileId {
-  return createHash("sha256")
-    .update("pm-vcs legacy file identity\0", "utf8")
-    .update(entry.path, "utf8")
-    .update("\0", "utf8")
-    .update(entry.id, "utf8")
-    .digest("hex")
-    .slice(0, 32);
-}
 import { splitLines, unifiedDiff } from "./diff.ts";
 import { type IgnoreRules, isIgnored, isRuntimeIgnored, readIgnoreRules } from "./ignore.ts";
 import { parseWorkingRecord, renderWorkingRecord } from "./record-format.ts";

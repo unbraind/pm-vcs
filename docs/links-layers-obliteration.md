@@ -442,3 +442,43 @@ Malformed tree/manifest bytes under valid claimed addresses return documented
 `corrupt_object`, including with existing or corrupt denial metadata, and a later
 bad object cannot leave earlier valid objects stored. Valid hashes continue
 through the unchanged denial and provenance rules.
+
+## Private registry absence and native payload ownership
+
+A missing `layers.json` means an empty registry. A present JSON `null`, non-array
+root, malformed JSON or invalid layer entry raises `bad_layers` before bulk
+staging can inspect or publish private overlay bytes. `readControlJson` accepts
+an optional absence fallback, selected only by the original read's `ENOENT`;
+`readLayers` supplies an empty array. Parsed values always undergo validation.
+There is no additional existence probe. Other control readers keep their default
+missing-file semantics, native I/O errors and symbolic-link refusals.
+
+`writeManifest(store, manifest, fileId?)` and the fixed/CDC buffer, file and open
+file-descriptor writers accept an optional final owning FileId. Every blob and
+manifest write forwards that identity to `ObjectStore.write`. Before erasure,
+existing calls without an identity remain supported. Once any denial exists,
+local payload writers must supply their actual owning identity. A denied identity,
+known denied bytes, supported recoverable encodings and malformed recognizable
+encodings still refuse through the same locked publication preflight. Supplying
+ownership never relaxes byte inspection. Anonymous transport and legacy
+unattributed arrivals retain their refusal.
+
+Two-sided merges already pass their reconciled FileId to the payload writer.
+Legacy trees without identities use the existing index-migration rule, now shared
+in the model: SHA-256 over the legacy identity domain, repository-relative path
+and original object address, truncated to 32 hex characters. A common base's
+explicit identity takes precedence; otherwise its original address provides
+migration provenance. With no common base, the actual pre-merge local entry
+provides that provenance, matching staging. Explicit descendant identities remain
+unchanged. Content conflicts retain their existing behavior, and stored input
+bytes still undergo integrity and denial checks before synthesis.
+
+Bounded real fixtures exercise private overlays, missing/empty/valid registries,
+actual links and native filesystem errors, fixed/CDC buffer/file/descriptor writes,
+standalone manifests, and legacy blob/record merges after unrelated authorized
+erasure. Survivor manifests and fragments retain their hashes, reads and clone/
+export behavior. The same package-owned scenarios run through built and npm-packed
+Node, native Bun, and the pinned project-installed CLI consumer. Selected docstring
+coverage remains a measured declaration subset (previous denominator 290), not
+whole internal documentation coverage. The declared minimum SDK runtime and
+independent true-global CLI proof remain historical and are not renewed here.

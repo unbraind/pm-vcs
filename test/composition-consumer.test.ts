@@ -13,7 +13,7 @@ import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 const consumer = `
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -21,6 +21,10 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "pm-vcs";
 import { Repository } from "pm-vcs/dist/engine/repo.js";
+import { writeFragmented, writeFragmentedFile, writeFragmentsFromFd, writeCdcFragmented, writeCdcFragmentedFile, writeCdcFragmentsFromFd, readFragmented } from "pm-vcs/dist/engine/fragments.js";
+import { writeManifest, encodeRecord, migratedFileId } from "pm-vcs/dist/engine/model.js";
+import { mergeTrees } from "pm-vcs/dist/engine/rewrite.js";
+import { buildTree, flattenTree } from "pm-vcs/dist/engine/worktree.js";
 import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
@@ -121,6 +125,48 @@ assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
 assert.equal(repo.readFileState(revision, "secret.bin").kind, "obliterated"); assert.deepEqual(repo.verify().corrupt, []);
 const clone = Repository.open((await cloneFrom(root, join(process.cwd(), process.argv[2] + "-clone"), new Date())).root);
 assert.equal(clone.identity(), repo.identity()); assert.equal(clone.readFileState(revision, "secret.bin").kind, "obliterated"); assert.equal(clone.links()[0].link.revision, pin);
+// Real registry corruption must never stage private bytes through any artifact/runtime.
+repo.addLayer("registry-repair", new Map([["private-repair.txt", { content: Buffer.from("private consumer bytes"), executable: false }]]));
+const layersPath = join(repo.controlDirectory, "layers.json"); const layerBytes = readFileSync(layersPath);
+const registryIndex = readFileSync(join(repo.controlDirectory, "index")); const registryObjects = repo.objects.inventory(); const registryOps = repo.operations.read();
+writeFileSync(layersPath, "null"); assert.throws(() => repo.layers(), { code: "bad_layers" }); assert.throws(() => repo.stage([]), { code: "bad_layers" });
+assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), registryIndex); assert.deepEqual(repo.objects.inventory(), registryObjects); assert.deepEqual(repo.operations.read(), registryOps);
+assert.equal(readFileSync(join(root, "private-repair.txt"), "utf8"), "private consumer bytes"); writeFileSync(layersPath, layerBytes); repo.removeLayer("registry-repair");
+// Legacy inputs are produced before erasure; provenance comes from their actual base.
+const repaired = Repository.init(join(process.cwd(), process.argv[2] + "-writer-repair")); repaired.identity();
+await new PmClient({ cwd: repaired.root, pmRoot: join(repaired.root, ".agents/pm"), noExtensions: true }).init("repair", { defaults: true, author: "fixture" });
+repaired.setAuthority("fixture", "repair-read", "repair-erase");
+const selectedBytes = Buffer.from("consumer terminal marker 71294638");
+writeFileSync(join(repaired.root, "selected"), selectedBytes); writeFileSync(join(repaired.root, "owner"), "original owner bytes"); repaired.stage([]); repaired.commit({ message: "repair baseline", author }, new Date());
+const owner = repaired.readIndex().find(entry => entry.path === "owner"); const selectedOwner = repaired.readIndex().find(entry => entry.path === "selected");
+const legacyInputs = ["blob", "record"].map(type => {
+  const path = "legacy-" + type;
+  const payloads = type === "blob" ? ["a\\nb\\nc\\n", "A\\nb\\nc\\n", "a\\nb\\nC\\n"].map(text => Buffer.from(text)) : [{ left: "a", right: "c" }, { left: "A", right: "c" }, { left: "a", right: "C" }].map(encodeRecord);
+  const ids = payloads.map(payload => repaired.objects.write(type, payload));
+  return { type, path, owner: migratedFileId({ path, id: ids[0] }), trees: ids.map(id => buildTree(repaired.objects, new Map([[path, { id, mode: "100644" }]]))) };
+});
+repaired.obliterate("selected", "repair-erase", "incident", new Date());
+const fragmentBytes = Buffer.from("independent consumer survivor 98364271\\n".repeat(8)); const fragmentSource = join(process.cwd(), process.argv[2] + ".fragment-source"); writeFileSync(fragmentSource, fragmentBytes);
+const fragmentParams = { minChunkSize: 64, maxChunkSize: 64, mask: 1 };
+const fragmentResults = [writeFragmented(repaired.objects, fragmentBytes, 64, owner.fileId), writeFragmentedFile(repaired.objects, fragmentSource, 64, owner.fileId), writeCdcFragmented(repaired.objects, fragmentBytes, fragmentParams, owner.fileId), writeCdcFragmentedFile(repaired.objects, fragmentSource, fragmentParams, owner.fileId)];
+for (const cdc of [false, true]) {
+  const fd = openSync(fragmentSource, "r");
+  try {
+    const fragments = cdc ? writeCdcFragmentsFromFd(repaired.objects, fd, fragmentBytes.length, fragmentParams, fragmentSource, owner.fileId) : writeFragmentsFromFd(repaired.objects, fd, fragmentBytes.length, 64, fragmentSource, owner.fileId);
+    const manifest = { totalLength: fragmentBytes.length, fragments, ...(cdc ? { mode: "cdc" } : {}) }; fragmentResults.push({ manifestId: writeManifest(repaired.objects, manifest, owner.fileId), manifest });
+  } finally { closeSync(fd); }
+}
+for (const result of fragmentResults) assert.deepEqual(readFragmented(repaired.objects, result.manifestId), fragmentBytes);
+assert.throws(() => writeFragmented(repaired.objects, fragmentBytes, 64, selectedOwner.fileId), { code: "file_obliterated" });
+assert.throws(() => writeCdcFragmented(repaired.objects, selectedBytes, fragmentParams, owner.fileId), { code: "object_obliterated" });
+assert.throws(() => writeFragmented(repaired.objects, fragmentBytes, 64), { code: "unattributed_arrival" });
+repaired.writeIndex(repaired.readIndex().map(entry => entry.path === "owner" ? { ...entry, id: fragmentResults[0].manifestId } : entry)); writeFileSync(join(repaired.root, "owner"), fragmentBytes);
+for (const input of legacyInputs) {
+  const merged = mergeTrees({ store: repaired.objects, config: repaired.config, committer: author }, ...input.trees); assert.deepEqual(merged.conflicts, []);
+  const entry = flattenTree(repaired.objects, merged.tree).get(input.path); assert.equal(entry.fileId, input.owner); repaired.writeIndex([...repaired.readIndex(), { path: input.path, ...entry }]);
+}
+repaired.commit({ message: "repaired writers", author }, new Date()); exportBundle(repaired.objects, repaired.refs, []);
+const repairedClone = Repository.open((await cloneFrom(repaired.root, repaired.root + "-clone", new Date())).root); assert.deepEqual(readFileSync(join(repairedClone.root, "owner")), fragmentBytes); assert.deepEqual(repairedClone.verify().corrupt, []);
 const warmedDenial = repo.objects.denials()[0];
 const durablePaths = [join(repo.controlDirectory, "denials.json"), join(repo.controlDirectory, "objects", warmedDenial.id.slice(0, 2), warmedDenial.id.slice(2))];
 const durableSnapshot = () => durablePaths.map(path => {

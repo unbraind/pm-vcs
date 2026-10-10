@@ -35,6 +35,7 @@ import {
   effectiveChangeId,
   encodeRecord,
   identityWithoutChangeLine,
+  migratedFileId,
   readCommit,
   writeCommit,
 } from "./model.ts";
@@ -331,6 +332,12 @@ export function mergeTrees(
         continue;
       }
       const identity = reconcileIdentity(path, ourEntry, theirEntry);
+      // Legacy descendants share their base's established migration identity.
+      // Without a base, our actual pre-merge entry is the migration provenance,
+      // matching ordinary staging; this is never an anonymous arrival grant.
+      if (identity.fileId === undefined) {
+        identity.fileId = baseEntry?.fileId ?? migratedFileId({ path, id: baseEntry?.id ?? ourEntry.id });
+      }
       const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels, identity.fileId);
       files.set(path, resolution.id === ourEntry.id && resolution.conflict?.reason === "content" ? ourEntry : {
         id: resolution.id,

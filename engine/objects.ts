@@ -73,7 +73,7 @@ export class ObjectStoreError extends Error {
 }
 
 /**
- * Reads one control-directory JSON file, returning null when it is absent.
+ * Reads one control-directory JSON file, returning the fallback only on ENOENT.
  *
  * Every per-repository and per-instance control file — views, hints, instance
  * registries, remotes — is read through this one shape: absent means "nothing
@@ -84,17 +84,21 @@ export class ObjectStoreError extends Error {
  * @param path - The file to read.
  * @param code - Stable error code raised for a parse failure.
  * @param what - What the file is called in messages, for example "view file".
- * @returns The parsed JSON value, or null when the file does not exist.
+ * @param absent - Value returned only for a missing file; defaults to null for
+ *   existing readers. Parsed JSON null never selects this fallback. A caller
+ *   needing to distinguish absence can supply its valid empty registry value
+ *   without a separate existence probe or a second read.
+ * @returns The parsed JSON value, or `absent` when the file does not exist.
  * @throws ObjectStoreError When the file exists but is not valid JSON.
  */
-export function readControlJson(path: string, code: string, what: string): unknown {
+export function readControlJson(path: string, code: string, what: string, absent: unknown = null): unknown {
   let contents: string;
   try {
     if (lstatSync(path).isSymbolicLink()) throw new ObjectStoreError(code, `The ${what} cannot be a symbolic link.`);
     contents = readFileSync(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return null;
+    return absent;
   }
   try {
     return JSON.parse(contents);
@@ -271,6 +275,10 @@ export class ObjectStore {
    *
    * @param type - The object kind.
    * @param payload - The object's raw content.
+   * @param fileId - Owning stable file identity for a locally produced payload.
+   *   Optional before erasure and for structural objects; blob, record and
+   *   manifest writes require it once a denial exists. Attribution never skips
+   *   denied-byte/representation inspection or permits a denied identity.
    * @returns The id the content is stored under.
    */
   write(type: ObjectType, payload: Buffer, fileId?: string): ObjectId {

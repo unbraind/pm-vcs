@@ -144,8 +144,7 @@ export function writePrivateJson(path: string, value: unknown): void {
 
 /** Read and strictly validate all private overlay snapshots. */
 export function readLayers(control: string, rules?: IgnoreRules): LocalLayer[] {
-  const raw = readControlJson(join(control, "layers.json"), "bad_layers", "private layers");
-  if (raw === null) return [];
+  const raw = readControlJson(join(control, "layers.json"), "bad_layers", "private layers", []);
   if (!Array.isArray(raw)) throw new ObjectStoreError("bad_layers", "Private layers must be an array.");
   const names = new Set<string>();
   const paths: string[] = [];
