@@ -49,9 +49,8 @@ storage concern rather than part of the uncompressed content identity. This enab
 transfer, range reads and reuse of fragments across revisions.
 
 pm-vcs already stores arbitrary bytes and keeps text diff/merge above its object store. Its
-current loose-object design still stores one whole file as one blob. It therefore retains the
-binary-first boundary and defers these scale additions until they are benchmarked in
-TypeScript:
+loose store supports manifests with fixed and content-defined fragments, streaming writers
+and range reads. These capabilities retain the binary-first boundary:
 
 - streaming object reads and writes;
 - content-defined and fixed-size fragment strategies;
@@ -94,8 +93,7 @@ Lore instances materialize views of a repository. View rules govern inbound mate
 ignore rules govern outbound staging. Immutable content can be cached and shared while each
 instance keeps independent branch, staging and dirty state. Missing data can be fetched lazily.
 
-pm-vcs should adopt sparse instances only after remote object reads and fragmented storage
-exist. A view may change what is materialized, never the committed root-tree identity. Merge
+pm-vcs ships sparse shared instances over remote object reads and fragmented storage. A view may change what is materialized, never the committed root-tree identity. Merge
 must operate on full trees even when the instance sees a subset, and conflicts outside the
 view must remain visible. Shared immutable stores must not imply shared HEAD, index, view,
 dirty state or operation log.
@@ -134,14 +132,21 @@ the atomic publication boundary.
 
 Lore distinguishes committed links from local layers. A link pins content from another
 repository and travels with history. A layer overlays content for one instance without
-changing the committed revision. pm-vcs will adapt both rather than reproduce Git submodules:
-committed links pin immutable repository/revision identities and preserve authorization;
-local layers never affect commit IDs and remain visibly outside status unless promoted.
+changing the committed revision. pm-vcs ships both: typed link descriptors pin an immutable
+repository identity and commit ID with explicit file mappings and separate target authority.
+Resolution creates a private layer; ordinary bundles contain no target payloads or grants.
+Layers mask bulk staging, refuse explicit staging and appear as exclusions in status. Edited
+overlay bytes survive checkout; removal restores the current underlying index and requires
+explicit discard of edits. These are separate from local shared-instance links.
 
 Lore also distinguishes deliberately obliterated payloads from missing or corrupt data.
-pm-vcs currently never deletes objects. Garbage collection of unreachable data and mandatory
-erasure of reachable history are separate designs. Obliteration requires typed absence,
-authorization, audit, deduplication isolation and explicit checkout/verify behavior.
+pm-vcs ships authorized FileId-scoped obliteration for its loose zlib backend. Durable typed
+denial precedes physical deletion across historical roots, fragments, temporary copies and
+known shared-instance worktrees. Shared ownership, affected layers and unsupported storage
+refuse before mutation. Typed absence remains distinct during reads, checkout and verification;
+stale imports cannot resurrect bytes. Remote tombstones cannot authorize deleting held local
+bytes. Garbage collection, pack storage, independent clones and filesystem snapshots remain
+separate boundaries. See [the shipped design](docs/links-layers-obliteration.md).
 
 ## PM-linked file attribution
 
@@ -164,8 +169,8 @@ is not a second source of truth and does not mutate an item when a file changes.
 | `pm vcs items [from..to]` | Which items are explicit or linked to files changed by this range? |
 
 The first implementation derives answers from canonical trees, commits and current PM links.
-Historical link-at-event-time indexing, at-scale persistent indexes, fragments, views, locks,
-served remotes and obliteration remain separately tracked work rather than inflated claims.
+Historical link-at-event-time indexing, at-scale persistent indexes and enforced leases
+remain separately tracked work.
 
 ## Capability decisions
 
@@ -176,14 +181,14 @@ served remotes and obliteration remain separately tracked work rather than infla
 | immutable content plus compare-and-swap pointers | retain; shipped locally |
 | stable file identity | adopt; shipped |
 | stable branch identity separate from name | adopt before served remotes |
-| FastCDC and fragment storage | adopt the invariant after TypeScript benchmarks |
-| sparse views and lazy fetch | adopt after remotes and fragments |
+| FastCDC and fragment storage | adopt the invariant; shipped as Gear-based content-defined fragments |
+| sparse views and lazy fetch | adopt; shipped |
 | authoritative server | adapt to authority per remote |
 | resumable publication | adopt |
 | tenant partitions | adopt for hosted service security |
 | remote-enforced file leases | adopt using `FileId` |
-| committed links and local layers | adapt |
-| typed obliteration | adopt separately from garbage collection |
+| committed links and local layers | adapt; shipped |
+| typed obliteration | adopted separately from garbage collection; shipped for loose storage |
 | Lore object or wire compatibility | reject |
 | mandatory centralized operation | reject |
 | pm-vcs change IDs and operation log | retain as differentiators |

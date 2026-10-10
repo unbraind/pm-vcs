@@ -64,7 +64,6 @@
 - Retire the vendored docstring analyzer and converge the changelog on replace mode ([pm-vcs-8bpi](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8bpi.toon))
 - Release bot identity absent from the allowlist would break the audit on the first release ([pm-vcs-gehh](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-gehh.toon))
 - Public git history embeds a personal author email and blocks release approval ([pm-vcs-mhbz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-mhbz.toon))
-- Make every production TypeScript script part of exact coverage and add lint and duplication gates ([pm-vcs-op2c](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-op2c.toon))
 - Fix NODE_V8_COVERAGE lcov corruption in test helpers ([pm-vcs-lapg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-lapg.toon))
 - The 100 percent branch gate rested on an incidental execution, so an unrelated change failed CI on Node 26 only ([pm-vcs-8e8k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8e8k.toon))
 - A fetched branch can be neither named nor listed, so the push refusal's own remediation cannot be followed ([pm-vcs-dh19](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-dh19.toon))

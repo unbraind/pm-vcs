@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, mock, test } from "node:test";
 
 import { parseIgnore } from "../engine/ignore.ts";
 import { writeCommit, type Signature } from "../engine/model.ts";
-import { ObjectStoreError } from "../engine/objects.ts";
+import { ObjectStoreError, type ObjectStore } from "../engine/objects.ts";
 import { Repository } from "../engine/repo.ts";
 import { buildTree, materializeTree } from "../engine/worktree.ts";
 import { WorktreeMutation, worktreeMutationCapabilities } from "../engine/worktree-mutation.ts";
@@ -44,7 +44,7 @@ function setup(control: boolean = false): { repo: Repository; destination: strin
 }
 
 /** Hook both descriptor-safe syscalls and their old pathname equivalents for behavioral revert proofs. */
-function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: string, swap: () => void): () => boolean {
+function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: string, swap: () => void, erasure = false): () => boolean {
   let swapped = false;
   const trigger = (path: unknown): void => {
     if (!swapped && typeof path === "string" && path.endsWith(`/${leaf}`)) {
@@ -67,9 +67,9 @@ function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: strin
     mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => {
       if (String(args[0]).endsWith(`/${leaf}`)) {
         observations += 1;
-        // Unlink's second leaf observation, open's post-unlink absence observation,
+        // Unlink's second observation (first with a retained erasure identity), open's post-unlink absence observation,
         // mkdir's first missing-child observation, or rmdir's repeated child check.
-        const boundary = operation === "unlink" ? 2 : operation === "open" ? 3 : 1;
+        const boundary = operation === "unlink" ? (erasure ? 1 : 2) : operation === "open" ? 3 : 1;
         if (operation === "rmdir" ? pruning : observations === boundary) trigger(args[0]);
       }
       return lstat(...args);
@@ -137,6 +137,62 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
               assert.ok(failure instanceof ObjectStoreError);
               assert.equal(failure.code, "worktree_path_changed");
               assert.deepEqual(repo.readIndex(), index, "refusal does not publish a partial index");
+            });
+          }
+        }
+      }
+
+      for (const control of [false, true]) {
+        for (const action of ["layer-add", "layer-restore", "layer-delete", "link", "obliterate"] as const) {
+          const operations = action === "obliterate" || action === "layer-delete" ? ["unlink"] as const
+            : action === "layer-restore" ? ["open", "unlink"] as const : ["open", "mkdir", "unlink"] as const;
+          for (const operation of operations) {
+            test(`${action} refuses ancestor replacement at ${operation} into ${control ? "control state" : "outside"}`, () => {
+              const { repo, destination, tip } = setup(control);
+              repo.restore(["branch/leaf.txt"], tip);
+              const path = operation === "mkdir" ? "branch/new/leaf.txt" : "branch/leaf.txt";
+              if (operation === "mkdir") fs.rmdirSync(join(repo.root, "branch/new"));
+              if (action === "layer-delete") {
+                const empty = buildTree(repo.objects, new Map());
+                repo.materialize(empty);
+                repo.commit({ message: "empty underlying tree", author }, new Date(1000));
+              }
+              if (action === "layer-restore" || action === "layer-delete") {
+                repo.addLayer("fixture", new Map([[path, { content: Buffer.from("private replacement\n"), executable: false }]]));
+              }
+              if (action === "obliterate") {
+                repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+                writeFileSync(join(repo.root, path), "unique payload selected for permanent physical erasure\n");
+                repo.stage([path]);
+                repo.commit({ message: "selected identity", author }, new Date(1000));
+              }
+              const replaceAncestor = (): void => {
+                renameSync(join(repo.root, "branch"), join(repo.root, "parked"));
+                symlinkSync(destination, join(repo.root, "branch"), "dir");
+              };
+              let swapped: (() => boolean) | undefined;
+              if (action === "obliterate") {
+                // Guarded preflight reads also observe this leaf. Arm the
+                // removal race after the original durable denial write.
+                const record = repo.objects.recordDenials;
+                mock.method(repo.objects, "recordDenials", (...args: Parameters<ObjectStore["recordDenials"]>) => {
+                  record.apply(repo.objects, args);
+                  swapped = intercept(operation, "leaf.txt", replaceAncestor, true);
+                });
+              } else swapped = intercept(operation, operation === "mkdir" ? "new" : "leaf.txt", replaceAncestor);
+              assert.throws(() => {
+                if (action === "layer-add") repo.addLayer("fixture", new Map([[path, { content: Buffer.from("private replacement\n"), executable: true }]]));
+                else if (action === "layer-restore" || action === "layer-delete") repo.removeLayer("fixture");
+                else if (action === "link") repo.stageLink(path, { version: 1, repository: repo.identity(), revision: tip,
+                  mappings: [{ source: "source.txt", destination: "vendor/file.txt" }] });
+                else repo.obliterate(path, "erase-fixture", "incident", new Date(2000));
+              }, { code: "worktree_path_changed" });
+              assert.equal(swapped?.(), true, "the selected mutation boundary was exercised");
+              for (const sentinel of ["leaf.txt", "new/leaf.txt", "droppable/sentinel"]) {
+                assert.equal(readFileSync(join(destination, sentinel), "utf8"), "sentinel\n");
+                assert.equal(statSync(join(destination, sentinel)).mode & 0o777, 0o600);
+              }
+              if (action === "obliterate") assert.equal(repo.objects.denials()[0]!.pending, true, "a failed removal cannot report completed erasure");
             });
           }
         }
@@ -468,4 +524,28 @@ test("falling back from procfs cannot adopt a concurrently replaced root inode",
   });
   assert.throws(() => new WorktreeMutation(repo.root, ".pmvcs"), { code: "worktree_path_changed" });
   assert.equal(readFileSync(join(fixture!.root, "parked-root/branch/leaf.txt"), "utf8"), "sentinel\n");
+});
+
+
+test("store lock cleanup preserves a foreign lock after a successful callback", () => {
+  const { repo } = setup();
+  const path = join(repo.controlDirectory, "objects.lock");
+  assert.throws(() => repo.objects.withWriteLock(/** A replacement lock is never owned by this transaction. */ () => {
+    fs.unlinkSync(path);
+    writeFileSync(path, "foreign owner");
+  }), { code: "worktree_path_changed" });
+  assert.equal(readFileSync(path, "utf8"), "foreign owner");
+});
+
+test("store lock cleanup preserves a foreign lock and the original root-mutation refusal", () => {
+  const { repo, destination, tip } = setup();
+  mkdirSync(join(destination, ".pmvcs"));
+  writeFileSync(join(destination, ".pmvcs/objects.lock"), "foreign owner");
+  betweenSteps = false;
+  intercept("open", "leaf.txt", () => {
+    renameSync(repo.root, join(fixture!.root, "parked-root"));
+    symlinkSync(destination, repo.root, "dir");
+  });
+  assert.throws(() => repo.restore(["branch/leaf.txt"], tip), { code: "worktree_path_changed" });
+  assert.equal(readFileSync(join(destination, ".pmvcs/objects.lock"), "utf8"), "foreign owner");
 });

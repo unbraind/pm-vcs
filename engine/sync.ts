@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 
-import { assertClosurePresent, exportBundle, importBundleObjects } from "./bundle.ts";
+import { exportBundle, importBundleObjects, serializeBundle } from "./bundle.ts";
 import { isAncestor } from "./merge.ts";
 import type { ObjectId } from "./objects.ts";
 import { ObjectStoreError } from "./objects.ts";
@@ -43,7 +43,7 @@ export interface FetchReport {
   readonly conflictingTags: readonly string[];
   /** Objects transferred and stored. */
   readonly added: readonly ObjectId[];
-  /** True when the remote had nothing the local repository lacked. */
+  /** True when fetch changes no eligible refs, stored objects or exchanged denial metadata. */
   readonly upToDate: boolean;
 }
 
@@ -155,30 +155,44 @@ export async function fetchFrom(
   }
 
   if (wanted.length === 0) {
-    return { remote: remoteName, url: remote.url, updated: [], conflictingTags, added: [], upToDate: true };
+    // Empty legacy fetch means ALL refs, so it cannot express metadata-only exchange.
+    const eligible = advertisement.refs.filter((entry) => localNameFor(remoteName, entry.name) !== null
+      && (!entry.name.startsWith(TAG_PREFIX) || !conflictingTags.includes(entry.name.slice(TAG_PREFIX.length)))).map((entry) => entry.name);
+    const haves = localTips(repository);
+    let metadata: Buffer | undefined;
+    if (wire.fetchObjects !== undefined && advertisement.capabilities.includes("object-fetch")) metadata = await wire.fetchObjects([]);
+    else if (eligible.length > 0) metadata = await wire.fetch(eligible, haves);
+    return repository.objects.withWriteLock(/** Even a peer without eligible transfer refs must validate held closure and local audits. */ () => {
+      const beforeDenials = repository.objects.denials().length;
+      const bytes = metadata ?? serializeBundle(repository.objects, { refs: {}, prerequisites: [], objects: [] });
+      const { added } = importBundleObjects(repository.objects, bytes, haves);
+      const changed = added.length > 0 || repository.objects.denials().length !== beforeDenials;
+      return { remote: remoteName, url: remote.url, updated: [], conflictingTags, added, upToDate: !changed };
+    });
   }
 
   const bundle = await wire.fetch(wanted.map((item) => item.remoteRef), localTips(repository));
-  const { added } = importBundleObjects(repository.objects, bundle);
-  for (const item of wanted) assertClosurePresent(repository.objects, item.localRef, item.target);
+  return repository.objects.withWriteLock(/** Validate all advertised roots and publish their tracking refs within one erasure lease. */ () => {
+    const { added } = importBundleObjects(repository.objects, bundle, wanted.map((item) => item.target));
 
-  repository.refs.transaction(wanted.map((item) => ({
-    name: item.localRef,
-    expected: item.before,
-    next: item.target,
-  })));
-  const updated: RefTransition[] = wanted.map((item) => ({
-    ref: item.localRef,
-    before: item.before,
-    after: item.target,
-  }));
-  repository.operations.append(
-    "fetch",
-    `Fetched ${updated.length} ref(s) from ${remoteName}.`,
-    updated,
-    now,
-  );
-  return { remote: remoteName, url: remote.url, updated, conflictingTags, added, upToDate: false };
+    repository.refs.transaction(wanted.map((item) => ({
+      name: item.localRef,
+      expected: item.before,
+      next: item.target,
+    })));
+    const updated: RefTransition[] = wanted.map((item) => ({
+      ref: item.localRef,
+      before: item.before,
+      after: item.target,
+    }));
+    repository.operations.append(
+      "fetch",
+      `Fetched ${updated.length} ref(s) from ${remoteName}.`,
+      updated,
+      now,
+    );
+    return { remote: remoteName, url: remote.url, updated, conflictingTags, added, upToDate: false };
+  });
 }
 
 /**
@@ -353,6 +367,7 @@ export async function cloneFrom(
   const repository = Repository.init(root, branch ?? DEFAULT_BRANCH, advertisement.config);
   let fetched: FetchReport;
   try {
+    if (advertisement.repositoryId !== undefined) repository.objects.adoptIdentity(advertisement.repositoryId);
     repository.remotes.add(remoteName, location);
     fetched = await fetchFrom(repository, remoteName, now, wire);
   } catch (error) {

@@ -33,7 +33,7 @@ import {
   ObjectStoreError,
   type ObjectStore,
 } from "./objects.ts";
-import type { CdcParams, FragmentEntry, FragmentManifest, FragmentWriteResult } from "./model.ts";
+import type { CdcParams, FileId, FragmentEntry, FragmentManifest, FragmentWriteResult } from "./model.ts";
 import { manifestId as computeManifestId, readManifest, writeManifest } from "./model.ts";
 
 /** Default fragment size: 1 MiB. Large enough to amortise per-fragment overhead, small enough to bound memory. */
@@ -66,6 +66,8 @@ function assertFragmentSize(fragmentSize: number, code: string): void {
  * @param totalLength - Expected total content length in bytes.
  * @param fragmentSize - Maximum bytes per fragment.
  * @param sourcePath - Source path, used in error messages.
+ * @param fileId - Owning stable identity for every fragment; optional before
+ *   erasure, required after it. Store denial and byte inspection remain active.
  * @returns The ordered fragment entries.
  * @throws ObjectStoreError When `readSync` returns fewer bytes than requested.
  */
@@ -75,6 +77,7 @@ export function writeFragmentsFromFd(
   totalLength: number,
   fragmentSize: number,
   sourcePath: string,
+  fileId?: FileId,
 ): FragmentEntry[] {
   // This helper is exported, so its callers are not only the two in this module
   // that validate first. A fragmentSize of 0 makes `toRead` 0, the inner read
@@ -88,33 +91,35 @@ export function writeFragmentsFromFd(
       `Total length ${totalLength} is not a non-negative integer.`,
     );
   }
-  const fragments: FragmentEntry[] = [];
-  const buffer = Buffer.allocUnsafe(fragmentSize);
-  let remaining = totalLength;
-  while (remaining > 0) {
-    const toRead = Math.min(fragmentSize, remaining);
-    // readSync may return fewer bytes than asked for without the file being
-    // truncated, so fill the fragment across as many reads as it takes. Only a
-    // read that returns 0 means there are no more bytes, and that is the one
-    // case where the file really is shorter than its recorded length. Treating
-    // any partial return as short_read reports corruption on a healthy file.
-    let filled = 0;
-    while (filled < toRead) {
-      const bytesRead = readSync(fd, buffer, filled, toRead - filled, null);
-      if (bytesRead === 0) {
-        throw new ObjectStoreError(
-          "short_read",
-          `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
-        );
+  return store.withWriteLock(/** Hold one lease across every descriptor read and fragment publication. */ () => {
+    const fragments: FragmentEntry[] = [];
+    const buffer = Buffer.allocUnsafe(fragmentSize);
+    let remaining = totalLength;
+    while (remaining > 0) {
+      const toRead = Math.min(fragmentSize, remaining);
+      // readSync may return fewer bytes than asked for without the file being
+      // truncated, so fill the fragment across as many reads as it takes. Only a
+      // read that returns 0 means there are no more bytes, and that is the one
+      // case where the file really is shorter than its recorded length. Treating
+      // any partial return as short_read reports corruption on a healthy file.
+      let filled = 0;
+      while (filled < toRead) {
+        const bytesRead = readSync(fd, buffer, filled, toRead - filled, null);
+        if (bytesRead === 0) {
+          throw new ObjectStoreError(
+            "short_read",
+            `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
+          );
+        }
+        filled += bytesRead;
       }
-      filled += bytesRead;
+      const chunk = buffer.subarray(0, toRead);
+      const id = store.write("blob", chunk, fileId);
+      fragments.push({ id, length: toRead });
+      remaining -= toRead;
     }
-    const chunk = buffer.subarray(0, toRead);
-    const id = store.write("blob", chunk);
-    fragments.push({ id, length: toRead });
-    remaining -= toRead;
-  }
-  return fragments;
+    return fragments;
+  });
 }
 
 /**
@@ -127,6 +132,8 @@ export function writeFragmentsFromFd(
  * @param store - Destination object store.
  * @param content - The content to fragment and store.
  * @param fragmentSize - Maximum bytes per fragment. Defaults to 1 MiB.
+ * @param fileId - Owning stable identity for every fragment and the manifest;
+ *   optional before erasure, required after it. Never inferred from content.
  * @returns The manifest id and the manifest.
  * @throws ObjectStoreError When the fragment size is not a positive integer.
  */
@@ -134,19 +141,22 @@ export function writeFragmented(
   store: ObjectStore,
   content: Buffer,
   fragmentSize: number = DEFAULT_FRAGMENT_SIZE,
+  fileId?: FileId,
 ): FragmentWriteResult {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
-  const totalLength = content.length;
-  const fragments: FragmentEntry[] = [];
-  for (let offset = 0; offset < totalLength; offset += fragmentSize) {
-    const end = Math.min(offset + fragmentSize, totalLength);
-    const chunk = content.subarray(offset, end);
-    const id = store.write("blob", chunk);
-    fragments.push({ id, length: end - offset });
-  }
-  const manifest: FragmentManifest = { totalLength, fragments };
-  const id = writeManifest(store, manifest);
-  return { manifestId: id, manifest };
+  return store.withWriteLock(/** Publish all fixed fragments and their manifest under one reentrant lease. */ () => {
+    const totalLength = content.length;
+    const fragments: FragmentEntry[] = [];
+    for (let offset = 0; offset < totalLength; offset += fragmentSize) {
+      const end = Math.min(offset + fragmentSize, totalLength);
+      const chunk = content.subarray(offset, end);
+      const id = store.write("blob", chunk, fileId);
+      fragments.push({ id, length: end - offset });
+    }
+    const manifest: FragmentManifest = { totalLength, fragments };
+    const id = writeManifest(store, manifest, fileId);
+    return { manifestId: id, manifest };
+  });
 }
 
 /**
@@ -162,6 +172,8 @@ export function writeFragmented(
  * @param store - Destination object store.
  * @param sourcePath - Absolute path to the file to read and fragment.
  * @param fragmentSize - Maximum bytes per fragment. Defaults to 1 MiB.
+ * @param fileId - Owning stable identity for every fragment and the manifest;
+ *   optional before erasure, required after it. Never inferred from the path.
  * @returns The manifest id and the manifest.
  * @throws ObjectStoreError When the fragment size is not a positive integer, or
  *   a short read is encountered on the source file.
@@ -170,23 +182,26 @@ export function writeFragmentedFile(
   store: ObjectStore,
   sourcePath: string,
   fragmentSize: number = DEFAULT_FRAGMENT_SIZE,
+  fileId?: FileId,
 ): FragmentWriteResult {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
-  const fd = openSync(sourcePath, "r");
-  try {
-    // fstat the DESCRIPTOR, not the path. Measuring with statSync and then
-    // opening leaves a window in which the path can be replaced, so the length
-    // recorded in the manifest would describe a different file from the one
-    // whose bytes are stored — a manifest that is internally consistent and
-    // wrong. The descriptor names one file for its whole lifetime.
-    const totalLength = fstatSync(fd).size;
-    const fragments = writeFragmentsFromFd(store, fd, totalLength, fragmentSize, sourcePath);
-    const manifest: FragmentManifest = { totalLength, fragments };
-    const id = writeManifest(store, manifest);
-    return { manifestId: id, manifest };
-  } finally {
-    closeSync(fd);
-  }
+  return store.withWriteLock(/** Keep source descriptor ownership, every fragment and the manifest in one lease. */ () => {
+    const fd = openSync(sourcePath, "r");
+    try {
+      // fstat the DESCRIPTOR, not the path. Measuring with statSync and then
+      // opening leaves a window in which the path can be replaced, so the length
+      // recorded in the manifest would describe a different file from the one
+      // whose bytes are stored — a manifest that is internally consistent and
+      // wrong. The descriptor names one file for its whole lifetime.
+      const totalLength = fstatSync(fd).size;
+      const fragments = writeFragmentsFromFd(store, fd, totalLength, fragmentSize, sourcePath, fileId);
+      const manifest: FragmentManifest = { totalLength, fragments };
+      const id = writeManifest(store, manifest, fileId);
+      return { manifestId: id, manifest };
+    } finally {
+      closeSync(fd);
+    }
+  });
 }
 
 /**
@@ -207,7 +222,7 @@ export function writeFragmentedFile(
  * @returns The blob's bytes.
  * @throws ObjectStoreError When the stored blob's length differs from the manifest's.
  */
-function readFragmentBlob(store: ObjectStore, fragment: FragmentEntry): Buffer {
+export function readFragmentBlob(store: ObjectStore, fragment: FragmentEntry): Buffer {
   const data = store.readTyped(fragment.id, "blob");
   if (data.length !== fragment.length) {
     throw new ObjectStoreError(
@@ -259,33 +274,35 @@ export function readFragmentedToFile(
   id: ObjectId,
   destinationPath: string,
 ): void {
-  const manifest = readManifest(store, id);
-  const fd = openSync(destinationPath, "wx");
-  let complete = false;
-  try {
-    for (const fragment of manifest.fragments) {
-      const data = readFragmentBlob(store, fragment);
-      // writeSync returns the bytes actually written and is not guaranteed to
-      // transfer the whole buffer in one call. Ignoring the return value
-      // truncates the output on a short write while reporting success, which
-      // for a restore path means silent corruption of the restored file.
-      let written = 0;
-      while (written < data.length) {
-        written += writeSync(fd, data, written, data.length - written);
+  return store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
+    const manifest = readManifest(store, id);
+    const fd = openSync(destinationPath, "wx");
+    let complete = false;
+    try {
+      for (const fragment of manifest.fragments) {
+        const data = readFragmentBlob(store, fragment);
+        // writeSync returns the bytes actually written and is not guaranteed to
+        // transfer the whole buffer in one call. Ignoring the return value
+        // truncates the output on a short write while reporting success, which
+        // for a restore path means silent corruption of the restored file.
+        let written = 0;
+        while (written < data.length) {
+          written += writeSync(fd, data, written, data.length - written);
+        }
       }
+      fsyncSync(fd);
+      complete = true;
+    } finally {
+      closeSync(fd);
+      // A fragment read can throw partway through - a missing blob, or one whose
+      // length disagrees with its manifest entry - and the bytes written before
+      // that point are already on disk. Leaving them behind is worse than the
+      // failure itself: the file looks like a restore, and a caller retrying
+      // meets EEXIST from the exclusive open rather than a clean second attempt.
+      // The destination only survives a run that completed.
+      if (!complete) rmSync(destinationPath, { force: true });
     }
-    fsyncSync(fd);
-    complete = true;
-  } finally {
-    closeSync(fd);
-    // A fragment read can throw partway through - a missing blob, or one whose
-    // length disagrees with its manifest entry - and the bytes written before
-    // that point are already on disk. Leaving them behind is worse than the
-    // failure itself: the file looks like a restore, and a caller retrying
-    // meets EEXIST from the exclusive open rather than a clean second attempt.
-    // The destination only survives a run that completed.
-    if (!complete) rmSync(destinationPath, { force: true });
-  }
+  });
 }
 
 /**
@@ -552,6 +569,8 @@ function cdcBoundaries(
  * @param totalLength - Expected total content length in bytes.
  * @param params - CDC parameters.
  * @param sourcePath - Source path, used in error messages.
+ * @param fileId - Owning stable identity for every fragment; optional before
+ *   erasure, required after it. Store denial and byte inspection remain active.
  * @returns The ordered fragment entries.
  * @throws ObjectStoreError When CDC parameters are invalid, or a short read is
  *   encountered on the source file.
@@ -562,6 +581,7 @@ export function writeCdcFragmentsFromFd(
   totalLength: number,
   params: CdcParams,
   sourcePath: string,
+  fileId?: FileId,
 ): FragmentEntry[] {
   assertCdcParams(params, "invalid_cdc_params");
   if (!Number.isInteger(totalLength) || totalLength < 0) {
@@ -570,50 +590,52 @@ export function writeCdcFragmentsFromFd(
       `Total length ${totalLength} is not a non-negative integer.`,
     );
   }
-  const { minChunkSize, maxChunkSize, mask } = params;
-  const readSize = Math.min(8192, maxChunkSize);
-  const readBuf = Buffer.allocUnsafe(readSize);
-  const chunkBuf = Buffer.allocUnsafe(maxChunkSize);
-  const fragments: FragmentEntry[] = [];
-  let chunkLen = 0;
-  let hash = 0;
-  let remaining = totalLength;
+  return store.withWriteLock(/** Hold one lease across the rolling read and every content-defined fragment. */ () => {
+    const { minChunkSize, maxChunkSize, mask } = params;
+    const readSize = Math.min(8192, maxChunkSize);
+    const readBuf = Buffer.allocUnsafe(readSize);
+    const chunkBuf = Buffer.allocUnsafe(maxChunkSize);
+    const fragments: FragmentEntry[] = [];
+    let chunkLen = 0;
+    let hash = 0;
+    let remaining = totalLength;
 
-  while (remaining > 0) {
-    const toRead = Math.min(readSize, remaining);
-    let filled = 0;
-    while (filled < toRead) {
-      const bytesRead = readSync(fd, readBuf, filled, toRead - filled, null);
-      if (bytesRead === 0) {
-        throw new ObjectStoreError(
-          "short_read",
-          `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
-        );
+    while (remaining > 0) {
+      const toRead = Math.min(readSize, remaining);
+      let filled = 0;
+      while (filled < toRead) {
+        const bytesRead = readSync(fd, readBuf, filled, toRead - filled, null);
+        if (bytesRead === 0) {
+          throw new ObjectStoreError(
+            "short_read",
+            `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
+          );
+        }
+        filled += bytesRead;
       }
-      filled += bytesRead;
+
+      for (let i = 0; i < filled; i++) {
+        chunkBuf[chunkLen] = readBuf[i]!;
+        chunkLen++;
+        hash = ((hash << 1) + GEAR_TABLE[readBuf[i]!]!) | 0;
+        if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
+          const chunk = chunkBuf.subarray(0, chunkLen);
+          const id = store.write("blob", chunk, fileId);
+          fragments.push({ id, length: chunkLen });
+          chunkLen = 0;
+          hash = 0;
+        }
+      }
+      remaining -= filled;
     }
 
-    for (let i = 0; i < filled; i++) {
-      chunkBuf[chunkLen] = readBuf[i]!;
-      chunkLen++;
-      hash = ((hash << 1) + GEAR_TABLE[readBuf[i]!]!) | 0;
-      if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
-        const chunk = chunkBuf.subarray(0, chunkLen);
-        const id = store.write("blob", chunk);
-        fragments.push({ id, length: chunkLen });
-        chunkLen = 0;
-        hash = 0;
-      }
+    if (chunkLen > 0) {
+      const chunk = chunkBuf.subarray(0, chunkLen);
+      const id = store.write("blob", chunk, fileId);
+      fragments.push({ id, length: chunkLen });
     }
-    remaining -= filled;
-  }
-
-  if (chunkLen > 0) {
-    const chunk = chunkBuf.subarray(0, chunkLen);
-    const id = store.write("blob", chunk);
-    fragments.push({ id, length: chunkLen });
-  }
-  return fragments;
+    return fragments;
+  });
 }
 
 /**
@@ -626,6 +648,8 @@ export function writeCdcFragmentsFromFd(
  * @param store - Destination object store.
  * @param content - The content to chunk and store.
  * @param params - CDC parameters. Defaults to {@link DEFAULT_CDC_PARAMS}.
+ * @param fileId - Owning stable identity for every fragment and the manifest;
+ *   optional before erasure, required after it. Denied encodings still refuse.
  * @returns The manifest id and the manifest.
  * @throws ObjectStoreError When CDC parameters are invalid.
  */
@@ -633,12 +657,15 @@ export function writeCdcFragmented(
   store: ObjectStore,
   content: Buffer,
   params: CdcParams = DEFAULT_CDC_PARAMS,
+  fileId?: FileId,
 ): FragmentWriteResult {
   assertCdcParams(params, "invalid_cdc_params");
-  const fragments = cdcBoundaries(content, params, (chunk) => store.write("blob", chunk));
-  const manifest: FragmentManifest = { totalLength: content.length, fragments, mode: "cdc" };
-  const id = writeManifest(store, manifest);
-  return { manifestId: id, manifest };
+  return store.withWriteLock(/** Publish all content-defined fragments and their manifest in one lease. */ () => {
+    const fragments = cdcBoundaries(content, params, (chunk) => store.write("blob", chunk, fileId));
+    const manifest: FragmentManifest = { totalLength: content.length, fragments, mode: "cdc" };
+    const id = writeManifest(store, manifest, fileId);
+    return { manifestId: id, manifest };
+  });
 }
 
 /**
@@ -652,6 +679,8 @@ export function writeCdcFragmented(
  * @param store - Destination object store.
  * @param sourcePath - Absolute path to the file to read and chunk.
  * @param params - CDC parameters. Defaults to {@link DEFAULT_CDC_PARAMS}.
+ * @param fileId - Owning stable identity for every fragment and the manifest;
+ *   optional before erasure, required after it. Denied encodings still refuse.
  * @returns The manifest id and the manifest.
  * @throws ObjectStoreError When CDC parameters are invalid, or a short read is
  *   encountered on the source file.
@@ -660,18 +689,21 @@ export function writeCdcFragmentedFile(
   store: ObjectStore,
   sourcePath: string,
   params: CdcParams = DEFAULT_CDC_PARAMS,
+  fileId?: FileId,
 ): FragmentWriteResult {
   assertCdcParams(params, "invalid_cdc_params");
-  const fd = openSync(sourcePath, "r");
-  try {
-    const totalLength = fstatSync(fd).size;
-    const fragments = writeCdcFragmentsFromFd(store, fd, totalLength, params, sourcePath);
-    const manifest: FragmentManifest = { totalLength, fragments, mode: "cdc" };
-    const id = writeManifest(store, manifest);
-    return { manifestId: id, manifest };
-  } finally {
-    closeSync(fd);
-  }
+  return store.withWriteLock(/** Keep the streaming descriptor and complete CDC publication under one lease. */ () => {
+    const fd = openSync(sourcePath, "r");
+    try {
+      const totalLength = fstatSync(fd).size;
+      const fragments = writeCdcFragmentsFromFd(store, fd, totalLength, params, sourcePath, fileId);
+      const manifest: FragmentManifest = { totalLength, fragments, mode: "cdc" };
+      const id = writeManifest(store, manifest, fileId);
+      return { manifestId: id, manifest };
+    } finally {
+      closeSync(fd);
+    }
+  });
 }
 
 /**
