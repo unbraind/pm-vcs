@@ -513,3 +513,29 @@ Node, native Bun, and the pinned project-installed CLI consumer. Selected docstr
 coverage remains a measured declaration subset (previous denominator 290), not
 whole internal documentation coverage. The declared minimum SDK runtime and
 independent true-global CLI proof remain historical and are not renewed here.
+
+
+## Completed streaming and legacy-fetch source verification
+
+Executed source `ae4d8e77e35fb61f0a75c1af6726eed8289f584e`, frozen head
+`876df66196df72ef0101d7a4c3a0214bebe39ce5`: unchanged PM-linked release
+1348/1348, zero failures/skips/cancellations/todos, 787.977 runner seconds
+within the original 3600-second limit. All53 authored executable sources
+measure four100, with positive20872 statement/line,664function,5460branch
+counters;335 fresh native records/1161functions/5460ranges are all hit.
+Root independently matches398 committed files, every raw counter/freshness
+receipt and all121 history prefixes, repeats98 real regressions and verifies
+source controls with1/1/6 genuine failures and exact restoration. Five final
+consumer scenarios and the372 integration/226 race/native132 cases pass.
+
+This later PM/document/self-host-bundle receipt follow-up preserves the tested
+runtime, gates, tests and package pins byte-for-byte. The executed freeze is
+retained as immutable evidence, not relabeled as tests of later metadata.
+Self-host and consumer checks are renewed against the updated bundle.
+Documentation295 selected declarations is not whole internal coverage;
+minimum8.1 runtime/globalCLI proof, physical Windows/root permissions,
+complete-history privacy, production scale and required reviewers remain open.
+The32MiB memory fixture reduces retained buffers to1.2-1.6MiB but grows RSS
+about62MiB; metadata/selected-payload memory and cold-history costs remain.
+Conflicting-only legacy peers without metadata/object-fetch support cannot
+exchange new denials. No merge or release.
