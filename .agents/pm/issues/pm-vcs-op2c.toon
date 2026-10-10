@@ -6,9 +6,7 @@ status: in_progress
 priority: 0
 tags[7]: coverage,docstrings,duplication,lint,quality,release-blocker,typescript
 created_at: "2026-08-07T13:01:18.790Z"
-updated_at: "2026-10-10T10:20:35.511Z"
-assignee: codex-raw-coverage-repair
-claim_principal: codex-raw-coverage-repair
+updated_at: "2026-10-10T10:27:02.126Z"
 author: codex
 estimated_minutes: 480
 acceptance_criteria: "Every source and production script is instrumented by the repository coverage command; every supported coverage dimension is exactly 100%; ESLint enforces no explicit any, no inline or dynamic imports, erasable syntax, and repository conventions; jscpd or an equivalently strict duplicate-code detector runs fail-closed; release:check and prepublishOnly include all gates; tests are behavioral and do not use coverage ignores, artificial execution, or broad exclusions"
@@ -30,11 +28,13 @@ component: quality/release
 customer_impact: A release could currently satisfy configured coverage while regressions in operational acceptance scripts or duplicated/forbidden code remain undetected
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-o3jj,discovered_from,"2026-08-07T13:01:47.549Z",codex,pm-audit,asserted
-comments[4]{created_at,author,text}:
+comments[6]{created_at,author,text}:
   "2026-10-10T10:08:37.713Z",codex-raw-coverage-repair,"Root verified frozen branch 70f42579086c59c695b151e65cda6459bbfa8e6f: 1240 passing tests, 53 production files at four-dimension C8 100%, LCOV 20707 lines/661 functions/5307 branches, SDK 2026.10.10 Node/Bun/CLI acceptance, 391 frozen fingerprints. Merged raw V8 still has two inherited zero-hit intervals: engine/repo.ts offsets 71425-71504 (createInstance cleanup failure, coverage ignore) and engine/serve.ts offsets 33366-33394 (request-body error wrapper). These invalidate a strict no-ignore/all-raw-positive claim. Reopening this existing owner under the no-artificial-execution/no-exclusion acceptance contract; preserve leases and original-error precedence. Related feature pm-vcs-8xis and PR https://github.com/unbraind/pm-vcs/pull/97; root owns public review and checks."
   "2026-10-10T10:13:41.043Z",codex-raw-coverage-repair,"Inventory verified: the unchanged coverage command measures 53 root/engine/scripts TypeScript files; the only suppression was the createInstance cleanup c8 block. A real regular-file destination deterministically produces mkdir ENOTDIR followed by cleanup scandir ENOTDIR: the original syscall/path wins, the file survives, rollback stops at the first cleanup fault and the created branch remains recoverable. The shared-store lease releases and another instance links successfully; no cooperative race is claimed. Real socket EOF before Content-Length makes the request-body promise reject, settles the existing outcome hook and permits a subsequent advertisement. Both behavior tests pass on original source; the no-ignore policy assertion fails on original source. Negative source controls independently fail the mkdir-precedence and abort-settlement assertions; both fixed files restored byte-exact. Removed the sole suppression and replaced the one-use HTTP error wrapper with the real Node-typed rejection callback. SDK 2026.10.10/floor 2026.8.1 and coverage scope/thresholds remain unchanged."
   "2026-10-10T10:18:26.175Z","harness:codex","Orchestrator interruption preserves focused real-file/socket fixtures and source bytes. GitHub native workflows did not start because SDK pin/lock changes conflict with current main. Integrate main dependency updates, retain SDK2026.10.10 and independent8.1floor, regenerate lock and full self-host snapshot, then rerun unchanged all-source/raw/native/consumer gates. Prior70f4257 remains historical scopedC8 evidence with two raw gaps. No closure, force recovery, source gate approval or publication."
   "2026-10-10T10:20:35.511Z","harness:codex","Current main4324c968 integrated without discarding dependency changes: pm-ops2026.10.6 and pm-changelog2026.10.5 retained, exact development SDK2026.10.10/floor8.1 preserved, lock regenerated from main and reports zero dependency vulnerabilities. SDK-only package/lock conflicts are resolved. Real raw-coverage controls and every predecessor PM event retained; no accepted gate for this integrated tree until refreeze/selfhost regeneration/full unchanged source and consumer verification."
+  "2026-10-10T10:26:16.714Z",codex-raw-coverage-repair,"Resumed after main integration at c2868ed with the same claim and all predecessor histories. Reviewed real regular-file cleanup and socket EOF contracts. The fixture now observes the actual native mkdir error and compares code/message/syscall/path instead of assuming ENOTDIR across platforms; it also verifies the distinct native readdir failure, unchanged notes, preserved recoverable branch, released lease and successful recovery. Removed the dummy callback. Installed Node supports withResolvers at runtime, but the configured ES2022 TypeScript library does not expose it, so the real synchronous Promise executor initializes the callback directly without changing compiler scope. Focused three tests, strict test compilation and unchanged quality checks pass. Current source-removal controls independently fail original-error precedence and aborted-body settlement; restored both production files byte-exact. No new production branches or exclusions. Final immutable full release/raw and SDK10 consumer proofs still pending."
+  "2026-10-10T10:26:19.043Z",codex-raw-coverage-repair,"Freeze protocol: preserve main4324c968 and checkpoint a85850d as ancestors; retain SDK2026.10.10 with independent floor2026.8.1 plus main pm-ops2026.10.6 and pm-changelog2026.10.5. Release this claim unclosed before committing all source/test/docs/PM bytes, then regenerate selfhost.bundle and freeze its commit. Run the unchanged linked release:check with timeout3600; require all53 files at four100, positive raw executable ranges, matching Git/Istanbul/LCOV inventories and every tracked fingerprint, native TOON/strace/selfhost/identity/docs/changelog/audit/release acceptance plus current SDK10 built/npm-packed Node/native Bun/global CLI. No tracked edits after freeze; final immutable manifests and raw records are returned to the orchestrator. Inherited pending receipts are preserved without reconciliation; public checks and reviews remain with the orchestrator."
 notes[4]{created_at,author,text}:
   "2026-08-08T00:41:47.815Z","harness:codex","The package remains intentionally unpublished: audit:identities still rejects exactly one known non-public historical address,independently of these clean code-quality gates."
   "2026-08-08T00:42:45.025Z","harness:codex",The default pm health --strict-exit reproduced the known unbraind/pm-cli#928 silent provider-refresh hang and was stopped after four minutes; CI now uses the documented --check-only mode and the read-only strict health gate completes promptly.
@@ -42,13 +42,22 @@ notes[4]{created_at,author,text}:
   "2026-08-08T01:00:28.691Z","harness:codex","Accepted all three remaining CodeRabbit findings on the first review head: parser failure is tracked independently of the thrown value; equal-content reconciliation no longer leaks copiedFrom across the selected FileId; and the real strace success path runs only on a Linux host with strace available. Added reversed-provenance behavior coverage."
 learnings[1]{created_at,author,text}:
   "2026-08-08T00:41:47.815Z","harness:codex",An explicit source allowlist can report perfect coverage while omitting operational scripts. c8 --all makes absence measurable; behavior-driven failure fixtures also exposed unreachable defensive branches that were better simplified.
-files[9]:
+files[12]:
   - path: .github/workflows/ci.yml
     scope: project
     note: Mandatory quality and deterministic tracker-health gates
   - path: .jscpd.json
     scope: project
     note: Fail-closed zero-duplication production scan
+  - path: coverage/lcov.info
+    scope: project
+    note: Fresh full-gate LCOV records checked against every tracked production source and positive counters
+  - path: coverage/raw-manifest.json
+    scope: project
+    note: Final native V8 record fingerprints generated after the immutable full gate
+  - path: coverage/raw-source-counters.json
+    scope: project
+    note: Final native V8 merged source ranges and zero-hit assessment generated after the immutable full gate
   - path: engine/repo.ts
     scope: project
   - path: engine/serve.ts
@@ -120,6 +129,6 @@ tests[8]:
       source_kind: local_mutation
       source_ref: feat/links-layers-obliteration
 docs[2]{path,scope,note}:
-  ARCHITECTURE.md,project,Exact all-source testing architecture
+  ARCHITECTURE.md,project,Real cleanup and socket-abort contracts plus separate native raw range validation
   README.md,project,Developer quality-gate contract
 body: ""
