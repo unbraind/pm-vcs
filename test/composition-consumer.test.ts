@@ -13,7 +13,7 @@ import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 const consumer = `
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -24,7 +24,7 @@ import { Repository } from "pm-vcs/dist/engine/repo.js";
 import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
-import { serializeBundle } from "pm-vcs/dist/engine/bundle.js";
+import { exportBundle, importBundleObjects, serializeBundle } from "pm-vcs/dist/engine/bundle.js";
 const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
 assert.equal(installedSdk.version, "2026.10.10");
 const cliExecutable = process.argv[4];
@@ -121,6 +121,19 @@ assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
 assert.equal(repo.readFileState(revision, "secret.bin").kind, "obliterated"); assert.deepEqual(repo.verify().corrupt, []);
 const clone = Repository.open((await cloneFrom(root, join(process.cwd(), process.argv[2] + "-clone"), new Date())).root);
 assert.equal(clone.identity(), repo.identity()); assert.equal(clone.readFileState(revision, "secret.bin").kind, "obliterated"); assert.equal(clone.links()[0].link.revision, pin);
+const warmedDenial = repo.objects.denials()[0];
+const durablePaths = [join(repo.controlDirectory, "denials.json"), join(repo.controlDirectory, "objects", warmedDenial.id.slice(0, 2), warmedDenial.id.slice(2))];
+const durableSnapshot = () => durablePaths.map(path => {
+  const stat = lstatSync(path, { bigint: true }); return { ino: stat.ino, mtime: stat.mtimeNs, ctime: stat.ctimeNs, bytes: readFileSync(path) };
+});
+const durableBefore = durableSnapshot(); const repeatedBundle = exportBundle(repo.objects, repo.refs, []);
+for (let repeat = 0; repeat < 2; repeat += 1) {
+  assert.deepEqual(importBundleObjects(repo.objects, repeatedBundle).added, []);
+  assert.deepEqual(durableSnapshot(), durableBefore); assert.equal(repo.objects.denials()[0], warmedDenial);
+}
+await new FileTransport(root, root).push(repeatedBundle, [], false, new Date());
+assert.deepEqual(durableSnapshot(), durableBefore); assert.equal(repo.objects.denials()[0], warmedDenial);
+assert.deepEqual(clone.objects.denials(), repo.objects.denials());
 for (const caller of ["hub", "linked"]) {
   const hub = join(process.cwd(), process.argv[2] + "-custom-" + caller); mkdirSync(hub);
   const tracker = join(hub, "custom/team");

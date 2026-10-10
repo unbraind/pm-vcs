@@ -368,6 +368,22 @@ or corrupt payloads; a cold no-op costs one pass over those bytes. Legacy transp
 without that endpoint or its advertised capability retain their full-bundle
 fallback. Constant-byte cold no-op sync is not claimed.
 
+Import preserves the durable denial registry and existing tombstone files when
+received metadata adds no terminal identity, including stale peers omitting local
+denials and peers repeating an already known record. Registry validation checks
+canonical metadata; import separately reads and hash-verifies every local audit
+object before publication. Missing or corrupt local audits refuse instead of
+being silently reconstructed. A genuinely new received identity persists the
+combined registry before object publication, after the complete arrival and
+closure checks. Pending local cleanup and duplicate or conflicting FileIds still
+refuse. Warm handles retain their registry cache across these unchanged imports;
+this does not remove the cold closure hashing bound described above.
+
+JSON-header regression fixtures assert native chmod-based EACCES only on POSIX
+under a non-root process. Missing-file, directory, integrity and remaining
+functional assertions run on every platform; root and Windows permission
+enforcement is not established by those chmod fixtures.
+
 Recognizable base64-derived zlib candidates retain strict malformed-data and
 output-budget refusal. An encoded denied payload can exceed the inspection budget
 while remaining recoverable with a larger budget. Suppressing that refusal would

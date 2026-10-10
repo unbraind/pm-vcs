@@ -15,6 +15,7 @@ import { exportBundle, parseBundle } from "../engine/bundle.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const temps: ReturnType<typeof makeTempDir>[] = [];
+const modeDenialSupported = process.platform !== "win32" && process.getuid !== undefined && process.getuid() !== 0;
 const author: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1000, timezoneOffsetMinutes: 0 };
 afterEach(() => { for (const temp of temps.splice(0)) temp.cleanup(); });
 
@@ -81,11 +82,12 @@ test("JSON header repair preserves missing, directory and permission errors for 
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
   const before = snapshot(repo);
   for (const code of ["ENOENT", "EISDIR", "EACCES"] as const) {
+    if (code === "EACCES" && !modeDenialSupported) continue;
     if (code === "EISDIR") mkdirSync(spec);
     if (code === "EACCES") { rmSync(spec, { recursive: true }); writeFileSync(spec, "{}"); chmodSync(spec, 0); }
     try {
       const result = await harness.runCommand({ command: "vcs link", args: ["dependency.link"], options: { spec }, pmRoot: repo.root });
-      assert.match(String(result.errorMessage), new RegExp(code));
+      assert.ok(String(result.errorMessage).includes(code));
       assert.doesNotMatch(String(result.errorMessage), /not valid JSON/);
       assert.deepEqual(snapshot(repo), before);
     } finally { if (code === "EACCES") chmodSync(spec, 0o600); }
@@ -165,9 +167,12 @@ test("JSON header repair preserves malformed, truncated and nonmatching discover
   assert.throws(() => repo.objects.readIfType(id, "link"), error => error instanceof ObjectStoreError && error.code === "corrupt_object");
   rmSync(path); assert.equal(repo.objects.readIfType(id, "link"), undefined);
   mkdirSync(path); assert.throws(() => repo.objects.readIfType(id, "link"), error => (error as NodeJS.ErrnoException).code === "EISDIR");
-  rmSync(path, { recursive: true }); writeFileSync(path, valid); chmodSync(path, 0);
-  try { assert.throws(() => repo.objects.readIfType(id, "link"), error => (error as NodeJS.ErrnoException).code === "EACCES"); }
-  finally { chmodSync(path, 0o600); }
+  rmSync(path, { recursive: true }); writeFileSync(path, valid);
+  if (modeDenialSupported) {
+    chmodSync(path, 0);
+    try { assert.throws(() => repo.objects.readIfType(id, "link"), error => (error as NodeJS.ErrnoException).code === "EACCES"); }
+    finally { chmodSync(path, 0o600); }
+  }
   assert.throws(() => repo.objects.readIfType("invalid", "link"), error => error instanceof ObjectStoreError && error.code === "invalid_object_id");
 });
 

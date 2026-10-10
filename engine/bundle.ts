@@ -322,8 +322,11 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
     }
   }
   requireClosure(store, targets, lines, combined, lines.filter(/** Standalone tree arrivals must also retain structural closure. */ (line) => line.type === "tree").map(/** Validate trees even when no advertised ref reaches them. */ (line) => line.id));
+  // Registry validation proves canonical metadata, not physical audit durability.
+  // Verify held audits before omitting their rewrite or extending the registry.
+  for (const denial of local) store.readTyped(denial.id, "tombstone");
   if (header.identity !== undefined) store.adoptIdentity(header.identity);
-  if (combined.length > 0) store.recordDenials(combined);
+  if (combined.length > local.length) store.recordDenials(combined);
   const added: ObjectId[] = [];
   const skipped: ObjectId[] = [];
   for (const line of lines) {
