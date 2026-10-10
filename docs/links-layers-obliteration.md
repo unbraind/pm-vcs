@@ -346,7 +346,10 @@ output-budget refusal. An encoded denied payload can exceed the inspection budge
 while remaining recoverable with a larger budget. Suppressing that refusal would
 admit uninspected content. Ordinary binary data that resembles a malformed encoded
 candidate can also receive a conservative refusal; availability is bounded by
-supported representation inspection.
+supported representation inspection. For example, fresh bytes `00 ff 11 00 80`
+can be staged after erasing an unrelated payload, while `78 9c ff` and its
+canonical base64 representation refuse as malformed recognized zlib data. Raw
+file provenance does not suppress inspection of encoded retained copies.
 
 ## Recovery, export and closure memory
 
@@ -369,6 +372,18 @@ survive in the closure map. Link validation happens before retaining its kind;
 hash-valid malformed links and manifests still produce corruption. Held copies
 are read and hashed within the same publication lease, including duplicates of
 valid incoming objects; presence alone grants no trust.
+Filesystem push validates every requested branch or tag name before importing
+arrival bytes. Both push and uploaded-object publication validate the union of
+requested commit roots under one synchronous writer lease, through the atomic
+compare-and-swap ref transaction and operation receipt. Push includes requested
+targets absent from the bundle advertisement in its import preflight; publication
+uses one shared closure walk. Each distinct held object is read and hash-checked
+once in that walk. Fast-forward policy can still read commit ancestry separately.
+Invalid names precede bundle or closure errors; all closure errors precede
+fast-forward policy and ref compare-and-swap. Stale push transactions retain
+`ref_changed`; uploaded-object publication retains `publication_race`. A refused
+publication clears its connection arrival receipt before retry.
+
 Physical/structural failures are also retained for this walk, so a hash-valid
 malformed link or manifest shared by two owners is read once and refuses both.
 A context-dependent role mismatch leaves the successful kind available for

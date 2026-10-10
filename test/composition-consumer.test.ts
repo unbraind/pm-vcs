@@ -23,6 +23,7 @@ import { Repository } from "pm-vcs/dist/engine/repo.js";
 import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
+import { serializeBundle } from "pm-vcs/dist/engine/bundle.js";
 const root = join(process.cwd(), process.argv[2]); mkdirSync(root);
 const client = new PmClient({ cwd: root, pmRoot: join(root, ".agents", "pm"), noExtensions: true });
 await client.init("consumer", { defaults: true, author: "fixture" });
@@ -31,7 +32,20 @@ const author = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1
 const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
 assert.equal(installedSdk.version, "2026.10.10");
 assert.equal(Boolean(process.versions.bun), process.argv[2].startsWith("bun-"));
-repo.stage([]); repo.commit({ message: "tracker", author }, new Date());
+repo.stage([]); const publicationBase = repo.commit({ message: "tracker", author }, new Date());
+writeFileSync(join(root, "publication.bin"), Buffer.from([0, 255, 17])); repo.stage(["publication.bin"]);
+const publicationTip = repo.commit({ message: "publication", author }, new Date());
+const publicationWire = new FileTransport(root, root);
+const emptyPublication = serializeBundle(repo.objects, { refs: {}, prerequisites: [], objects: [] });
+for (const mode of ["push", "publish"]) {
+  const updates = [{ ref: "refs/heads/" + mode + "-one", expected: null, next: publicationTip }, { ref: "refs/tags/" + mode + "-two", expected: null, next: publicationBase }];
+  const receipt = mode === "push" ? await publicationWire.push(emptyPublication, updates, false, new Date()) : await publicationWire.publish(updates, false, new Date());
+  assert.deepEqual(receipt.updated, updates); assert.deepEqual(receipt.added, []);
+  for (const update of updates) assert.equal(repo.refs.read(update.ref), update.next);
+  const missing = [...updates.map(update => ({ ...update, expected: update.next })), { ref: "refs/heads/" + mode + "-missing", expected: null, next: "f".repeat(64) }];
+  await assert.rejects(mode === "push" ? publicationWire.push(emptyPublication, missing, true, new Date()) : publicationWire.publish(missing, true, new Date()), error => error.code === "incomplete_bundle");
+  assert.equal(repo.refs.read(missing.at(-1).ref), null);
+}
 const target = Repository.init(join(process.cwd(), process.argv[2] + "-target")); target.setAuthority("target", "target-read", "target-erase");
 writeFileSync(join(target.root, "asset.bin"), Buffer.from([0, 255, 128, 19, 47])); target.stage(["asset.bin"]);
 const pin = target.commit({ message: "pin", author }, new Date());
@@ -135,7 +149,7 @@ for (const deniedSide of ["base", "ours", "theirs"]) {
   else assert.equal(readFileSync(join(mergedRepo.root, "p"), "utf8"), "unrelated consumer left");
   assert.deepEqual(readFileSync(join(mergedRepo.controlDirectory, "denials.json")), denials);
 }
-process.stdout.write(JSON.stringify({ runtime: process.argv[2], sdk: installedSdk.version, linked: true, layers: true, erased: true, clone: true, deniedMerge: true }));
+process.stdout.write(JSON.stringify({ runtime: process.argv[2], sdk: installedSdk.version, linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true }));
 `;
 
 test("built and npm-packed SDK10 Node/native Bun consumers and global CLI execute composition and denied merges", /** Use a packed artifact and real peer dependency instead of SDK doubles. */ () => {
@@ -158,7 +172,7 @@ test("built and npm-packed SDK10 Node/native Bun consumers and global CLI execut
     writeFileSync(join(project, "built.mjs"), built); writeFileSync(join(project, "packed.mjs"), consumer);
     for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-global-cli"]]) {
       const result = spawnSync(runtime, [script, scenario, archive], { cwd: project, env: { ...withoutPmContext(process.env), ...discardChildCoverage() }, encoding: "utf8", timeout: 120_000 });
-      assert.equal(result.status, 0, `${scenario}: ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: "2026.10.10", linked: true, layers: true, erased: true, clone: true, deniedMerge: true });
+      assert.equal(result.status, 0, `${scenario}: ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: "2026.10.10", linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true });
     }
   } finally { temporary.cleanup(); }
 });

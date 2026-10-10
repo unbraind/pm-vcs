@@ -6,7 +6,7 @@ status: in_progress
 priority: 0
 tags[7]: coverage,docstrings,duplication,lint,quality,release-blocker,typescript
 created_at: "2026-08-07T13:01:18.790Z"
-updated_at: "2026-10-10T10:42:41.877Z"
+updated_at: "2026-10-10T11:20:30.954Z"
 author: codex
 estimated_minutes: 480
 acceptance_criteria: "Every source and production script is instrumented by the repository coverage command; every supported coverage dimension is exactly 100%; ESLint enforces no explicit any, no inline or dynamic imports, erasable syntax, and repository conventions; jscpd or an equivalently strict duplicate-code detector runs fail-closed; release:check and prepublishOnly include all gates; tests are behavioral and do not use coverage ignores, artificial execution, or broad exclusions"
@@ -28,7 +28,7 @@ component: quality/release
 customer_impact: A release could currently satisfy configured coverage while regressions in operational acceptance scripts or duplicated/forbidden code remain undetected
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-o3jj,discovered_from,"2026-08-07T13:01:47.549Z",codex,pm-audit,asserted
-comments[8]{created_at,author,text}:
+comments[11]{created_at,author,text}:
   "2026-10-10T10:08:37.713Z",codex-raw-coverage-repair,"Root verified frozen branch 70f42579086c59c695b151e65cda6459bbfa8e6f: 1240 passing tests, 53 production files at four-dimension C8 100%, LCOV 20707 lines/661 functions/5307 branches, SDK 2026.10.10 Node/Bun/CLI acceptance, 391 frozen fingerprints. Merged raw V8 still has two inherited zero-hit intervals: engine/repo.ts offsets 71425-71504 (createInstance cleanup failure, coverage ignore) and engine/serve.ts offsets 33366-33394 (request-body error wrapper). These invalidate a strict no-ignore/all-raw-positive claim. Reopening this existing owner under the no-artificial-execution/no-exclusion acceptance contract; preserve leases and original-error precedence. Related feature pm-vcs-8xis and PR https://github.com/unbraind/pm-vcs/pull/97; root owns public review and checks."
   "2026-10-10T10:13:41.043Z",codex-raw-coverage-repair,"Inventory verified: the unchanged coverage command measures 53 root/engine/scripts TypeScript files; the only suppression was the createInstance cleanup c8 block. A real regular-file destination deterministically produces mkdir ENOTDIR followed by cleanup scandir ENOTDIR: the original syscall/path wins, the file survives, rollback stops at the first cleanup fault and the created branch remains recoverable. The shared-store lease releases and another instance links successfully; no cooperative race is claimed. Real socket EOF before Content-Length makes the request-body promise reject, settles the existing outcome hook and permits a subsequent advertisement. Both behavior tests pass on original source; the no-ignore policy assertion fails on original source. Negative source controls independently fail the mkdir-precedence and abort-settlement assertions; both fixed files restored byte-exact. Removed the sole suppression and replaced the one-use HTTP error wrapper with the real Node-typed rejection callback. SDK 2026.10.10/floor 2026.8.1 and coverage scope/thresholds remain unchanged."
   "2026-10-10T10:18:26.175Z","harness:codex","Orchestrator interruption preserves focused real-file/socket fixtures and source bytes. GitHub native workflows did not start because SDK pin/lock changes conflict with current main. Integrate main dependency updates, retain SDK2026.10.10 and independent8.1floor, regenerate lock and full self-host snapshot, then rerun unchanged all-source/raw/native/consumer gates. Prior70f4257 remains historical scopedC8 evidence with two raw gaps. No closure, force recovery, source gate approval or publication."
@@ -37,6 +37,9 @@ comments[8]{created_at,author,text}:
   "2026-10-10T10:26:19.043Z",codex-raw-coverage-repair,"Freeze protocol: preserve main4324c968 and checkpoint a85850d as ancestors; retain SDK2026.10.10 with independent floor2026.8.1 plus main pm-ops2026.10.6 and pm-changelog2026.10.5. Release this claim unclosed before committing all source/test/docs/PM bytes, then regenerate selfhost.bundle and freeze its commit. Run the unchanged linked release:check with timeout3600; require all53 files at four100, positive raw executable ranges, matching Git/Istanbul/LCOV inventories and every tracked fingerprint, native TOON/strace/selfhost/identity/docs/changelog/audit/release acceptance plus current SDK10 built/npm-packed Node/native Bun/global CLI. No tracked edits after freeze; final immutable manifests and raw records are returned to the orchestrator. Inherited pending receipts are preserved without reconciliation; public checks and reviews remain with the orchestrator."
   "2026-10-10T10:40:08.032Z",codex-raw-coverage-repair,"Frozen candidate a75c2b5 completed 1243/1243 tests with zero failures/skips/cancellations and all53 C8 source files at four100. Native TOON, installed CLI strace, selfhost byte identity, production audit, identity audit and dry-run packing passed. The complete release command failed at changelog:check: reopening this owner correctly removes its old closed-item changelog entry. This stale derived documentation was missed before the first freeze; the failed candidate and raw evidence are preserved externally. Regenerate CHANGELOG.md through the unchanged package command, verify the remaining release scripts, release this same claim unclosed, regenerate the bundle and freeze again. A second complete unchanged gate is required on the corrected snapshot; no push or full release claim from the failed candidate."
   "2026-10-10T10:42:41.289Z",codex-raw-coverage-repair,"Independent native audit of failed candidate a75c2b5 merged331 real V8 records: all53 production sources, 1154 functions and5311 ranges, zero unhit ranges. Installed Node Inspector types validate raw shapes; the installed stripTypeScriptTypes API verifies offset-preserving erasure and the exact appended sourceURL comment instead of guessing range bounds or excluding executable ranges. No type-only or unknown zero ranges were accepted as covered. The real cleanup catch is hit; the redundant HTTP wrapper is removed and the genuine abort fixture settles. CHANGELOG.md now matches the reopened owner through changelog:full/check; release date and publish-attestation scripts also pass. Every production file remains byte-exact to the reviewed/control-restored candidate. Preserve the failed receipt, release unclosed and refreeze all tracked documentation/PM/bundle bytes before the final unchanged complete gate."
+  "2026-10-10T11:13:21.799Z",codex-publication-validation,"PR97 finding 4237410845 is confirmed in FileTransport push and publish: each ref starts a fresh closure walk. The installed source API already supports extra import publication roots, and the physical-root writer lease is synchronous and reentrant. Add bounded real SDK/filesystem tests for shared and distinct tips, unadvertised targets, corrupt/missing second targets, invalid names before mutation, force, stale CAS and receipt lifecycle. Batch every requested root under one lease without changing integrity or role-aware denial checks. Prior accepted 85e8a2e receipts remain historical only once source changes. Inspect the existing conservative malformed-encoding contract using ordinary fresh binary files after unrelated authorized erasure; do not weaken supported nested encoding refusal."
+  "2026-10-10T11:18:21.511Z",codex-publication-validation,"Seven linked publication regressions pass with zero failures/skips. Real original operations measure three refs/two shared tips/five unique objects: push and publish each make five integrity reads under one native lock inode through refs and operation logging; old-source controls make sixteen and twelve reads. Restoring only both predecessor production modules makes the efficiency, invalid-name-before-arrival and unadvertised-second-root-before-arrival assertions fail with loaded modules; fixed bytes restored exactly. Corrupt and absent second targets, force, stale CAS/error classification and acceptedThisConnection reset remain covered. Existing integration passes 76/76 and expanded built/npm-packed Node/native Bun/global CLI consumers pass. Removed the obsolete single-target closure wrapper after its callers switched to the existing batch API; no integrity branch or coverage exclusion changed. Ordinary fresh binary staging passes after unrelated authorized erasure; malformed zlib-shaped and base64-wrapped candidates retain uninspectable_payload, while a retained encoded erased frame remains object_obliterated. This is the documented conservative supported representation contract, not a confirmed binary correctness defect."
+  "2026-10-10T11:20:30.263Z",codex-publication-validation,"Freeze preparation: independent root PM receipt on the existing feature confirms the same conservative binary contract; retain that appended feature/history pair in the source snapshot. Own PM-linked publication and expanded SDK10 consumer commands pass; type/test compilation, lint, zero duplication, docstrings, dependency inventory, declared independent SDK floor, changelog regeneration/check, release-date and provenance checks pass. Only bundle and transport production bytes changed; all51 other executable sources and predecessor121 history prefixes remain unchanged. Health strict check passes with its inherited provenance advisory; validate succeeds with inherited metadata/resolution advisories, without reconciliation. Release this claim unclosed before committing all code/test/docs/PM bytes, regenerate selfhost.bundle and freeze its commit. Mandatory next gate is the unchanged linked release:check at timeout3600 plus fresh linked consumers, all53 per-file four100, positive actual native V8 ranges/sourceURL mappings, matching Git/Istanbul/LCOV inventories/counters and all immutable tracked hashes. Invalidate reports on any failed candidate; no push until every gate passes and the worktree is clean. Root owns final CI and public review; no closure, merge or publication."
 notes[4]{created_at,author,text}:
   "2026-08-08T00:41:47.815Z","harness:codex","The package remains intentionally unpublished: audit:identities still rejects exactly one known non-public historical address,independently of these clean code-quality gates."
   "2026-08-08T00:42:45.025Z","harness:codex",The default pm health --strict-exit reproduced the known unbraind/pm-cli#928 silent provider-refresh hang and was stopped after four minutes; CI now uses the documented --check-only mode and the read-only strict health gate completes promptly.
@@ -44,7 +47,7 @@ notes[4]{created_at,author,text}:
   "2026-08-08T01:00:28.691Z","harness:codex","Accepted all three remaining CodeRabbit findings on the first review head: parser failure is tracked independently of the thrown value; equal-content reconciliation no longer leaks copiedFrom across the selected FileId; and the real strace success path runs only on a Linux host with strace available. Added reversed-provenance behavior coverage."
 learnings[1]{created_at,author,text}:
   "2026-08-08T00:41:47.815Z","harness:codex",An explicit source allowlist can report perfect coverage while omitting operational scripts. c8 --all makes absence measurable; behavior-driven failure fixtures also exposed unreachable defensive branches that were better simplified.
-files[13]:
+files[17]:
   - path: .github/workflows/ci.yml
     scope: project
     note: Mandatory quality and deterministic tracker-health gates
@@ -63,9 +66,13 @@ files[13]:
   - path: coverage/raw-source-counters.json
     scope: project
     note: Final native V8 merged source ranges and zero-hit assessment generated after the immutable full gate
+  - path: engine/bundle.ts
+    scope: project
   - path: engine/repo.ts
     scope: project
   - path: engine/serve.ts
+    scope: project
+  - path: engine/transport.ts
     scope: project
   - path: scripts/eslint.config.ts
     scope: project
@@ -75,12 +82,16 @@ files[13]:
   - path: test/c8-gaps.test.ts
     scope: project
     note: Behavior-driven branches exposed by all-source instrumentation
+  - path: test/composition-consumer.test.ts
+    scope: project
+  - path: test/publication-validation.test.ts
+    scope: project
   - path: test/quality-scripts.test.ts
     scope: project
     note: Behavioral operational-script and quality-policy coverage
   - path: test/raw-coverage.test.ts
     scope: project
-tests[8]:
+tests[9]:
   - command: npm run check
     path: package.json
     scope: project
@@ -133,7 +144,22 @@ tests[8]:
       created_at: "2026-10-10T10:14:32.011Z"
       source_kind: local_mutation
       source_ref: feat/links-layers-obliteration
-docs[2]{path,scope,note}:
-  ARCHITECTURE.md,project,Real cleanup and socket-abort contracts plus separate native raw range validation
-  README.md,project,Developer quality-gate contract
+  - command: node --test test/publication-validation.test.ts
+    scope: project
+    timeout_seconds: 120
+    pm_context_mode: tracker
+    provenance:
+      author: codex-publication-validation
+      created_at: "2026-10-10T11:16:57.174Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+docs[3]:
+  - path: ARCHITECTURE.md
+    scope: project
+    note: Real cleanup and socket-abort contracts plus separate native raw range validation
+  - path: docs/links-layers-obliteration.md
+    scope: project
+  - path: README.md
+    scope: project
+    note: Developer quality-gate contract
 body: ""

@@ -15,10 +15,11 @@ import { redactRemoteUrl } from "./credentials.ts";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve } from "node:path";
 
-import { serializeBundle, exportBundle, importBundleObjects, assertClosurePresent } from "./bundle.ts";
+import { serializeBundle, exportBundle, importBundleObjects } from "./bundle.ts";
+import { requireClosure } from "./closure.ts";
 import { isAncestor } from "./merge.ts";
 import { type ObjectId, type ObjectType, ObjectStoreError, hashObject } from "./objects.ts";
-import { BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./refs.ts";
+import { assertRefName, BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./refs.ts";
 import type { RepositoryConfig } from "./config.ts";
 import { REPOSITORY_FORMAT, Repository } from "./repo.ts";
 import { HttpTransport } from "./http-transport.ts";
@@ -257,7 +258,7 @@ export function translatePublicationRace(error: unknown): unknown {
  * implementation would inherit.
  *
  * @param update - The ref move being requested.
- * @throws ObjectStoreError When the ref is neither a branch nor a tag.
+ * @throws ObjectStoreError When the ref is malformed or neither a branch nor a tag.
  */
 function assertPushableRef(update: PushUpdate): void {
   if (!update.ref.startsWith(BRANCH_PREFIX) && !update.ref.startsWith(TAG_PREFIX)) {
@@ -267,6 +268,7 @@ function assertPushableRef(update: PushUpdate): void {
       + `Push a ${BRANCH_PREFIX} or ${TAG_PREFIX} name instead.`,
     );
   }
+  assertRefName(update.ref);
 }
 
 /**
@@ -349,43 +351,44 @@ export class FileTransport implements Transport {
   /** Verify incoming closure and fast-forward policy before atomically publishing requested receiver refs. */
   async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
     const repository = this.open();
-    const { added } = importBundleObjects(repository.objects, bundle);
-    for (const update of updates) {
-      assertPushableRef(update);
-      assertClosurePresent(repository.objects, update.ref, update.next);
-      const current = repository.refs.read(update.ref);
-      if (current === null || current === update.next) continue;
-      if (!force && !isAncestor(repository.objects, current, update.next)) {
-        // Name a spelling the caller can actually act on. A fetch writes a branch
-        // to `refs/remotes/<remote>/<branch>`, which `resolve` accepts as the
-        // `<remote>/<branch>` shorthand; a tag keeps its own name and has no
-        // tracking ref, so the same sentence would send a tag pusher after a ref
-        // that will never exist.
-        const recovery = update.ref.startsWith(BRANCH_PREFIX)
-          ? "Fetch first, then merge or rebase onto the tracking branch it writes — "
-            + `<remote>/${update.ref.slice(BRANCH_PREFIX.length)}, which "pm vcs branch --remotes" lists — `
-            + "or push with --force to discard them deliberately."
-          : "Fetch first to see what it points at now, then move the tag deliberately, "
-            + "or push with --force to discard them deliberately.";
-        throw new ObjectStoreError(
-          "non_fast_forward",
-          `Pushing ${update.next.slice(0, 12)} to ${update.ref} would discard commits ${this.url} already has, `
-          + `because its current ${current.slice(0, 12)} is not an ancestor of it. ${recovery}`,
-        );
+    return repository.objects.withWriteLock(/** Import validation, policy, refs and receipt share one synchronous publication lease. */ () => {
+      for (const update of updates) assertPushableRef(update);
+      const { added } = importBundleObjects(repository.objects, bundle, [...new Set(updates.map(/** Include every requested target, even when absent from advertised refs. */ (update) => update.next))]);
+      for (const update of updates) {
+        const current = repository.refs.read(update.ref);
+        if (current === null || current === update.next) continue;
+        if (!force && !isAncestor(repository.objects, current, update.next)) {
+          // Name a spelling the caller can actually act on. A fetch writes a branch
+          // to `refs/remotes/<remote>/<branch>`, which `resolve` accepts as the
+          // `<remote>/<branch>` shorthand; a tag keeps its own name and has no
+          // tracking ref, so the same sentence would send a tag pusher after a ref
+          // that will never exist.
+          const recovery = update.ref.startsWith(BRANCH_PREFIX)
+            ? "Fetch first, then merge or rebase onto the tracking branch it writes — "
+              + `<remote>/${update.ref.slice(BRANCH_PREFIX.length)}, which "pm vcs branch --remotes" lists — `
+              + "or push with --force to discard them deliberately."
+            : "Fetch first to see what it points at now, then move the tag deliberately, "
+              + "or push with --force to discard them deliberately.";
+          throw new ObjectStoreError(
+            "non_fast_forward",
+            `Pushing ${update.next.slice(0, 12)} to ${update.ref} would discard commits ${this.url} already has, `
+            + `because its current ${current.slice(0, 12)} is not an ancestor of it. ${recovery}`,
+          );
+        }
       }
-    }
-    // One transaction for every ref, and every entry a compare-and-swap against the
-    // value the pusher observed. Two agents pushing the same branch concurrently
-    // both pass the fast-forward check above against the same old tip; without the
-    // swap the second write would land on top of the first and the first agent's
-    // commit would be reachable from nothing.
-    repository.refs.transaction(updates.map((update) => ({
-      name: update.ref,
-      expected: update.expected,
-      next: update.next,
-    })));
-    this.logPublication(repository, `Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
-    return { updated: updates, added };
+      // One transaction for every ref, and every entry a compare-and-swap against the
+      // value the pusher observed. Two agents pushing the same branch concurrently
+      // both pass the fast-forward check above against the same old tip; without the
+      // swap the second write would land on top of the first and the first agent's
+      // commit would be reachable from nothing.
+      repository.refs.transaction(updates.map((update) => ({
+        name: update.ref,
+        expected: update.expected,
+        next: update.next,
+      })));
+      this.logPublication(repository, `Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
+      return { updated: updates, added };
+    });
   }
 
   /**
@@ -455,44 +458,41 @@ export class FileTransport implements Transport {
     // a receipt they did not belong to.
     const added = [...this.acceptedThisConnection];
     this.acceptedThisConnection.length = 0;
-    for (const update of updates) {
-      assertPushableRef(update);
-      // Closure before policy: publication is what makes incomplete history
-      // reachable, so it is refused until every object a moved ref names is
-      // present and hash-valid. The objects were verified on arrival, so what
-      // remains is presence of the whole closure — including any object this
-      // receiver already held before the upload began.
-      assertClosurePresent(repository.objects, update.ref, update.next);
-      const current = repository.refs.read(update.ref);
-      if (current === update.next) continue;
-      // The fast-forward question is only meaningful while this sender's
-      // observation is still current. When it is not, the compare-and-swap
-      // below is the authority: it refuses the stale publication and the
-      // refusal is translated into the retryable `publication_race`, which
-      // leaves the winner's tip and this sender's history exactly where they
-      // were.
-      if (
-        current === update.expected && !force && current !== null
-        && !isAncestor(repository.objects, current, update.next)
-      ) {
-        throw new ObjectStoreError(
-          "non_fast_forward",
-          `Publishing ${update.next.slice(0, 12)} to ${update.ref} would discard commits ${this.url} already has, `
-            + `because its current ${current.slice(0, 12)} is not an ancestor of it. Fetch first, or publish with force.`,
-        );
+    return repository.objects.withWriteLock(/** Held objects cannot be erased between the shared integrity walk and atomic ref publication. */ () => {
+      for (const update of updates) assertPushableRef(update);
+      requireClosure(repository.objects, [...new Set(updates.map(/** Share verified structure across all publication roots, without retaining leaf bytes. */ (update) => update.next))]);
+      for (const update of updates) {
+        const current = repository.refs.read(update.ref);
+        if (current === update.next) continue;
+        // The fast-forward question is only meaningful while this sender's
+        // observation is still current. When it is not, the compare-and-swap
+        // below is the authority: it refuses the stale publication and the
+        // refusal is translated into the retryable `publication_race`, which
+        // leaves the winner's tip and this sender's history exactly where they
+        // were.
+        if (
+          current === update.expected && !force && current !== null
+          && !isAncestor(repository.objects, current, update.next)
+        ) {
+          throw new ObjectStoreError(
+            "non_fast_forward",
+            `Publishing ${update.next.slice(0, 12)} to ${update.ref} would discard commits ${this.url} already has, `
+              + `because its current ${current.slice(0, 12)} is not an ancestor of it. Fetch first, or publish with force.`,
+          );
+        }
       }
-    }
-    try {
-      repository.refs.transaction(updates.map((update) => ({
-        name: update.ref,
-        expected: update.expected,
-        next: update.next,
-      })));
-    } catch (caught) {
-      throw translatePublicationRace(caught);
-    }
-    this.logPublication(repository, `Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
-    return { updated: updates, added };
+      try {
+        repository.refs.transaction(updates.map((update) => ({
+          name: update.ref,
+          expected: update.expected,
+          next: update.next,
+        })));
+      } catch (caught) {
+        throw translatePublicationRace(caught);
+      }
+      this.logPublication(repository, `Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
+      return { updated: updates, added };
+    });
   }
 }
 

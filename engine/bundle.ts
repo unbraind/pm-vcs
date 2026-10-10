@@ -110,28 +110,6 @@ export interface ObjectImportReport {
 }
 
 /**
- * Refuses an advertised ref whose history is not fully present.
- *
- * A bundle arrives from outside and its header is a claim, not a fact. It can name
- * a ref at a well-formed but absent object id while carrying no object lines and
- * declaring no prerequisites. Publishing that ref would leave a branch pointing at
- * nothing — and every later read reports that as a corrupt repository rather than
- * as a bad import, so the diagnosis lands arbitrarily far from the cause.
- *
- * The whole closure is checked, not only the commits: a bundle missing one blob
- * deep inside a tree is just as unusable, and finding out at checkout time is
- * finding out too late.
- *
- * @param store - Destination store, already holding whatever the bundle carried.
- * @param name - Ref name being advertised, for the message.
- * @param target - Commit the ref would be published at.
- * @throws ObjectStoreError When any object in the closure is absent.
- */
-export function assertClosurePresent(store: ObjectStore, name: string, target: ObjectId): void {
-  requireClosure(store, [target]);
-}
-
-/**
  * Serializes a bundle header and its objects into the canonical bundle format.
  *
  * Shared by {@link exportBundle} and the series export in `engine/series.ts` so the
