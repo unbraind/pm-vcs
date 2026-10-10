@@ -344,9 +344,10 @@ export function decodeIndex(contents: string): IndexEntry[] {
  * @param root - Absolute repository root.
  * @param controlDirectory - Name of the control directory to skip.
  * @param rules - Ignore rules excluding further paths.
+ * @param inspectLeafLinks - Include ordinary leaf links for no-follow erasure inspection, regardless of their target.
  * @returns Canonical repository-relative paths, sorted.
  */
-export function listWorkingTree(root: string, controlDirectory: string, rules: IgnoreRules): string[] {
+export function listWorkingTree(root: string, controlDirectory: string, rules: IgnoreRules, inspectLeafLinks = false): string[] {
   const found: string[] = [];
   /** Descend through materializable entries without following symlinks or tool-owned directories. */
   const walk = (directory: string): void => {
@@ -363,7 +364,7 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
       }
       if (!entry.isFile() && !entry.isSymbolicLink()) continue;
       const path = relative(root, absolute).split(sep).join("/");
-      if (!isIgnored(path, rules) && !isProtectedWorktreePath(root, path, true)) found.push(path);
+      if (!isIgnored(path, rules) && ((inspectLeafLinks && entry.isSymbolicLink()) || !isProtectedWorktreePath(root, path, true))) found.push(path);
     }
   };
   walk(root);

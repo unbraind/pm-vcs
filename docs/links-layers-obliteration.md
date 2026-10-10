@@ -54,6 +54,13 @@ verify the captured directory identities around each step, retaining the documen
 final check/use race of that portable backend. Every case spelling of `.pmvcs` is
 protected at every depth, including the leaf. A refused erasure removal leaves its
 durable denial pending and cannot publish a completed physical-erasure receipt.
+Erasure inspects leaf links as target text with no-follow identity checks, including
+dangling and ignored owned links. An owned link is unlinked without reading or
+deleting its target; unrelated links remain, unless their target text retains selected
+bytes, which refuses before denial. Ancestor links and protected control/runtime
+paths remain forbidden. Ordinary restore, write and delete operations retain their
+leaf-link refusal. The erasure removal must match the leaf identity inspected
+before denial, as well as the captured ancestor identities.
 
 ## Typed obliteration
 
@@ -289,6 +296,8 @@ its planned post-undo HEAD, including a restored branch that the same operation
 moves. Checkout retains the same check for direct materialization. Manifest or
 mixed record/blob changes return a per-path content conflict and preserve our
 complete typed object; manifest metadata is never text-merged into a blob.
+Manifest conflicts validate every fragment's real frame, hash, blob kind and declared
+length under the writer lease, one fragment at a time without assembling the file.
 Agreed and one-sided changes keep the existing tree-merge behavior.
 
 When a competing payload merge encounters an intentionally obliterated address,

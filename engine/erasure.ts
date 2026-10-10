@@ -1,7 +1,7 @@
 /** Authorized FileId-scoped erasure over the complete supported loose storage backend. */
-import { existsSync, readdirSync, rmSync, readFileSync } from "node:fs";
+import { type BigIntStats, existsSync, lstatSync, readdirSync, rmSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { authorize, readLayers, assertSafeFilePath, syncDirectory } from "./composition.ts";
+import { authorize, readLayers, assertCompositionPath, syncDirectory } from "./composition.ts";
 import { payloadDigest, encodeTombstone, type ErasureDenial } from "./lifecycle.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
 import { frameObject, hashObject, ObjectStoreError, type ObjectId, type ObjectStore, type StoredObject } from "./objects.ts";
@@ -132,11 +132,13 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     }
     const mutations = new Map<Repository, WorktreeMutation>();
     try {
-      const removals = new Map<Repository, Set<string>>();
+      const removals = new Map<Repository, Map<string, BigIntStats>>();
       for (const [instance, index] of indexes) {
         const rules = instance.ignoreRules();
-        mutations.set(instance, new WorktreeMutation(instance.root, ".pmvcs"));
-        const paths = new Set<string>();
+        if (!lstatSync(instance.controlDirectory).isDirectory()) throw new ObjectStoreError("unsafe_composition_path", "Repository control roots must be real directories.");
+        const mutation = new WorktreeMutation(instance.root, ".pmvcs");
+        mutations.set(instance, mutation);
+        const paths = new Map<string, BigIntStats>();
         removals.set(instance, paths);
         const owned = new Set(index.filter(/** Worktree removal follows identity, not a historical path now reused by another file. */ (entry) => entry.fileId === fileId).map(/** Collect current paths belonging to the selected identity. */ (entry) => entry.path));
         for (const layer of readLayers(instance.controlDirectory, rules)) {
@@ -146,19 +148,19 @@ export function eraseFile(repository: Repository, instances: readonly Repository
             }
           }
         }
-        for (const path of listWorkingTree(instance.root, ".pmvcs", { patterns: [], negations: [], runtime: rules.runtime })) {
-          assertSafeFilePath(instance.root, path, rules);
-          const absolute = join(instance.root, ...path.split("/"));
-          if (owned.has(path)) paths.add(path);
-          else if (containsSelectedBytes(readFileSync(absolute), payloads)) {
+        // Inspect observed leaves first, then any absent or excluded owned paths.
+        const observed = new Set(listWorkingTree(instance.root, ".pmvcs", { patterns: [], negations: [], runtime: rules.runtime }, true));
+        for (const path of new Set([...observed, ...owned])) {
+          assertCompositionPath(path, rules);
+          const leaf = mutation.inspectForErasure(path);
+          if (leaf === undefined) {
+            if (owned.has(path) && !observed.has(path)) continue;
+            throw new ObjectStoreError("worktree_path_changed", "An inspected working-tree leaf disappeared during erasure.");
+          }
+          if (owned.has(path)) paths.set(path, leaf.stat);
+          else if (containsSelectedBytes(leaf.content, payloads)) {
             throw new ObjectStoreError("erasure_worktree_conflict", "An unrelated or untracked file retains selected bytes; remove the copy before retrying.");
           }
-        }
-        // Ignored but owned paths must still be scrubbed.
-        for (const path of owned) {
-          assertSafeFilePath(instance.root, path, rules);
-          const absolute = join(instance.root, ...path.split("/"));
-          if (existsSync(absolute)) paths.add(path);
         }
       }
       const tombstone = existing?.tombstone ?? { version: 1 as const, fileId, roots: [...roots], objects: [...selected], payloads: [...selected].map(/** Hash actual physical payloads without copying them into audit metadata. */ (id) => payloadDigest(inventory.get(id)!.payload)), principal, timestamp: now.toISOString(), reason };
@@ -175,8 +177,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       store.recordDenials(next);
       const directories = new Set<string>();
       for (const [instance, paths] of removals) {
-        for (const path of paths) {
-          mutations.get(instance)!.remove(path);
+        for (const [path, stat] of paths) {
+          mutations.get(instance)!.removeForErasure(path, stat);
           directories.add(dirname(join(instance.root, ...path.split("/"))));
         }
       }

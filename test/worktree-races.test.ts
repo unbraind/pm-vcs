@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, mock, test } from "node:test";
 
 import { parseIgnore } from "../engine/ignore.ts";
 import { writeCommit, type Signature } from "../engine/model.ts";
-import { ObjectStoreError } from "../engine/objects.ts";
+import { ObjectStoreError, type ObjectStore } from "../engine/objects.ts";
 import { Repository } from "../engine/repo.ts";
 import { buildTree, materializeTree } from "../engine/worktree.ts";
 import { WorktreeMutation, worktreeMutationCapabilities } from "../engine/worktree-mutation.ts";
@@ -44,7 +44,7 @@ function setup(control: boolean = false): { repo: Repository; destination: strin
 }
 
 /** Hook both descriptor-safe syscalls and their old pathname equivalents for behavioral revert proofs. */
-function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: string, swap: () => void): () => boolean {
+function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: string, swap: () => void, erasure = false): () => boolean {
   let swapped = false;
   const trigger = (path: unknown): void => {
     if (!swapped && typeof path === "string" && path.endsWith(`/${leaf}`)) {
@@ -67,9 +67,9 @@ function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: strin
     mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => {
       if (String(args[0]).endsWith(`/${leaf}`)) {
         observations += 1;
-        // Unlink's second leaf observation, open's post-unlink absence observation,
+        // Unlink's second observation (first with a retained erasure identity), open's post-unlink absence observation,
         // mkdir's first missing-child observation, or rmdir's repeated child check.
-        const boundary = operation === "unlink" ? 2 : operation === "open" ? 3 : 1;
+        const boundary = operation === "unlink" ? (erasure ? 1 : 2) : operation === "open" ? 3 : 1;
         if (operation === "rmdir" ? pruning : observations === boundary) trigger(args[0]);
       }
       return lstat(...args);
@@ -166,10 +166,20 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
                 repo.stage([path]);
                 repo.commit({ message: "selected identity", author }, new Date(1000));
               }
-              const swapped = intercept(operation, operation === "mkdir" ? "new" : "leaf.txt", () => {
+              const replaceAncestor = (): void => {
                 renameSync(join(repo.root, "branch"), join(repo.root, "parked"));
                 symlinkSync(destination, join(repo.root, "branch"), "dir");
-              });
+              };
+              let swapped: (() => boolean) | undefined;
+              if (action === "obliterate") {
+                // Guarded preflight reads also observe this leaf. Arm the
+                // removal race after the original durable denial write.
+                const record = repo.objects.recordDenials;
+                mock.method(repo.objects, "recordDenials", (...args: Parameters<ObjectStore["recordDenials"]>) => {
+                  record.apply(repo.objects, args);
+                  swapped = intercept(operation, "leaf.txt", replaceAncestor, true);
+                });
+              } else swapped = intercept(operation, operation === "mkdir" ? "new" : "leaf.txt", replaceAncestor);
               assert.throws(() => {
                 if (action === "layer-add") repo.addLayer("fixture", new Map([[path, { content: Buffer.from("private replacement\n"), executable: true }]]));
                 else if (action === "layer-restore" || action === "layer-delete") repo.removeLayer("fixture");
@@ -177,7 +187,7 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
                   mappings: [{ source: "source.txt", destination: "vendor/file.txt" }] });
                 else repo.obliterate(path, "erase-fixture", "incident", new Date(2000));
               }, { code: "worktree_path_changed" });
-              assert.equal(swapped(), true, "the selected mutation boundary was exercised");
+              assert.equal(swapped?.(), true, "the selected mutation boundary was exercised");
               for (const sentinel of ["leaf.txt", "new/leaf.txt", "droppable/sentinel"]) {
                 assert.equal(readFileSync(join(destination, sentinel), "utf8"), "sentinel\n");
                 assert.equal(statSync(join(destination, sentinel)).mode & 0o777, 0o600);

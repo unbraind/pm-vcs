@@ -1,13 +1,13 @@
 /** Built and npm-packed acceptance against real SDK trackers under Node and Bun. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
-import { withoutPmContext } from "../scripts/pm-environment.ts";
+import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 
 /** Identical consumer program exercises the built CLI harness and engine through package-owned imports. */
 const consumer = `
@@ -24,13 +24,19 @@ import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
 import { serializeBundle } from "pm-vcs/dist/engine/bundle.js";
+const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
+assert.equal(installedSdk.version, "2026.10.10");
+const cliExecutable = process.argv[4];
+if (process.argv[2] === "node-project-cli") {
+  const version = spawnSync(process.execPath, [cliExecutable, "--version"], { encoding: "utf8" });
+  assert.equal(version.status, 0, "Project-installed PM CLI unavailable before fixture setup: " + (version.error?.message ?? version.stderr + version.stdout));
+  assert.equal(version.stdout.trim(), installedSdk.version, "Project-installed PM CLI version mismatch before fixture setup: expected " + installedSdk.version + ", got " + version.stdout.trim());
+}
 const root = join(process.cwd(), process.argv[2]); mkdirSync(root);
 const client = new PmClient({ cwd: root, pmRoot: join(root, ".agents", "pm"), noExtensions: true });
 await client.init("consumer", { defaults: true, author: "fixture" });
 const repo = Repository.init(root); repo.identity(); repo.setAuthority("fixture", "consumer-read", "consumer-erase");
 const author = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1000, timezoneOffsetMinutes: 0 };
-const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
-assert.equal(installedSdk.version, "2026.10.10");
 assert.equal(Boolean(process.versions.bun), process.argv[2].startsWith("bun-"));
 repo.stage([]); const publicationBase = repo.commit({ message: "tracker", author }, new Date());
 writeFileSync(join(root, "publication.bin"), Buffer.from([0, 255, 17])); repo.stage(["publication.bin"]);
@@ -137,10 +143,9 @@ for (const deniedSide of ["base", "ours", "theirs"]) {
   }
   mergedRepo.switchTo("left", new Date()); const ours = mergedRepo.readIndex().find(entry => entry.path === "p");
   let result;
-  if (process.argv[2] === "node-global-cli") {
-    const version = spawnSync("pm", ["--version"], { encoding: "utf8" }); assert.equal(version.status, 0); assert.equal(version.stdout.trim(), installedSdk.version);
-    const installed = spawnSync("pm", ["package", "install", process.argv[3], "--project"], { cwd: mergedRepo.root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
-    const merged = spawnSync("pm", ["--json", "vcs", "merge", "right", "--message", "denied merge"], { cwd: mergedRepo.root, encoding: "utf8" });
+  if (process.argv[2] === "node-project-cli") {
+    const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { cwd: mergedRepo.root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
+    const merged = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "merge", "right", "--message", "denied merge"], { cwd: mergedRepo.root, encoding: "utf8" });
     assert.equal(merged.status, 0, merged.stderr + merged.stdout); result = JSON.parse(merged.stdout).merge;
   } else result = mergedRepo.merge("right", { message: "denied merge", author }, new Date());
   assert.equal(result.clean, false); assert.ok(result.conflicts.some(conflict => conflict.path === "p" && conflict.reason === "content"));
@@ -152,7 +157,7 @@ for (const deniedSide of ["base", "ours", "theirs"]) {
 process.stdout.write(JSON.stringify({ runtime: process.argv[2], sdk: installedSdk.version, linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true }));
 `;
 
-test("built and npm-packed SDK10 Node/native Bun consumers and global CLI execute composition and denied merges", /** Use a packed artifact and real peer dependency instead of SDK doubles. */ () => {
+test("built and npm-packed SDK10 Node/native Bun consumers and project-installed CLI execute composition and denied merges", /** Use a packed artifact and real peer dependency instead of SDK doubles. */ () => {
   const temporary = makeTempDir();
   try {
     const npmEnvironment = { ...process.env, ...discardChildCoverage() };
@@ -170,8 +175,16 @@ test("built and npm-packed SDK10 Node/native Bun consumers and global CLI execut
     assert.match(design, /--current-erase-token-file/); assert.doesNotMatch(design, /PR[0-9]+|Review ID|Verified disposition|Renewed finding|source-only/);
     const built = consumer.replace('from "pm-vcs"', `from ${JSON.stringify(pathToFileURL(join(packageRoot, "dist", "index.js")).href)}`).replaceAll(/"pm-vcs\/dist\/([^" ]+)"/g, /** Bind the same consumer to built files for direct built-package acceptance. */ (_match, path: string) => JSON.stringify(pathToFileURL(join(packageRoot, "dist", path)).href));
     writeFileSync(join(project, "built.mjs"), built); writeFileSync(join(project, "packed.mjs"), consumer);
-    for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-global-cli"]]) {
-      const result = spawnSync(runtime, [script, scenario, archive], { cwd: project, env: { ...withoutPmContext(process.env), ...discardChildCoverage() }, encoding: "utf8", timeout: 120_000 });
+    const environment = { ...withoutPmContext(process.env), ...discardChildCoverage() };
+    const unavailable = spawnSync(process.execPath, ["packed.mjs", "node-project-cli", archive, join(project, "missing-cli.js")], { cwd: project, env: environment, encoding: "utf8", timeout: 120_000 });
+    assert.equal(unavailable.status, 1); assert.match(unavailable.stderr, /Project-installed PM CLI unavailable before fixture setup/);
+    assert.equal(existsSync(join(project, "node-project-cli")), false);
+    writeFileSync(join(project, "wrong-version.mjs"), consumer.replace("version.stdout.trim(), installedSdk.version", 'version.stdout.trim(), "2026.8.1"'));
+    const wrongVersion = spawnSync(process.execPath, ["wrong-version.mjs", "node-project-cli", archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 120_000 });
+    assert.equal(wrongVersion.status, 1); assert.match(wrongVersion.stderr, /Project-installed PM CLI version mismatch before fixture setup/);
+    assert.equal(existsSync(join(project, "node-project-cli")), false);
+    for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-project-cli"]]) {
+      const result = spawnSync(runtime, [script, scenario, archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 120_000 });
       assert.equal(result.status, 0, `${scenario}: ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: "2026.10.10", linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true });
     }
   } finally { temporary.cleanup(); }

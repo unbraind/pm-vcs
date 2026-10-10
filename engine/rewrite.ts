@@ -30,6 +30,7 @@ import {
   type FileMode,
   type Signature,
   compareByteOrder,
+  decodeManifest,
   decodeRecord,
   effectiveChangeId,
   encodeRecord,
@@ -47,7 +48,7 @@ import {
 import { mergeAppendOnlyLog, mergeRecords } from "./records.ts";
 import { type RepositoryConfig, isRecordPath, matchesGlob } from "./config.ts";
 import { buildTree, flattenTree } from "./worktree.ts";
-import { readFragmented } from "./fragments.ts";
+import { readFragmentBlob } from "./fragments.ts";
 
 /** One path that could not be merged automatically. */
 export interface MergeConflict {
@@ -157,11 +158,11 @@ export function mergePath(
     const ourObject = ctx.store.denial(ourId) === undefined ? ctx.store.read(ourId) : null;
     const theirObject = ctx.store.denial(theirId) === undefined ? ctx.store.read(theirId) : null;
     const baseObject = baseId === null || ctx.store.denial(baseId) !== undefined ? null : ctx.store.read(baseId);
-    for (const [id, object] of [[ourId, ourObject], [theirId, theirObject], [baseId, baseObject]] as const) {
+    for (const object of [ourObject, theirObject, baseObject]) {
       if (object !== null && !["blob", "record", "manifest", "link"].includes(object.type)) {
         throw new ObjectStoreError("object_type_mismatch", `Merge payload at ${path} has structural object kind ${object.type}.`);
       }
-      if (id !== null && object?.type === "manifest") readFragmented(ctx.store, id);
+      if (object?.type === "manifest") for (const fragment of decodeManifest(object.payload).fragments) readFragmentBlob(ctx.store, fragment);
     }
     if (ourObject?.type === "link" || theirObject?.type === "link" || baseObject?.type === "link") {
       throw new ObjectStoreError("link_merge_conflict", `Competing link descriptors at ${path} require explicit pin reconciliation before merging.`);

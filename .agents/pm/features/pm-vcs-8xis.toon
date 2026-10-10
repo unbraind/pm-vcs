@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:34.077Z"
-updated_at: "2026-10-10T11:15:04.368Z"
+updated_at: "2026-10-10T12:36:54.849Z"
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
 parent: pm-vcs-b7cb
 risk: high
-comments[84]{created_at,author,text}:
+comments[87]{created_at,author,text}:
   "2026-09-12T23:35:59.709Z",pi-agent,"Audit 2026-09-13: EXISTS — committed repository links are implemented as sparse linked instances (engine/instances.ts: instance link, shared object store, sparse views; test/instances.test.ts: 'a linked instance materializes its view, shares objects and keeps private state', 'concurrent instances share objects but never overwrite each other's state'). REMAINS — local layers that overlay an instance without changing commit identity are not implemented (grep for local-layer/overlay returns no matches). Typed obliteration is not implemented (grep for obliterate/Obliteration in engine/ returns no matches). Checkout and verify distinguishing obliterated content from missing and corrupt objects is not implemented. Two of four acceptance criteria are not met."
   "2026-10-07T20:55:16.467Z",codex-sol,"Baseline against the built package and a real disposable SDK tracker: a synthetic binary was staged and committed successfully; vcs link, vcs layer and vcs obliterate are absent, and the repository exposes no layer or obliteration API. Acceptance will pin a typed external repository revision and subset across a clone without transferring its payload or credentials; overlay tracked and new paths while preserving commit identity and excluding layers visibly from status and add; authorize FileId-scoped erasure across moves and revisions, byte-scan stored and decoded representations, distinguish obliterated/missing/corrupt state, and reject resurrection through stale fetch/import. The previous audit conflated local shared instances with committed external links. Full item, parent, linked research record and LORE.md were read; the removed historical research-doc link is superseded by LORE.md."
   "2026-10-07T20:56:24.216Z",codex-sol,"Design recorded first in docs/links-layers-obliteration.md: canonical typed committed links with explicit target authorization; private layer snapshots masked from staging/status and preserved across materialization; authorized FileId erasure with durable typed denial, full-store historical inventory, deduplication refusal, byte removal and non-resurrection at every object arrival boundary. Remote tombstones cannot silently authorize deletion of locally held content. Verification and checkout preserve the distinction between intentional erasure, missing data and corruption."
@@ -97,7 +97,10 @@ comments[84]{created_at,author,text}:
   "2026-10-10T09:39:14.437Z",codex-denied-merge-repair,"2026-10-10 denied merge repair: claim codex-denied-merge-repair for verified functional review 4237177154 on PR 97, frozen predecessor e516687. Preserved all 391 tracked fingerprints and historical raw coverage outside the package before invalidation. TDD will use real SDK trackers, native store/mergePath/mergeTrees and branch merges; explicit index identity replacement is required after terminal erasure, ordinary staging must still refuse. Preserve complete ours entries, validate surviving payload integrity under the shared lease, and refuse corruption before refs/HEAD/index mutation. Upgrade only the exact dev SDK pin to published 2026.10.10; preserve compatibility floor. Link unchanged full release gate and fresh packed Node/native Bun/global CLI controls; release claim before bundle regeneration/freeze, keep item open. No delegation or GH replies."
   "2026-10-10T09:48:56.471Z",codex-denied-merge-repair,"2026-10-10 candidate verification: nine real SDK/native store/path/tree/branch regression cases pass through linked PM execution. Reverting only engine/rewrite.ts and engine/repo.ts to e516687 after fixtures/modules load makes all nine semantic tests fail; exact fixed bytes were restored and hash checked. Tests cover denied base, denied sides with absent/present base, complete ours identity/mode/copy provenance, absent denied ours, unchanged denial bytes, terminal staging refusal, surviving blob hash damage/missing data, structural type refusal, link reconciliation and corrupt manifest fragments. A real branch corruption refusal preserves refs/HEAD/index/worktree and merge state. Actual installed SDK declarations were inspected, exact dev pin/lock now match registry-published 2026.10.10; independent 2026.8.1 floor retained. Linked built and packed consumers pass Node and native Bun plus installed-global CLI 2026.10.10. Global CLI subprocesses clear inherited PM discovery coordinates using existing environment isolation. Type/test build, lint, zero-duplicate all53 scope, docstrings and changelog check pass. Final unchanged linked release:check with fresh all53 C8 four100/raw/LCOV counters, selfhost/native TOON/strace/identities/audit/release checks remains mandatory after release, bundle regeneration and commit freeze; final immutable receipts go to root externally. Keep item open; CI/review, complete privacy, recovery and production scale remain independent."
   "2026-10-10T11:15:04.368Z","harness:codex","Root boundedreal binarycontract fixture on reviewed source: ordinary six-byte binary stages bothwithout andafter authorized unrelated erasure; three-byte valid-header/malformed-zlib-shaped bytes stagewithoutdenials butaftererasure refuseuninspectable_payload, preservingfilebytes. Thismatches explicit existingdocs344-348 conservative availabilityboundary; notall arbitrarybinary support or privacycertification. Two preliminarycaller-invalid probes (missingrequiredDate, then noncanonical spacedreason) are excluded; correctdeclaredAPI andmachine-readable reasoncode yieldexpectedresults. No decoder/source/gate changes, mocks, syntheticerror injection or realtenantdata. Per-ref batchpublicationfinding4237410845 remainsactive; supportedencoding refusals mustremainpreserved."
-files[31]:
+  "2026-10-10T12:15:24.493Z",codex-sol,"2026-10-10 included review repair: claimed by codex-sol on frozen ee8fca0. Independently triage ordinary and dangling leaf symlinks, fragment-only integrity validation before conflict, and PATH CLI provenance. Use bounded real disposable SDK/store/filesystem fixtures and delegating original operation observers. Preserve all121 history prefixes and historical raw and failure receipts. Preserve ancestor and protected tracker/control refusal, native leases, ordinary restore/delete symlink refusal, terminal denial/corruption semantics and complete ours identity. Root owns finding replies, CI/review and merge decisions. Final unchanged linked release gate requires released claim, regenerated changelog and selfhost bundle, committed immutable source/all-file hashes and fresh all53 C8/native/counter inventories before push."
+  "2026-10-10T12:28:19.345Z",codex-sol,"Independent triage confirms all three findings. Eight valid old-source semantic assertions fail: ordinary and dangling links block unrelated erasure, four owned/ignored-owned leaf-link cases refuse, external target text hides selected bytes, and all three manifests request full-file concat. New bounded real regressions pass22/22; original read/hash/type/length and concat observers retain real operations. Preflight records exact leaf identities and reads link text without following targets; explicit erasure-only unlink preserves generic remove/write refusal, ancestor/protected-root refusal, pending denial on replacement and resumable cleanup. Missing/corrupt/type/length/manifest-total cases preserve durable state. Existing removal-race fixtures now arm their original syscall observer after the real durable denial, since guarded preflight reads correctly refuse earlier replacement. Built/npm-packed Node/native Bun and explicit project-installed CLI consumers pass; actual missing/wrong-version prerequisites fail before fixture creation. This corrects the global-provenance label; root independent true-global acceptance remains separate. Quality gates pass with all53 sources and290 documented declarations. Final full frozen gate remains required."
+  "2026-10-10T12:36:54.299Z",codex-sol,"Final candidate proof before freeze: all23 bounded real erasure/fragment regressions and226 existing race cases pass, zero failures/skips/cancellations. Existing composition/rewrite/worktree tests were exercised; their only six initial failures came from observers firing during preflight, and the corrected post-denial removal observers retain the same pending-denial and sentinel assertions. Current diagnostics show every new mutation method and erasure branch executed; historical untouched branches remain for the complete all53 gate. Final predecessor controls restore only five production modules and fail eight intended semantic assertions across14 tests with modules loaded; fixed bytes are restored and SHA256 checked. Restoring the original real consumer program under the current prerequisite assertions makes the unavailable-CLI expectation fail because it returns success and creates fixtures; restored test bytes are hash checked. Explicit project-installed pinned CLI, actual missing/wrong-version diagnostic controls, built and npm-packed Node/native Bun consumers pass. Compiler union includes all53 authored sources; docstrings cover290 declarations. Exact SDK2026.10.10, pm-ops2026.10.6 and pm-changelog2026.10.5 remain pinned; declared floor2026.8.1 is preserved without renewed minimum-runtime proof. Production and complete dependency audit, type/test compilation, lint/zero duplication, identity and strict health/validate checks pass with inherited advisories. Preserve all121 history prefixes and332 historical raw records; no claim of new global install, CI/review, production scale or privacy certification. Release only this own claim unclosed, regenerate changelog through pm-changelog, commit source/PM checkpoint, regenerate selfhost.bundle from committed bytes, freeze all tracked/source hashes and run unchanged linked npm run release:check at its existing3600-second limit. Exact final results remain in external immutable receipts after freeze."
+files[32]:
   - path: CHANGELOG.md
     scope: project
   - path: composition-commands.ts
@@ -156,6 +159,8 @@ files[31]:
     note: real SDK behavioral and byte-erasure regressions
   - path: test/control-directories.test.ts
     scope: project
+  - path: test/erasure-fragment-repairs.test.ts
+    scope: project
   - path: test/ignore.test.ts
     scope: project
   - path: test/manifest-vocabulary.test.ts
@@ -168,7 +173,7 @@ files[31]:
     scope: project
   - path: vcs-commands.ts
     scope: project
-tests[16]:
+tests[17]:
   - command: node --test test/composition.test.ts
     scope: project
     timeout_seconds: 240
@@ -305,6 +310,15 @@ tests[16]:
     provenance:
       author: codex-denied-merge-repair
       created_at: "2026-10-10T09:44:58.441Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: node --test test/erasure-fragment-repairs.test.ts
+    scope: project
+    timeout_seconds: 240
+    workspace_context_mode: source
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-10T12:25:45.811Z"
       source_kind: local_mutation
       source_ref: feat/links-layers-obliteration
 docs[4]{path,scope}:

@@ -207,7 +207,7 @@ export function writeFragmentedFile(
  * @returns The blob's bytes.
  * @throws ObjectStoreError When the stored blob's length differs from the manifest's.
  */
-function readFragmentBlob(store: ObjectStore, fragment: FragmentEntry): Buffer {
+export function readFragmentBlob(store: ObjectStore, fragment: FragmentEntry): Buffer {
   const data = store.readTyped(fragment.id, "blob");
   if (data.length !== fragment.length) {
     throw new ObjectStoreError(
