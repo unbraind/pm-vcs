@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import type { CommandHandlerContext, ExtensionApi } from "@unbrained/pm-cli/sdk/authoring";
 import { openRepository, optionalString, requiredArgument, sourceWorkingRoot } from "./vcs-commands.ts";
 import { Repository } from "./engine/repo.ts";
-import { authorize, decodeLink, type AuthorityChangeAuthorization } from "./engine/composition.ts";
+import { authorize, type AuthorityChangeAuthorization, type RepositoryLink } from "./engine/composition.ts";
 import { ObjectStoreError } from "./engine/objects.ts";
 
 /** Read an explicitly named local credential without storing it in descriptor or command output. */
@@ -71,7 +71,7 @@ export function registerCompositionCommands(api: ExtensionApi): void {
     description: "Stage a canonical committed link descriptor, or list pinned links without contacting their targets.",
     arguments: [{ name: "descriptor", required: false, description: "Repository-relative descriptor path" }],
     flags: [
-      { long: "--spec", value_name: "file", value_type: "string", description: "Canonical JSON link descriptor file" },
+      { long: "--spec", value_name: "file", value_type: "string", description: "JSON link descriptor file; whitespace is accepted and stored bytes are canonicalized" },
       { long: "--list", description: "List staged typed links" },
     ],
     /** Stage only immutable descriptor metadata, never target bytes. */
@@ -80,8 +80,17 @@ export function registerCompositionCommands(api: ExtensionApi): void {
       if (context.options?.list === true) return { ok: true, links: repo.links() };
       const path = requiredArgument(context, 0, "descriptor path", "pm vcs link descriptor --spec link.json");
       const spec = optionalString(context.options, "spec");
-      if (spec === undefined) throw new ObjectStoreError("bad_link", "A canonical --spec file is required.");
-      return { ok: true, id: repo.stageLink(path, decodeLink(readFileSync(resolve(sourceWorkingRoot(context), spec)))) };
+      if (spec === undefined) throw new ObjectStoreError("bad_link", "A JSON --spec file is required.");
+      const contents = readFileSync(resolve(sourceWorkingRoot(context), spec), "utf8");
+      let parsed: unknown;
+      try { parsed = JSON.parse(contents); } catch {
+        throw new ObjectStoreError("bad_link", "The --spec file is not valid JSON.");
+      }
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new ObjectStoreError("bad_link", "The --spec file must contain a link descriptor object.");
+      }
+      // stageLink validates every field with encodeLink before publishing canonical bytes.
+      return { ok: true, id: repo.stageLink(path, parsed as RepositoryLink) };
     },
   });
   api.registerCommand({

@@ -151,13 +151,16 @@ pm vcs diff main feature
 
 A committed link is a typed descriptor, distinct from `vcs instance` and its shared
 local store. Obtain the target's `Repository.identity()` and an exact commit ID, then
-write a canonical JSON spec with `encodeLink`:
+write a JSON spec (pretty printing and a trailing newline are accepted):
 
 ```json
 {"version":1,"repository":"0123456789abcdef0123456789abcdef","revision":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","mappings":[{"source":"assets/model.bin","destination":"vendor/model.bin"}]}
 ```
 
-The descriptor commits metadata only. Exact file mappings declare the subset;
+The command validates every field using `encodeLink` and stores its canonical bytes.
+Stored `link` objects still require an exact canonical representation. Invalid JSON,
+root types and fields refuse before descriptor or index publication; unreadable spec
+files retain their filesystem errors. The descriptor commits metadata only. Exact file mappings declare the subset;
 branch movement cannot change the pin. Resolution requires the separately configured
 target read credential and creates an instance-private layer. Local target bindings
 and credentials are supplied at resolution and never appear in enclosing bundles.

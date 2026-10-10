@@ -10,6 +10,13 @@ commit object ID, and a source-to-destination path mapping. Its enclosing tree
 commits the descriptor, never the linked repository's bytes. A clone reproduces
 exactly that descriptor even when the linked repository is unavailable.
 
+The operator's `vcs link --spec` file accepts ordinary JSON whitespace, including
+pretty printing and a trailing newline. Its root must be an object; all fields
+are validated and canonicalized by the existing `encodeLink` contract in
+`stageLink` before object, descriptor or index publication. Unknown fields and
+invalid roots, values or mappings refuse. Filesystem read errors retain their
+native cause. Stored `link` bytes remain subject to strict `decodeLink` canonicality.
+
 Repository identity is stable across clones and independent of the configured
 remote URL. An explicit resolution checks the contacted repository identity and
 the exact commit ID before materializing the selected subset. Moving a branch
@@ -329,10 +336,19 @@ The writer lease waits against an elapsed five-second deadline, with sleeps
 bounded by the remaining time. A live owner is never recovered or displaced.
 Contention reports retry guidance and reserves recovery for interrupted writers.
 
-Link listing uses at most 64 compressed prefix bytes per unrelated index object.
-The prefix is only a listing hint. A recognized link still receives complete
-frame, hash and descriptor validation. Missing or unrecognizable unrelated content
-is omitted; operational I/O errors remain visible. A damaged prefix may conceal
+Link and manifest discovery advances in 64-byte compressed chunks until the frame
+header is available; a DEFLATE dynamic header can require more than one chunk.
+Each inflation attempt caps output at 4 KiB, backing off the input prefix when a
+compressible payload reaches that limit. A valid frame header fits in 32 bytes
+(kind, space, at most 16 decimal length digits and NUL). The compressed prefix
+budget is 64 KiB. An ambiguous stream that exhausts it raises `object_prefix_limit`
+instead of silently disappearing. This is an explicit discovery refusal bound,
+not a guarantee that every possible legal zlib stream exposes its header within
+that budget; deliberately padded streams can exceed it. Recognizable unrelated
+kinds avoid full payload reads. The prefix is only a listing hint. A recognized
+match still receives complete frame and hash validation, plus descriptor or
+manifest validation by its caller. Missing or malformed unrelated content is
+omitted; operational I/O errors remain visible. A damaged prefix may conceal
 its kind, so listing is partial discovery rather than a repository verification
 receipt. Resolution cannot use an omitted descriptor. Full verification and every
 publication closure continue reading and hashing complete required payloads.

@@ -359,9 +359,11 @@ export class ObjectStore {
   }
 
   /**
-   * Read a matching kind for a partial listing, using at most 64 compressed bytes to reject unrelated kinds.
+   * Read a matching kind for a partial listing, advancing in 64-byte compressed chunks until the header is available.
    * This prefix is a hint, never closure evidence: matching objects still undergo full frame and hash verification.
-   * Missing or unrecognizable prefixes are absent from the listing; operational I/O failures remain visible.
+   * Inflated output is capped at 4 KiB per attempt. A 64 KiB compressed-input budget exhaustion raises
+   * object_prefix_limit rather than silently hiding an ambiguous object. Missing or malformed prefixes are omitted;
+   * operational I/O failures remain visible. Ordinary recognizable unrelated objects avoid full payload reads.
    */
   readIfType(id: ObjectId, type: ObjectType): StoredObject | undefined {
     this.assertId(id);
@@ -371,14 +373,36 @@ export class ObjectStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw error;
     }
-    let prefix: Buffer;
+    let matching = false;
     try {
-      const bytes = Buffer.alloc(64);
-      const length = readSync(fd, bytes, 0, bytes.length, null);
-      try { prefix = inflateSync(bytes.subarray(0, length), { finishFlush: zlibConstants.Z_SYNC_FLUSH }); } catch { return undefined; }
+      const bytes = Buffer.alloc(64 * 1024);
+      let length = 0;
+      for (;;) {
+        if (length === bytes.length) throw new ObjectStoreError("object_prefix_limit", `Object ${id} has no recognizable header within the compressed prefix budget.`);
+        const count = readSync(fd, bytes, length, Math.min(64, bytes.length - length), null);
+        if (count === 0) return undefined;
+        length += count;
+        let end = length;
+        let prefix: Buffer;
+        for (;;) {
+          try {
+            prefix = inflateSync(bytes.subarray(0, end), { finishFlush: zlibConstants.Z_SYNC_FLUSH, maxOutputLength: 4096, chunkSize: 4096 });
+            break;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ERR_BUFFER_TOO_LARGE") return undefined;
+            // Back off input, never increase the output budget for a highly compressible payload.
+            end -= 1;
+          }
+        }
+        if (prefix.includes(0)) {
+          matching = /^([a-z]+) (0|[1-9][0-9]*)\0/.exec(prefix.toString("latin1"))?.[1] === type;
+          break;
+        }
+        // Any valid frame header fits in 32 bytes: longest kind, a space, at most 16 decimal length digits and NUL.
+        if (prefix.length >= 32) return undefined;
+      }
     } finally { closeSync(fd); }
-    const header = /^([a-z]+) (0|[1-9][0-9]*)\0/.exec(prefix.toString("latin1"));
-    return header?.[1] === type ? this.read(id) : undefined;
+    return matching ? this.read(id) : undefined;
   }
 
   /**

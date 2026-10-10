@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:34.077Z"
-updated_at: "2026-10-10T13:28:45.389Z"
+updated_at: "2026-10-10T14:43:29.870Z"
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
 parent: pm-vcs-b7cb
 risk: high
-comments[90]{created_at,author,text}:
+comments[94]{created_at,author,text}:
   "2026-09-12T23:35:59.709Z",pi-agent,"Audit 2026-09-13: EXISTS — committed repository links are implemented as sparse linked instances (engine/instances.ts: instance link, shared object store, sparse views; test/instances.test.ts: 'a linked instance materializes its view, shares objects and keeps private state', 'concurrent instances share objects but never overwrite each other's state'). REMAINS — local layers that overlay an instance without changing commit identity are not implemented (grep for local-layer/overlay returns no matches). Typed obliteration is not implemented (grep for obliterate/Obliteration in engine/ returns no matches). Checkout and verify distinguishing obliterated content from missing and corrupt objects is not implemented. Two of four acceptance criteria are not met."
   "2026-10-07T20:55:16.467Z",codex-sol,"Baseline against the built package and a real disposable SDK tracker: a synthetic binary was staged and committed successfully; vcs link, vcs layer and vcs obliterate are absent, and the repository exposes no layer or obliteration API. Acceptance will pin a typed external repository revision and subset across a clone without transferring its payload or credentials; overlay tracked and new paths while preserving commit identity and excluding layers visibly from status and add; authorize FileId-scoped erasure across moves and revisions, byte-scan stored and decoded representations, distinguish obliterated/missing/corrupt state, and reject resurrection through stale fetch/import. The previous audit conflated local shared instances with committed external links. Full item, parent, linked research record and LORE.md were read; the removed historical research-doc link is superseded by LORE.md."
   "2026-10-07T20:56:24.216Z",codex-sol,"Design recorded first in docs/links-layers-obliteration.md: canonical typed committed links with explicit target authorization; private layer snapshots masked from staging/status and preserved across materialization; authorized FileId erasure with durable typed denial, full-store historical inventory, deduplication refusal, byte removal and non-resurrection at every object arrival boundary. Remote tombstones cannot silently authorize deletion of locally held content. Verification and checkout preserve the distinction between intentional erasure, missing data and corruption."
@@ -103,7 +103,11 @@ comments[90]{created_at,author,text}:
   "2026-10-10T13:18:23.484Z",codex-sol,"2026-10-10 follow-up to PR97 review 5479067871 on 190a8d8: verified nested standard-tool leaf files reach observed erasure paths and fail composition validation. Claim codex-sol for bounded TDD fixtures covering submodule gitfiles, CVS and node_modules leaves, protected leaf links and malformed owned paths. Skip only observed unowned standard-tool artifacts before validation; preserve actual tracker/control fences, owned path refusal, no-follow identities, denial preflight, surviving hash verification and writer leases. Independently confirmed patch-series and repository-server implementations and tests; correct only their two existing architecture status rows. Retain every predecessor artifact and all121 history prefixes; root owns reviews and companion context. No closure or publication."
   "2026-10-10T13:26:21.206Z",codex-sol,"Corrected-source proof: all39 real erasure/fragment cases pass through the existing linked command; the16 new cases preserve real nested gitfiles, CVS/node_modules leaves and links, exclude their bytes and targets from reads, preserve every surviving loose object, and retain one writer lease. Ten forged owned tool/control/SDK-runtime paths refuse before denial with exact durable-state hashes. Replacing only engine/erasure.ts with190a8d8 reproduces six assertCompositionPath failures across39 tests with loaded modules; exact fixed bytes were restored and SHA256 checked. All226 original races and54 existing series/server cases pass. Broader linked integration initially passed371/372; its sole failure was a generated consumer newline escaping error, now corrected and rerunning. All53-source compiler inventory, type/test build, lint, zero duplication,290 documented declarations, full dependency audit and strict health/validate pass with inherited advisories. Only erasure production bytes changed; ordinary staging/restore and all denial, hash, lease and runtime/control safeguards remain intact. Architecture changes mark only the existing patch-series and served-repository rows shipped; design retains stable scope contracts and PM retains dated review proof."
   "2026-10-10T13:28:44.687Z",codex-sol,"Final freeze preparation: corrected existing linked composition/control/race/object/credential integration passes372/372 with zero failures/skips/cancellations, including the expanded tool-leaf built/npm-packed Node/native Bun/project-installed CLI consumers. Standalone consumer command also passes, including unavailable and wrong-version CLI prerequisite assertions before fixture creation. New focused erasure/fragment suite passes39/39; all226 existing races and54 existing series/server tests pass. Preserve original-source six semantic failures and fixture-authoring failure logs; erasure fixed bytes remain exactly control-restored and all52 other production modules remain predecessor-identical. SDK2026.10.10, ops2026.10.6, changelog2026.10.5 and independent8.1floor are unchanged. All121 prior history prefixes and1825 archived predecessor artifact files are preserved. Release only this own claim unclosed, regenerate CHANGELOG.md through the actual package command, commit source/tests/docs/TOON/history, regenerate selfhost.bundle from committed bytes and freeze every tracked/source fingerprint. Run the unchanged existing PM-linked release:check at its original3600-second limit; require full no-skip tests, all53 four100, positive LCOV and fresh native ranges without ignores, plus every native TOON/strace/selfhost/identity/dependency/pack/changelog/date/attestation gate and renewed consumers. Any gate failure invalidates canonical LCOV and remains failure. Final-head receipts remain external after freeze; root owns CI, CodeQL, reviews and companion context. No floor-runtime renewal, independent global installation, publication or production privacy/scale claim."
-files[33]:
+  "2026-10-10T14:26:53.600Z",codex-sol-json-header,"Repair two confirmed ordinary functional findings: operator link specs accept JSON whitespace while stored descriptors remain canonical; type discovery advances past incomplete DEFLATE headers with bounded allocation and full verification for matches. Preserve composition, erasure, control-directory, publication and binary contracts. Real synthetic fixtures and genuine source-only predecessor failures precede frozen exact-head release evidence."
+  "2026-10-10T14:36:32.154Z",codex-sol-json-header,"Nine new real functional fixtures pass. Both operator whitespace assertions fail with only the predecessor command source restored; both large canonical link and manifest discovery assertions fail with only the predecessor object-store source restored. Each control exits 1 with loaded modules and genuine AssertionError; fixed source bytes are restored exactly. Operator parsing uses unknown, rejects null/arrays/nonobjects, preserves filesystem causes, and delegates field validation and canonicalization to stageLink encodeLink. Prefix inflation uses the installed typed maxOutputLength API, bounded output and input backoff; ambiguous compressed-budget exhaustion is an explicit object_prefix_limit refusal, documented and tested using a valid padded stream. No ignores or gate changes."
+  "2026-10-10T14:43:28.407Z",codex-sol-json-header,"Final candidate validation: linked JSON/header suite passes 10/10; unchanged linked composition, control-directory, worktree-race, object and credential suite passes 372/372; linked erasure/fragment suite passes 39/39. Expanded built and packed Node/native Bun plus explicit project-installed SDK10 CLI consumers pass, including pretty/newline operator specs, invalid-input state preservation and large dynamic-header link discovery. Four intended predecessor assertions fail across two source-only controls; exact fixed bytes are restored. Test compilation, typecheck, lint, zero duplication, all53/290 docstrings, complete dependency audit, strict PM health and validation pass with inherited advisories. An initial generated consumer-program newline escape error was corrected and its failed log preserved. No gate, threshold, exclusions, protected-tool ownership rule, SDK floor, binary or publication contract changes."
+  "2026-10-10T14:43:29.133Z",codex-sol-json-header,"Freeze preparation: release only this own claim unclosed, regenerate CHANGELOG.md using unchanged pm-changelog procedure after audited comments and release, commit explicit source/tests/docs/TOON/history paths, regenerate selfhost.bundle from committed source and freeze its commit. The mandatory next check is the unchanged op2c-linked npm run release:check with its existing timeout plus fresh final consumers, all53 per-file four100, positive C8/LCOV/native counters with no ignores, sourceURL offset verification, complete tracked Gitblob/worktree equality and all121 preserved history prefixes. A failed gate invalidates canonical LCOV and is not approval. Final CI, reviews, companion context and closure remain with root."
+files[34]:
   - path: ARCHITECTURE.md
     scope: project
   - path: CHANGELOG.md
@@ -168,6 +172,9 @@ files[33]:
     scope: project
   - path: test/ignore.test.ts
     scope: project
+  - path: test/json-header-repair.test.ts
+    scope: project
+    note: real operator JSON and dynamic compressed-header regressions
   - path: test/manifest-vocabulary.test.ts
     scope: project
   - path: test/self-host.test.ts
@@ -178,7 +185,7 @@ files[33]:
     scope: project
   - path: vcs-commands.ts
     scope: project
-tests[17]:
+tests[18]:
   - command: node --test test/composition.test.ts
     scope: project
     timeout_seconds: 240
@@ -326,9 +333,24 @@ tests[17]:
       created_at: "2026-10-10T12:25:45.811Z"
       source_kind: local_mutation
       source_ref: feat/links-layers-obliteration
-docs[4]{path,scope}:
-  ARCHITECTURE.md,project
-  docs/links-layers-obliteration.md,project
-  LORE.md,project
-  README.md,project
+  - command: node --test test/json-header-repair.test.ts
+    scope: project
+    timeout_seconds: 240
+    pm_context_mode: schema
+    workspace_context_mode: source
+    provenance:
+      author: codex-sol-json-header
+      created_at: "2026-10-10T14:36:31.147Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+docs[4]:
+  - path: ARCHITECTURE.md
+    scope: project
+  - path: docs/links-layers-obliteration.md
+    scope: project
+    note: operator JSON and bounded discovery contract
+  - path: LORE.md
+    scope: project
+  - path: README.md
+    scope: project
 body: ""

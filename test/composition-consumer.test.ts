@@ -12,6 +12,7 @@ import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 /** Identical consumer program exercises the built CLI harness and engine through package-owned imports. */
 const consumer = `
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -76,8 +77,21 @@ writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout);
 const recovered = await harness.runCommand({ command: "vcs recover-lock", pmRoot: root }); assert.equal(recovered.errorMessage, undefined); assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
 const legacy = Repository.init(join(process.cwd(), process.argv[2] + "-legacy"));
 assert.equal((await new FileTransport(legacy.root, legacy.root).advertise()).repositoryId, undefined); assert.equal(existsSync(join(legacy.controlDirectory, "identity")), false);
-const spec = join(process.cwd(), process.argv[2] + ".link.json"); writeFileSync(spec, encodeLink(link));
+const spec = join(process.cwd(), process.argv[2] + ".link.json"); writeFileSync(spec, JSON.stringify(link, null, 2) + "\\n");
 const staged = await harness.runCommand({ command: "vcs link", args: ["dependency.link"], pmRoot: root, options: { spec } }); assert.equal(staged.errorMessage, undefined);
+assert.deepEqual(readFileSync(join(root, "dependency.link")), encodeLink(link));
+writeFileSync(spec, encodeLink(link).toString() + "\\n");
+const restaged = await harness.runCommand({ command: "vcs link", args: ["dependency.link"], pmRoot: root, options: { spec } }); assert.equal(restaged.errorMessage, undefined); assert.deepEqual(restaged.result, staged.result);
+const beforeIndex = readFileSync(join(repo.controlDirectory, "index")); const beforeObjects = repo.objects.inventory();
+for (const input of ["{", "null", "[]", JSON.stringify({ ...link, extra: true })]) {
+  writeFileSync(spec, input); const refused = await harness.runCommand({ command: "vcs link", args: ["invalid.link"], pmRoot: root, options: { spec } });
+  assert.equal(refused.errorCode, "bad_link"); assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), beforeIndex); assert.deepEqual(repo.objects.inventory(), beforeObjects);
+}
+const largeLink = { ...link, mappings: Array.from({ length: 400 }, (_, i) => {
+  const hex = createHash("sha256").update("mapping-" + i).digest("hex");
+  return { source: "src/" + hex.slice(0, 16) + "/" + i + ".bin", destination: "vendor/" + hex.slice(16, 32) + "/" + i + ".bin" };
+}) };
+const largeLinkId = repo.stageLink("large.link", largeLink); assert.equal(repo.links().find(entry => entry.path === "large.link").id, largeLinkId);
 repo.commit({ message: "descriptor", author }, new Date());
 writeFileSync(join(target.root, "asset.bin"), "branch moved"); target.stage(["asset.bin"]); target.commit({ message: "move", author }, new Date());
 repo.resolveLink("dependency.link", target, "target-read", "resolved"); assert.deepEqual(readFileSync(join(root, "vendor/asset.bin")), Buffer.from([0, 255, 128, 19, 47]));
@@ -131,6 +145,19 @@ for (const caller of ["hub", "linked"]) {
   invoked.obliterate("secret.bin", "custom-erase", "incident", new Date());
   for (const root of [hub, sibling]) assert.equal(existsSync(join(root, "secret.bin")), false);
   for (const root of [tracker, siblingTracker]) for (const path of runtimePaths) assert.deepEqual(readFileSync(join(root, path)), selected);
+}
+if (process.argv[2] === "node-project-cli") {
+  const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { cwd: root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
+  for (const input of [JSON.stringify(link, null, 2), encodeLink(link).toString() + "\\n"]) {
+    writeFileSync(spec, input);
+    const linked = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "operator.link", "--spec", spec], { cwd: root, encoding: "utf8" });
+    assert.equal(linked.status, 0, linked.stderr + linked.stdout); assert.deepEqual(readFileSync(join(root, "operator.link")), encodeLink(link));
+  }
+  const cliIndex = readFileSync(join(repo.controlDirectory, "index")); const cliObjects = repo.objects.inventory();
+  writeFileSync(spec, "null");
+  const invalidLink = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "invalid.link", "--spec", spec], { cwd: root, encoding: "utf8" });
+  assert.notEqual(invalidLink.status, 0); assert.match(invalidLink.stderr + invalidLink.stdout, /bad_link/);
+  assert.deepEqual(readFileSync(join(root, "operator.link")), encodeLink(link)); assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), cliIndex); assert.deepEqual(repo.objects.inventory(), cliObjects);
 }
 for (const deniedSide of ["base", "ours", "theirs"]) {
   const mergedRepo = Repository.init(join(process.cwd(), process.argv[2] + "-merge-" + deniedSide));
