@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:34.077Z"
-updated_at: "2026-10-10T08:39:28.193Z"
+updated_at: "2026-10-10T08:47:28.240Z"
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
 parent: pm-vcs-b7cb
 risk: high
-comments[74]{created_at,author,text}:
+comments[76]{created_at,author,text}:
   "2026-09-12T23:35:59.709Z",pi-agent,"Audit 2026-09-13: EXISTS — committed repository links are implemented as sparse linked instances (engine/instances.ts: instance link, shared object store, sparse views; test/instances.test.ts: 'a linked instance materializes its view, shares objects and keeps private state', 'concurrent instances share objects but never overwrite each other's state'). REMAINS — local layers that overlay an instance without changing commit identity are not implemented (grep for local-layer/overlay returns no matches). Typed obliteration is not implemented (grep for obliterate/Obliteration in engine/ returns no matches). Checkout and verify distinguishing obliterated content from missing and corrupt objects is not implemented. Two of four acceptance criteria are not met."
   "2026-10-07T20:55:16.467Z",codex-sol,"Baseline against the built package and a real disposable SDK tracker: a synthetic binary was staged and committed successfully; vcs link, vcs layer and vcs obliterate are absent, and the repository exposes no layer or obliteration API. Acceptance will pin a typed external repository revision and subset across a clone without transferring its payload or credentials; overlay tracked and new paths while preserving commit identity and excluding layers visibly from status and add; authorize FileId-scoped erasure across moves and revisions, byte-scan stored and decoded representations, distinguish obliterated/missing/corrupt state, and reject resurrection through stale fetch/import. The previous audit conflated local shared instances with committed external links. Full item, parent, linked research record and LORE.md were read; the removed historical research-doc link is superseded by LORE.md."
   "2026-10-07T20:56:24.216Z",codex-sol,"Design recorded first in docs/links-layers-obliteration.md: canonical typed committed links with explicit target authorization; private layer snapshots masked from staging/status and preserved across materialization; authorized FileId erasure with durable typed denial, full-store historical inventory, deduplication refusal, byte removal and non-resurrection at every object arrival boundary. Remote tombstones cannot silently authorize deletion of locally held content. Verification and checkout preserve the distinction between intentional erasure, missing data and corruption."
@@ -87,6 +87,8 @@ comments[74]{created_at,author,text}:
   "2026-10-10T08:31:27.099Z",codex-vcs-grant-repair,"Design-log migration for 4236960207: removed all dated review IDs, disposition tables, test-count/source-head narratives, native measurement receipts and behavioral-revert logs from the shipped design. Existing PM comments already preserve their results and rejected presence-only/encoded-inflate suggestions; those entries are retained without duplication. Remaining receipt detail: the rejected 6000-retry proposal approaching 50 ms totals about 299 seconds despite its 30-second message; the supported elapsed lease deadline is five seconds. Design now states only supported behavior and boundaries, including current-credential rotation and actual tracker fences. Prior c3c06e5 full1220/all53four100 is historical only after these edits."
   "2026-10-10T08:39:26.682Z",codex-vcs-grant-repair,"Candidate validation: node --test --test-name-pattern=\"grant repair\" test/composition.test.ts passes 8/8 directly and through pm test --run --only-last --progress, with zero failures/skips/cancellations. Actual installed CLI parses separate current/legacy flags using a packed extension, denies unauthorized replacement without byte changes, supports ordinary src/search paths and erases only selected content. Focused integration node --expose-gc --test --test-concurrency=1 test/composition*.test.ts test/ignore.test.ts passed 117/117 under diagnostic C8 for three modules; composition and command modules were four100, ignore branches 97.29 percent from missing diagnostic cases, not the full release gate. Added the real empty-context compatibility case afterward. Typecheck, build:test, lint, zero duplication and all 288 documented declarations pass; inventory remains all53 production modules."
   "2026-10-10T08:39:27.419Z",codex-vcs-grant-repair,"Seven isolated production-only revert proofs each exit1 with AssertionError and successful module loading: ordinary-path basename ban, missing current erase authorization, absent grant classification, lower-helper lease bypass, standalone authorization order, active SDK tracker-root omission and erasure runtime-fence omission. Every source byte was restored before the final linked 8/8 positive. Existing closure/object/bundle/sync/serve/HTTP and test relay bytes match predecessor4abb32a exactly. Native focused trace: 134217728 leaf bytes, 72 reachable objects read once, 136361610 compressed bytes, 19073043 buffer growth and 10297344 peak RSS growth. Scope remains a bounded synthetic corpus; malformed binary denial refusals, large carried-bundle memory, full privacy/scale and arbitrary filesystem writer trust remain open. No full gate ran before independent candidate review."
+  "2026-10-10T08:43:33.279Z",codex-vcs-grant-reviewer,"Independent immutable review of candidate d877e9da: inspect grants, caller leases, path safeguards and test assertions; no source changes or full release gate."
+  "2026-10-10T08:47:27.574Z",codex-vcs-grant-reviewer,"Independent candidate d877e9da review: no confirmed bypass/regression. Verified historical 37bfae7 SHA-256 grant shape against actual source, current v2 replacement checks, shared helper/erasure leases and root-aware composition callers. Own linked focused run passed 7/7 (11.2s): ordinary paths, shared v2 rotation, absent/legacy/corrupt grants, CLI separation, live helper lease, standalone authorization race and custom tracker fences. Limits: no full release or 53-source gate, packed Node/Bun consumers or Windows execution; runtime/tool exclusions and portable final path race remain documented. PM-only receipt changes require worker bundle regeneration. Release remains unclosed."
 files[30]:
   - path: CHANGELOG.md
     scope: project
@@ -156,7 +158,7 @@ files[30]:
     scope: project
   - path: vcs-commands.ts
     scope: project
-tests[14]:
+tests[15]:
   - command: node --test test/composition.test.ts
     scope: project
     timeout_seconds: 240
@@ -275,6 +277,14 @@ tests[14]:
     provenance:
       author: codex-vcs-grant-repair
       created_at: "2026-10-10T08:31:51.884Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: "node --test --test-name-pattern=\"grant repair (ordinary|v2|distinguishes|CLI keeps|lower-level|standalone|custom SDK)\" test/composition.test.ts"
+    scope: project
+    timeout_seconds: 60
+    provenance:
+      author: codex-vcs-grant-reviewer
+      created_at: "2026-10-10T08:45:02.684Z"
       source_kind: local_mutation
       source_ref: feat/links-layers-obliteration
 docs[4]{path,scope}:
