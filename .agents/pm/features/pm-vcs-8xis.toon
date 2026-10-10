@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:34.077Z"
-updated_at: "2026-10-10T08:15:35.395Z"
+updated_at: "2026-10-10T08:39:28.193Z"
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
 parent: pm-vcs-b7cb
 risk: high
-comments[69]{created_at,author,text}:
+comments[74]{created_at,author,text}:
   "2026-09-12T23:35:59.709Z",pi-agent,"Audit 2026-09-13: EXISTS — committed repository links are implemented as sparse linked instances (engine/instances.ts: instance link, shared object store, sparse views; test/instances.test.ts: 'a linked instance materializes its view, shares objects and keeps private state', 'concurrent instances share objects but never overwrite each other's state'). REMAINS — local layers that overlay an instance without changing commit identity are not implemented (grep for local-layer/overlay returns no matches). Typed obliteration is not implemented (grep for obliterate/Obliteration in engine/ returns no matches). Checkout and verify distinguishing obliterated content from missing and corrupt objects is not implemented. Two of four acceptance criteria are not met."
   "2026-10-07T20:55:16.467Z",codex-sol,"Baseline against the built package and a real disposable SDK tracker: a synthetic binary was staged and committed successfully; vcs link, vcs layer and vcs obliterate are absent, and the repository exposes no layer or obliteration API. Acceptance will pin a typed external repository revision and subset across a clone without transferring its payload or credentials; overlay tracked and new paths while preserving commit identity and excluding layers visibly from status and add; authorize FileId-scoped erasure across moves and revisions, byte-scan stored and decoded representations, distinguish obliterated/missing/corrupt state, and reject resurrection through stale fetch/import. The previous audit conflated local shared instances with committed external links. Full item, parent, linked research record and LORE.md were read; the removed historical research-doc link is superseded by LORE.md."
   "2026-10-07T20:56:24.216Z",codex-sol,"Design recorded first in docs/links-layers-obliteration.md: canonical typed committed links with explicit target authorization; private layer snapshots masked from staging/status and preserved across materialization; authorized FileId erasure with durable typed denial, full-store historical inventory, deduplication refusal, byte removal and non-resurrection at every object arrival boundary. Remote tombstones cannot silently authorize deletion of locally held content. Verification and checkout preserve the distinction between intentional erasure, missing data and corruption."
@@ -82,7 +82,12 @@ comments[69]{created_at,author,text}:
   "2026-10-10T08:15:31.163Z",codex-vcs-auth-investigator,"Safe minimal handoff: retain initial setAuthority(principal,newRead,newErase) only for actual ENOENT, add optional typed authorization argument with mutually exclusive currentEraseCredential or regenerateLegacy=true; valid v2 always requires CURRENT erase authorization regardless of principal equality or regeneration flag. Add CLI --current-erase-token-file separately from the NEW --erase-token-file, and explicit --regenerate-legacy restricted to recognized historical grants. Unknown versions, malformed/corrupt/unreadable grants and JSON null fail closed, never masquerade as absence; any repair is a separate explicit trusted-filesystem recovery. Classify and authorize before salt/write under the SAME shared lease; lower-level helpers must obey that contract and standalone eraseFile must authorize after acquiring it. Keep distinct nonempty new credentials and no credential persistence/output. Rotation changes existing reconfiguration callers intentionally; initial configuration remains source compatible."
   "2026-10-10T08:15:31.746Z",codex-vcs-auth-investigator,"4236960211 survives as ordinary-path compatibility defect (high confidence). engine/composition.ts:50-54 bans runtime/search/locks/transactions/checkpoints in every segment; engine/ignore.ts:149-187 instead builds non-negatable SDK fences beneath resolved trackers. Disposable proof: search/index.ts, src/runtime/index.ts, locks/client.ts, transactions/model.ts and checkpoints/data.txt all staged normally and isIgnored=false, yet assertCompositionPath/addLayer refused unsafe_composition_path. Mixed-case nested .PMVCS, .git and real tracker runtime remain control exclusions. Custom tracker proof: custom/team/runtime/cache had defaultFence=false but configured recordPaths custom/*/Issues/*.toon gave true. vcs-commands.ts:99-106 opens Repository without context.pm_root; ignoreRules at engine/repo.ts:829 uses root and config.recordPaths only. Removing bare-name filtering requires carrying active custom pmRoot into fence compilation and retaining root-aware checks for local destinations/target sources; context-free link encoding keeps canonical and control-name checks. Do not weaken control refusal."
   "2026-10-10T08:15:34.663Z",codex-vcs-auth-investigator,"Validation: focused composition command passed 2/2; focused custom-runtime ignore command passed 2/2, both also run through pm test --only-last --progress. Inline node --input-type=module disposable CLI/grant/path/shared-owner reproduction and live-lease configureAuthority reproduction both exited 0; temporary fixtures removed. No source/test/docs edits and no broad gate. Remaining risks: restricted caller threat model, lower-level helper lease ownership, strict recognized legacy migration and active custom tracker context need implementation/regression coverage. Release remains unclosed; orchestrator verifies and implements after handoff."
-files[29]:
+  "2026-10-10T08:22:49.666Z",codex-vcs-grant-repair,"Claimed as codex-vcs-grant-repair for verified PR97 findings 4236960207, 4236960211 and 4236960214. Preserve all predecessor source controls and historical receipts. Add real SDK/filesystem/CLI/shared-instance red regressions; require separate current erase authorization for v2 replacement, explicit recognized legacy regeneration, and fail closed on invalid or unreadable grants. Root-aware path fences will preserve control names and actual tracker runtime while allowing ordinary project directories. Independent candidate review precedes the complete unchanged 53-file gate; no GitHub feedback, closure, merge or publication."
+  "2026-10-10T08:27:42.833Z",codex-vcs-grant-repair,"Corrected the shared-instance fixture return-shape mistake before accepting red evidence. The corrected original-source run has seven failures, each an AssertionError with loaded modules; the custom erasure positive is asserted explicitly. Original grant/CLI/lease failures and path failures are retained as external proof receipts. Production edits now classify complete authority schemas under the shared lease and carry actual SDK pm_root into runtime fencing; canonical reports were invalidated before editing. These are local command/API protections; arbitrary filesystem writers remain outside the authorization protocol."
+  "2026-10-10T08:31:27.099Z",codex-vcs-grant-repair,"Design-log migration for 4236960207: removed all dated review IDs, disposition tables, test-count/source-head narratives, native measurement receipts and behavioral-revert logs from the shipped design. Existing PM comments already preserve their results and rejected presence-only/encoded-inflate suggestions; those entries are retained without duplication. Remaining receipt detail: the rejected 6000-retry proposal approaching 50 ms totals about 299 seconds despite its 30-second message; the supported elapsed lease deadline is five seconds. Design now states only supported behavior and boundaries, including current-credential rotation and actual tracker fences. Prior c3c06e5 full1220/all53four100 is historical only after these edits."
+  "2026-10-10T08:39:26.682Z",codex-vcs-grant-repair,"Candidate validation: node --test --test-name-pattern=\"grant repair\" test/composition.test.ts passes 8/8 directly and through pm test --run --only-last --progress, with zero failures/skips/cancellations. Actual installed CLI parses separate current/legacy flags using a packed extension, denies unauthorized replacement without byte changes, supports ordinary src/search paths and erases only selected content. Focused integration node --expose-gc --test --test-concurrency=1 test/composition*.test.ts test/ignore.test.ts passed 117/117 under diagnostic C8 for three modules; composition and command modules were four100, ignore branches 97.29 percent from missing diagnostic cases, not the full release gate. Added the real empty-context compatibility case afterward. Typecheck, build:test, lint, zero duplication and all 288 documented declarations pass; inventory remains all53 production modules."
+  "2026-10-10T08:39:27.419Z",codex-vcs-grant-repair,"Seven isolated production-only revert proofs each exit1 with AssertionError and successful module loading: ordinary-path basename ban, missing current erase authorization, absent grant classification, lower-helper lease bypass, standalone authorization order, active SDK tracker-root omission and erasure runtime-fence omission. Every source byte was restored before the final linked 8/8 positive. Existing closure/object/bundle/sync/serve/HTTP and test relay bytes match predecessor4abb32a exactly. Native focused trace: 134217728 leaf bytes, 72 reachable objects read once, 136361610 compressed bytes, 19073043 buffer growth and 10297344 peak RSS growth. Scope remains a bounded synthetic corpus; malformed binary denial refusals, large carried-bundle memory, full privacy/scale and arbitrary filesystem writer trust remain open. No full gate ran before independent candidate review."
+files[30]:
   - path: CHANGELOG.md
     scope: project
   - path: composition-commands.ts
@@ -141,6 +146,8 @@ files[29]:
     note: real SDK behavioral and byte-erasure regressions
   - path: test/control-directories.test.ts
     scope: project
+  - path: test/ignore.test.ts
+    scope: project
   - path: test/self-host.test.ts
     scope: project
   - path: test/served-sync.test.ts
@@ -149,7 +156,7 @@ files[29]:
     scope: project
   - path: vcs-commands.ts
     scope: project
-tests[13]:
+tests[14]:
   - command: node --test test/composition.test.ts
     scope: project
     timeout_seconds: 240
@@ -258,6 +265,16 @@ tests[13]:
     provenance:
       author: codex-vcs-auth-investigator
       created_at: "2026-10-10T08:15:32.303Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: "node --test --test-name-pattern=\"grant repair\" test/composition.test.ts"
+    scope: project
+    timeout_seconds: 240
+    pm_context_mode: schema
+    workspace_context_mode: source
+    provenance:
+      author: codex-vcs-grant-repair
+      created_at: "2026-10-10T08:31:51.884Z"
       source_kind: local_mutation
       source_ref: feat/links-layers-obliteration
 docs[4]{path,scope}:

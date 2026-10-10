@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import type { CommandHandlerContext, ExtensionApi } from "@unbrained/pm-cli/sdk/authoring";
 import { openRepository, optionalString, requiredArgument, sourceWorkingRoot } from "./vcs-commands.ts";
 import { Repository } from "./engine/repo.ts";
-import { authorize, decodeLink } from "./engine/composition.ts";
+import { authorize, decodeLink, type AuthorityChangeAuthorization } from "./engine/composition.ts";
 import { ObjectStoreError } from "./engine/objects.ts";
 
 /** Read an explicitly named local credential without storing it in descriptor or command output. */
@@ -49,12 +49,20 @@ export function registerCompositionCommands(api: ExtensionApi): void {
       { long: "--principal", value_name: "name", value_type: "string", description: "Audit principal" },
       { long: "--read-token-file", value_name: "file", value_type: "string", description: "Separate target read credential file" },
       { long: "--erase-token-file", value_name: "file", value_type: "string", description: "Permanent-erasure credential file" },
+      { long: "--current-erase-token-file", value_name: "file", value_type: "string", description: "Current erase credential authorizing replacement of an existing v2 grant" },
+      { long: "--regenerate-legacy", description: "Explicitly regenerate a recognized historical unversioned SHA-256 grant" },
     ],
     /** Configure grants only in clone-local control storage. */
     run(context: CommandHandlerContext) {
       const principal = optionalString(context.options, "principal");
       if (principal === undefined) throw new ObjectStoreError("bad_authority", "An explicit audit principal is required.");
-      openRepository(context).setAuthority(principal, credential(context, "readTokenFile"), credential(context, "eraseTokenFile"));
+      const current = optionalString(context.options, "currentEraseTokenFile");
+      const legacy = context.options.regenerateLegacy === true;
+      if (current !== undefined && legacy) throw new ObjectStoreError("bad_authority", "Current erase authorization and legacy regeneration are mutually exclusive.");
+      const authorization: AuthorityChangeAuthorization | undefined = current !== undefined
+        ? { currentEraseCredential: credential(context, "currentEraseTokenFile") }
+        : legacy ? { regenerateLegacy: true } : undefined;
+      openRepository(context).setAuthority(principal, credential(context, "readTokenFile"), credential(context, "eraseTokenFile"), authorization);
       return { ok: true, principal };
     },
   });
@@ -92,7 +100,7 @@ export function registerCompositionCommands(api: ExtensionApi): void {
       if (target === undefined || layer === undefined) throw new ObjectStoreError("bad_link", "Resolution requires an explicit --target and --layer.");
       const repo = openRepository(context);
       const created = repo.resolveLink(requiredArgument(context, 0, "descriptor path", "pm vcs link resolve descriptor"),
-        Repository.open(resolve(sourceWorkingRoot(context), target)), credential(context, "readTokenFile"), layer);
+        Repository.open(resolve(sourceWorkingRoot(context), target), context.pm_root), credential(context, "readTokenFile"), layer);
       return { ok: true, layer: { name: created.name, paths: created.files.map(/** Report ownership without printing private bytes. */ (file) => file.path) } };
     },
   });

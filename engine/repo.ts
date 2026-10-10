@@ -34,7 +34,7 @@ import {
 } from "./model.ts";
 import { type ObjectId, type PayloadState, ObjectStore, ObjectStoreError, hashObject, isObjectId, assertRegistryName, readControlJson } from "./objects.ts";
 
-import { assertCompositionPath, assertSafeFilePath, authorize, configureAuthority, decodeLink, encodeLink, pathsOverlap, readLayers, writePrivateJson, type LocalLayer, type RepositoryLink } from "./composition.ts";
+import { assertCompositionPath, assertSafeFilePath, authorize, configureAuthority, decodeLink, encodeLink, pathsOverlap, readLayers, writePrivateJson, type AuthorityChangeAuthorization, type LocalLayer, type RepositoryLink } from "./composition.ts";
 import { eraseFile, type ErasureReceipt } from "./erasure.ts";
 import { readFragmented } from "./fragments.ts";
 
@@ -328,13 +328,17 @@ export class Repository {
    */
   readonly config: RepositoryConfig;
 
+  /** Active SDK tracker root used only for non-negatable local runtime fences. */
+  private readonly pmRoot: string | undefined;
+
   /**
    * @param root - Absolute path to the working tree root.
    * @param config - Settings to use. Defaults to whatever the repository stores.
+   * @param pmRoot - Active SDK tracker root for this invocation's runtime fences.
    * @throws ObjectStoreError When the directory holds an instance link whose hub
    *   is missing — an instance without its shared store cannot answer anything.
    */
-  constructor(root: string, config?: RepositoryConfig) {
+  constructor(root: string, config?: RepositoryConfig, pmRoot?: string) {
     this.root = root;
     this.controlDirectory = join(root, CONTROL_DIRECTORY);
     this.instanceLink = Repository.resolveInstanceLink(this.controlDirectory, root);
@@ -346,6 +350,7 @@ export class Repository {
     this.operations = new OperationLog(join(this.controlDirectory, "oplog.jsonl"));
     this.remotes = new RemoteStore(join(shared, "remotes.json"));
     this.config = config ?? readConfig(join(shared, "config.json"));
+    this.pmRoot = pmRoot;
   }
 
   /**
@@ -455,12 +460,13 @@ export class Repository {
    * Opens an existing repository.
    *
    * @param root - Absolute path to the working tree root.
+   * @param pmRoot - Active SDK tracker root, independent of repository configuration.
    * @returns The opened repository.
    * @throws ObjectStoreError When there is no repository, or its format is one
    *   this build does not understand.
    */
-  static open(root: string): Repository {
-    const repository = new Repository(root);
+  static open(root: string, pmRoot?: string): Repository {
+    const repository = new Repository(root, undefined, pmRoot);
     let format: string;
     try {
       format = readFileSync(join(repository.controlDirectory, "format"), "utf8").trim();
@@ -826,8 +832,8 @@ export class Repository {
    *
    * @returns The compiled rules.
    */
-  private ignoreRules(): IgnoreRules {
-    return readIgnoreRules(this.root, this.config.recordPaths);
+  ignoreRules(): IgnoreRules {
+    return readIgnoreRules(this.root, this.config.recordPaths, this.pmRoot);
   }
 
   /**
@@ -997,14 +1003,14 @@ export class Repository {
   identity(): string { return this.objects.withWriteLock(/** Create a legacy identity once under the store lock. */ () => this.objects.identity()); }
 
   /** Configure separate local link-read and permanent-erasure credentials. */
-  setAuthority(principal: string, readCredential: string, eraseCredential: string): void {
+  setAuthority(principal: string, readCredential: string, eraseCredential: string, authorization?: AuthorityChangeAuthorization): void {
     return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
-      configureAuthority(this.sharedControlDirectory, principal, readCredential, eraseCredential);
+      configureAuthority(this.sharedControlDirectory, principal, readCredential, eraseCredential, authorization);
     });
   }
 
   /** List private snapshots belonging exclusively to this instance. */
-  layers(): LocalLayer[] { return readLayers(this.controlDirectory); }
+  layers(): LocalLayer[] { return readLayers(this.controlDirectory, this.ignoreRules()); }
 
   /** Collect exact overlay ownership for every staging and materialization boundary. */
   private layerPaths(): Set<string> {
@@ -1016,7 +1022,7 @@ export class Repository {
     if (overlays.size === 0) return;
     const incoming = [...flattenTree(this.objects, tree).keys()];
     for (const path of overlays) {
-      assertSafeFilePath(this.root, path);
+      assertSafeFilePath(this.root, path, this.ignoreRules());
       if (incoming.some(/** Exact overlays mask underlying files, while directory collisions refuse. */ (candidate) => candidate !== path && pathsOverlap(candidate, path))) {
         throw new ObjectStoreError("layer_checkout_conflict", "Checkout collides with a private layer directory; remove the layer first.");
       }
@@ -1036,7 +1042,7 @@ export class Repository {
       const dirty = new Set([...status.staged, ...status.unstaged].map(/** Refuse both staged and unstaged changes before overlaying. */ (change) => change.path));
       const layer: LocalLayer = { name, files: [...files].map(/** Store snapshots only in private control metadata. */ ([path, value]) => {
         assertCompositionPath(path, this.ignoreRules());
-        assertSafeFilePath(this.root, path);
+        assertSafeFilePath(this.root, path, this.ignoreRules());
         this.objects.preflight([{ type: "blob", payload: value.content, id: hashObject("blob", value.content) }], true);
         if (dirty.has(path) || (existsSync(join(this.root, ...path.split("/"))) && !index.has(path))
           || [...owned, ...files.keys()].some(/** Parent collisions and existing private ownership are never implicit. */ (other) => (other !== path || owned.has(path)) && pathsOverlap(other, path))
@@ -1067,7 +1073,7 @@ export class Repository {
       const index = new Map(this.readIndex().map(/** Restore the current checkout's underlying state. */ (entry) => [entry.path, entry]));
       const restore = new Map<string, Buffer>();
       for (const file of layer.files) {
-        assertSafeFilePath(this.root, file.path);
+        assertSafeFilePath(this.root, file.path, this.ignoreRules());
         if (!discardEdits && (!existsSync(join(this.root, ...file.path.split("/")))
           || !readFileSync(join(this.root, ...file.path.split("/"))).equals(Buffer.from(file.content, "base64"))
           || ((statSync(join(this.root, ...file.path.split("/"))).mode & 0o100) !== 0) !== file.executable)) {
@@ -1094,9 +1100,10 @@ export class Repository {
   stageLink(path: string, link: RepositoryLink): ObjectId {
     return this.objects.withWriteLock(/** Keep descriptor publication and index ownership together. */ () => {
       assertCompositionPath(path, this.ignoreRules());
-      assertSafeFilePath(this.root, path);
+      assertSafeFilePath(this.root, path, this.ignoreRules());
       if (this.layerPaths().has(path)) throw new ObjectStoreError("layer_excluded", "A private overlay cannot hold a staged descriptor.");
       const payload = encodeLink(link);
+      for (const mapping of link.mappings) assertCompositionPath(mapping.destination, this.ignoreRules());
       const index = this.readIndex();
       const previous = index.find(/** Preserve stable descriptor identity across a deliberate pin update. */ (entry) => entry.path === path);
       if (existsSync(join(this.root, path)) && previous === undefined) throw new ObjectStoreError("link_collision", "Descriptor path already holds untracked content.");
@@ -1127,6 +1134,7 @@ export class Repository {
   /** Explicitly resolve a pinned target under its own read authority into a private layer. */
   resolveLink(path: string, target: Repository, credential: string, layerName: string): LocalLayer {
     return this.objects.withWriteLock(/** Link publication cannot retain local cached bytes across erasure. */ () => target.objects.withWriteLock(/** Keep pinned target reads inside its independent erasure lease too. */ () => {
+        assertCompositionPath(path, this.ignoreRules());
         authorize(target.sharedControlDirectory, "read", credential);
         const descriptor = this.links().find(/** Resolve the named committed descriptor, never a branch. */ (entry) => entry.path === path);
         if (descriptor === undefined) throw new ObjectStoreError("unknown_link", "No typed link exists at that descriptor path.");
@@ -1135,7 +1143,7 @@ export class Repository {
         const files = new Map<string, { content: Buffer; executable: boolean }>();
         for (const mapping of descriptor.link.mappings) {
           assertCompositionPath(mapping.source, target.ignoreRules());
-          assertSafeFilePath(target.root, mapping.source);
+          assertSafeFilePath(target.root, mapping.source, target.ignoreRules());
           const entry = tree.get(mapping.source);
           if (entry === undefined) throw new ObjectStoreError("link_subset_missing", "Pinned revision does not contain a mapped source file.");
           const object = target.objects.read(entry.id);
@@ -1216,7 +1224,7 @@ export class Repository {
       paths.push(...this.retiredInstances().map(/** Unlink never silently relinquishes held private or working bytes. */ (path) => resolve(this.hubRoot, path)));
       const instances = [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
         if (path !== this.hubRoot && !this.instanceIsBound(path)) throw new ObjectStoreError("unbound_instance", "An inventoried instance is missing or no longer linked to this hub; explicitly prune retired paths before erasure.");
-        return Repository.open(path);
+        return Repository.open(path, this.pmRoot);
       });
       return eraseFile(this, instances, selector, credential, reason, now);
     });

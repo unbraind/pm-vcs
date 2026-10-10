@@ -11,6 +11,8 @@ import { inflateSync, deflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
+import { openRepository } from "../vcs-commands.ts";
+import { eraseFile } from "../engine/erasure.ts";
 import { Repository } from "../engine/repo.ts";
 import { configureAuthority, authorize, decodeLink, encodeLink, readLayers, assertSafeFilePath, assertCompositionPath, writePrivateJson, syncDirectory, type RepositoryLink } from "../engine/composition.ts";
 import { inspectRepresentations } from "../engine/representations.ts";
@@ -26,6 +28,8 @@ import { registerInstance } from "../engine/instances.ts";
 import { FileTransport } from "../engine/transport.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
+import { discardChildCoverage } from "./helpers/sandbox.ts";
+import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 
 const signature: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1000, timezoneOffsetMinutes: 0 };
 const temps: ReturnType<typeof makeTempDir>[] = [];
@@ -302,7 +306,7 @@ test("the real extension harness runs link, layer, authority and erasure operati
   const pmRoot = repo.root;
   const readToken = join(parent, "read-token"); const eraseToken = join(parent, "erase-token");
   writeFileSync(readToken, "read-fixture"); writeFileSync(eraseToken, "erase-fixture");
-  const auth = await harness.runCommand({ command: "vcs authority", pmRoot, options: { principal: "fixture", readTokenFile: readToken, eraseTokenFile: eraseToken } });
+  const auth = await harness.runCommand({ command: "vcs authority", pmRoot, options: { principal: "fixture", readTokenFile: readToken, eraseTokenFile: eraseToken, currentEraseTokenFile: eraseToken } });
   assert.equal(auth.errorMessage, undefined);
   const revision = commit(repo, "asset.bin", Buffer.from("cli-fixture"));
   const descriptor = linkTo(repo, revision); const spec = join(parent, "link.json"); writeFileSync(spec, encodeLink(descriptor));
@@ -329,7 +333,7 @@ test("canonical link and local metadata validators reject ambiguous, unsafe and 
   }
   refuses(() => decodeLink(Buffer.from("not JSON")), "bad_link");
   refuses(() => decodeLink(Buffer.from(` ${encodeLink(valid).toString()}`)), "bad_link");
-  for (const path of ["", "..", "a/../b", "/absolute", "a\\b", "C:drive", ".pmvcs/layers.json", ".git/config", "runtime/x", "a/locks/x"]) refuses(() => assertCompositionPath(path), "unsafe_composition_path");
+  for (const path of ["", "..", "a/../b", "/absolute", "a\\b", "C:drive", ".pmvcs/layers.json", ".git/config", ".agents/pm/runtime/x", ".agents/pm/search/cache", ".agents/pm/locks/x", ".agents/pm/transactions/x", ".agents/pm/checkpoints/x"]) refuses(() => assertCompositionPath(path, repo.ignoreRules()), "unsafe_composition_path");
   refuses(() => assertCompositionPath("custom/cache", { patterns: [], negations: [], runtime: [{ patterns: ["custom/**"], negations: [] }] }), "unsafe_composition_path");
   assertSafeFilePath(repo.root, "missing/deep.txt");
   mkdirSync(join(repo.root, "dir")); refuses(() => assertSafeFilePath(repo.root, "dir"), "unsafe_composition_path");
@@ -351,7 +355,7 @@ test("canonical link and local metadata validators reject ambiguous, unsafe and 
   refuses(() => configureAuthority(repo.controlDirectory, "fixture", "a", "a"), "bad_authority");
   rmSync(join(repo.controlDirectory, "authority.json")); refuses(() => authorize(repo.controlDirectory, "read", "a"), "unauthorized");
   writePrivateJson(join(repo.controlDirectory, "authority.json"), {}); refuses(() => authorize(repo.controlDirectory, "read", "a"), "unauthorized");
-  repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+  refuses(() => repo.setAuthority("fixture", "read-fixture", "erase-fixture"), "bad_authority");
 });
 
 test("layer and link ownership refuses dirty, untracked, overlapping and unsafe destinations", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
@@ -957,7 +961,7 @@ test("review credentials use versioned scrypt and reject malformed or legacy gra
   }
   writePrivateJson(path, { principal: "fixture", salt: authority.salt, read: createHash("sha256").update(`${authority.salt}\0read-fixture`).digest("hex"), erase: createHash("sha256").update(`${authority.salt}\0erase-fixture`).digest("hex") });
   refuses(() => authorize(repo.controlDirectory, "erase", "erase-fixture"), "unauthorized");
-  repo.setAuthority("fixture", "read-fixture", "erase-fixture"); repo.obliterate("credential-secret.bin", "erase-fixture", "incident", new Date());
+  repo.setAuthority("fixture", "read-fixture", "erase-fixture", { regenerateLegacy: true }); repo.obliterate("credential-secret.bin", "erase-fixture", "incident", new Date());
   assert.equal(existsSync(join(repo.root, "credential-secret.bin")), false);
 });
 
@@ -1615,4 +1619,180 @@ test("renewal uploads hash the entire batch before denial decoding or publicatio
   await assert.rejects(() => cleanTransport.uploadObjects([healthy, late]), (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_object");
   assert.equal(clean.objects.has(healthy.id), false, "an earlier upload was written before the full batch was hashed");
   await cleanTransport.uploadObjects([healthy]); assert.deepEqual(clean.objects.read(healthy.id).payload, payload);
+});
+
+test("grant repair ordinary directory names support layers links and unrelated erasure", /** Use real paths that staging already accepts, preserving unrelated bytes. */ async () => {
+  const { repo } = await fixture();
+  assert.deepEqual(Repository.open(repo.root, "").ignoreRules(), repo.ignoreRules());
+  const ordinary = ["search/index.ts", "src/runtime/index.ts", "locks/client.ts", "transactions/model.ts", "checkpoints/data.txt", "src/search/a.txt"];
+  for (const [index, path] of ordinary.entries()) commit(repo, path, Buffer.from(`ordinary source ${index}\n`));
+  const pin = repo.refs.resolveHead()!;
+  const paths = ordinary.map(path => `vendor/${path}`);
+  for (const path of paths) assert.doesNotThrow(() => assertCompositionPath(path));
+  repo.addLayer("ordinary", new Map(paths.map(path => [path, { content: Buffer.from("private ordinary overlay"), executable: false }])));
+  for (const path of paths) assert.equal(readFileSync(join(repo.root, path), "utf8"), "private ordinary overlay");
+  repo.removeLayer("ordinary");
+  repo.stageLink("search/dependency.link", { version: 1, repository: repo.identity(), revision: pin, mappings: ordinary.map((source, index) => ({ source, destination: paths[index] })) });
+  repo.resolveLink("search/dependency.link", repo, "read-fixture", "resolved-ordinary");
+  for (const [index, path] of paths.entries()) assert.equal(readFileSync(join(repo.root, path), "utf8"), `ordinary source ${index}\n`);
+  repo.removeLayer("resolved-ordinary");
+  const selected = Buffer.from("ordinary-path-erasure-selected-marker-682943");
+  const revision = commit(repo, "secret.bin", selected);
+  repo.obliterate("secret.bin", "erase-fixture", "incident", new Date());
+  assert.equal(repo.readFileState(revision, "secret.bin").kind, "obliterated");
+  assert.equal(scanBytes(repo.controlDirectory, selected), 0);
+  for (const [index, path] of ordinary.entries()) assert.equal(readFileSync(join(repo.root, path), "utf8"), `ordinary source ${index}\n`);
+  assert.deepEqual(repo.verify().corrupt, []);
+});
+
+test("grant repair v2 rotation requires the current erase grant across shared instances", /** Neither a proposed token, read access nor legacy regeneration can replace a current grant. */ async () => {
+  const { repo, parent } = await fixture();
+  const marker = Buffer.from("rotation-protected-selected-marker-394682"); commit(repo, "secret.bin", marker);
+  repo.linkInstance("shared", join(parent, "shared")); const instance = Repository.open(join(parent, "shared"));
+  const path = join(repo.controlDirectory, "authority.json"); const before = readFileSync(path);
+  for (const authorization of [undefined, { currentEraseCredential: "" }, { currentEraseCredential: "wrong" }, { currentEraseCredential: "read-fixture" }, { currentEraseCredential: "new-erase" }, { regenerateLegacy: true as const }]) {
+    refuses(() => instance.setAuthority("replacement", "new-read", "new-erase", authorization), "unauthorized");
+    assert.deepEqual(readFileSync(path), before);
+    assert.equal(existsSync(join(instance.controlDirectory, "authority.json")), false);
+    assert.deepEqual(readFileSync(join(repo.root, "secret.bin")), marker);
+    assert.deepEqual(readFileSync(join(instance.root, "secret.bin")), marker);
+    assert.deepEqual(repo.objects.denials(), []);
+  }
+  instance.setAuthority("replacement", "new-read", "new-erase", { currentEraseCredential: "erase-fixture" });
+  assert.equal(authorize(repo.controlDirectory, "read", "new-read"), "replacement");
+  for (const old of ["erase-fixture", "read-fixture"]) refuses(() => repo.obliterate("secret.bin", old, "incident", new Date()), "unauthorized");
+  repo.obliterate("secret.bin", "new-erase", "incident", new Date());
+  assert.equal(existsSync(join(repo.root, "secret.bin")), false); assert.equal(existsSync(join(instance.root, "secret.bin")), false);
+  assert.equal(repo.objects.denials()[0].tombstone.principal, "replacement");
+});
+
+test("grant repair distinguishes absent legacy invalid and unreadable authority files", /** Recognize only the historical unversioned SHA-256 shape and preserve every refused file. */ async () => {
+  const { repo, parent } = await fixture(); const path = join(repo.controlDirectory, "authority.json");
+  const original = JSON.parse(readFileSync(path, "utf8")) as { version: number; principal: string; salt: string; read: string; erase: string };
+  const legacy = { principal: "fixture", salt: original.salt, read: createHash("sha256").update(`${original.salt}\0read-fixture`).digest("hex"), erase: createHash("sha256").update(`${original.salt}\0erase-fixture`).digest("hex") };
+  for (const value of [null, [], {}, false, { ...original, version: 1 }, { ...original, version: 3 }, { ...original, read: "bad" }, { ...original, read: 1 }, { ...original, extra: "unknown" }, { ...original, erase: null }, { ...legacy, salt: "bad" }, { ...legacy, extra: "unknown" }]) {
+    writePrivateJson(path, value); const bytes = readFileSync(path);
+    for (const authorization of [undefined, { regenerateLegacy: true as const }, { currentEraseCredential: "erase-fixture" }]) {
+      refuses(() => repo.setAuthority("fixture", "new-read", "new-erase", authorization), "bad_authority");
+      assert.deepEqual(readFileSync(path), bytes);
+    }
+  }
+  writeFileSync(path, "{corrupt"); refuses(() => repo.setAuthority("fixture", "new-read", "new-erase", { regenerateLegacy: true }), "bad_authority"); assert.equal(readFileSync(path, "utf8"), "{corrupt");
+  chmodSync(path, 0o000);
+  try { assert.throws(() => repo.setAuthority("fixture", "new-read", "new-erase"), { code: "EACCES" }); } finally { chmodSync(path, 0o600); }
+  rmSync(path); mkdirSync(path); assert.throws(() => repo.setAuthority("fixture", "new-read", "new-erase"), { code: "EISDIR" }); rmSync(path, { recursive: true });
+  symlinkSync(join(parent, "absent-grant"), path); refuses(() => repo.setAuthority("fixture", "new-read", "new-erase"), "bad_authority"); rmSync(path);
+  refuses(() => repo.setAuthority("fixture", "new-read", "new-erase", { regenerateLegacy: true }), "unauthorized"); assert.equal(existsSync(path), false);
+  configureAuthority(repo.controlDirectory, "initial", "initial-read", "initial-erase"); assert.equal(authorize(repo.controlDirectory, "erase", "initial-erase"), "initial");
+  rmSync(path); repo.setAuthority("fixture", "read-fixture", "erase-fixture"); assert.equal(authorize(repo.controlDirectory, "erase", "erase-fixture"), "fixture");
+  writePrivateJson(path, legacy); const legacyBytes = readFileSync(path);
+  for (const authorization of [undefined, { currentEraseCredential: "erase-fixture" }]) {
+    refuses(() => repo.setAuthority("fixture", "new-read", "new-erase", authorization), "unauthorized"); assert.deepEqual(readFileSync(path), legacyBytes);
+  }
+  repo.setAuthority("regenerated", "new-read", "new-erase", { regenerateLegacy: true });
+  assert.equal(authorize(repo.controlDirectory, "erase", "new-erase"), "regenerated");
+  refuses(() => repo.setAuthority("fixture", "other-read", "other-erase", { regenerateLegacy: true }), "unauthorized");
+});
+
+test("grant repair CLI keeps current credentials separate from new tokens and legacy migration", /** Execute registered commands with real token files and unchanged grant bytes on refusal. */ async () => {
+  const { repo, parent } = await fixture(); const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const readToken = join(parent, "new-read-token"); const eraseToken = join(parent, "new-erase-token"); const currentToken = join(parent, "current-token");
+  writeFileSync(readToken, "new-read"); writeFileSync(eraseToken, "new-erase"); writeFileSync(currentToken, "erase-fixture");
+  const options = { principal: "replacement", readTokenFile: readToken, eraseTokenFile: eraseToken };
+  const path = join(repo.controlDirectory, "authority.json"); const before = readFileSync(path);
+  for (const extra of [{}, { regenerateLegacy: true }, { currentEraseTokenFile: eraseToken }, { currentEraseTokenFile: readToken }, { currentEraseTokenFile: currentToken, regenerateLegacy: true }]) {
+    const result = await harness.runCommand({ command: "vcs authority", pmRoot: join(repo.root, ".agents/pm"), options: { ...options, ...extra } });
+    assert.ok(result.errorMessage); assert.deepEqual(readFileSync(path), before);
+  }
+  const rotated = await harness.runCommand({ command: "vcs authority", pmRoot: join(repo.root, ".agents/pm"), options: { ...options, currentEraseTokenFile: currentToken } });
+  assert.equal(rotated.errorMessage, undefined); assert.equal(authorize(repo.controlDirectory, "erase", "new-erase"), "replacement");
+  assert.equal(JSON.stringify(rotated.result).includes("new-erase"), false);
+  const authority = JSON.parse(readFileSync(path, "utf8")) as { salt: string };
+  writePrivateJson(path, { principal: "fixture", salt: authority.salt, read: createHash("sha256").update(`${authority.salt}\0read-fixture`).digest("hex"), erase: createHash("sha256").update(`${authority.salt}\0erase-fixture`).digest("hex") });
+  const regenerated = await harness.runCommand({ command: "vcs authority", pmRoot: join(repo.root, ".agents/pm"), options: { ...options, regenerateLegacy: true } });
+  assert.equal(regenerated.errorMessage, undefined); assert.equal(authorize(repo.controlDirectory, "read", "new-read"), "replacement");
+  rmSync(path);
+  const initial = await harness.runCommand({ command: "vcs authority", pmRoot: join(repo.root, ".agents/pm"), options });
+  assert.equal(initial.errorMessage, undefined);
+});
+
+test("grant repair lower-level configuration respects a live shared writer lease", /** Independent native processes cannot replace a grant during a supported writer transaction. */ async () => {
+  const { repo } = await fixture(); const path = join(repo.controlDirectory, "authority.json"); const before = readFileSync(path);
+  const compositionUrl = pathToFileURL(join(process.cwd(), "engine/composition.ts")).href;
+  const program = `import { configureAuthority } from ${JSON.stringify(compositionUrl)}; try { configureAuthority(process.argv[1], "replacement", "new-read", "new-erase", { currentEraseCredential: "erase-fixture" }); process.stdout.write("changed"); } catch (error) { process.stdout.write(error.code); }`;
+  repo.objects.withWriteLock(/** Keep a real filesystem lease active throughout the child's attempted replacement. */ () => {
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.controlDirectory], { encoding: "utf8", timeout: 10_000 });
+    assert.equal(child.status, 0, child.stderr); assert.equal(child.stdout, "store_locked"); assert.deepEqual(readFileSync(path), before);
+    configureAuthority(repo.controlDirectory, "nested", "new-read", "new-erase", { currentEraseCredential: "erase-fixture" });
+    assert.equal(authorize(repo.controlDirectory, "erase", "new-erase"), "nested");
+  });
+});
+
+test("grant repair standalone erasure authorizes after its writer lease begins", /** A real serialized grant replacement at acquisition invalidates credentials checked earlier. */ async () => {
+  const { repo } = await fixture(); const marker = Buffer.from("standalone-erasure-authorization-marker-648293"); commit(repo, "secret.bin", marker);
+  const acquire = repo.objects.withWriteLock.bind(repo.objects); let rotated = false;
+  repo.objects.withWriteLock = action => {
+    repo.objects.withWriteLock = acquire;
+    configureAuthority(repo.controlDirectory, "replacement", "new-read", "new-erase", { currentEraseCredential: "erase-fixture" }); rotated = true;
+    return acquire(action);
+  };
+  refuses(() => eraseFile(repo, [repo], "secret.bin", "erase-fixture", "incident", new Date()), "unauthorized");
+  assert.equal(rotated, true); assert.deepEqual(readFileSync(join(repo.root, "secret.bin")), marker); assert.deepEqual(repo.objects.denials(), []);
+  eraseFile(repo, [repo], "secret.bin", "new-erase", "incident", new Date()); assert.equal(existsSync(join(repo.root, "secret.bin")), false);
+});
+
+test("grant repair custom SDK and configured tracker fences preserve runtime bytes", /** Root-aware layer, link and erasure operations honor the active tracker without a basename ban. */ async () => {
+  const { repo } = await fixture(); const tracker = join(repo.root, "custom/team");
+  const client = new PmClient({ cwd: repo.root, pmRoot: tracker, noExtensions: true }); await client.init("custom", { defaults: true, author: "fixture" });
+  const context = { command: "vcs layer", args: [], options: {}, global: { json: true, quiet: true, noPager: true }, pm_root: tracker, repo_root: repo.root };
+  const active = openRepository(context); const selected = Buffer.from("custom-tracker-selected-marker-924683"); const revision = commit(active, "secret.bin", selected);
+  const paths = ["custom/team/runtime/cache", "custom/team/search/cache", "custom/team/locks/item.lock", "custom/team/transactions/state", "custom/team/checkpoints/point"];
+  for (const path of paths) { mkdirSync(dirname(join(repo.root, path)), { recursive: true }); writeFileSync(join(repo.root, path), selected); }
+  const descriptor: RepositoryLink = { version: 1, repository: repo.identity(), revision, mappings: [{ source: "secret.bin", destination: "safe" }] };
+  for (const path of paths) {
+    refuses(() => active.addLayer("unsafe", new Map([[`${path}-new`, { content: Buffer.from("overlay"), executable: false }]])), "unsafe_composition_path");
+    refuses(() => active.stageLink(`${path}-link`, descriptor), "unsafe_composition_path");
+    refuses(() => active.stageLink("unsafe.link", { ...descriptor, mappings: [{ source: "secret.bin", destination: `${path}-new` }] }), "unsafe_composition_path");
+  }
+  active.stageLink("allowed.link", descriptor);
+  writePrivateJson(join(active.controlDirectory, "layers.json"), [{ name: "forged", files: [{ path: paths[0], content: selected.toString("base64"), executable: false }] }]);
+  refuses(() => active.layers(), "unsafe_composition_path"); refuses(() => active.removeLayer("forged", true), "unsafe_composition_path"); rmSync(join(active.controlDirectory, "layers.json"));
+  const selectedEntry = active.readIndex().find(entry => entry.path === "secret.bin")!;
+  active.writeIndex([...active.readIndex(), { ...selectedEntry, path: paths[0] }]);
+  refuses(() => active.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "unsafe_composition_path");
+  assert.deepEqual(active.objects.denials(), []); for (const path of paths) assert.deepEqual(readFileSync(join(repo.root, path)), selected);
+  active.writeIndex(active.readIndex().filter(entry => entry.path !== paths[0]));
+  assert.doesNotThrow(() => active.obliterate("secret.bin", "erase-fixture", "incident", new Date()));
+  assert.equal(existsSync(join(repo.root, "secret.bin")), false); for (const path of paths) assert.deepEqual(readFileSync(join(repo.root, path)), selected);
+  writeFileSync(join(repo.controlDirectory, "config.json"), JSON.stringify({ recordPaths: ["custom/*/Issues/*.toon"], recordPolicy: {} }));
+  const configured = Repository.open(repo.root);
+  refuses(() => configured.addLayer("unsafe", new Map([[`${paths[0]}-new`, { content: Buffer.from("overlay"), executable: false }]])), "unsafe_composition_path");
+  configured.stageLink("configured.link", { ...descriptor, mappings: [{ source: paths[0], destination: "safe" }] });
+  refuses(() => configured.resolveLink("configured.link", configured, "read-fixture", "unsafe"), "unsafe_composition_path");
+  const next = Buffer.from("configured-tracker-selected-marker-374962"); commit(configured, "other.bin", next);
+  configured.obliterate("other.bin", "erase-fixture", "incident", new Date());
+  for (const path of paths) assert.deepEqual(readFileSync(join(repo.root, path)), selected);
+});
+
+test("grant repair installed CLI parses separate current and legacy flags and preserves ordinary paths", /** Exercise the actual installed host CLI with a packed extension and disposable token files. */ async () => {
+  const { repo, parent } = await fixture(); installPackedExtension(repo.root);
+  const authorityPath = join(repo.controlDirectory, "authority.json"); rmSync(authorityPath);
+  const readToken = join(parent, "cli-read"); const eraseToken = join(parent, "cli-erase"); const currentToken = join(parent, "cli-current");
+  writeFileSync(readToken, "cli-read-grant"); writeFileSync(eraseToken, "cli-erase-grant"); writeFileSync(currentToken, "cli-erase-grant");
+  const common = [pmExecutable, "--json", "vcs", "authority", "--principal", "fixture", "--read-token-file", readToken, "--erase-token-file", eraseToken];
+  const environment = { ...withoutPmContext(process.env), ...discardChildCoverage() };
+  const initial = spawnSync(process.execPath, common, { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 }); assert.equal(initial.status, 0, initial.stderr + initial.stdout);
+  const original = readFileSync(authorityPath); writeFileSync(readToken, "cli-new-read"); writeFileSync(eraseToken, "cli-new-erase");
+  for (const flags of [[], ["--regenerate-legacy"], ["--current-erase-token-file", eraseToken], ["--current-erase-token-file", currentToken, "--regenerate-legacy"]]) {
+    const denied = spawnSync(process.execPath, [...common, ...flags], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
+    assert.equal(denied.status, 1, denied.stderr + denied.stdout); assert.deepEqual(readFileSync(authorityPath), original);
+  }
+  const rotated = spawnSync(process.execPath, [...common, "--current-erase-token-file", currentToken], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
+  assert.equal(rotated.status, 0, rotated.stderr + rotated.stdout); assert.equal(authorize(repo.controlDirectory, "erase", "cli-new-erase"), "fixture"); assert.equal(rotated.stdout.includes("cli-new-erase"), false);
+  const overlay = join(parent, "cli-overlay"); writeFileSync(overlay, "ordinary CLI overlay\n");
+  const created = spawnSync(process.execPath, [pmExecutable, "--json", "vcs", "layer", "ordinary", "src/search/a.txt", overlay], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
+  assert.equal(created.status, 0, created.stderr + created.stdout); assert.equal(readFileSync(join(repo.root, "src/search/a.txt"), "utf8"), "ordinary CLI overlay\n"); repo.removeLayer("ordinary");
+  commit(repo, "src/search/a.txt", Buffer.from("unrelated CLI source\n")); commit(repo, "secret.bin", Buffer.from("installed-cli-selected-marker-374698"));
+  const erased = spawnSync(process.execPath, [pmExecutable, "--json", "vcs", "obliterate", "secret.bin", "--erase-token-file", eraseToken, "--reason", "incident"], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
+  assert.equal(erased.status, 0, erased.stderr + erased.stdout); assert.equal(existsSync(join(repo.root, "secret.bin")), false); assert.equal(readFileSync(join(repo.root, "src/search/a.txt"), "utf8"), "unrelated CLI source\n");
 });

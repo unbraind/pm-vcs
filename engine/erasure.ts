@@ -72,8 +72,8 @@ function assertAuditSafe(candidates: readonly Buffer[], payloads: readonly Buffe
 export function eraseFile(repository: Repository, instances: readonly Repository[], selector: string, credential: string, reason: string, now: Date): ErasureReceipt {
   const store = repository.objects;
   const control = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
-  const principal = authorize(control, "erase", credential);
   return store.withWriteLock(/** Hold the same writer lock for planning, durable denial and every deletion. */ () => {
+    const principal = authorize(control, "erase", credential);
     syncDirectory(control);
     const local = store.denials();
     const fileId = /^[0-9a-f]{32}$/.test(selector) ? selector : repository.readIndex().find(/** Resolve a path only through its stable staged identity. */ (entry) => entry.path === selector)?.fileId;
@@ -134,19 +134,20 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     try {
       const removals = new Map<Repository, Set<string>>();
       for (const [instance, index] of indexes) {
+        const rules = instance.ignoreRules();
         mutations.set(instance, new WorktreeMutation(instance.root, ".pmvcs"));
         const paths = new Set<string>();
         removals.set(instance, paths);
         const owned = new Set(index.filter(/** Worktree removal follows identity, not a historical path now reused by another file. */ (entry) => entry.fileId === fileId).map(/** Collect current paths belonging to the selected identity. */ (entry) => entry.path));
-        for (const layer of readLayers(instance.controlDirectory)) {
+        for (const layer of readLayers(instance.controlDirectory, rules)) {
           for (const file of layer.files) {
             if (owned.has(file.path) || containsSelectedBytes(Buffer.from(file.content, "base64"), payloads)) {
               throw new ObjectStoreError("erasure_layer_conflict", "Remove affected private layers before authorized erasure.");
             }
           }
         }
-        for (const path of listWorkingTree(instance.root, ".pmvcs", { patterns: [], negations: [] })) {
-          assertSafeFilePath(instance.root, path);
+        for (const path of listWorkingTree(instance.root, ".pmvcs", { patterns: [], negations: [], runtime: rules.runtime })) {
+          assertSafeFilePath(instance.root, path, rules);
           const absolute = join(instance.root, ...path.split("/"));
           if (owned.has(path)) paths.add(path);
           else if (containsSelectedBytes(readFileSync(absolute), payloads)) {
@@ -155,7 +156,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         }
         // Ignored but owned paths must still be scrubbed.
         for (const path of owned) {
-          assertSafeFilePath(instance.root, path);
+          assertSafeFilePath(instance.root, path, rules);
           const absolute = join(instance.root, ...path.split("/"));
           if (existsSync(absolute)) paths.add(path);
         }

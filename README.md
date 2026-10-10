@@ -166,7 +166,9 @@ pins or recursively follow nested descriptors.
 
 | command | behavior |
 | --- | --- |
-| `pm vcs authority --principal operator --read-token-file read.token --erase-token-file erase.token` | Configure two distinct clone-local version 2 scrypt grants. Regenerate legacy SHA-256 grants explicitly. Token files should live outside tracked content. |
+| `pm vcs authority --principal operator --read-token-file read.token --erase-token-file erase.token` | Initially configure two distinct clone-local version 2 scrypt grants only when the grant is absent. Token files should live outside tracked content. |
+| `pm vcs authority --principal operator --read-token-file new-read.token --erase-token-file new-erase.token --current-erase-token-file current-erase.token` | Replace a valid v2 grant using its separate current erase credential. Proposed new credentials cannot authorize replacement. |
+| `pm vcs authority --principal operator --read-token-file read.token --erase-token-file erase.token --regenerate-legacy` | Explicitly regenerate a recognized historical unversioned SHA-256 grant. This flag cannot replace v2, unknown, corrupt or unreadable grants. |
 | `pm vcs link dependency.link --spec link.json` | Stage a canonical typed descriptor; commit normally. |
 | `pm vcs link --list` | List descriptors without accessing target repositories. |
 | `pm vcs link resolve dependency.link --target ../target --read-token-file read.token --layer dependency` | Verify separate authority, target identity and exact revision, then overlay the mapped files privately. |

@@ -142,12 +142,14 @@ export function parseIgnore(text: string): IgnoreRules {
  *
  * @param root - Absolute repository root.
  * @param recordPaths - Record globs used to discover configured custom trackers.
+ * @param pmRoot - Active SDK tracker root, when supplied by the caller.
  * @returns The compiled rules including non-negatable SDK runtime fences.
  * @throws Error The underlying I/O error, when an ignore file exists but cannot
  *   be read.
  */
-export function readIgnoreRules(root: string, recordPaths: readonly string[] = []): IgnoreRules {
+export function readIgnoreRules(root: string, recordPaths: readonly string[] = [], pmRoot?: string): IgnoreRules {
   const candidates = new Set([resolveImplicitPmRoot(root), resolvePmRoot(root)]);
+  if (pmRoot !== undefined && pmRoot !== "") candidates.add(resolvePmRoot(root, pmRoot));
   for (const pattern of recordPaths) {
     const prefix = pattern.split(/[*?[]/, 1)[0];
     let directory = resolve(root, prefix);

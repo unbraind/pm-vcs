@@ -106,7 +106,7 @@ export function openRepository(context: CommandHandlerContext): Repository {
       "Run `pm vcs init` to create one here, or run this command inside an existing repository.",
     );
   }
-  return Repository.open(root);
+  return Repository.open(root, context.pm_root);
 }
 
 /** Return the host-bound SDK client, with a tracker-bound fallback for test and legacy hosts. */

@@ -18,7 +18,7 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "pm-vcs";
 import { Repository } from "pm-vcs/dist/engine/repo.js";
-import { encodeLink } from "pm-vcs/dist/engine/composition.js";
+import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
 const root = join(process.cwd(), process.argv[2]); mkdirSync(root);
@@ -33,6 +33,19 @@ const pin = target.commit({ message: "pin", author }, new Date());
 const link = { version: 1, repository: target.identity(), revision: pin, mappings: [{ source: "asset.bin", destination: "vendor/asset.bin" }] };
 const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
 assert.equal(JSON.parse(readFileSync(join(repo.controlDirectory, "authority.json"), "utf8")).version, 2);
+const newRead = join(process.cwd(), process.argv[2] + ".new-read"); const newErase = join(process.cwd(), process.argv[2] + ".new-erase"); const currentErase = join(process.cwd(), process.argv[2] + ".current-erase");
+writeFileSync(newRead, "consumer-read-next"); writeFileSync(newErase, "consumer-erase-next"); writeFileSync(currentErase, "consumer-erase");
+const rotationOptions = { principal: "rotated", readTokenFile: newRead, eraseTokenFile: newErase };
+const beforeGrant = readFileSync(join(repo.controlDirectory, "authority.json"));
+for (const extra of [{}, { regenerateLegacy: true }, { currentEraseTokenFile: newErase }]) {
+  const refused = await harness.runCommand({ command: "vcs authority", pmRoot: join(root, ".agents/pm"), options: { ...rotationOptions, ...extra } });
+  assert.ok(refused.errorMessage); assert.deepEqual(readFileSync(join(repo.controlDirectory, "authority.json")), beforeGrant);
+}
+const rotation = await harness.runCommand({ command: "vcs authority", pmRoot: join(root, ".agents/pm"), options: { ...rotationOptions, currentEraseTokenFile: currentErase } });
+assert.equal(rotation.errorMessage, undefined); assert.equal(authorize(repo.controlDirectory, "erase", "consumer-erase-next"), "rotated");
+repo.setAuthority("fixture", "consumer-read", "consumer-erase", { currentEraseCredential: "consumer-erase-next" });
+repo.addLayer("ordinary-path", new Map([["src/search/a.txt", { content: Buffer.from("ordinary path overlay"), executable: false }]]));
+assert.equal(readFileSync(join(root, "src/search/a.txt"), "utf8"), "ordinary path overlay"); repo.removeLayer("ordinary-path");
 const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }); assert.equal(dead.status, 0);
 writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout);
 const recovered = await harness.runCommand({ command: "vcs recover-lock", pmRoot: root }); assert.equal(recovered.errorMessage, undefined); assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
@@ -78,6 +91,7 @@ test("built package and npm-packed Node/Bun consumers execute links, layers, era
     // The consumer uses the actual pinned SDK and its installed dependency graph.
     symlinkSync(join(packageRoot, "node_modules", "@unbrained"), join(project, "node_modules", "@unbrained"), "junction");
     const design = readFileSync(join(project, "node_modules", "pm-vcs", "docs", "links-layers-obliteration.md"), "utf8"); assert.match(design, /Typed obliteration/);
+    assert.match(design, /--current-erase-token-file/); assert.doesNotMatch(design, /PR[0-9]+|Review ID|Verified disposition|Renewed finding|source-only/);
     const built = consumer.replace('from "pm-vcs"', `from ${JSON.stringify(pathToFileURL(join(packageRoot, "dist", "index.js")).href)}`).replaceAll(/"pm-vcs\/dist\/([^" ]+)"/g, /** Bind the same consumer to built files for direct built-package acceptance. */ (_match, path: string) => JSON.stringify(pathToFileURL(join(packageRoot, "dist", path)).href));
     writeFileSync(join(project, "built.mjs"), built); writeFileSync(join(project, "packed.mjs"), consumer);
     for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "packed.mjs", "bun-packed"]]) {

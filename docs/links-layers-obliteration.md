@@ -1,8 +1,7 @@
 # Repository composition and permanent payload erasure
 
-This design implements pm-vcs-8xis through the engine API and the pm command surface.
-It uses pm-vcs objects and real trackers; Git remains only the source repository's
-review transport. Sparse linked instances remain a separate local storage mechanism.
+Repository composition uses native pm-vcs objects through the engine API and pm
+commands. Sparse linked instances share local storage independently of committed links.
 
 ## Committed links
 
@@ -32,8 +31,14 @@ independent of an overlay. Bulk add skips layer-owned paths; explicit add refuse
 them. Ordinary status excludes their changes and separately lists excluded layers
 so local content is visible without masquerading as a repository modification.
 
-Layer paths are canonical repository-relative paths. Control directories, runtime
-state, symlink traversal, ambiguous overlapping ownership, dirty tracked paths,
+Layer paths are canonical repository-relative paths. Ordinary project directories
+named search, runtime, locks, transactions or checkpoints are supported. Actual SDK
+tracker runtime fences apply beneath default tracker roots, configured record-path
+tracker roots and the active SDK pm_root. These fences cannot be negated; canonical
+path checks, every case spelling of .pmvcs and ALWAYS_IGNORED tool directories remain
+protected. Context-free link encoding validates canonical and control paths; staging
+and resolution also validate destinations and target sources with their root rules.
+Control directories, tracker runtime state, symlink traversal, ambiguous overlapping ownership, dirty tracked paths,
 and untracked collisions are refused before changing disk. Tree materialization
 preserves overlays and the complete underlying index. Removing a layer restores
 its underlying staged bytes or removes overlay-only paths. Layer edits cannot be
@@ -60,11 +65,28 @@ History retains structural references and the terminal typed state; immutable
 commit IDs are not rewritten into a misleading new ancestry.
 
 Local erasure requires an explicitly configured authority and matching credential.
-Authorization is checked before any mutation. Version 2 local grants use scrypt
+Authorization is checked inside the shared writer lease before any mutation,
+including standalone erasure helpers. Version 2 local grants use scrypt
 (N=16384, r=8, p=1), a random 16-byte repository salt and 32-byte verifiers.
 Verifier encodings are validated before constant-time byte comparison. Legacy
-unversioned SHA-256 grants refuse; regenerate both grants explicitly with
-`vcs authority` before link resolution or erasure. Credentials and grants remain
+unversioned SHA-256 grants cannot authorize link reads or erasure. Regenerate both
+grants explicitly with `vcs authority --regenerate-legacy` only for the recognized
+historical unversioned format. Unknown versions, JSON null, malformed grants, corrupt
+JSON and unreadable files fail closed; they require trusted filesystem recovery.
+
+Initial `setAuthority(principal, readCredential, eraseCredential)` remains supported
+only when authority.json is genuinely absent. Replacing a valid v2 grant requires
+the separate optional authorization `{ currentEraseCredential }`, which must match
+the current erase verifier. The proposed new read or erase token grants no replacement
+authority. CLI rotation supplies `--current-erase-token-file` separately from the
+new `--read-token-file` and `--erase-token-file`. The typed alternative
+`{ regenerateLegacy: true }` and CLI `--regenerate-legacy` apply only to recognized
+historical grants; they never permit v2 overwrite. Both choices are mutually
+exclusive. Classification, authorization and replacement hold the shared store lease
+in Repository and lower-level configuration helpers. Linked instances rotate their
+hub grant, so the change applies to all instances sharing it. Filesystem writers
+that bypass this protocol already control the grant and stored payloads; these
+checks protect supported command/API callers. Credentials and grants remain
 clone-local and never enter bundles. A typed, canonical tombstone records
 version, FileId, affected object IDs, principal, timestamp and reason, without
 recording the erased bytes or credential. Its content-addressed identity and
@@ -105,24 +127,6 @@ resumable uploads and publication preflight the denial registry before accepting
 bytes. A stale peer cannot restore a denied object or introduce a new payload under
 an obliterated FileId. Ref updates occur only after complete validation. Linking to
 another repository cannot bypass its tombstones or collapse its authorization scope.
-
-## Acceptance evidence
-
-Tests use real disposable pm trackers and real repository directories, including
-the built package and packed Node/Bun consumers. They prove descriptor identity
-across clone, exact pin resolution after a branch moves, separate authorization,
-layer exclusion from explicit/bulk staging and clone, isolated instances, switch
-and removal behavior, authorized and refused FileId-scoped erasure, rename and
-historical coverage, deduplication refusal, tombstone transfer, and stale-fetch
-resurrection refusal before bytes or refs change.
-
-The byte scan recursively examines every repository storage file and decoded
-compressed/base64 representations for a synthetic binary marker, before and after
-erasure, and checks that unrelated payloads remain intact. Revert proof disables
-only the changed behavior while leaving tests and module loading intact: link pin
-validation, layer staging exclusion, and erasure/persistent denial each have tests
-that fail for the intended behavioral reason. The release gates retain their exact
-100 percent coverage and zero-duplication thresholds under npm and Bun.
 
 ## Implementable format and security boundary
 
@@ -203,7 +207,9 @@ also cause conservative refusal. Unsupported pack/cache artefacts are refused by
 physical inventory; this release does not implement a pack backend.
 
 The application boundary includes supported loose storage, private control metadata,
-current/retired registered working instances, and overlays. Standard tool directories
+current/retired registered working instances, and overlays. Tracker runtime fences
+are excluded from worktree inspection and cannot be erased through a forged owned
+path. Ordinary project ignore rules cannot hide owned files from erasure. Standard tool directories
 excluded from repository tracking, external backups, independently owned clones,
 filesystem snapshots, media recovery and novel custom encryption are outside it.
 Direct hostile filesystem mutation and writers bypassing the store lease are outside
@@ -251,12 +257,7 @@ current branch, then retrying the merge; the engine does not select a pin throug
 text merge or create a misleading clean commit. Existing resolved private bytes
 remain unchanged until explicitly removing or resolving their layer.
 
-Behavioral regression receipts revert individual checks while retaining tests and
-imports: target identity, bulk layer masking, physical payload deletion, arrival
-denial, structural denial, audit preflight and retained-copy inspection each produce assertion
-failures with successful module loading. Restored behavior passes the same scenarios.
-Audit-field and link-identity type checks and empty-payload structural separation
-have the same behavioral revert evidence. Incoming principal, reason, FileId,
+Incoming principal, reason, FileId,
 repository identity and pinned revision fields must be strings; JSON coercion cannot
 manufacture valid typed metadata. An erased empty blob
 remains denied by its exact typed address and FileId, while zero-byte structural
@@ -277,20 +278,7 @@ Hub and linked-instance verification both classify `object_not_found` and
 `missing_fragment` as missing. Actual damaged bytes remain corrupt, and validated
 FileId-attributed terminal payloads remain explicitly obliterated.
 
-PR97 review regressions exercise version 2 grant regeneration and independent
-read/erase refusal, ordinary large binary and long-text controls, denial-cache
-refresh and immutable records, read-only metadata access during a live lease,
-cheap identity adoption, typed inventory corruption, SIGKILL recovery and pending
-denial preservation. Native syscall traces verify one denial-file open for forty
-reads plus lookups, and complete owner bytes before atomic lease publication.
-Paused native syscalls coordinate real permission failures and disappearing or
-replaced owners; tests never substitute filesystem data, liveness results or errno.
-Fourteen production-behavior reverts fail with assertion errors while modules load;
-the restored production behavior passes the same filesystem/subprocess scenarios.
-Legacy SHA-256 grants require explicit regeneration, and malformed recognizable
-encodings still refuse under the physical-erasure privacy boundary.
-
-## Renewed PR97 review contracts
+## Mutation and publication contracts
 
 Private-layer parent and descendant collisions are checked before switch, hard
 reset, undo or rewrite changes refs, HEAD or the operation log. Undo validates
@@ -315,11 +303,6 @@ restore relinquished cleanup scope. Active entries must first be explicitly unli
 The writer lease waits against an elapsed five-second deadline, with sleeps
 bounded by the remaining time. A live owner is never recovered or displaced.
 Contention reports retry guidance and reserves recovery for interrupted writers.
-The previous one-second budget can reject ordinary overlapping materialization;
-a real owner held longer than one second now lets a waiting writer complete.
-Existing subprocess deadlines remain unchanged. The suggested 6,000 retries
-with waits rising to 50 ms would total about 299 seconds, despite its proposed
-30-second message; the elapsed deadline makes the actual bound explicit.
 
 Link listing uses at most 64 compressed prefix bytes per unrelated index object.
 The prefix is only a listing hint. A recognized link still receives complete
@@ -342,50 +325,17 @@ Ordinary no-op fetch uses the existing object endpoint to exchange identity and
 denial metadata. It still validates the receiver's held closure, including missing
 or corrupt payloads; a cold no-op costs one pass over those bytes. Legacy transports
 without that endpoint or its advertised capability retain their full-bundle
-fallback. A real HTTP peer without the optional capability exercises that fallback
-without requesting the unsupported endpoint. Real process traces cover
-an incompressible 4 MiB payload, one open per held object, no source loose-object
-opens and compressed read bytes bounded by the held inventory. Shared-leaf import
-traces cover two FileIds, a standalone series base/patch and an advertised ref,
-with one complete payload read. Constant-byte cold no-op sync is not claimed.
+fallback. Constant-byte cold no-op sync is not claimed.
 
-Review disposition:
+Recognizable base64-derived zlib candidates retain strict malformed-data and
+output-budget refusal. An encoded denied payload can exceed the inspection budget
+while remaining recoverable with a larger budget. Suppressing that refusal would
+admit uninspected content. Ordinary binary data that resembles a malformed encoded
+candidate can also receive a conservative refusal; availability is bounded by
+supported representation inspection.
 
-| Review ID | Verified disposition |
-| --- | --- |
-| 4236571405 | Removed duplicate articles from composition argument errors. |
-| 4236571410 | Removed repeat import/series walks and per-reference disk reads; retained full held-closure verification. Presence-only publication trust is unsafe. Cold no-op remains one complete held-byte pass. |
-| 4236571415 | Added an elapsed five-second writer wait and live-owner-safe retry guidance. |
-| 4236571418 | Added bounded type hints for partial link discovery; matching links still validate completely. |
-| 4236571422 | Enforced physical hub binding before foreign worktree access; added authorized audited retired-path pruning. |
-| 4236571427 | Read layers once for each scan/status operation. |
-| 4236571431 | Preflighted private-layer collisions before ref/HEAD/oplog mutations, including planned undo and detached rewrite. |
-| 4236571434 | Rejected the suggested blanket base64-derived inflate catch. An over-budget encoded denied marker is recoverable with sufficient budget and must refuse while uninspected. Malformed recognizable candidates retain the same conservative refusal. |
-| 4236571441 | Manifest and file-kind conflicts preserve a complete side instead of merging metadata or aborting the whole tree merge. |
-| 5477799727 outside-diff | Undo/reset descriptions now state that obliterated payloads cannot be recovered. |
+## Recovery, export and closure memory
 
-The base64-zlib proposal conflates malformed data with output-budget refusal.
-A compressed 20 MiB decoded copy of a synthetic denied marker fails the default
-inspection budget, and the same copy is detected when enough budget is available.
-Ignoring that inflate failure would admit an encoded denied payload. Arbitrary
-binary data that happens to contain a recognizable malformed encoded candidate
-can still receive a conservative refusal; that availability boundary is explicit
-and does not certify uninspected content as clean.
-
-Renewed behavioral proof consists of twenty-one isolated production-only reversions:
-manifest/kind handling; switch, hard reset, undo and rewrite preflight; retired
-binding; link prefix reads; scan/status snapshots; the writer wait; closure read
-reuse; prune authority, bound-scope refusal and audit recording; repeat series
-walks; held-duplicate validation; metadata no-op exchange; article grammar; and
-the unsafe base64-zlib suggestion; legacy HTTP capability handling; and physical
-hub binding before opening a foreign repository's configuration. Every case exits
-nonzero with an assertion
-failure after successful module loading. Production files are restored before
-positive validation. The concurrency fixture preloads the waiter and coordinates
-real processes through standard I/O, so module startup does not consume the lease
-hold under test. It preserves the existing ten-second subprocess bound.
-
-## Additional renewal: recovery, export and closure memory
 
 The erasure command's `--recover-lock` flag validates the erase credential before
 changing the writer lock, including when invoked from a shared instance. A wrong
@@ -394,9 +344,7 @@ standalone `vcs recover-lock` command still recovers ordinary dead writers witho
 erase authority; recovery alone never completes pending erasure.
 
 Export uses bounded manifest discovery for file leaves. Serialization still reads
-and hashes every exported object completely. A real 4 MiB incompressible leaf
-previously cost 8,391,216 compressed read bytes; it now costs 4,195,608 bytes for
-serialization plus 64 discovery bytes. Missing leaves/manifests, damaged hashes
+and hashes every exported object completely. Missing leaves/manifests, damaged hashes
 and malformed matching manifests refuse export. Prefix hints never substitute
 for serialization integrity.
 
@@ -412,16 +360,9 @@ malformed link or manifest shared by two owners is read once and refuses both.
 A context-dependent role mismatch leaves the successful kind available for
 another reference; denial checks always precede reuse of cached results.
 
-A native cold process with real 128 MiB blob/record payloads, additional physical
-fragments and shared references measures buffer allocation and peak RSS while
-tracing object opens and compressed bytes. Original source retained 149,097,462
-buffer bytes for 134,217,728 leaf bytes. An initial restored run measured
-14,878,192 buffer growth and 19,529,728 peak RSS growth. The regression compares
-growth against the actual corpus bytes, without a fabricated memory limit, and
-requires one complete physical read per reachable object. These measurements
-cover a bounded synthetic corpus. Metadata still scales with graph size; one
-large inflated object and complete carried bundle payloads still require memory.
-Multi-gigabyte operational readiness is not established by this measurement.
+Closure metadata scales with graph size. One large inflated object and complete
+carried bundle payloads still require memory. Bounded closure retention does not
+establish multi-gigabyte operational readiness or full privacy and scale assurance.
 
 Resumable uploads hash every claimed ID in the entire batch before denial decoding
 or storage mutation. Denial preflight and writes then share one writer lease.
@@ -429,20 +370,3 @@ Malformed tree/manifest bytes under valid claimed addresses return documented
 `corrupt_object`, including with existing or corrupt denial metadata, and a later
 bad object cannot leave earlier valid objects stored. Valid hashes continue
 through the unchanged denial and provenance rules.
-
-| Renewed finding | Verified correction and source-only failure |
-| --- | --- |
-| 4236761416 | Wrong erase credentials previously removed a real crashed writer lock; authorized hub/shared retries now recover and erase. |
-| 4236761421 | Native export read bytes proved duplicate full payload discovery; bounded discovery retains full serialization verification and missing/corrupt manifest refusal. |
-| 4236761429 | Native buffer growth proved all leaf bytes remained held; kind/decoded-structure caching removes those bytes and preserves one read/hash per object and structural validation. |
-| 4236761445 | Real malformed uploaded trees/manifests previously reached denial decoding first; whole-batch hash validation now returns `corrupt_object` before any publication. |
-
-The earlier twenty-one source-only proofs and the root's test relay repair remain
-in place. Four additional isolated source-only reversions retain the tests and
-produce loaded-module assertion failures before restoring production source.
-An additional source-only failure (two physical opens versus one) protects shared
-malformed-leaf validation. The complete gate at intermediate `075a04a` passed
-1,219 tests and all four dimensions for every one of the 53 source files before
-this additional cache correction; its canonical reports were then invalidated.
-The `4f3144f` 1,214-test four-dimension coverage receipt remains dated evidence;
-only a new complete committed-head pass certifies the renewed candidate.

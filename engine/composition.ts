@@ -2,9 +2,9 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { ALWAYS_IGNORED, isControlPath, isRuntimeIgnored, type IgnoreRules } from "./ignore.ts";
+import { ALWAYS_IGNORED, isControlPath, isRuntimeIgnored, readIgnoreRules, type IgnoreRules } from "./ignore.ts";
 import { compareByteOrder } from "./model.ts";
-import { assertRegistryName, isObjectId, ObjectStoreError, readControlJson } from "./objects.ts";
+import { assertRegistryName, isObjectId, ObjectStore, ObjectStoreError, readControlJson } from "./objects.ts";
 import { isCanonicalRepoPath } from "./worktree.ts";
 
 /** One exact source file and destination file in a pinned repository. */
@@ -48,17 +48,16 @@ export interface LocalLayer {
 /** Validate paths for composition, rejecting control state on every platform. */
 export function assertCompositionPath(path: string, rules?: IgnoreRules): void {
   if (isControlPath(path) || !isCanonicalRepoPath(path) || path.includes("\\") || /^[A-Za-z]:/.test(path)
-    || path.split("/").some(/** Reject private tool directories and PM runtime folders. */ (part) =>
-      (ALWAYS_IGNORED as readonly string[]).includes(part)
-      || ["runtime", "locks", "transactions", "checkpoints", "search"].includes(part))
+    || path.split("/").some(/** Reject private tool directories at any depth. */ (part) =>
+      (ALWAYS_IGNORED as readonly string[]).includes(part))
     || (rules !== undefined && isRuntimeIgnored(path, rules))) {
     throw new ObjectStoreError("unsafe_composition_path", "Composition paths must be canonical files outside control and runtime state.");
   }
 }
 
 /** Prove every existing component is a regular directory or final regular file. */
-export function assertSafeFilePath(root: string, path: string): void {
-  assertCompositionPath(path);
+export function assertSafeFilePath(root: string, path: string, rules: IgnoreRules = readIgnoreRules(root)): void {
+  assertCompositionPath(path, rules);
   if (!lstatSync(root).isDirectory() || !lstatSync(join(root, ".pmvcs")).isDirectory()) throw new ObjectStoreError("unsafe_composition_path", "Repository and control roots must be real directories.");
   let current = root;
   const parts = path.split("/");
@@ -144,7 +143,7 @@ export function writePrivateJson(path: string, value: unknown): void {
 }
 
 /** Read and strictly validate all private overlay snapshots. */
-export function readLayers(control: string): LocalLayer[] {
+export function readLayers(control: string, rules?: IgnoreRules): LocalLayer[] {
   const raw = readControlJson(join(control, "layers.json"), "bad_layers", "private layers");
   if (raw === null) return [];
   if (!Array.isArray(raw)) throw new ObjectStoreError("bad_layers", "Private layers must be an array.");
@@ -162,7 +161,7 @@ export function readLayers(control: string): LocalLayer[] {
         || typeof file.executable !== "boolean" || Buffer.from(file.content, "base64").toString("base64") !== file.content) {
         throw new ObjectStoreError("bad_layers", "Layer files need canonical paths, base64 content and executable state.");
       }
-      assertCompositionPath(file.path);
+      assertCompositionPath(file.path, rules);
       if (paths.some(/** Refuse ambiguous file ownership across snapshots. */ (path) => pathsOverlap(path, file.path))) {
         throw new ObjectStoreError("bad_layers", "Private layer paths overlap.");
       }
@@ -186,13 +185,50 @@ export interface LocalAuthority {
   readonly erase: string;
 }
 
-/** Configure explicit separate read and erase grants for this repository. */
-export function configureAuthority(control: string, principal: string, read: string, erase: string): void {
-  if (!/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(principal) || read.length === 0 || erase.length === 0 || read === erase) {
-    throw new ObjectStoreError("bad_authority", "Authority needs an audit principal and two distinct nonempty credentials.");
-  }
-  const salt = randomBytes(16).toString("hex");
-  writePrivateJson(join(control, "authority.json"), { version: 2, principal, salt, read: credentialHash(salt, read), erase: credentialHash(salt, erase) });
+/** Separate authorization for a current v2 rotation or explicit historical grant regeneration. */
+export type AuthorityChangeAuthorization =
+  | { readonly currentEraseCredential: string; readonly regenerateLegacy?: never }
+  | { readonly regenerateLegacy: true; readonly currentEraseCredential?: never };
+
+/** Historical unversioned salted SHA-256 grant shape; it cannot authorize v2 operations. */
+type LegacyAuthority = Omit<LocalAuthority, "version"> & { readonly version?: never };
+
+/** Distinguish genuine absence from invalid JSON values and recognize only supported complete grant shapes. */
+function readAuthority(control: string): LocalAuthority | LegacyAuthority | null | undefined {
+  const path = join(control, "authority.json");
+  if (lstatSync(path, { throwIfNoEntry: false }) === undefined) return undefined;
+  const raw = readControlJson(path, "bad_authority", "local authority") as Partial<LocalAuthority> | null;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)
+    || typeof raw.principal !== "string" || !/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(raw.principal)
+    || typeof raw.salt !== "string" || !/^[0-9a-f]{32}$/.test(raw.salt)
+    || typeof raw.read !== "string" || !/^[0-9a-f]{64}$/.test(raw.read)
+    || typeof raw.erase !== "string" || !/^[0-9a-f]{64}$/.test(raw.erase)) return null;
+  const fields = Object.keys(raw).sort().join(",");
+  if (raw.version === 2 && fields === "erase,principal,read,salt,version") return raw as LocalAuthority;
+  if (fields === "erase,principal,read,salt") return raw as LegacyAuthority;
+  return null;
+}
+
+/** Configure separate grants in shared control storage, authorizing replacement within its writer lease. */
+export function configureAuthority(control: string, principal: string, read: string, erase: string, authorization?: AuthorityChangeAuthorization): void {
+  new ObjectStore(join(control, "objects")).withWriteLock(/** Classification, current authorization and atomic replacement share one physical store lease. */ () => {
+    if (!/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(principal) || read.length === 0 || erase.length === 0 || read === erase) {
+      throw new ObjectStoreError("bad_authority", "Authority needs an audit principal and two distinct nonempty credentials.");
+    }
+    const current = readAuthority(control);
+    if (current === null) throw new ObjectStoreError("bad_authority", "Invalid local authority requires explicit trusted-filesystem recovery.");
+    if (authorization?.regenerateLegacy === true && (current === undefined || current.version === 2)) {
+      throw new ObjectStoreError("unauthorized", "Legacy regeneration applies only to a recognized historical SHA-256 grant.");
+    }
+    if (current !== undefined) {
+      if (current.version === 2) authorize(control, "erase", authorization?.currentEraseCredential ?? "");
+      else if (authorization?.regenerateLegacy !== true) {
+        throw new ObjectStoreError("unauthorized", "Historical SHA-256 grants require explicit --regenerate-legacy.");
+      }
+    }
+    const salt = randomBytes(16).toString("hex");
+    writePrivateJson(join(control, "authority.json"), { version: 2, principal, salt, read: credentialHash(salt, read), erase: credentialHash(salt, erase) });
+  });
 }
 
 /** Hash a credential with repository-local salt without retaining its raw value. */
@@ -202,12 +238,10 @@ function credentialHash(salt: string, credential: string): string {
 
 /** Authorize one action independently of the enclosing repository and return its audit principal. */
 export function authorize(control: string, action: "read" | "erase", credential: string): string {
-  const raw = readControlJson(join(control, "authority.json"), "bad_authority", "local authority") as LocalAuthority | null;
-  if (raw === null || raw.version !== 2 || typeof raw.principal !== "string" || !/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(raw.principal)
-    || typeof raw.salt !== "string" || !/^[0-9a-f]{32}$/.test(raw.salt)
-    || typeof raw[action] !== "string" || !/^[0-9a-f]{64}$/.test(raw[action])
+  const raw = readAuthority(control);
+  if (raw === undefined || raw === null || raw.version !== 2
     || !timingSafeEqual(Buffer.from(raw[action], "hex"), Buffer.from(credentialHash(raw.salt, credential), "hex"))) {
-    throw new ObjectStoreError("unauthorized", "A matching version 2 credential is required; regenerate legacy grants with vcs authority.");
+    throw new ObjectStoreError("unauthorized", "A matching current version 2 credential is required; historical grants require vcs authority --regenerate-legacy.");
   }
   return raw.principal;
 }
