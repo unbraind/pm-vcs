@@ -11,7 +11,8 @@ import { discardChildCoverage } from "./helpers/sandbox.ts";
 /** Identical consumer program exercises the built CLI harness and engine through package-owned imports. */
 const consumer = `
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -19,10 +20,11 @@ import extension from "pm-vcs";
 import { Repository } from "pm-vcs/dist/engine/repo.js";
 import { encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom } from "pm-vcs/dist/engine/sync.js";
+import { FileTransport } from "pm-vcs/dist/engine/transport.js";
 const root = join(process.cwd(), process.argv[2]); mkdirSync(root);
 const client = new PmClient({ cwd: root, pmRoot: join(root, ".agents", "pm"), noExtensions: true });
 await client.init("consumer", { defaults: true, author: "fixture" });
-const repo = Repository.init(root); repo.setAuthority("fixture", "consumer-read", "consumer-erase");
+const repo = Repository.init(root); repo.identity(); repo.setAuthority("fixture", "consumer-read", "consumer-erase");
 const author = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1000, timezoneOffsetMinutes: 0 };
 repo.stage([]); repo.commit({ message: "tracker", author }, new Date());
 const target = Repository.init(join(process.cwd(), process.argv[2] + "-target")); target.setAuthority("target", "target-read", "target-erase");
@@ -30,6 +32,12 @@ writeFileSync(join(target.root, "asset.bin"), Buffer.from([0, 255, 128, 19, 47])
 const pin = target.commit({ message: "pin", author }, new Date());
 const link = { version: 1, repository: target.identity(), revision: pin, mappings: [{ source: "asset.bin", destination: "vendor/asset.bin" }] };
 const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+assert.equal(JSON.parse(readFileSync(join(repo.controlDirectory, "authority.json"), "utf8")).version, 2);
+const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }); assert.equal(dead.status, 0);
+writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout);
+const recovered = await harness.runCommand({ command: "vcs recover-lock", pmRoot: root }); assert.equal(recovered.errorMessage, undefined); assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
+const legacy = Repository.init(join(process.cwd(), process.argv[2] + "-legacy"));
+assert.equal((await new FileTransport(legacy.root, legacy.root).advertise()).repositoryId, undefined); assert.equal(existsSync(join(legacy.controlDirectory, "identity")), false);
 const spec = join(process.cwd(), process.argv[2] + ".link.json"); writeFileSync(spec, encodeLink(link));
 const staged = await harness.runCommand({ command: "vcs link", args: ["dependency.link"], pmRoot: root, options: { spec } }); assert.equal(staged.errorMessage, undefined);
 repo.commit({ message: "descriptor", author }, new Date());

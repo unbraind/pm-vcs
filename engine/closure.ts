@@ -27,6 +27,7 @@ interface Reference {
 /** Validate commit roots against held objects plus an unpublished arrival, without mutating storage. */
 export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), audits = false, trees: readonly ObjectId[] = []): ClosureReport {
   const result: ClosureReport = { verified: 0, obliterated: [], missing: [], corrupt: [] };
+  const denied = new Map(denials.flatMap(/** Index addresses once while retaining each leaf's original attribution. */ (entry) => entry.tombstone.objects.map(/** Preserve the first denial when identical payloads have multiple terminal owners. */ (id) => [id, entry] as const)).reverse());
   const carried = new Map(arrivals.map(/** Resolve incoming objects before publication. */ (object) => [object.id, object]));
   const pending: Reference[] = targets.map(/** Every advertised root is a commit, independently of denial claims. */ (id) => ({ id, role: "commit" }));
   for (const id of trees) pending.push({ id, role: "tree" });
@@ -39,7 +40,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
     const key = JSON.stringify(reference);
     if (seen.has(key)) continue;
     seen.add(key);
-    const denial = denials.find(/** Denial addresses alone never determine a reference's semantic role. */ (entry) => entry.tombstone.objects.includes(id));
+    const denial = denied.get(id);
     if (denial !== undefined) {
       if (role === "payload" && fileId === denial.tombstone.fileId && root !== undefined && denial.tombstone.roots.includes(root)) result.obliterated.push(id);
       else result.corrupt.push(`${id}: invalid_erasure_role`);

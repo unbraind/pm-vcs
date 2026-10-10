@@ -181,8 +181,8 @@ remain separately tracked work.
 | immutable content plus compare-and-swap pointers | retain; shipped locally |
 | stable file identity | adopt; shipped |
 | stable branch identity separate from name | adopt before served remotes |
-| FastCDC and fragment storage | adopt the invariant after TypeScript benchmarks |
-| sparse views and lazy fetch | adopt after remotes and fragments |
+| FastCDC and fragment storage | adopt the invariant; shipped as Gear-based content-defined fragments |
+| sparse views and lazy fetch | adopt; shipped |
 | authoritative server | adapt to authority per remote |
 | resumable publication | adopt |
 | tenant partitions | adopt for hosted service security |

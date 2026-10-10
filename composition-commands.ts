@@ -17,6 +17,15 @@ function credential(context: CommandHandlerContext, flag: string): string {
 /** Register complete engine-backed composition and lifecycle commands. */
 export function registerCompositionCommands(api: ExtensionApi): void {
   api.registerCommand({
+    name: "vcs recover-lock",
+    description: "Recover a confirmed dead ordinary writer or an aged empty legacy lock without erasure authority.",
+    /** Recover only the lease; pending erasure still requires its separate authorized cleanup. */
+    run(context: CommandHandlerContext) {
+      openRepository(context).objects.recoverWriterLock();
+      return { ok: true };
+    },
+  });
+  api.registerCommand({
     name: "vcs authority",
     description: "Configure distinct local credentials for pinned-target reads and permanent erasure; grants never enter bundles.",
     flags: [

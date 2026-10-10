@@ -47,7 +47,7 @@ function assertSupportedControl(control: string): void {
   const supported = new Set(["objects", "refs", "format", "index", "config.json", "HEAD", "oplog.jsonl", "remotes.json",
     "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
   for (const entry of readdirSync(control, { withFileTypes: true })) {
-    if (!supported.has(entry.name) || entry.isSymbolicLink()) {
+    if ((!supported.has(entry.name) && !(entry.isFile() && /^objects\.lock\.[0-9]+\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Unknown control storage or symlinks prevent a complete erasure receipt.");
     }
   }

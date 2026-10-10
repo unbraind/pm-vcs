@@ -319,7 +319,7 @@ export class FileTransport implements Transport {
     const repository = this.open();
     const head = repository.refs.readHead();
     return {
-      repositoryId: repository.identity(),
+      repositoryId: repository.objects.recordedIdentity(),
       refs: [...repository.refs.list(BRANCH_PREFIX), ...repository.refs.list(TAG_PREFIX)],
       head: head.kind === "branch" ? head.ref : null,
       config: repository.config,

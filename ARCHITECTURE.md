@@ -368,7 +368,13 @@ refuse. Typed tombstones contain only addresses, FileId, principal, timestamp an
 code. Immutable commits retain their addresses and intentional absence travels in bundles.
 Undo cannot recover erased bytes. Unknown packs/caches and unverifiable temporary copies
 refuse rather than being excluded from a successful receipt. Interrupted cleanup remains
-persistently denied; explicit authorized retry completes it. The trusted filesystem
+persistently denied; explicit authorized retry completes it. Local grants use version 2
+scrypt and validated constant-time comparison; legacy grants require explicit
+regeneration. Immutable identity reads take no writer lock. Denial reads reuse
+validated records indexed by address until the registry filesystem identity changes.
+Ordinary crashed writers use standalone `vcs recover-lock` without erase authority;
+new leases atomically publish complete PID metadata and legacy empty locks need
+a one-minute grace period. Explicit recovery commands must be coordinated. The trusted filesystem
 operator excludes concurrent direct filesystem mutation, backups and snapshots from this
 application-level guarantee. Full details are in
 [links, layers and obliteration](docs/links-layers-obliteration.md).

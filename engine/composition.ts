@@ -1,5 +1,5 @@
 /** Canonical repository links, local authorization and safe private overlay storage. */
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ALWAYS_IGNORED, isControlPath, isRuntimeIgnored, type IgnoreRules } from "./ignore.ts";
@@ -174,6 +174,8 @@ export function readLayers(control: string): LocalLayer[] {
 
 /** Local grants are salted hashes and never enter an exported bundle. */
 export interface LocalAuthority {
+  /** Version 2 uses fixed scrypt parameters and a 32-byte verifier. */
+  readonly version: 2;
   /** Audit principal selected by the local operator. */
   readonly principal: string;
   /** Random salt separating credential hashes across repositories. */
@@ -190,20 +192,22 @@ export function configureAuthority(control: string, principal: string, read: str
     throw new ObjectStoreError("bad_authority", "Authority needs an audit principal and two distinct nonempty credentials.");
   }
   const salt = randomBytes(16).toString("hex");
-  writePrivateJson(join(control, "authority.json"), { principal, salt, read: credentialHash(salt, read), erase: credentialHash(salt, erase) });
+  writePrivateJson(join(control, "authority.json"), { version: 2, principal, salt, read: credentialHash(salt, read), erase: credentialHash(salt, erase) });
 }
 
 /** Hash a credential with repository-local salt without retaining its raw value. */
 function credentialHash(salt: string, credential: string): string {
-  return createHash("sha256").update(`${salt}\0${credential}`).digest("hex");
+  return scryptSync(credential, salt, 32, { N: 16384, r: 8, p: 1 }).toString("hex");
 }
 
 /** Authorize one action independently of the enclosing repository and return its audit principal. */
 export function authorize(control: string, action: "read" | "erase", credential: string): string {
   const raw = readControlJson(join(control, "authority.json"), "bad_authority", "local authority") as LocalAuthority | null;
-  if (raw === null || typeof raw.principal !== "string" || typeof raw.salt !== "string"
-    || typeof raw[action] !== "string" || raw[action] !== credentialHash(raw.salt, credential)) {
-    throw new ObjectStoreError("unauthorized", "A separately configured matching credential is required for this action.");
+  if (raw === null || raw.version !== 2 || typeof raw.principal !== "string" || !/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(raw.principal)
+    || typeof raw.salt !== "string" || !/^[0-9a-f]{32}$/.test(raw.salt)
+    || typeof raw[action] !== "string" || !/^[0-9a-f]{64}$/.test(raw[action])
+    || !timingSafeEqual(Buffer.from(raw[action], "hex"), Buffer.from(credentialHash(raw.salt, credential), "hex"))) {
+    throw new ObjectStoreError("unauthorized", "A matching version 2 credential is required; regenerate legacy grants with vcs authority.");
   }
   return raw.principal;
 }

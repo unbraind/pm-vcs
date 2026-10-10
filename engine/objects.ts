@@ -17,6 +17,7 @@ import {
   fstatSync,
   existsSync,
   lstatSync,
+  linkSync,
   readdirSync,
   unlinkSync,
   mkdirSync,
@@ -25,6 +26,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -221,6 +223,8 @@ export function parseFramedObject(framed: Buffer): StoredObject {
 export class ObjectStore {
   /** Absolute path to the directory holding the fan-out subdirectories. */
   private readonly root: string;
+  /** Validated immutable denials and address indexes follow the registry's filesystem identity. */
+  private denialCache?: { signature: string; entries: ErasureDenial[]; objects: Map<ObjectId, ErasureDenial>; files: Map<string, ErasureDenial> };
 
   /**
    * @param root - Directory that holds the object fan-out. Created on demand.
@@ -272,7 +276,7 @@ export class ObjectStore {
     return this.withWriteLock(/** Check permanent denial while holding the publication lock. */ () => {
       const id = hashObject(type, payload);
       this.preflight([{ type, payload, id }], fileId !== undefined);
-      if (fileId !== undefined && this.denials().some(/** Refuse attribution to a terminal file identity. */ (denial) => denial.tombstone.fileId === fileId)) {
+      if (fileId !== undefined && this.cachedDenials().files.has(fileId)) {
         throw new ObjectStoreError("file_obliterated", "This FileId is permanently denied.");
       }
       return this.writeRaw(type, payload);
@@ -373,32 +377,60 @@ export class ObjectStore {
   identity(): string {
     return this.withWriteLock(/** Concurrent explicit identity requests share one atomic creation. */ () => {
       const path = join(dirname(this.root), "identity");
-      if (!existsSync(path)) writePrivateJson(path, randomBytes(16).toString("hex"));
-      const identity = readControlJson(path, "bad_identity", "repository identity");
-      if (typeof identity !== "string" || !/^[0-9a-f]{32}$/.test(identity)) throw new ObjectStoreError("bad_identity", "Repository identity is corrupt.");
+      const recorded = this.recordedIdentity();
+      if (recorded !== undefined) return recorded;
+      const identity = randomBytes(16).toString("hex");
+      writePrivateJson(path, identity);
       return identity;
     });
   }
 
   /** Read an existing identity without introducing nondeterminism into standalone archives. */
   recordedIdentity(): string | undefined {
-    return existsSync(join(dirname(this.root), "identity")) ? this.identity() : undefined;
+    const path = join(dirname(this.root), "identity");
+    if (lstatSync(path, { throwIfNoEntry: false }) === undefined) return undefined;
+    const identity = readControlJson(path, "bad_identity", "repository identity");
+    if (typeof identity !== "string" || !/^[0-9a-f]{32}$/.test(identity)) throw new ObjectStoreError("bad_identity", "Repository identity is corrupt.");
+    return identity;
   }
 
   /** Adopt an exported identity only into an empty store without an established local identity. */
   adoptIdentity(identity: string): void {
     if (!/^[0-9a-f]{32}$/.test(identity)) throw new ObjectStoreError("bad_identity", "Received repository identity is invalid.");
     this.withWriteLock(/** Empty clones adopt their source identity under the same creation lease. */ () => {
-      if (this.inventory().length === 0 && !existsSync(join(dirname(this.root), "identity"))) writePrivateJson(join(dirname(this.root), "identity"), identity);
+      if (this.recordedIdentity() !== undefined) return;
+      if (existsSync(this.root) && (!lstatSync(this.root).isDirectory()
+        || readdirSync(this.root, { withFileTypes: true }).some(/** Any unsupported entry or nonempty fan-out already establishes an occupied store. */ (entry) =>
+          !entry.isDirectory() || !/^[0-9a-f]{2}$/.test(entry.name) || readdirSync(join(this.root, entry.name)).length > 0))) return;
+      writePrivateJson(join(dirname(this.root), "identity"), identity);
     });
   }
 
   /** Read every durable terminal identity and incomplete cleanup record. */
-  denials(): ErasureDenial[] { return readDenials(dirname(this.root)); }
+  denials(): ErasureDenial[] { return [...this.cachedDenials().entries]; }
+
+  /** Revalidate only after replacement or modification; never let mutable callers alter cached authorization. */
+  private cachedDenials(): NonNullable<ObjectStore["denialCache"]> {
+    const path = join(dirname(this.root), "denials.json");
+    const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    const signature = stat === undefined ? "absent" : `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;
+    if (this.denialCache?.signature === signature) return this.denialCache;
+    const entries = readDenials(dirname(this.root));
+    const objects = new Map<ObjectId, ErasureDenial>();
+    const files = new Map<string, ErasureDenial>();
+    for (const entry of entries) {
+      Object.freeze(entry.tombstone.roots); Object.freeze(entry.tombstone.objects); Object.freeze(entry.tombstone.payloads);
+      Object.freeze(entry.tombstone); Object.freeze(entry);
+      files.set(entry.tombstone.fileId, entry);
+      for (const id of entry.tombstone.objects) if (!objects.has(id)) objects.set(id, entry);
+    }
+    this.denialCache = { signature, entries, objects, files };
+    return this.denialCache;
+  }
 
   /** Find intentional absence independently of physical object presence. */
   denial(id: ObjectId): ErasureDenial | undefined {
-    return this.denials().find(/** Match every historical root or fragment address. */ (entry) => entry.tombstone.objects.includes(id));
+    return this.cachedDenials().objects.get(id);
   }
 
   /** Inspect present, intentionally absent, missing and damaged content without conflating states. */
@@ -427,6 +459,7 @@ export class ObjectStore {
   recordDenials(denials: readonly ErasureDenial[]): void {
     this.withWriteLock(/** The durable denial and canonical audit objects publish under the same store lease. */ () => {
       writePrivateJson(join(dirname(this.root), "denials.json"), denials);
+      this.denialCache = undefined;
       for (const denial of denials) this.writeRaw("tombstone", encodeTombstone(denial.tombstone));
     });
   }
@@ -446,7 +479,10 @@ export class ObjectStore {
         }
         const id = directory.name + file.name.slice(0, 62);
         const path = join(this.root, directory.name, file.name);
-        const object = parseFramedObject(inflateSync(readFileSync(path)));
+        const compressed = readFileSync(path);
+        let framed: Buffer;
+        try { framed = inflateSync(compressed); } catch { throw new ObjectStoreError("corrupt_object", "Inventory found an unreadable compressed object."); }
+        const object = parseFramedObject(framed);
         if (hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("corrupt_object", "Inventory found a mismatched loose object.");
         result.push({ id, path, object });
       }
@@ -460,52 +496,70 @@ export class ObjectStore {
     if (activeLeases.has(lease)) return action();
     if (!existsSync(dirname(this.root))) mkdirSync(dirname(this.root), { recursive: true });
     const path = join(dirname(this.root), "objects.lock");
-    let fd: number;
-    for (let attempt = 0; ; attempt += 1) {
-      try { fd = openSync(path, "wx", 0o600); break; } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        if (attempt === 200) {
-          throw new ObjectStoreError("store_locked", "Another writer holds the store lock; interrupted locks require explicit recovery.");
-        }
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-      }
-    }
+    const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    const fd = openSync(temporary, "wx", 0o600);
+    let acquired = false;
     const locked = fstatSync(fd, { bigint: true });
     let result: T;
     let lockChanged = false;
     try {
-      writeSync(fd, String(process.pid));
+      writeFileSync(fd, String(process.pid));
       fsyncSync(fd);
+      for (let attempt = 0; ; attempt += 1) {
+        try { linkSync(temporary, path); acquired = true; break; } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          if (attempt === 200) {
+            throw new ObjectStoreError("store_locked", "Another writer holds the store lock; use vcs recover-lock for interrupted writers.");
+          }
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+      }
+      unlinkSync(temporary);
       activeLeases.add(lease);
       result = action();
     } finally {
       activeLeases.delete(lease);
       closeSync(fd);
+      rmSync(temporary, { force: true });
       // A moved root must neither hide the mutation refusal nor unlink a foreign lock.
-      const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-      if (observed !== undefined && observed.dev === locked.dev && observed.ino === locked.ino) unlinkSync(path);
-      else lockChanged = true;
+      if (acquired) {
+        const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+        if (observed !== undefined && observed.dev === locked.dev && observed.ino === locked.ino) unlinkSync(path);
+        else lockChanged = true;
+      }
     }
     if (lockChanged) throw new ObjectStoreError("worktree_path_changed", "Store lock identity changed during mutation.");
     return result;
   }
 
-  /** Explicitly recover a crashed writer's lock, refusing a live or unidentifiable owner. */
+  /** Recover a dead writer or an empty legacy lock older than one minute; live and unidentified owners refuse. */
   recoverWriterLock(): void {
     const path = join(dirname(this.root), "objects.lock");
+    const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    if (observed === undefined) return;
+    if (observed.isSymbolicLink()) throw new ObjectStoreError("store_locked", "Lock owner is unknown.");
     let content: string;
     try { content = readFileSync(path, "utf8"); } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    const pid = Number(content);
-    if (!Number.isSafeInteger(pid) || pid <= 0) throw new ObjectStoreError("store_locked", "Lock owner is unknown.");
-    try { process.kill(pid, 0); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-      rmSync(path);
-      return;
+    if (content === "") {
+      if (BigInt(Date.now()) * 1_000_000n - observed.mtimeNs < 60_000_000_000n) throw new ObjectStoreError("store_locked", "Empty legacy lock is within its owner-publication grace period.");
+    } else {
+      const pid = Number(content);
+      if (!/^[1-9][0-9]*$/.test(content) || !Number.isSafeInteger(pid)) throw new ObjectStoreError("store_locked", "Lock owner is unknown.");
+      let dead = false;
+      try { process.kill(pid, 0); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        dead = true;
+      }
+      if (!dead) throw new ObjectStoreError("store_locked", "Lock owner is still running.");
     }
-    throw new ObjectStoreError("store_locked", "Lock owner is still running.");
+    const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    if (current === undefined) return;
+    if (current.dev !== observed.dev || current.ino !== observed.ino || current.ctimeNs !== observed.ctimeNs
+      || current.mtimeNs !== observed.mtimeNs || current.size !== observed.size) throw new ObjectStoreError("store_locked", "Lock owner changed during recovery.");
+    unlinkSync(path);
   }
 
   /**

@@ -1,6 +1,7 @@
 /** Typed erasure metadata and provenance checks at every object arrival boundary. */
 import { inspectRepresentations } from "./representations.ts";
 import { createHash } from "node:crypto";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { decodeManifest, decodeTree } from "./model.ts";
 import { hashObject, isObjectId, ObjectStoreError, readControlJson, type ObjectId, type StoredObject } from "./objects.ts";
@@ -55,8 +56,9 @@ export function encodeTombstone(value: ErasureTombstone): Buffer {
 
 /** Read persisted denial, refusing corruption rather than reopening an erased identity. */
 export function readDenials(control: string): ErasureDenial[] {
-  const raw = readControlJson(join(control, "denials.json"), "bad_tombstone", "erasure denial registry");
-  if (raw === null) return [];
+  const path = join(control, "denials.json");
+  const raw = readControlJson(path, "bad_tombstone", "erasure denial registry");
+  if (raw === null && lstatSync(path, { throwIfNoEntry: false }) === undefined) return [];
   return validateDenials(raw);
 }
 
@@ -88,14 +90,14 @@ export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects
   if (denials.some(/** An interrupted erasure never permits publication. */ (denial) => denial.pending)) {
     throw new ObjectStoreError("erasure_incomplete", "Authorized cleanup must finish before store writes resume.");
   }
-  const deniedObjects = new Set(denials.flatMap(/** Combine all permanently denied addresses. */ (denial) => [...denial.tombstone.objects]));
+  const deniedObjects = new Map(denials.flatMap(/** Index every permanently denied address once per arrival batch. */ (denial) => denial.tombstone.objects.map(/** Preserve attribution for structural role checks. */ (id) => [id, denial] as const)).reverse());
   const digests = new Set(denials.flatMap(/** Deny both original loose frames and type-independent payload bytes. */ (denial) => [...denial.tombstone.objects, ...denial.tombstone.payloads]));
   const files = new Map(denials.map(/** Index terminal identities independently of their current paths. */ (denial) => [denial.tombstone.fileId, denial]));
   for (const object of objects) {
-    if (deniedObjects.has(object.id) || inspectRepresentations(object.payload, /** Nonempty frames and payloads remain denied beneath supported encodings; empty content retains its exact typed address. */ (bytes) => bytes.length > 0 && digests.has(payloadDigest(bytes)))) throw new ObjectStoreError("object_obliterated", "Arrival contains permanently denied payload bytes.");
+    if (deniedObjects.has(object.id) || (object.payload.length > 0 && digests.has(payloadDigest(object.payload))) || inspectRepresentations(object.payload, /** Nonempty frames and payloads remain denied beneath supported encodings; empty content retains its exact typed address. */ (bytes) => bytes.length > 0 && digests.has(payloadDigest(bytes)))) throw new ObjectStoreError("object_obliterated", "Arrival contains permanently denied payload bytes.");
     if (object.type === "tree") {
       for (const entry of decodeTree(object.payload)) {
-        const affected = denials.find(/** Payload absence is valid only at its original attributed leaf. */ (denial) => denial.tombstone.objects.includes(entry.id));
+        const affected = deniedObjects.get(entry.id);
         if (affected !== undefined && (entry.mode === "40000" || entry.fileId !== affected.tombstone.fileId || !affected.tombstone.roots.includes(entry.id))) {
           throw new ObjectStoreError("invalid_erasure_role", "Tree denial does not match its payload FileId and root.");
         }

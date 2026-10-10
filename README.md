@@ -166,7 +166,7 @@ pins or recursively follow nested descriptors.
 
 | command | behavior |
 | --- | --- |
-| `pm vcs authority --principal operator --read-token-file read.token --erase-token-file erase.token` | Configure two distinct clone-local salted credential hashes. Token files should live outside tracked content. |
+| `pm vcs authority --principal operator --read-token-file read.token --erase-token-file erase.token` | Configure two distinct clone-local version 2 scrypt grants. Regenerate legacy SHA-256 grants explicitly. Token files should live outside tracked content. |
 | `pm vcs link dependency.link --spec link.json` | Stage a canonical typed descriptor; commit normally. |
 | `pm vcs link --list` | List descriptors without accessing target repositories. |
 | `pm vcs link resolve dependency.link --target ../target --read-token-file read.token --layer dependency` | Verify separate authority, target identity and exact revision, then overlay the mapped files privately. |
@@ -174,6 +174,7 @@ pins or recursively follow nested descriptors.
 | `pm vcs layer --list` | Show names and excluded paths without printing private bytes. |
 | `pm vcs layer local --remove` | Restore the current underlying index; edited or missing overlays require `--discard-edits`. |
 | `pm vcs obliterate <FileId-or-indexed-path> --erase-token-file erase.token --reason incident` | Erase every historical payload and fragment of the stable identity, with a durable typed audit. Authorized retry resumes pending cleanup. |
+| `pm vcs recover-lock` | Recover a confirmed dead writer or aged empty legacy lock without erase authority. Pending erasure remains denied until authorized cleanup. |
 
 One-sided link changes retain their typed descriptor during merge. Competing pins
 raise `link_merge_conflict`; explicitly stage and commit an agreed descriptor, then
@@ -191,7 +192,10 @@ copies and every registered or previously unlinked shared instance. It refuses
 ambiguous copies, affected layers, deduplicated payloads owned by another identity,
 missing inventory and unsupported pack/cache artefacts before mutation. Pending denial
 is fsynced before deletion and blocks writes until cleanup completes. A crashed
-writer's lock requires explicit `--recover-lock`; a live or unknown owner refuses.
+writer's lock can be recovered with `pm vcs recover-lock` without erase authority.
+New locks publish complete PID metadata atomically; empty legacy locks require a
+one-minute grace period, and a live or unknown owner refuses. Coordinate recovery
+without concurrent recovery commands; pending erasure still needs authorized retry.
 Fresh bundles/clones reproduce intentional absence. Remote tombstones cannot erase
 held local bytes without local authorization. Stale bundles and novel payloads under
 a denied FileId fail preflight before storing bytes or moving refs.
