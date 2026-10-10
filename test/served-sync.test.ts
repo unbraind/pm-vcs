@@ -138,6 +138,22 @@ test("a served repository advertises itself exactly as a file remote does", asyn
   assert.deepEqual(advertisement.config, Repository.open(served.repository.root).config);
 });
 
+test("HTTP advertisement preserves legacy identity absence and reports explicit identity", async () => {
+  const served = await serveSeededRepo();
+  const http = new HttpTransport(served.url);
+  assert.equal(served.repository.objects.recordedIdentity(), undefined);
+  const legacy = await http.advertise();
+  assert.equal(legacy.repositoryId, undefined);
+  assert.equal(served.repository.objects.recordedIdentity(), undefined);
+
+  const identity = served.repository.identity();
+  const established = await http.advertise();
+  assert.equal(established.repositoryId, identity);
+  assert.equal(served.repository.objects.recordedIdentity(), identity);
+  assert.deepEqual(established.refs, legacy.refs);
+  assert.deepEqual(established.config, legacy.config);
+});
+
 test("cloning over HTTP reproduces the same commits and configuration as cloning over a file remote", async () => {
   const served = await serveSeededRepo();
   commitFile(served.repository, "records/one.toon", "fields\n");
