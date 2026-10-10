@@ -1,5 +1,6 @@
 /** Bounded real leaf-link erasure and fragmented conflict regressions. */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs, { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, mock, test } from "node:test";
@@ -31,7 +32,57 @@ async function fixture(): Promise<{ repo: Repository; scratch: string }> {
 /** Snapshot durable repository state around an expected pre-publication refusal. */
 function state(repo: Repository): object {
   return { refs: repo.refs.list("refs/"), index: repo.readIndex(), operations: repo.operations.read(), denials: repo.objects.denials(),
-    head: readFileSync(join(repo.controlDirectory, "HEAD")), merge: existsSync(join(repo.controlDirectory, "MERGE_STATE")), objects: readdirSync(join(repo.controlDirectory, "objects"), { recursive: true }) };
+    head: readFileSync(join(repo.controlDirectory, "HEAD")), merge: existsSync(join(repo.controlDirectory, "MERGE_STATE")),
+    control: readdirSync(repo.controlDirectory, { recursive: true, encoding: "utf8" }).filter(path => lstatSync(join(repo.controlDirectory, path)).isFile())
+      .map(path => [path, createHash("sha256").update(readFileSync(join(repo.controlDirectory, path))).digest("hex")]) };
+}
+
+for (const name of [".git", "CVS", "node_modules"]) for (const link of [false, true]) {
+  test(`erasure preserves an unowned nested standard-tool ${name} ${link ? "link" : "file"} outside its physical boundary`, async () => {
+    const { repo, scratch } = await fixture(); const selected = Buffer.from("standard-tool-selected-marker-681432");
+    writeFileSync(join(repo.root, "secret"), selected); repo.stage(["secret"]);
+    const entry = repo.readIndex().find(entry => entry.path === "secret")!; const tip = repo.commit({ message: "selected", author }, new Date());
+    const survivors = repo.objects.inventory().filter(object => object.id !== entry.id).map(object => ({ path: object.path, bytes: readFileSync(object.path) }));
+    const directory = join(repo.root, "vendor/lib"); mkdirSync(directory, { recursive: true }); const leaf = join(directory, name);
+    const target = join(scratch, "protected-target"); writeFileSync(target, selected);
+    const bytes = name === ".git" ? Buffer.from("gitdir: ../../.git/modules/lib\n") : selected;
+    if (link) symlinkSync(target, leaf); else writeFileSync(leaf, bytes);
+    mkdirSync(join(repo.root, ".git/modules/lib"), { recursive: true }); writeFileSync(join(repo.root, ".git/modules/lib/config"), selected);
+    const inspected: string[] = []; const leases = new Set<bigint>(); const inspect = WorktreeMutation.prototype.inspectForErasure;
+    mock.method(WorktreeMutation.prototype, "inspectForErasure", function (this: WorktreeMutation, path: string) {
+      inspected.push(path); leases.add(lstatSync(join(repo.controlDirectory, "objects.lock"), { bigint: true }).ino); return inspect.call(this, path);
+    });
+    const read = fs.readFileSync; const reads: string[] = [];
+    mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => { if (typeof args[0] === "string") reads.push(args[0]); return read(...args); });
+    assert.doesNotThrow(() => repo.obliterate("secret", "erase-fixture", "incident", new Date())); mock.restoreAll();
+    assert.equal(inspected.includes(`vendor/lib/${name}`), false); assert.equal(reads.includes(leaf), false); assert.equal(reads.includes(target), false);
+    assert.equal(reads.some(path => path.startsWith(join(repo.root, ".git") + "/")), false); assert.equal(leases.size, 1);
+    if (link) { assert.equal(lstatSync(leaf).isSymbolicLink(), true); assert.equal(readlinkSync(leaf), target); }
+    else assert.deepEqual(readFileSync(leaf), bytes);
+    assert.deepEqual(readFileSync(target), selected); assert.deepEqual(readFileSync(join(repo.root, ".git/modules/lib/config")), selected);
+    for (const survivor of survivors) assert.deepEqual(readFileSync(survivor.path), survivor.bytes);
+    assert.equal(existsSync(join(repo.root, "secret")), false); assert.equal(repo.readFileState(tip, "secret").kind, "obliterated");
+    assert.equal(repo.objects.denials()[0]!.pending, false); assert.deepEqual(repo.verify().corrupt, []);
+    assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
+  });
+}
+
+for (const path of ["vendor/lib/.git", "vendor/lib/CVS", "vendor/lib/node_modules", "vendor/lib/.pmvcs", ".agents/pm/runtime/leaf"]) for (const link of [false, true]) {
+  test(`erasure refuses forged owned protected ${path} ${link ? "link" : "file"} before publishing denial`, async () => {
+    const { repo, scratch } = await fixture(); const selected = Buffer.from("owned-protected-selected-marker-462819");
+    writeFileSync(join(repo.root, "secret"), selected); repo.stage(["secret"]);
+    const entry = repo.readIndex().find(entry => entry.path === "secret")!; repo.commit({ message: "selected", author }, new Date());
+    const leaf = join(repo.root, path); mkdirSync(join(leaf, ".."), { recursive: true });
+    const target = join(scratch, "owned-target"); writeFileSync(target, selected);
+    if (link) symlinkSync(target, leaf); else writeFileSync(leaf, selected);
+    repo.writeIndex(repo.readIndex().map(current => current.path === "secret" ? { ...current, path } : current)); rmSync(join(repo.root, "secret"));
+    const before = state(repo);
+    assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "incident", new Date()), { code: "unsafe_composition_path" });
+    assert.deepEqual(state(repo), before); assert.deepEqual(repo.objects.denials(), []); assert.deepEqual(repo.objects.read(entry.id).payload, selected);
+    if (link) { assert.equal(lstatSync(leaf).isSymbolicLink(), true); assert.equal(readlinkSync(leaf), target); }
+    else assert.deepEqual(readFileSync(leaf), selected);
+    assert.deepEqual(readFileSync(target), selected); assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
+  });
 }
 
 for (const dangling of [false, true]) {

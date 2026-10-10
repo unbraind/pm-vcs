@@ -562,9 +562,9 @@ on every commit.
 | PM item ↔ native file/change attribution | pm SDK | **shipped** |
 | remotes, clone, fetch, push | git transport | **shipped** |
 | self-hosted source, CI-gated | — | **shipped** |
-| patch series as an object | kernel lore / `git format-patch` | **Phase 5** |
+| patch series as an object | kernel lore / `git format-patch` | **shipped** |
 | review + issues as native records | Forgejo, but in-repository | **Phase 5** |
-| served repository | Forgejo / `git daemon` | **Phase 5** |
+| served repository | Forgejo / `git daemon` | **shipped** |
 | packed storage, reachability index | git packfiles | **Phase 6** |
 | shallow / partial history | git `--depth` / partial clone | **Phase 6** |
 | garbage collection bounded by the oplog | `git gc`, but oplog-aware | **Phase 6** |

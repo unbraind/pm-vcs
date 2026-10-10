@@ -219,9 +219,11 @@ coordinate inside the caller's repository is rebased into each registered instan
 an external tracker retains its absolute boundary. Only the corresponding tracker
 runtime paths are excluded, so same-named ordinary project directories remain
 inspected. Tracker runtime fences cannot be erased through a forged owned
-path. Ordinary project ignore rules cannot hide owned files from erasure. Standard tool directories
-excluded from repository tracking, external backups, independently owned clones,
+path. Ordinary project ignore rules cannot hide owned files from erasure. Unowned
+standard tool artifacts, including nested tool-name files and leaf links, external
+backups, independently owned clones,
 filesystem snapshots, media recovery and novel custom encryption are outside it.
+An owned protected tool path still refuses before denial publication.
 Direct hostile filesystem mutation and writers bypassing the store lease are outside
 the authorized application protocol. Operators must remove ambiguous retained copies
 explicitly before retrying; the engine never silently deletes an unrelated FileId.

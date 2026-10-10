@@ -7,6 +7,7 @@ import { decodeManifest, decodeTree } from "./model.ts";
 import { frameObject, hashObject, ObjectStoreError, type ObjectId, type ObjectStore, type StoredObject } from "./objects.ts";
 import { inspectClosure } from "./closure.ts";
 import { inspectRepresentations } from "./representations.ts";
+import { ALWAYS_IGNORED } from "./ignore.ts";
 import { listWorkingTree, type IndexEntry } from "./worktree.ts";
 import { WorktreeMutation } from "./worktree-mutation.ts";
 import type { Repository } from "./repo.ts";
@@ -151,6 +152,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         // Inspect observed leaves first, then any absent or excluded owned paths.
         const observed = new Set(listWorkingTree(instance.root, ".pmvcs", { patterns: [], negations: [], runtime: rules.runtime }, true));
         for (const path of new Set([...observed, ...owned])) {
+          // Unowned tool artifacts, including submodule gitfiles, are outside the physical-erasure boundary.
+          if (!owned.has(path) && path.split("/").some(/** Exclude tool-owned leaves without inspecting their bytes or link targets. */ (part) => (ALWAYS_IGNORED as readonly string[]).includes(part))) continue;
           assertCompositionPath(path, rules);
           const leaf = mutation.inspectForErasure(path);
           if (leaf === undefined) {

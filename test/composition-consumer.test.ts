@@ -12,7 +12,7 @@ import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 /** Identical consumer program exercises the built CLI harness and engine through package-owned imports. */
 const consumer = `
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -93,7 +93,16 @@ writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout); writeFi
 const denied = await harness.runCommand({ command: "vcs obliterate", args: ["secret.bin"], pmRoot: root, options: { eraseTokenFile: token, reason: "incident", recoverLock: true } });
 assert.match(String(denied.errorMessage), /authority|credential|Unauthorized/i); assert.equal(readFileSync(join(repo.controlDirectory, "objects.lock"), "utf8"), dead.stdout);
 writeFileSync(token, "consumer-erase");
+const toolRoot = join(root, "vendor/lib"); mkdirSync(toolRoot, { recursive: true });
+const gitfile = Buffer.from("gitdir: ../../.git/modules/lib\\n"); writeFileSync(join(toolRoot, ".git"), gitfile);
+const toolBytes = Buffer.from("consumer unique permanent bytes 638529");
+for (const name of ["CVS", "node_modules"]) writeFileSync(join(toolRoot, name), toolBytes);
+const toolTarget = join(process.cwd(), process.argv[2] + ".tool-target"); writeFileSync(toolTarget, toolBytes);
+symlinkSync(toolTarget, join(toolRoot, ".hg"));
 const erased = await harness.runCommand({ command: "vcs obliterate", args: ["secret.bin"], pmRoot: root, options: { eraseTokenFile: token, reason: "incident", recoverLock: true } }); assert.equal(erased.errorMessage, undefined);
+assert.deepEqual(readFileSync(join(toolRoot, ".git")), gitfile);
+for (const name of ["CVS", "node_modules"]) assert.deepEqual(readFileSync(join(toolRoot, name)), toolBytes);
+assert.equal(readlinkSync(join(toolRoot, ".hg")), toolTarget); assert.deepEqual(readFileSync(toolTarget), toolBytes);
 assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
 assert.equal(repo.readFileState(revision, "secret.bin").kind, "obliterated"); assert.deepEqual(repo.verify().corrupt, []);
 const clone = Repository.open((await cloneFrom(root, join(process.cwd(), process.argv[2] + "-clone"), new Date())).root);
