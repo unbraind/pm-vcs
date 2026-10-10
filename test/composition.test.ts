@@ -1555,7 +1555,8 @@ test("renewal closure discards leaf bytes with native memory and one physical ha
     assert.equal(events.filter(line => line.includes("read(") && line.includes(`<${path}>`)).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0), size);
   }
   const retained = result.after.arrayBuffers - result.before.arrayBuffers; const peakGrowth = result.peakAfter - result.peakBefore;
-  console.log(`renewal closure: ${payloadBytes} leaf payload bytes, ${compressed.size} reachable objects read once, ${retained} buffer growth, ${peakGrowth} native peak RSS growth`);
+  const compressedBytes = [...compressed.values()].reduce((sum, bytes) => sum + bytes, 0);
+  console.log(`renewal closure: ${payloadBytes} leaf payload bytes, ${compressed.size} reachable objects read once, ${compressedBytes} compressed bytes, ${retained} buffer growth, ${peakGrowth} native peak RSS growth`);
   assert.ok(retained < payloadBytes, `closure retained all ${payloadBytes} payload bytes (${retained} buffer growth)`);
   assert.ok(peakGrowth < payloadBytes, `closure native peak grew by repository payload size (${peakGrowth}/${payloadBytes})`);
   for (const [name, type, payload] of [["link", "link", Buffer.from("{}")], ["fragments", "manifest", Buffer.from("malformed\n")]] as const) {
@@ -1565,6 +1566,25 @@ test("renewal closure discards leaf bytes with native memory and one physical ha
     assert.equal(inspectClosure(repo.objects, [badCommit]).corrupt.length, 1);
   }
   assert.deepEqual(inspectClosure(repo.objects, [target]).corrupt, []);
+});
+
+test("renewal closure caches malformed shared leaves without repeating physical reads", /** Hash-valid malformed structures still fail for each owner while sharing one failed physical validation. */ async () => {
+  const { repo, parent } = await fixture();
+  const repoUrl = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
+  const closureUrl = pathToFileURL(join(process.cwd(), "engine/closure.ts")).href;
+  const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { inspectClosure } from ${JSON.stringify(closureUrl)}; const r=Repository.open(process.argv[1]); process.stdout.write(JSON.stringify(r.objects.withWriteLock(()=>inspectClosure(r.objects,[process.argv[2]]))));`;
+  for (const type of ["link", "manifest"] as const) {
+    const id = repo.objects.write(type, Buffer.from(type === "link" ? "{}" : "malformed\n"));
+    const tree = writeTree(repo.objects, ["a", "b"].map(name => ({ name, mode: "100644", id, fileId: name.repeat(32) })));
+    const target = writeCommit(repo.objects, { tree, parents: [], author: signature, committer: signature, message: "shared malformed structure" });
+    const trace = join(parent, `${type}.strace`);
+    const child = spawnSync("strace", ["-e", "trace=openat", "-P", objectPath(repo, id), "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root, target], { encoding: "utf8", timeout: 10_000 });
+    assert.equal(child.status, 0, child.stderr);
+    const report = JSON.parse(child.stdout) as ReturnType<typeof inspectClosure>;
+    assert.equal(report.corrupt.length, 2); assert.deepEqual(report.missing, []);
+    assert.ok(report.corrupt.every(error => error.endsWith(type === "link" ? "bad_link" : "malformed_object")));
+    assert.equal(readFileSync(trace, "utf8").split("\n").filter(line => line.includes("openat(")).length, 1, "shared malformed structure was physically read twice");
+  }
 });
 
 test("renewal uploads hash the entire batch before denial decoding or publication", /** Real malformed tree/manifest claims and a late corrupt upload cannot publish an earlier valid object. */ async () => {

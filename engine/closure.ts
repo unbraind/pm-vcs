@@ -41,7 +41,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
   if (audits) for (const denial of denials) pending.push({ id: denial.id, role: "tombstone" });
   const seen = new Set<string>();
   const verified = new Set<ObjectId>();
-  const held = new Map<ObjectId, VerifiedObject>();
+  const held = new Map<ObjectId, VerifiedObject | ObjectStoreError>();
   while (pending.length > 0) {
     const reference = pending.pop() as Reference;
     const { id, role, fileId, root } = reference;
@@ -56,6 +56,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
     }
     try {
       let object = held.get(id);
+      if (object instanceof ObjectStoreError) throw object;
       if (object === undefined) {
         const bytes = carried.get(id) ?? store.read(id);
         if (bytes.type === "commit") object = { type: bytes.type, structure: decodeCommit(bytes.payload) };
@@ -81,6 +82,9 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
       verified.add(id);
     } catch (error) {
       if (!(error instanceof ObjectStoreError)) throw error;
+      // Cache only physical/structural failures. A role mismatch must leave
+      // the verified kind available to other references with a valid role.
+      if (!held.has(id)) held.set(id, error);
       result[error.code === "object_not_found" || error.code === "missing_fragment" ? "missing" : "corrupt"].push(`${id}: ${error.code}`);
     }
   }

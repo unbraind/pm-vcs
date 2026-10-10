@@ -407,6 +407,10 @@ survive in the closure map. Link validation happens before retaining its kind;
 hash-valid malformed links and manifests still produce corruption. Held copies
 are read and hashed within the same publication lease, including duplicates of
 valid incoming objects; presence alone grants no trust.
+Physical/structural failures are also retained for this walk, so a hash-valid
+malformed link or manifest shared by two owners is read once and refuses both.
+A context-dependent role mismatch leaves the successful kind available for
+another reference; denial checks always precede reuse of cached results.
 
 A native cold process with real 128 MiB blob/record payloads, additional physical
 fragments and shared references measures buffer allocation and peak RSS while
@@ -436,5 +440,9 @@ through the unchanged denial and provenance rules.
 The earlier twenty-one source-only proofs and the root's test relay repair remain
 in place. Four additional isolated source-only reversions retain the tests and
 produce loaded-module assertion failures before restoring production source.
+An additional source-only failure (two physical opens versus one) protects shared
+malformed-leaf validation. The complete gate at intermediate `075a04a` passed
+1,219 tests and all four dimensions for every one of the 53 source files before
+this additional cache correction; its canonical reports were then invalidated.
 The `4f3144f` 1,214-test four-dimension coverage receipt remains dated evidence;
 only a new complete committed-head pass certifies the renewed candidate.
