@@ -774,7 +774,7 @@ function readBoundedBody(request: IncomingMessage, maxBytes: number): Promise<Bu
       chunks.push(chunk);
     });
     request.on("end", () => resolveBody(Buffer.concat(chunks)));
-    request.on("error", (error) => rejectBody(error));
+    request.on("error", rejectBody);
   });
 }
 

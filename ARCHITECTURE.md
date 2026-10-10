@@ -617,3 +617,12 @@ about the host rather than against the host.
 An unreachable branch is not suppressed. It is either made reachable — which is how the
 `ObjectStore.read` errno defect in §3 was found — or deleted along with a written-down
 invariant explaining why it cannot happen.
+
+The production inventory has no coverage-ignore directives. Raw V8 ranges remain a
+separate check from C8/Istanbul and LCOV: native TypeScript erasure can leave their
+function and branch maps different. Cleanup is exercised by a real regular-file
+instance destination: creation's `mkdir` error survives cleanup's `readdir` error,
+the file stays intact, and the shared-store lease is released. Rollback stops at
+its first cleanup fault, so a newly created branch can remain for recovery. A real
+socket EOF before the declared HTTP body length exercises request-body rejection;
+the outcome hook settles and a subsequent advertisement proves service survival.

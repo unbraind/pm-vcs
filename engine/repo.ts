@@ -1380,11 +1380,11 @@ export class Repository {
         registeredHere = true;
         instance.materialize(readCommit(this.objects, head).tree);
       } catch (error) {
-        // Undo only what this call did, and only while it is still ours to undo:
-        // the branch is deleted by compare-and-swap, so a concurrent move wins
-        // and is left alone. Cleanup is best-effort — the original failure is
-        // the truthful one to surface; a cleanup fault must not replace it, and
-        // what it leaves behind is ordinary unregistered state.
+        // Undo only what this call did. The shared-store lease excludes
+        // cooperative branch writers throughout creation and cleanup; the
+        // compare-and-swap also guards against a writer bypassing that lease.
+        // Cleanup is best-effort: its first fault stops rollback, and the
+        // original creation error must still reach the caller unchanged.
         try {
           // When this call created the root, the root goes. When the caller
           // supplied it, only its CONTENTS go — the pre-flight refused a
@@ -1401,20 +1401,11 @@ export class Repository {
           }
           if (registeredHere) unregisterInstance(this.sharedControlDirectory, name);
           if (createdBranch) this.refs.compareAndSwap(branchRef, head, null);
-        /* c8 ignore start -- unreachable in a single process, and deliberately kept.
-           Both cleanup steps can only fail against a CONCURRENT change: `rmSync`
-           with `force` is a no-op on an absent path and can otherwise only hit a
-           permission change racing us on a directory this call just created, and
-           `compareAndSwap` throws only if the branch moved after we installed it.
-           Neither is producible in-process — every in-process way to fail this
-           creation is refused by the pre-flight before the branch exists, which
-           `a pre-existing non-empty instance path is refused before anything is
-           created` pins. The guard stays because under real concurrency a
-           cleanup fault must not replace the original error. */
         } catch {
-          // The original error below names the real failure.
+          // A regular file passed as the destination makes mkdir fail during
+          // creation and readdir fail during cleanup, without any concurrency.
+          // Keep the original mkdir error, including its syscall and path.
         }
-        /* c8 ignore stop */
         throw error;
       }
       return { name, path: instanceRoot, branch, head, include };
