@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:34.077Z"
-updated_at: "2026-10-10T18:13:36.951Z"
+updated_at: "2026-10-10T18:55:58.810Z"
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
 parent: pm-vcs-b7cb
 risk: high
-comments[105]{created_at,author,text}:
+comments[110]{created_at,author,text}:
   "2026-09-12T23:35:59.709Z",pi-agent,"Audit 2026-09-13: EXISTS — committed repository links are implemented as sparse linked instances (engine/instances.ts: instance link, shared object store, sparse views; test/instances.test.ts: 'a linked instance materializes its view, shares objects and keeps private state', 'concurrent instances share objects but never overwrite each other's state'). REMAINS — local layers that overlay an instance without changing commit identity are not implemented (grep for local-layer/overlay returns no matches). Typed obliteration is not implemented (grep for obliterate/Obliteration in engine/ returns no matches). Checkout and verify distinguishing obliterated content from missing and corrupt objects is not implemented. Two of four acceptance criteria are not met."
   "2026-10-07T20:55:16.467Z",codex-sol,"Baseline against the built package and a real disposable SDK tracker: a synthetic binary was staged and committed successfully; vcs link, vcs layer and vcs obliterate are absent, and the repository exposes no layer or obliteration API. Acceptance will pin a typed external repository revision and subset across a clone without transferring its payload or credentials; overlay tracked and new paths while preserving commit identity and excluding layers visibly from status and add; authorize FileId-scoped erasure across moves and revisions, byte-scan stored and decoded representations, distinguish obliterated/missing/corrupt state, and reject resurrection through stale fetch/import. The previous audit conflated local shared instances with committed external links. Full item, parent, linked research record and LORE.md were read; the removed historical research-doc link is superseded by LORE.md."
   "2026-10-07T20:56:24.216Z",codex-sol,"Design recorded first in docs/links-layers-obliteration.md: canonical typed committed links with explicit target authorization; private layer snapshots masked from staging/status and preserved across materialization; authorized FileId erasure with durable typed denial, full-store historical inventory, deduplication refusal, byte removal and non-resurrection at every object arrival boundary. Remote tombstones cannot silently authorize deletion of locally held content. Verification and checkout preserve the distinction between intentional erasure, missing data and corruption."
@@ -118,7 +118,12 @@ comments[105]{created_at,author,text}:
   "2026-10-10T17:51:07.856Z",codex-sol-stream-1010,"Candidate linked runs pass23 new real cases,20 null-layer/owner cases,6 prior denial-noop cases,10 JSON-header cases,39 erasure/fragment cases and372 unchanged integration cases including226 original races, with zero failures/skips/cancellations. Expanded five built/npm-packed Node/native Bun/pinned project CLI scenarios pass, including unavailable/wrong-version prerequisites. Strict type/test builds, lint, zero duplication, all53 source inventories and295 selected documented declarations pass; this is selected declaration scope, not whole internal docs. Complete dependency audit is zero. SDK10.10/Ops10.6/changelog10.5 and declared independent8.1floor are unchanged; floor runtime and independent global CLI acceptance remain unrenewed. All121 original history prefixes and2698 predecessor artifact files remain intact; op2c is byte-exact. Native writer linked run and final immutable full release/raw/LCOV/consumer evidence remain required. Linux non-root permission cases execute; Windows/root permissions, whole privacy/production/scale and public CI/review approval are unverified."
   "2026-10-10T17:51:43.067Z",codex-sol-stream-1010,"Final freeze preparation: actual linked native fixed/CDC/rewrite writer suite passes132/132 under expose-gc and serial execution at its240-second bound. All prior linked suites and new23 cases pass; eight valid predecessor semantic assertion failures are restored exactly. Release only this own claim unclosed, regenerate CHANGELOG.md through unchanged pm-changelog, commit explicit source/tests/docs and paired TOON/history, then regenerate selfhost.bundle from committed source and commit the final metadata snapshot. Freeze every tracked Gitblob plus SHA256 and all53 authored sources before the unchanged op2c-linked npm run release:check at timeout3600. Require at least1348 zero-failure/cancel/skip/todo tests, all53 per-file C8/LCOV four100/every positive counter and genuinely fresh native ranges with verified installed-Node stripping/sourceURL offsets and no ignores, plus native TOON/strace/selfhost/type/lint/dup/docs/audits/identity/pack/changelog/date/attestation and fresh five consumers. Invalidate canonical LCOV on any incomplete/failing gate; preserve every prior artifact. No tracked writes after freeze or failing-head push. Final immutable evidence remains external; this feature remains in_progress and unclosed."
   "2026-10-10T18:13:36.951Z",codex,"Orchestrator independent completed-release verification: executed frozen876df661/sourceae4d8e77e35fb61f0a75c1af6726eed8289f584e unchanged op2c release passes1348/1348, zero fail/cancelSkipTodo, actual runner787.977s/original3600s (wall789.002s). All53authored executable sources C8S/B/F/L100 and positive20872statement-line/664function/5460branch counters; fresh native335records1161functions5460rangeszero unhit. Root independently matches all398 committed frozen blobs and every raw freshness/hash/range/count, repeats98/98 actual regressions and verifies real predecessor controls1bundle/1erasure/6sync failures with exact restoration and all121 prefixes. Five post-gate built/packedNode/nativeBun/pinnedprojectCLI consumers pass; all372integration/226races/native132 andtype/lint/dup/audits0/changelog/selfhost/date/attestation pass. Strict210/44beforethis own verifier comment, claimreleased anditemsunclosed. Docs295selected/53files only, floor8.1runtime/globalCLI/Windows-root permissions/historyprivacy/scale/requiredreviewer quorum remainopen.32MiBfixture retains1.2-1.6MiBbuffers with62MiBRSSgrowth, noconstant-memoryclaim; metadata/selectedpayload/coldhistory/binaryambiguity andunsupported conflicting-onlylegacy denial exchange remainlimits. This pairedPM/document/bundle follow-up records completed proof without reassigning old exact-tree tests to metadata changes; runtime/gate/test/pin bytes stayidentical, selfhost/consumer verification renewed. No hosteddata/telemetry/core/merge/release changes."
-files[38]:
+  "2026-10-10T18:43:28.987Z",codex-sol-8xis-lease-batch-20261010,"Verified PR97 ordinary findings 4238761445, 4238761452, 4238761464 and 4238761441 against the clean current contracts and complete owner and related PM records. Plan real filesystem regressions for all seven public writer APIs, physical lease reuse and batch integrity, receipts and native partial failure before changing source. Keep batch hash ordering, full closure and ref CAS, denial and pending cleanup semantics unchanged. Remove only the newly added dated streaming receipt section from the shipped design; its original immutable proof remains in earlier paired owner events. Preserve all 121 starting histories, original criteria, estimates, deadlines and op2c bytes. The previously supplied external prefix baseline is unavailable in this environment; preserve a fresh clean-head baseline and report that verification limit. Existing full release command remains at timeout 3600, with fresh all-source native coverage and consumers after claim release, source commit and bundle regeneration. No delegation, closure or public review feedback."
+  "2026-10-10T18:47:25.588Z",codex-sol-8xis-lease-batch-20261010,"Corrected red-first suite on unchanged production source runs 29 real cases: six complete writer APIs reacquire multiple physical leases and six allow a preloaded actual erasure process to finish between writes; one upload efficiency assertion finds zero batch accept calls, and native rename failure exposes optimistic failed-batch IDs in a later receipt. The standalone manifest already uses one native lease through ObjectStore.write and its real interprocess exclusion passes. Same-store nested callers reuse their existing physical lease. Actual short reads, file-descriptor cleanup, held corrupt duplicate closure refusal, hash/denial/pending refusals and stale CAS are retained. Initial observer this annotations and an invalid repository method caused test-authoring failures, preserved separately and excluded from semantic proof. accept and writeRaw have the same denial and native publication paths as write; presence remains deduplication only, with complete held-copy integrity established by publication closure. Source fix will wrap the six fragment APIs and use one genuine accept call; receipt accumulation follows success only."
+  "2026-10-10T18:47:54.243Z",codex-sol-8xis-lease-batch-20261010,"Removed only the newly appended Completed streaming and legacy-fetch source verification section from docs/links-layers-obliteration.md. Full original 1348-test proof, executed source ae4d8e77 and frozen 876df661, counter totals and limits remain immutable in prior paired owner comments, including the root verification event. The removed section is preserved as a standalone external artifact for review; no failed receipt was deleted or relabeled. Generic streaming, memory, metadata, legacy-peer and documentation-scope contracts remain in the shipped design. Guarded both permanent-denial fixture chmod operations using the existing physical-mode support condition; every denial-before-I/O assertion still runs with zero test skips."
+  "2026-10-10T18:55:57.234Z",codex-sol-8xis-lease-batch-20261010,"Final candidate source verification: all 29 linked lease and upload regressions pass, including seven public APIs, physical one-lease observations, same-store reentrancy, seven real preloaded interprocess erasures, unrelated lock preservation, descriptor cleanup and native partial publication failure with exact errno propagation. Two independent predecessor source controls execute 29 cases each and produce 12 and 2 genuine assertion failures with modules loaded; final fixed bytes restore exactly. Integration passes 372/372 including all 226 existing races; native fixed/CDC/rewrite passes 132/132 under unchanged GC and serial options, JSON header 10/10 and owner attribution 20/20 pass without skips. Five built and npm-packed Node/native Bun/pinned project CLI scenarios also pass; actual missing and mismatched CLI prerequisites remain refusals before fixtures. Only engine/fragments.ts and engine/transport.ts production files change; op2c, all gates, config, SDK10.10/Ops10.6/changelog10.5 and independent8.1 floor remain byte-exact. Selected docstrings remain 295 declarations across 53 files, not whole internal docs. Preserve initial test-authoring failures and all real red receipts externally. Static diagnostic overlap with predecessor controls is not frozen-source proof; the unchanged full release static gates will establish it. No renewed minimum/global runtime, root/Windows physical permissions, history privacy, scale or required reviewer claim."
+  "2026-10-10T18:55:58.026Z",codex-sol-8xis-lease-batch-20261010,"Freeze protocol: release only this own claim unclosed, regenerate changelog with the unchanged package command, commit explicit code, tests, docs and this paired TOON/history, then regenerate selfhost.bundle from that committed source and commit its snapshot. Freeze every tracked Git blob and filesystem SHA plus all 53 authored executable sources. Run the genuine unchanged op2c-linked npm run release:check at its original 3600-second limit with all fresh per-file C8 and LCOV metrics/counters and native V8 ranges and sourceURL mappings, no exclusions or threshold changes, followed by fresh five consumers and committed self-host equality. Failed or incomplete gates remain failures and invalidate canonical LCOV; no failed head is pushed. Exact executed/source/final heads, raw manifests and final receipts belong in the external immutable handoff. Preserve all 121 clean starting history prefixes; the older supplied external prefix file was unavailable and is not claimed verified. Root owns closure, CI, review feedback and any publication."
+files[40]:
   - path: ARCHITECTURE.md
     scope: project
   - path: CHANGELOG.md
@@ -177,7 +182,7 @@ files[38]:
     scope: project
   - path: test/composition-consumer.test.ts
     scope: project
-    note: built and packed Node Bun acceptance
+    note: Five artifact and runtime scenarios observe complete writer leases and native failed-batch receipts
   - path: test/composition.test.ts
     scope: project
     note: real SDK behavioral and byte-erasure regressions
@@ -187,6 +192,9 @@ files[38]:
     scope: project
   - path: test/erasure-fragment-repairs.test.ts
     scope: project
+  - path: test/helpers/writer-erasure-worker.ts
+    scope: project
+    note: Real preloaded interprocess erasure with native lock contention
   - path: test/ignore.test.ts
     scope: project
   - path: test/json-header-repair.test.ts
@@ -205,9 +213,12 @@ files[38]:
     note: Real arrival inspections streaming physical storage and scoped legacy fetch regressions
   - path: test/worktree-races.test.ts
     scope: project
+  - path: test/writer-lease-batch-publication.test.ts
+    scope: project
+    note: Real complete-call writer leases and batch receipt regressions
   - path: vcs-commands.ts
     scope: project
-tests[22]:
+tests[23]:
   - command: node --test test/composition.test.ts
     scope: project
     timeout_seconds: 240
@@ -405,12 +416,22 @@ tests[22]:
       created_at: "2026-10-10T17:49:04.702Z"
       source_kind: local_mutation
       source_ref: feat/links-layers-obliteration
+  - command: node --expose-gc --test --test-concurrency=1 test/writer-lease-batch-publication.test.ts
+    scope: project
+    timeout_seconds: 120
+    pm_context_mode: schema
+    workspace_context_mode: source
+    provenance:
+      author: codex-sol-8xis-lease-batch-20261010
+      created_at: "2026-10-10T18:47:24.887Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
 docs[4]:
   - path: ARCHITECTURE.md
     scope: project
   - path: docs/links-layers-obliteration.md
     scope: project
-    note: Streaming contract retention bounds and legacy metadata limitation
+    note: Stable contracts retained; newly appended dated receipt relocated to paired owner evidence
   - path: LORE.md
     scope: project
   - path: README.md

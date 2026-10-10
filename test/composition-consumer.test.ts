@@ -28,6 +28,7 @@ import { buildTree, flattenTree } from "pm-vcs/dist/engine/worktree.js";
 import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom, fetchFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
+import { hashObject } from "pm-vcs/dist/engine/objects.js";
 import { exportBundle, importBundleObjects, serializeBundle } from "pm-vcs/dist/engine/bundle.js";
 const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
 assert.equal(installedSdk.version, "2026.10.10");
@@ -47,6 +48,20 @@ repo.stage([]); const publicationBase = repo.commit({ message: "tracker", author
 writeFileSync(join(root, "publication.bin"), Buffer.from([0, 255, 17])); repo.stage(["publication.bin"]);
 const publicationTip = repo.commit({ message: "publication", author }, new Date());
 const publicationWire = new FileTransport(root, root);
+const deliveredBytes = Buffer.from("consumer batch receipt 93284651");
+const delivered = { type: "blob", payload: deliveredBytes, id: hashObject("blob", deliveredBytes) };
+await publicationWire.uploadObjects([delivered, delivered]);
+await publicationWire.uploadObjects([delivered]);
+assert.deepEqual((await publicationWire.publish([], false, new Date())).added, [delivered.id]);
+const partial = ["consumer native first 48519372", "consumer native second 76392814"].map(text => {
+  const payload = Buffer.from(text); return { type: "blob", payload, id: hashObject("blob", payload) };
+});
+const blockedUpload = join(repo.controlDirectory, "objects", partial[1].id.slice(0, 2), partial[1].id.slice(2)); mkdirSync(blockedUpload, { recursive: true });
+await assert.rejects(publicationWire.uploadObjects(partial));
+assert.equal(repo.objects.has(partial[0].id), true); assert.equal(repo.objects.has(partial[1].id), false);
+assert.deepEqual((await publicationWire.publish([], false, new Date())).added, []);
+rmSync(blockedUpload, { recursive: true }); await publicationWire.uploadObjects(partial);
+assert.deepEqual((await publicationWire.publish([], false, new Date())).added, [partial[1].id]);
 const emptyPublication = serializeBundle(repo.objects, { refs: {}, prerequisites: [], objects: [] });
 for (const mode of ["push", "publish"]) {
   const updates = [{ ref: "refs/heads/" + mode + "-one", expected: null, next: publicationTip }, { ref: "refs/tags/" + mode + "-two", expected: null, next: publicationBase }];
@@ -148,11 +163,21 @@ const legacyInputs = ["blob", "record"].map(type => {
 repaired.obliterate("selected", "repair-erase", "incident", new Date());
 const fragmentBytes = Buffer.from("independent consumer survivor 98364271\\n".repeat(8)); const fragmentSource = join(process.cwd(), process.argv[2] + ".fragment-source"); writeFileSync(fragmentSource, fragmentBytes);
 const fragmentParams = { minChunkSize: 64, maxChunkSize: 64, mask: 1 };
-const fragmentResults = [writeFragmented(repaired.objects, fragmentBytes, 64, owner.fileId), writeFragmentedFile(repaired.objects, fragmentSource, 64, owner.fileId), writeCdcFragmented(repaired.objects, fragmentBytes, fragmentParams, owner.fileId), writeCdcFragmentedFile(repaired.objects, fragmentSource, fragmentParams, owner.fileId)];
+// Observe the actual physical lease around original store writes in every artifact/runtime.
+function completeWriter(action) {
+  const original = repaired.objects.write; const leases = [];
+  repaired.objects.write = function (...args) {
+    const held = lstatSync(join(repaired.controlDirectory, "objects.lock"), { bigint: true }); leases.push(held.ino);
+    return original.apply(this, args);
+  };
+  try { const value = action(); assert.ok(leases.length > 0); assert.equal(new Set(leases).size, 1); return value; }
+  finally { repaired.objects.write = original; }
+}
+const fragmentResults = [completeWriter(() => writeFragmented(repaired.objects, fragmentBytes, 64, owner.fileId)), completeWriter(() => writeFragmentedFile(repaired.objects, fragmentSource, 64, owner.fileId)), completeWriter(() => writeCdcFragmented(repaired.objects, fragmentBytes, fragmentParams, owner.fileId)), completeWriter(() => writeCdcFragmentedFile(repaired.objects, fragmentSource, fragmentParams, owner.fileId))];
 for (const cdc of [false, true]) {
   const fd = openSync(fragmentSource, "r");
   try {
-    const fragments = cdc ? writeCdcFragmentsFromFd(repaired.objects, fd, fragmentBytes.length, fragmentParams, fragmentSource, owner.fileId) : writeFragmentsFromFd(repaired.objects, fd, fragmentBytes.length, 64, fragmentSource, owner.fileId);
+    const fragments = completeWriter(() => cdc ? writeCdcFragmentsFromFd(repaired.objects, fd, fragmentBytes.length, fragmentParams, fragmentSource, owner.fileId) : writeFragmentsFromFd(repaired.objects, fd, fragmentBytes.length, 64, fragmentSource, owner.fileId));
     const manifest = { totalLength: fragmentBytes.length, fragments, ...(cdc ? { mode: "cdc" } : {}) }; fragmentResults.push({ manifestId: writeManifest(repaired.objects, manifest, owner.fileId), manifest });
   } finally { closeSync(fd); }
 }
@@ -291,14 +316,17 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     const environment = { ...withoutPmContext(process.env), ...discardChildCoverage() };
     const unavailable = spawnSync(process.execPath, ["packed.mjs", "node-project-cli", archive, join(project, "missing-cli.js")], { cwd: project, env: environment, encoding: "utf8", timeout: 120_000 });
     assert.equal(unavailable.status, 1); assert.match(unavailable.stderr, /Project-installed PM CLI unavailable before fixture setup/);
+    console.log("consumer prerequisite: unavailable CLI, actual exit 1 before fixture setup");
     assert.equal(existsSync(join(project, "node-project-cli")), false);
     writeFileSync(join(project, "wrong-version.mjs"), consumer.replace("version.stdout.trim(), installedSdk.version", 'version.stdout.trim(), "2026.8.1"'));
     const wrongVersion = spawnSync(process.execPath, ["wrong-version.mjs", "node-project-cli", archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 120_000 });
     assert.equal(wrongVersion.status, 1); assert.match(wrongVersion.stderr, /Project-installed PM CLI version mismatch before fixture setup/);
+    console.log("consumer prerequisite: mismatched CLI version, actual exit 1 before fixture setup");
     assert.equal(existsSync(join(project, "node-project-cli")), false);
     for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-project-cli"]]) {
       const result = spawnSync(runtime, [script, scenario, archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 120_000 });
       assert.equal(result.status, 0, `${scenario}: ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: "2026.10.10", linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true });
+      console.log(`consumer scenario ${scenario}: ${result.stdout}`);
     }
   } finally { temporary.cleanup(); }
 });

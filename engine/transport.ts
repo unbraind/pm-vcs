@@ -439,13 +439,14 @@ export class FileTransport implements Transport {
       }
     }
     repository.objects.withWriteLock(/** Denial preflight and publication share one lease after every claimed address is verified. */ () => {
-      repository.objects.preflight(objects, false);
-      for (const object of objects) {
-        // Counted before the write, which no-ops on an existing object: the
-        // receipt names what this transfer delivered, not what the store holds.
-        if (!repository.objects.has(object.id)) this.acceptedThisConnection.push(object.id);
-        repository.objects.write(object.type, object.payload);
-      }
+      // Presence is only a receipt/deduplication hint. Publication still verifies
+      // complete held closure before refs move, including corrupt held duplicates.
+      const delivered = [...new Set(objects.map(object => object.id))]
+        .filter(id => !repository.objects.has(id));
+      repository.objects.accept(objects, false);
+      // Native I/O can leave partial immutable objects behind. A failed batch
+      // contributes no accepted IDs; retry counts only its remaining new arrivals.
+      for (const id of delivered) this.acceptedThisConnection.push(id);
     });
   }
 

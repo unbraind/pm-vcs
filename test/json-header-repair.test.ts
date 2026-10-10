@@ -195,10 +195,11 @@ test("JSON header repair cannot bypass permanent denial through matching recreat
   repo.commit({ message: "selected", author }, new Date(1000));
   const selected = repo.readIndex()[0];
   repo.obliterate("selected.bin", "erase-fixture", "incident", new Date(2000));
-  const path = objectPath(repo, selected.id); writeFileSync(path, deflateSync(frameObject("blob", payload))); chmodSync(path, 0);
+  const path = objectPath(repo, selected.id); writeFileSync(path, deflateSync(frameObject("blob", payload)));
+  if (modeDenialSupported) chmodSync(path, 0);
   try {
     assert.equal(repo.objects.readIfType(selected.id, "blob"), undefined, "denial must precede physical prefix I/O");
     assert.throws(() => repo.objects.read(selected.id), error => error instanceof ObjectStoreError && error.code === "object_obliterated");
     assert.throws(() => repo.objects.write("blob", payload, selected.fileId), error => error instanceof ObjectStoreError && error.code === "object_obliterated");
-  } finally { chmodSync(path, 0o600); }
+  } finally { if (modeDenialSupported) chmodSync(path, 0o600); }
 });

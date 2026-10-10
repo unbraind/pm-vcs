@@ -91,33 +91,35 @@ export function writeFragmentsFromFd(
       `Total length ${totalLength} is not a non-negative integer.`,
     );
   }
-  const fragments: FragmentEntry[] = [];
-  const buffer = Buffer.allocUnsafe(fragmentSize);
-  let remaining = totalLength;
-  while (remaining > 0) {
-    const toRead = Math.min(fragmentSize, remaining);
-    // readSync may return fewer bytes than asked for without the file being
-    // truncated, so fill the fragment across as many reads as it takes. Only a
-    // read that returns 0 means there are no more bytes, and that is the one
-    // case where the file really is shorter than its recorded length. Treating
-    // any partial return as short_read reports corruption on a healthy file.
-    let filled = 0;
-    while (filled < toRead) {
-      const bytesRead = readSync(fd, buffer, filled, toRead - filled, null);
-      if (bytesRead === 0) {
-        throw new ObjectStoreError(
-          "short_read",
-          `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
-        );
+  return store.withWriteLock(/** Hold one lease across every descriptor read and fragment publication. */ () => {
+    const fragments: FragmentEntry[] = [];
+    const buffer = Buffer.allocUnsafe(fragmentSize);
+    let remaining = totalLength;
+    while (remaining > 0) {
+      const toRead = Math.min(fragmentSize, remaining);
+      // readSync may return fewer bytes than asked for without the file being
+      // truncated, so fill the fragment across as many reads as it takes. Only a
+      // read that returns 0 means there are no more bytes, and that is the one
+      // case where the file really is shorter than its recorded length. Treating
+      // any partial return as short_read reports corruption on a healthy file.
+      let filled = 0;
+      while (filled < toRead) {
+        const bytesRead = readSync(fd, buffer, filled, toRead - filled, null);
+        if (bytesRead === 0) {
+          throw new ObjectStoreError(
+            "short_read",
+            `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
+          );
+        }
+        filled += bytesRead;
       }
-      filled += bytesRead;
+      const chunk = buffer.subarray(0, toRead);
+      const id = store.write("blob", chunk, fileId);
+      fragments.push({ id, length: toRead });
+      remaining -= toRead;
     }
-    const chunk = buffer.subarray(0, toRead);
-    const id = store.write("blob", chunk, fileId);
-    fragments.push({ id, length: toRead });
-    remaining -= toRead;
-  }
-  return fragments;
+    return fragments;
+  });
 }
 
 /**
@@ -142,17 +144,19 @@ export function writeFragmented(
   fileId?: FileId,
 ): FragmentWriteResult {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
-  const totalLength = content.length;
-  const fragments: FragmentEntry[] = [];
-  for (let offset = 0; offset < totalLength; offset += fragmentSize) {
-    const end = Math.min(offset + fragmentSize, totalLength);
-    const chunk = content.subarray(offset, end);
-    const id = store.write("blob", chunk, fileId);
-    fragments.push({ id, length: end - offset });
-  }
-  const manifest: FragmentManifest = { totalLength, fragments };
-  const id = writeManifest(store, manifest, fileId);
-  return { manifestId: id, manifest };
+  return store.withWriteLock(/** Publish all fixed fragments and their manifest under one reentrant lease. */ () => {
+    const totalLength = content.length;
+    const fragments: FragmentEntry[] = [];
+    for (let offset = 0; offset < totalLength; offset += fragmentSize) {
+      const end = Math.min(offset + fragmentSize, totalLength);
+      const chunk = content.subarray(offset, end);
+      const id = store.write("blob", chunk, fileId);
+      fragments.push({ id, length: end - offset });
+    }
+    const manifest: FragmentManifest = { totalLength, fragments };
+    const id = writeManifest(store, manifest, fileId);
+    return { manifestId: id, manifest };
+  });
 }
 
 /**
@@ -181,21 +185,23 @@ export function writeFragmentedFile(
   fileId?: FileId,
 ): FragmentWriteResult {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
-  const fd = openSync(sourcePath, "r");
-  try {
-    // fstat the DESCRIPTOR, not the path. Measuring with statSync and then
-    // opening leaves a window in which the path can be replaced, so the length
-    // recorded in the manifest would describe a different file from the one
-    // whose bytes are stored — a manifest that is internally consistent and
-    // wrong. The descriptor names one file for its whole lifetime.
-    const totalLength = fstatSync(fd).size;
-    const fragments = writeFragmentsFromFd(store, fd, totalLength, fragmentSize, sourcePath, fileId);
-    const manifest: FragmentManifest = { totalLength, fragments };
-    const id = writeManifest(store, manifest, fileId);
-    return { manifestId: id, manifest };
-  } finally {
-    closeSync(fd);
-  }
+  return store.withWriteLock(/** Keep source descriptor ownership, every fragment and the manifest in one lease. */ () => {
+    const fd = openSync(sourcePath, "r");
+    try {
+      // fstat the DESCRIPTOR, not the path. Measuring with statSync and then
+      // opening leaves a window in which the path can be replaced, so the length
+      // recorded in the manifest would describe a different file from the one
+      // whose bytes are stored — a manifest that is internally consistent and
+      // wrong. The descriptor names one file for its whole lifetime.
+      const totalLength = fstatSync(fd).size;
+      const fragments = writeFragmentsFromFd(store, fd, totalLength, fragmentSize, sourcePath, fileId);
+      const manifest: FragmentManifest = { totalLength, fragments };
+      const id = writeManifest(store, manifest, fileId);
+      return { manifestId: id, manifest };
+    } finally {
+      closeSync(fd);
+    }
+  });
 }
 
 /**
@@ -584,50 +590,52 @@ export function writeCdcFragmentsFromFd(
       `Total length ${totalLength} is not a non-negative integer.`,
     );
   }
-  const { minChunkSize, maxChunkSize, mask } = params;
-  const readSize = Math.min(8192, maxChunkSize);
-  const readBuf = Buffer.allocUnsafe(readSize);
-  const chunkBuf = Buffer.allocUnsafe(maxChunkSize);
-  const fragments: FragmentEntry[] = [];
-  let chunkLen = 0;
-  let hash = 0;
-  let remaining = totalLength;
+  return store.withWriteLock(/** Hold one lease across the rolling read and every content-defined fragment. */ () => {
+    const { minChunkSize, maxChunkSize, mask } = params;
+    const readSize = Math.min(8192, maxChunkSize);
+    const readBuf = Buffer.allocUnsafe(readSize);
+    const chunkBuf = Buffer.allocUnsafe(maxChunkSize);
+    const fragments: FragmentEntry[] = [];
+    let chunkLen = 0;
+    let hash = 0;
+    let remaining = totalLength;
 
-  while (remaining > 0) {
-    const toRead = Math.min(readSize, remaining);
-    let filled = 0;
-    while (filled < toRead) {
-      const bytesRead = readSync(fd, readBuf, filled, toRead - filled, null);
-      if (bytesRead === 0) {
-        throw new ObjectStoreError(
-          "short_read",
-          `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
-        );
+    while (remaining > 0) {
+      const toRead = Math.min(readSize, remaining);
+      let filled = 0;
+      while (filled < toRead) {
+        const bytesRead = readSync(fd, readBuf, filled, toRead - filled, null);
+        if (bytesRead === 0) {
+          throw new ObjectStoreError(
+            "short_read",
+            `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
+          );
+        }
+        filled += bytesRead;
       }
-      filled += bytesRead;
+
+      for (let i = 0; i < filled; i++) {
+        chunkBuf[chunkLen] = readBuf[i]!;
+        chunkLen++;
+        hash = ((hash << 1) + GEAR_TABLE[readBuf[i]!]!) | 0;
+        if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
+          const chunk = chunkBuf.subarray(0, chunkLen);
+          const id = store.write("blob", chunk, fileId);
+          fragments.push({ id, length: chunkLen });
+          chunkLen = 0;
+          hash = 0;
+        }
+      }
+      remaining -= filled;
     }
 
-    for (let i = 0; i < filled; i++) {
-      chunkBuf[chunkLen] = readBuf[i]!;
-      chunkLen++;
-      hash = ((hash << 1) + GEAR_TABLE[readBuf[i]!]!) | 0;
-      if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
-        const chunk = chunkBuf.subarray(0, chunkLen);
-        const id = store.write("blob", chunk, fileId);
-        fragments.push({ id, length: chunkLen });
-        chunkLen = 0;
-        hash = 0;
-      }
+    if (chunkLen > 0) {
+      const chunk = chunkBuf.subarray(0, chunkLen);
+      const id = store.write("blob", chunk, fileId);
+      fragments.push({ id, length: chunkLen });
     }
-    remaining -= filled;
-  }
-
-  if (chunkLen > 0) {
-    const chunk = chunkBuf.subarray(0, chunkLen);
-    const id = store.write("blob", chunk, fileId);
-    fragments.push({ id, length: chunkLen });
-  }
-  return fragments;
+    return fragments;
+  });
 }
 
 /**
@@ -652,10 +660,12 @@ export function writeCdcFragmented(
   fileId?: FileId,
 ): FragmentWriteResult {
   assertCdcParams(params, "invalid_cdc_params");
-  const fragments = cdcBoundaries(content, params, (chunk) => store.write("blob", chunk, fileId));
-  const manifest: FragmentManifest = { totalLength: content.length, fragments, mode: "cdc" };
-  const id = writeManifest(store, manifest, fileId);
-  return { manifestId: id, manifest };
+  return store.withWriteLock(/** Publish all content-defined fragments and their manifest in one lease. */ () => {
+    const fragments = cdcBoundaries(content, params, (chunk) => store.write("blob", chunk, fileId));
+    const manifest: FragmentManifest = { totalLength: content.length, fragments, mode: "cdc" };
+    const id = writeManifest(store, manifest, fileId);
+    return { manifestId: id, manifest };
+  });
 }
 
 /**
@@ -682,16 +692,18 @@ export function writeCdcFragmentedFile(
   fileId?: FileId,
 ): FragmentWriteResult {
   assertCdcParams(params, "invalid_cdc_params");
-  const fd = openSync(sourcePath, "r");
-  try {
-    const totalLength = fstatSync(fd).size;
-    const fragments = writeCdcFragmentsFromFd(store, fd, totalLength, params, sourcePath, fileId);
-    const manifest: FragmentManifest = { totalLength, fragments, mode: "cdc" };
-    const id = writeManifest(store, manifest, fileId);
-    return { manifestId: id, manifest };
-  } finally {
-    closeSync(fd);
-  }
+  return store.withWriteLock(/** Keep the streaming descriptor and complete CDC publication under one lease. */ () => {
+    const fd = openSync(sourcePath, "r");
+    try {
+      const totalLength = fstatSync(fd).size;
+      const fragments = writeCdcFragmentsFromFd(store, fd, totalLength, params, sourcePath, fileId);
+      const manifest: FragmentManifest = { totalLength, fragments, mode: "cdc" };
+      const id = writeManifest(store, manifest, fileId);
+      return { manifestId: id, manifest };
+    } finally {
+      closeSync(fd);
+    }
+  });
 }
 
 /**
