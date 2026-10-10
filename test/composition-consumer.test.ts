@@ -11,7 +11,7 @@ import { discardChildCoverage } from "./helpers/sandbox.ts";
 /** Identical consumer program exercises the built CLI harness and engine through package-owned imports. */
 const consumer = `
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -44,6 +44,11 @@ repo.commit({ message: "descriptor", author }, new Date());
 writeFileSync(join(target.root, "asset.bin"), "branch moved"); target.stage(["asset.bin"]); target.commit({ message: "move", author }, new Date());
 repo.resolveLink("dependency.link", target, "target-read", "resolved"); assert.deepEqual(readFileSync(join(root, "vendor/asset.bin")), Buffer.from([0, 255, 128, 19, 47]));
 assert.equal(repo.status().excludedLayers[0].name, "resolved"); assert.throws(/** Explicit staging remains masked in the real consumer. */ () => repo.stage(["vendor/asset.bin"]), /** Assert the stable typed refusal. */ error => error.code === "layer_excluded"); repo.stage([]); repo.removeLayer("resolved");
+const retired = join(process.cwd(), process.argv[2] + "-retired");
+repo.linkInstance("retired", retired); repo.unlinkInstance("retired"); rmSync(retired, { recursive: true });
+const pruneToken = join(process.cwd(), process.argv[2] + ".prune-token"); writeFileSync(pruneToken, "consumer-erase");
+const pruned = await harness.runCommand({ command: "vcs instance prune-retired", args: ["../" + process.argv[2] + "-retired"], pmRoot: root, options: { eraseTokenFile: pruneToken, reason: "retired" } });
+assert.equal(pruned.errorMessage, undefined); assert.equal(repo.operations.read().at(-1).command, "prune-retired-instance");
 writeFileSync(join(root, "secret.bin"), "consumer unique permanent bytes 638529"); repo.stage(["secret.bin"]); const revision = repo.commit({ message: "secret", author }, new Date());
 const token = join(process.cwd(), process.argv[2] + ".erase-token"); writeFileSync(token, "consumer-erase");
 const erased = await harness.runCommand({ command: "vcs obliterate", args: ["secret.bin"], pmRoot: root, options: { eraseTokenFile: token, reason: "incident" } }); assert.equal(erased.errorMessage, undefined);

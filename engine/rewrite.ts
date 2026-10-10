@@ -126,7 +126,8 @@ export class RewriteConflictError extends Error {
 /**
  * Merges one attributed payload path; competing repository links refuse atomically.
  *
- * Record objects take the per-field path; native PM append-only histories union
+ * Manifest or mixed-kind changes preserve our complete object and return a
+ * content conflict for explicit resolution. Record objects take the per-field path; native PM append-only histories union
  * their events. Other blobs and rewritten history prefixes take diff3. The
  * distinction is made on the stored object's type rather than on the path's
  * extension, so what a file is called never decides how it merges.
@@ -157,7 +158,13 @@ export function mergePath(
       throw new ObjectStoreError("link_merge_conflict", `Competing link descriptors at ${path} require explicit pin reconciliation before merging.`);
     }
     const records = ourObject.type === "record" && theirObject.type === "record";
-    if (baseObject !== null && baseObject.type !== (records ? "record" : "blob")) throw new ObjectStoreError("object_type_mismatch", "Merge base has an incompatible payload kind.");
+    // Manifest metadata is not file text. Kind transitions need an explicit
+    // resolution, preserving one complete side rather than synthesizing bytes.
+    if (ourObject.type === "manifest" || theirObject.type === "manifest" || baseObject?.type === "manifest"
+      || ourObject.type !== theirObject.type
+      || (baseObject !== null && baseObject.type !== ourObject.type)) {
+      return { id: ourId, conflict: { path, reason: "content" } };
+    }
     if (records) {
       const baseDocument = baseObject === null ? {} : decodeRecord(baseObject.payload);
       const result = mergeRecords(

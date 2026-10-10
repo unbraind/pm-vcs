@@ -34,6 +34,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
   if (audits) for (const denial of denials) pending.push({ id: denial.id, role: "tombstone" });
   const seen = new Set<string>();
   const verified = new Set<ObjectId>();
+  const held = new Map<ObjectId, ReturnType<ObjectStore["read"]>>();
   while (pending.length > 0) {
     const reference = pending.pop() as Reference;
     const { id, role, fileId, root } = reference;
@@ -47,7 +48,8 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
       continue;
     }
     try {
-      const object = carried.get(id) ?? store.read(id);
+      const object = carried.get(id) ?? held.get(id) ?? store.read(id);
+      held.set(id, object);
       const allowed = role === "payload" ? ["blob", "record", "link", "manifest"] : [role === "fragment" ? "blob" : role];
       if (!allowed.includes(object.type)) throw new ObjectStoreError("object_type_mismatch", "History reference has the wrong object kind.");
       if (role === "commit") {

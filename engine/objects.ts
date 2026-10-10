@@ -23,6 +23,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   statSync,
@@ -358,6 +359,29 @@ export class ObjectStore {
   }
 
   /**
+   * Read a matching kind for a partial listing, using at most 64 compressed bytes to reject unrelated kinds.
+   * This prefix is a hint, never closure evidence: matching objects still undergo full frame and hash verification.
+   * Missing or unrecognizable prefixes are absent from the listing; operational I/O failures remain visible.
+   */
+  readIfType(id: ObjectId, type: ObjectType): StoredObject | undefined {
+    this.assertId(id);
+    if (this.denial(id) !== undefined) return undefined;
+    let fd: number;
+    try { fd = openSync(this.pathFor(id), "r"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    let prefix: Buffer;
+    try {
+      const bytes = Buffer.alloc(64);
+      const length = readSync(fd, bytes, 0, bytes.length, null);
+      try { prefix = inflateSync(bytes.subarray(0, length), { finishFlush: zlibConstants.Z_SYNC_FLUSH }); } catch { return undefined; }
+    } finally { closeSync(fd); }
+    const header = /^([a-z]+) (0|[1-9][0-9]*)\0/.exec(prefix.toString("latin1"));
+    return header?.[1] === type ? this.read(id) : undefined;
+  }
+
+  /**
    * Reads an object and requires it to be of a particular kind.
    *
    * @param id - Object id to read.
@@ -505,13 +529,16 @@ export class ObjectStore {
     try {
       writeFileSync(fd, String(process.pid));
       fsyncSync(fd);
-      for (let attempt = 0; ; attempt += 1) {
+      const deadline = performance.now() + 5000;
+      const sleeper = new Int32Array(new SharedArrayBuffer(4));
+      for (;;) {
         try { linkSync(temporary, path); acquired = true; break; } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-          if (attempt === 200) {
-            throw new ObjectStoreError("store_locked", "Another writer holds the store lock; use vcs recover-lock for interrupted writers.");
+          const remaining = deadline - performance.now();
+          if (remaining <= 0) {
+            throw new ObjectStoreError("store_locked", "Another writer holds the store lock after a 5-second wait; retry when it completes. Use vcs recover-lock only for an interrupted writer, never a live owner.");
           }
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+          Atomics.wait(sleeper, 0, 0, Math.min(25, remaining));
         }
       }
       unlinkSync(temporary);

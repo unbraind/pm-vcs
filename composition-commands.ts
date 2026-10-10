@@ -26,6 +26,23 @@ export function registerCompositionCommands(api: ExtensionApi): void {
     },
   });
   api.registerCommand({
+    name: "vcs instance prune-retired",
+    description: "Explicitly relinquish a missing or unbound retired cleanup path with erasure authority and a local audit reason.",
+    arguments: [{ name: "path", required: true, description: "Stored hub-relative retired instance path" }],
+    flags: [
+      { long: "--erase-token-file", value_name: "file", value_type: "string", description: "Local permanent-erasure credential file" },
+      { long: "--reason", value_name: "code", value_type: "string", description: "Bounded audit reason for relinquishing cleanup scope" },
+    ],
+    /** Record the scope reduction before removing its inventory entry; never delete instance bytes. */
+    run(context: CommandHandlerContext) {
+      const path = requiredArgument(context, 0, "retired instance path", "pm vcs instance prune-retired path --reason retired");
+      const reason = optionalString(context.options, "reason");
+      if (reason === undefined) throw new ObjectStoreError("bad_prune_reason", "An explicit --reason code is required.");
+      openRepository(context).pruneRetiredInstance(path, credential(context, "eraseTokenFile"), reason, new Date());
+      return { ok: true, pruned: path };
+    },
+  });
+  api.registerCommand({
     name: "vcs authority",
     description: "Configure distinct local credentials for pinned-target reads and permanent erasure; grants never enter bundles.",
     flags: [
@@ -53,7 +70,7 @@ export function registerCompositionCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext) {
       const repo = openRepository(context);
       if (context.options?.list === true) return { ok: true, links: repo.links() };
-      const path = requiredArgument(context, 0, "a descriptor path", "pm vcs link descriptor --spec link.json");
+      const path = requiredArgument(context, 0, "descriptor path", "pm vcs link descriptor --spec link.json");
       const spec = optionalString(context.options, "spec");
       if (spec === undefined) throw new ObjectStoreError("bad_link", "A canonical --spec file is required.");
       return { ok: true, id: repo.stageLink(path, decodeLink(readFileSync(resolve(sourceWorkingRoot(context), spec)))) };
@@ -74,7 +91,7 @@ export function registerCompositionCommands(api: ExtensionApi): void {
       const layer = optionalString(context.options, "layer");
       if (target === undefined || layer === undefined) throw new ObjectStoreError("bad_link", "Resolution requires an explicit --target and --layer.");
       const repo = openRepository(context);
-      const created = repo.resolveLink(requiredArgument(context, 0, "a descriptor path", "pm vcs link resolve descriptor"),
+      const created = repo.resolveLink(requiredArgument(context, 0, "descriptor path", "pm vcs link resolve descriptor"),
         Repository.open(resolve(sourceWorkingRoot(context), target)), credential(context, "readTokenFile"), layer);
       return { ok: true, layer: { name: created.name, paths: created.files.map(/** Report ownership without printing private bytes. */ (file) => file.path) } };
     },
@@ -97,10 +114,10 @@ export function registerCompositionCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext) {
       const repo = openRepository(context);
       if (context.options?.list === true) return { ok: true, layers: repo.layers().map(/** Listing exposes ownership but never content. */ (layer) => ({ name: layer.name, paths: layer.files.map(/** Extract canonical exclusion paths. */ (file) => file.path) })) };
-      const name = requiredArgument(context, 0, "a layer name", "pm vcs layer local destination source");
+      const name = requiredArgument(context, 0, "layer name", "pm vcs layer local destination source");
       if (context.options?.remove === true) { repo.removeLayer(name, context.options?.discardEdits === true); return { ok: true, removed: name }; }
-      const destination = requiredArgument(context, 1, "a destination path", "pm vcs layer local destination source");
-      const source = requiredArgument(context, 2, "a source file", "pm vcs layer local destination source");
+      const destination = requiredArgument(context, 1, "destination path", "pm vcs layer local destination source");
+      const source = requiredArgument(context, 2, "source file", "pm vcs layer local destination source");
       repo.addLayer(name, new Map([[destination, { content: readFileSync(resolve(sourceWorkingRoot(context), source)), executable: context.options?.executable === true }]]));
       return { ok: true, layer: { name, paths: [destination] } };
     },
@@ -121,7 +138,7 @@ export function registerCompositionCommands(api: ExtensionApi): void {
       const reason = optionalString(context.options, "reason");
       if (reason === undefined) throw new ObjectStoreError("bad_tombstone", "An explicit --reason code is required.");
       if (context.options?.recoverLock === true) repo.objects.recoverWriterLock();
-      return { ok: true, erasure: repo.obliterate(requiredArgument(context, 0, "a FileId or indexed path", "pm vcs obliterate file --reason incident"), token, reason, new Date()) };
+      return { ok: true, erasure: repo.obliterate(requiredArgument(context, 0, "FileId or indexed path", "pm vcs obliterate file --reason incident"), token, reason, new Date()) };
     },
   });
 }

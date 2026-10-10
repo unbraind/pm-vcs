@@ -296,17 +296,18 @@ export function parseBundle(bytes: Buffer): { header: BundleContents; lines: Bun
  *
  * @param store - Destination object store.
  * @param bytes - The bundle's contents.
+ * @param targets - Additional publication roots advertised separately by a transport.
  * @returns The validated header, and which objects were written versus already held.
  * @throws ObjectStoreError When a prerequisite commit is absent, or the bundle is
  *   malformed.
  */
-export function importBundleObjects(store: ObjectStore, bytes: Buffer): ObjectImportReport {
+export function importBundleObjects(store: ObjectStore, bytes: Buffer, targets: readonly ObjectId[] = []): ObjectImportReport {
   const parsed = parseBundle(bytes);
-  return store.withWriteLock(/** Preflight whole-bundle denial and arrival before the first byte publication. */ () => importPreflighted(store, parsed.header, parsed.lines));
+  return store.withWriteLock(/** Preflight whole-bundle denial and arrival before the first byte publication. */ () => importPreflighted(store, parsed.header, parsed.lines, targets));
 }
 
 /** Import a complete parsed archive while holding its publication lock and preserving local erasure authority. */
-function importPreflighted(store: ObjectStore, header: BundleContents, lines: readonly BundleLine[]): ObjectImportReport {
+function importPreflighted(store: ObjectStore, header: BundleContents, lines: readonly BundleLine[], publicationTargets: readonly ObjectId[]): ObjectImportReport {
   const local = store.denials();
   const received = header.denials ?? [];
   for (const denial of received) {
@@ -319,6 +320,13 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
   assertArrivalsAllowed(combined, lines, true);
   store.preflight(lines, true);
   const carried = new Set(lines.map((line) => line.id));
+  const checked = new Set<ObjectId>();
+  for (const line of lines) {
+    // Carried bytes were hashed by parsing, but a deduplicated physical copy
+    // may have changed. Validate that copy before allowing it to stand in for
+    // the arrival; never publish refs over a corrupt held duplicate.
+    if (!checked.has(line.id) && store.has(line.id)) { store.read(line.id); checked.add(line.id); }
+  }
   const missing = (header.prerequisites ?? []).filter((id) => !carried.has(id) && !store.has(id));
   if (missing.length > 0) {
     throw new ObjectStoreError(
@@ -327,7 +335,7 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
       + "Import the bundle that carries them first.",
     );
   }
-  const targets = [...Object.values(header.refs), ...(header.prerequisites ?? [])];
+  const targets = [...publicationTargets, ...Object.values(header.refs), ...(header.prerequisites ?? [])];
   for (const line of lines) {
     if (line.type === "commit") targets.push(line.id);
     if (line.type === "series") {
@@ -348,14 +356,6 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
     added.push(line.id);
   }
   store.accept(lines, true);
-  for (const line of lines) {
-    if (line.type !== "series") continue;
-    const series = decodeSeries(store.read(line.id).payload);
-    assertClosurePresent(store, `series ${line.id} base`, series.base);
-    for (const patch of series.patches) {
-      assertClosurePresent(store, `series ${line.id} patch`, patch.commit);
-    }
-  }
   return { header, added, skipped };
 }
 
@@ -370,17 +370,18 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
  *   malformed, or an advertised ref's history is incomplete.
  */
 export function importBundle(store: ObjectStore, refs: RefStore, bytes: Buffer): ImportReport {
-  const { header, added, skipped } = importBundleObjects(store, bytes);
-  for (const [name, target] of Object.entries(header.refs)) assertClosurePresent(store, name, target);
-  // One transaction, not a loop of independent swaps: a bundle advertising three
-  // refs must not be able to publish two and fail on the third, which would leave
-  // the repository advertising a history it did not fully receive.
-  refs.transaction(Object.entries(header.refs).map(([name, target]) => ({
-    name,
-    expected: refs.read(name),
-    next: target,
-  })));
-  return { added, skipped, refs: header.refs };
+  return store.withWriteLock(/** The complete preflight and ref publication share one lease, so no second closure walk is needed. */ () => {
+    const { header, added, skipped } = importBundleObjects(store, bytes);
+    // One transaction, not a loop of independent swaps: a bundle advertising three
+    // refs must not be able to publish two and fail on the third, which would leave
+    // the repository advertising a history it did not fully receive.
+    refs.transaction(Object.entries(header.refs).map(([name, target]) => ({
+      name,
+      expected: refs.read(name),
+      next: target,
+    })));
+    return { added, skipped, refs: header.refs };
+  });
 }
 
 

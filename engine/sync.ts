@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 
-import { assertClosurePresent, exportBundle, importBundleObjects } from "./bundle.ts";
+import { exportBundle, importBundleObjects } from "./bundle.ts";
 import { isAncestor } from "./merge.ts";
 import type { ObjectId } from "./objects.ts";
 import { ObjectStoreError } from "./objects.ts";
@@ -156,31 +156,35 @@ export async function fetchFrom(
 
   if (wanted.length === 0) {
     // Tombstones can change while every immutable ref remains unchanged.
-    const { added } = importBundleObjects(repository.objects, await wire.fetch([], localTips(repository)));
+    const metadata = wire.fetchObjects === undefined
+      ? await wire.fetch([], localTips(repository))
+      : await wire.fetchObjects([]);
+    const { added } = importBundleObjects(repository.objects, metadata, localTips(repository));
     return { remote: remoteName, url: remote.url, updated: [], conflictingTags, added, upToDate: true };
   }
 
   const bundle = await wire.fetch(wanted.map((item) => item.remoteRef), localTips(repository));
-  const { added } = importBundleObjects(repository.objects, bundle);
-  for (const item of wanted) assertClosurePresent(repository.objects, item.localRef, item.target);
+  return repository.objects.withWriteLock(/** Validate all advertised roots and publish their tracking refs within one erasure lease. */ () => {
+    const { added } = importBundleObjects(repository.objects, bundle, wanted.map((item) => item.target));
 
-  repository.refs.transaction(wanted.map((item) => ({
-    name: item.localRef,
-    expected: item.before,
-    next: item.target,
-  })));
-  const updated: RefTransition[] = wanted.map((item) => ({
-    ref: item.localRef,
-    before: item.before,
-    after: item.target,
-  }));
-  repository.operations.append(
-    "fetch",
-    `Fetched ${updated.length} ref(s) from ${remoteName}.`,
-    updated,
-    now,
-  );
-  return { remote: remoteName, url: remote.url, updated, conflictingTags, added, upToDate: false };
+    repository.refs.transaction(wanted.map((item) => ({
+      name: item.localRef,
+      expected: item.before,
+      next: item.target,
+    })));
+    const updated: RefTransition[] = wanted.map((item) => ({
+      ref: item.localRef,
+      before: item.before,
+      after: item.target,
+    }));
+    repository.operations.append(
+      "fetch",
+      `Fetched ${updated.length} ref(s) from ${remoteName}.`,
+      updated,
+      now,
+    );
+    return { remote: remoteName, url: remote.url, updated, conflictingTags, added, upToDate: false };
+  });
 }
 
 /**

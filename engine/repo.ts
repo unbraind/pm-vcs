@@ -12,7 +12,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -851,7 +851,9 @@ export class Repository {
     // are passed as the extra-check set: a hinted path is re-read even when its
     // cached stat matches. The report below is what rewrites them, and `scan`
     // is the authority both derive from.
-    const excluded = new Set([...this.layerPaths(), ...snapshot.entries.filter(/** Terminal absence is visible independently of ordinary modifications. */ (entry) => this.objects.denial(entry.id) !== undefined).map(/** Mask absent payloads while preserving their staged structural identity. */ (entry) => entry.path)]);
+    const layers = this.layers();
+    const obliterated = this.obliteratedPaths();
+    const excluded = new Set([...layers.flatMap(/** Use one validated layer snapshot for this status operation. */ (layer) => layer.files.map(/** Exclude exact overlay ownership. */ (file) => file.path)), ...snapshot.entries.filter(/** Terminal absence is visible independently of ordinary modifications. */ (entry) => this.objects.denial(entry.id) !== undefined).map(/** Mask absent payloads while preserving their staged structural identity. */ (entry) => entry.path)]);
     const report = computeStatus(
       this.objects,
       this.root,
@@ -876,8 +878,8 @@ export class Repository {
     }
     const merge = this.readMergeState();
     const annotated: StatusReport = { ...report,
-      ...(this.layers().length > 0 ? { excludedLayers: this.layers().map(/** Make private exclusions visible in status. */ (layer) => ({ name: layer.name, paths: layer.files.map(/** Report names without exposing snapshot bytes. */ (file) => file.path) })) } : {}),
-      ...(this.obliteratedPaths().length > 0 ? { obliterated: this.obliteratedPaths() } : {}) };
+      ...(layers.length > 0 ? { excludedLayers: layers.map(/** Make private exclusions visible in status. */ (layer) => ({ name: layer.name, paths: layer.files.map(/** Report names without exposing snapshot bytes. */ (file) => file.path) })) } : {}),
+      ...(obliterated.length > 0 ? { obliterated } : {}) };
     if (merge === null) return annotated;
     // The merge state is authoritative for `clean`: even if HEAD, index and
     // working tree momentarily agree, the repository is not in a settled state
@@ -963,12 +965,9 @@ export class Repository {
   private materializeLocked(tree: ObjectId | null): void {
     const view = this.view();
     const overlays = this.layerPaths();
+    this.assertLayersAcceptTree(tree, overlays);
     const flat = overlays.size > 0 || this.objects.denials().length > 0 ? flattenTree(this.objects, tree) : new Map();
     const blocked = new Set([...overlays, ...[...flat].filter(/** Obliterated payloads are intentional absence, not checkout failures. */ ([, entry]) => this.objects.denial(entry.id) !== undefined).map(/** Keep every terminal path out of the write set. */ ([path]) => path)]);
-    for (const path of overlays) {
-      assertSafeFilePath(this.root, path);
-      if ([...flat.keys()].some(/** Refuse collisions before any checkout byte changes. */ (incoming) => incoming !== path && pathsOverlap(incoming, path))) throw new ObjectStoreError("layer_checkout_conflict", "Checkout collides with a private layer directory.");
-    }
     const visible = (path: string): boolean => !blocked.has(path) && (view === null || viewIncludes(view, path));
     // Only non-sparse entries are removable: a path this working tree never
     // materialized is not its content to delete, and an untracked file that
@@ -1010,6 +1009,18 @@ export class Repository {
   /** Collect exact overlay ownership for every staging and materialization boundary. */
   private layerPaths(): Set<string> {
     return new Set(this.layers().flatMap(/** Flatten private layer ownership without reading working bytes. */ (layer) => layer.files.map(/** Extract one path without exposing private payload. */ (file) => file.path)));
+  }
+
+  /** Refuse unsafe overlay paths and parent collisions before moving refs, HEAD or the operation log. */
+  private assertLayersAcceptTree(tree: ObjectId | null, overlays = this.layerPaths()): void {
+    if (overlays.size === 0) return;
+    const incoming = [...flattenTree(this.objects, tree).keys()];
+    for (const path of overlays) {
+      assertSafeFilePath(this.root, path);
+      if (incoming.some(/** Exact overlays mask underlying files, while directory collisions refuse. */ (candidate) => candidate !== path && pathsOverlap(candidate, path))) {
+        throw new ObjectStoreError("layer_checkout_conflict", "Checkout collides with a private layer directory; remove the layer first.");
+      }
+    }
   }
 
   /** Add an instance-private overlay after proving ownership, cleanliness and safe paths. */
@@ -1108,8 +1119,8 @@ export class Repository {
   links(): { path: string; id: ObjectId; link: RepositoryLink }[] {
     return this.readIndex().flatMap(/** A terminal erased descriptor is no longer resolvable. */ (entry) => {
       if (this.objects.denial(entry.id) !== undefined) return [];
-      const object = this.objects.read(entry.id);
-      return object.type === "link" ? [{ path: entry.path, id: entry.id, link: decodeLink(object.payload) }] : [];
+      const object = this.objects.readIfType(entry.id, "link");
+      return object === undefined ? [] : [{ path: entry.path, id: entry.id, link: decodeLink(object.payload) }];
     });
   }
 
@@ -1159,16 +1170,54 @@ export class Repository {
     return inspectClosure(this.objects, targets, [], this.objects.denials(), true);
   }
 
+  /** Read the retired cleanup scope without accepting absolute, empty or malformed paths. */
+  private retiredInstances(): string[] {
+    const path = join(this.sharedControlDirectory, "unlinked-instances.json");
+    const retired = readControlJson(path, "bad_instances", "retired instance inventory");
+    if (retired === null && !existsSync(path)) return [];
+    if (!Array.isArray(retired) || retired.some(/** Only canonical relative paths previously emitted by unlink can be inventoried. */ (entry) =>
+      typeof entry !== "string" || entry === "" || entry === "." || isAbsolute(entry)
+      || entry.includes("\\") || relative(this.hubRoot, resolve(this.hubRoot, entry)).split(sep).join("/") !== entry)) {
+      throw new ObjectStoreError("bad_instances", "Retired instance inventory is corrupt.");
+    }
+    return retired;
+  }
+
+  /** Check the physical shared-store binding before opening or touching another instance's index or worktree. */
+  private instanceIsBound(path: string): boolean {
+    try {
+      const link = Repository.resolveInstanceLink(join(path, CONTROL_DIRECTORY), path);
+      return link !== null && realpathSync(link.controlDirectory) === realpathSync(this.sharedControlDirectory);
+    } catch (error) {
+      if (error instanceof ObjectStoreError && error.code === "broken_instance_link") return false;
+      throw error;
+    }
+  }
+
+  /** Explicitly relinquish a missing or unbound retired cleanup path under erasure authority, recording the reason locally. */
+  pruneRetiredInstance(path: string, credential: string, reason: string, now: Date): void {
+    this.objects.withWriteLock(/** Scope reduction is serialized with instance creation and physical erasure. */ () => {
+      const principal = authorize(this.sharedControlDirectory, "erase", credential);
+      if (!/^[a-z][a-z0-9_-]{0,63}$/.test(reason)) throw new ObjectStoreError("bad_prune_reason", "Pruning requires a bounded reason code.");
+      const retired = this.retiredInstances();
+      if (!retired.includes(path)) throw new ObjectStoreError("unknown_retired_instance", "No retired instance has that stored relative path.");
+      const root = resolve(this.hubRoot, path);
+      const missing = lstatSync(root, { throwIfNoEntry: false }) === undefined;
+      if (!missing && this.instanceIsBound(root)) throw new ObjectStoreError("instance_still_bound", "The retired instance still reads this hub; its held bytes remain in erasure scope.");
+      this.operations.append("prune-retired-instance", `Pruned ${path} (${missing ? "missing" : "unbound"}); principal ${principal}; reason ${reason}. Cleanup at this path is no longer claimed.`, [], now);
+      writePrivateJson(join(this.sharedControlDirectory, "unlinked-instances.json"), retired.filter(/** Remove only the explicitly named scope entry after recording its audit. */ (entry) => entry !== path));
+    });
+  }
+
   /** Permanently erase all payloads of a FileId, including every shared instance. */
   obliterate(selector: string, credential: string, reason: string, now: Date): ErasureReceipt {
     return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
       const paths = [this.hubRoot, ...readInstances(this.sharedControlDirectory).map(/** Registered instances share this denial and physical cleanup scope. */ (entry) => resolve(this.hubRoot, entry.path))];
-      const retired = readControlJson(join(this.sharedControlDirectory, "unlinked-instances.json"), "bad_instances", "retired instance inventory");
-      if (retired !== null) {
-        if (!Array.isArray(retired) || retired.some(/** Retired paths remain known even after unlink. */ (path) => typeof path !== "string")) throw new ObjectStoreError("bad_instances", "Retired instance inventory is corrupt.");
-        paths.push(...(retired as string[]).map(/** Resolve only paths previously registered by this clone. */ (path) => resolve(this.hubRoot, path)));
-      }
-      const instances = [...new Set(paths)].map(/** Missing registered instances refuse, because their held bytes cannot be proved absent. */ (path) => Repository.open(path));
+      paths.push(...this.retiredInstances().map(/** Unlink never silently relinquishes held private or working bytes. */ (path) => resolve(this.hubRoot, path)));
+      const instances = [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
+        if (path !== this.hubRoot && !this.instanceIsBound(path)) throw new ObjectStoreError("unbound_instance", "An inventoried instance is missing or no longer linked to this hub; explicitly prune retired paths before erasure.");
+        return Repository.open(path);
+      });
       return eraseFile(this, instances, selector, credential, reason, now);
     });
   }
@@ -1400,8 +1449,7 @@ export class Repository {
     return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
       const entry = readInstances(this.sharedControlDirectory).find(/** Retain a bound working tree's cleanup scope after registry unlink. */ (candidate) => candidate.name === name);
       if (entry !== undefined) {
-        const retired = readControlJson(join(this.sharedControlDirectory, "unlinked-instances.json"), "bad_instances", "retired instance inventory") ?? [];
-        if (!Array.isArray(retired)) throw new ObjectStoreError("bad_instances", "Retired instance inventory is corrupt.");
+        const retired = this.retiredInstances();
         writePrivateJson(join(this.sharedControlDirectory, "unlinked-instances.json"), [...new Set([...retired, entry.path])]);
       }
       unregisterInstance(this.sharedControlDirectory, name);
@@ -1532,8 +1580,9 @@ export class Repository {
     const hints = readHints(this.controlDirectory);
     const dirty = new Set<string>();
     let checked = 0;
+    const overlays = this.layerPaths();
     for (const entry of index) {
-      if (this.layerPaths().has(entry.path) || this.objects.denial(entry.id) !== undefined) continue;
+      if (overlays.has(entry.path) || this.objects.denial(entry.id) !== undefined) continue;
       const absolute = join(this.root, ...entry.path.split("/"));
       if (!existsSync(absolute)) {
         if (entry.sparse !== true) dirty.add(entry.path);
@@ -1795,6 +1844,7 @@ export class Repository {
       } catch {
         exists = false;
       }
+      this.assertLayersAcceptTree(targetTree);
       const before = this.refs.readHead();
       const beforeTarget = before.kind === "branch" ? before.ref : before.target;
       const rawBefore = this.refs.rawHead();
@@ -2195,7 +2245,13 @@ export class Repository {
   undo(sequence: number | null, now: Date): Operation {
     return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
       this.assertNoMergeInProgress();
-      const operation = this.operations.undo(this.refs, sequence, now);
+      const operation = this.operations.undo(this.refs, sequence, now, /** Validate the post-undo checkout while its transitions are still only a plan. */ (target) => {
+        const raw = target.head?.before ?? this.refs.rawHead();
+        const name = raw.startsWith("ref: ") ? raw.slice(5).trim() : "HEAD";
+        const transition = target.refs.find(/** A restored attached HEAD may name a ref that this undo also moves. */ (entry) => entry.ref === name);
+        const restored = transition !== undefined ? transition.before : name === "HEAD" ? raw : this.refs.read(name);
+        this.assertLayersAcceptTree(restored === null ? null : readCommit(this.objects, restored).tree);
+      });
       const head = this.refs.resolveHead();
       this.materialize(head === null ? null : readCommit(this.objects, head).tree);
       return operation;
@@ -2332,12 +2388,7 @@ export class Repository {
    * @throws ObjectStoreError When any untracked path collides with the tree.
    */
   private assertNoUntrackedCollisions(tree: ObjectId | null, overwriteReason: string): void {
-    const overlays = this.layerPaths();
-    for (const path of (overlays.size === 0 ? [] : flattenTree(this.objects, tree).keys())) {
-      if ([...overlays].some(/** A future tree cannot replace a layer's parent directory with a file. */ (overlay) => overlay !== path && pathsOverlap(overlay, path))) {
-        throw new ObjectStoreError("layer_checkout_conflict", "Checkout would collide with a private overlay parent; remove the layer first.");
-      }
-    }
+    this.assertLayersAcceptTree(tree);
     const untracked = this.status().untracked;
     if (untracked.length === 0 || tree === null) return;
     const incomingPaths = [...flattenTree(this.objects, tree).keys()];
@@ -2423,6 +2474,10 @@ export class Repository {
    * @returns The commit HEAD ends up at, or null on an unborn branch.
    */
   private applyRewrite(plan: RewritePlan, now: Date): ObjectId | null {
+    const current = this.refs.readHead();
+    const name = current.kind === "branch" ? current.ref : "HEAD";
+    const target = plan.moves.find(/** Both attached and detached rewrites preflight the checkout they will publish. */ (move) => move.ref === name)?.after ?? current.target;
+    this.assertLayersAcceptTree(target === null ? null : readCommit(this.objects, target).tree);
     this.refs.transaction(plan.moves.map((move) => ({
       name: move.ref,
       expected: move.before,
@@ -2581,6 +2636,7 @@ export class Repository {
       const target = this.resolve(revision);
       const targetTree = readCommit(this.objects, target).tree;
       if (mode === "hard") {
+        this.assertLayersAcceptTree(targetTree);
         const untracked = [...this.status().untracked].sort(compareByteOrder);
         if (untracked.length > 0) {
           throw new ObjectStoreError(

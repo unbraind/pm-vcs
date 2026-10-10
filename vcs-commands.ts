@@ -758,7 +758,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
   api.registerCommand({
     name: "vcs undo",
     description:
-      "Reverse a recorded operation, restoring every ref it moved and re-materializing the working tree. Objects are never removed, so any operation stays reversible.",
+      "Reverse a recorded operation, restoring every ref it moved and re-materializing the working tree. Undo restores refs; payloads erased by vcs obliterate cannot be restored.",
     flags: [{ long: "--operation", value_name: "number", description: "Which operation to reverse (default the most recent)", value_type: "string" }],
     run(context: CommandHandlerContext): VcsEnvelope & { undo: Operation } {
       const repository = openRepository(context);
@@ -1063,7 +1063,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
 
   api.registerCommand({
     name: "vcs reset",
-    description: "Move HEAD to a revision. --mode soft moves only the branch; mixed also rewrites the index; hard also rewrites the working tree. Objects are never deleted, so undo recovers.",
+    description: "Move HEAD to a revision. --mode soft moves only the branch; mixed also rewrites the index; hard also rewrites the working tree. Undo restores refs; obliterated payloads remain unavailable.",
     arguments: [{ name: "revision", description: "Where HEAD should move", required: true }],
     flags: [{ long: "--mode", value_name: "mode", description: "How far to reset: soft, mixed or hard (default mixed)", value_type: "string" }],
     run(context: CommandHandlerContext): VcsEnvelope & { head: ObjectId } {

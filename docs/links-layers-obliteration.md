@@ -289,3 +289,93 @@ Fourteen production-behavior reverts fail with assertion errors while modules lo
 the restored production behavior passes the same filesystem/subprocess scenarios.
 Legacy SHA-256 grants require explicit regeneration, and malformed recognizable
 encodings still refuse under the physical-erasure privacy boundary.
+
+## Renewed PR97 review contracts
+
+Private-layer parent and descendant collisions are checked before switch, hard
+reset, undo or rewrite changes refs, HEAD or the operation log. Undo validates
+its planned post-undo HEAD, including a restored branch that the same operation
+moves. Checkout retains the same check for direct materialization. Manifest or
+mixed record/blob changes return a per-path content conflict and preserve our
+complete typed object; manifest metadata is never text-merged into a blob.
+Agreed and one-sided changes keep the existing tree-merge behavior.
+
+Before erasure opens another inventoried worktree, its link must resolve to this
+hub's physical shared control directory. Matching clone identity alone cannot
+establish that binding. Missing or reused locations refuse instead of being
+silently skipped. `vcs instance prune-retired <stored-relative-path>
+--erase-token-file <file> --reason <code>` explicitly relinquishes only a missing
+or unbound retired path. It requires erasure authority, refuses a still-bound
+instance and records principal, reason and scope reduction in the local operation
+log before changing inventory. It deletes no working bytes. The audit records
+that future erasure receipts no longer claim cleanup at that location; independent
+clones and externally moved copies remain outside those receipts. Undo does not
+restore relinquished cleanup scope. Active entries must first be explicitly unlinked.
+
+The writer lease waits against an elapsed five-second deadline, with sleeps
+bounded by the remaining time. A live owner is never recovered or displaced.
+Contention reports retry guidance and reserves recovery for interrupted writers.
+The previous one-second budget can reject ordinary overlapping materialization;
+a real owner held longer than one second now lets a waiting writer complete.
+Existing subprocess deadlines remain unchanged.
+
+Link listing uses at most 64 compressed prefix bytes per unrelated index object.
+The prefix is only a listing hint. A recognized link still receives complete
+frame, hash and descriptor validation. Missing or unrecognizable unrelated content
+is omitted; operational I/O errors remain visible. A damaged prefix may conceal
+its kind, so listing is partial discovery rather than a repository verification
+receipt. Resolution cannot use an omitted descriptor. Full verification and every
+publication closure continue reading and hashing complete required payloads.
+Scan and status each validate one private-layer metadata snapshot per operation.
+
+Import preflight validates each held object once within one closure walk, retaining
+role and FileId checks for every reference. Carried bytes are independently hashed;
+a held duplicate is also read and hashed before deduplication can substitute it
+for the arrival. Ref import and fetch publication share the same store lease as
+preflight. Series bases/patches and separately advertised fetch roots join that
+preflight instead of repeating whole walks after publication. No cross-operation
+payload trust cache is introduced.
+
+Ordinary no-op fetch uses the existing object endpoint to exchange identity and
+denial metadata. It still validates the receiver's held closure, including missing
+or corrupt payloads; a cold no-op costs one pass over those bytes. Legacy transports
+without that endpoint retain their full-bundle fallback. Real process traces cover
+an incompressible 4 MiB payload, one open per held object, no source loose-object
+opens and compressed read bytes bounded by the held inventory. Shared-leaf import
+traces cover two FileIds, a standalone series base/patch and an advertised ref,
+with one complete payload read. Constant-byte cold no-op sync is not claimed.
+
+Review disposition:
+
+| Review ID | Verified disposition |
+| --- | --- |
+| 4236571405 | Removed duplicate articles from composition argument errors. |
+| 4236571410 | Removed repeat import/series walks and per-reference disk reads; retained full held-closure verification. Presence-only publication trust is unsafe. Cold no-op remains one complete held-byte pass. |
+| 4236571415 | Added an elapsed five-second writer wait and live-owner-safe retry guidance. |
+| 4236571418 | Added bounded type hints for partial link discovery; matching links still validate completely. |
+| 4236571422 | Enforced physical hub binding before foreign worktree access; added authorized audited retired-path pruning. |
+| 4236571427 | Read layers once for each scan/status operation. |
+| 4236571431 | Preflighted private-layer collisions before ref/HEAD/oplog mutations, including planned undo and detached rewrite. |
+| 4236571434 | Rejected the suggested blanket base64-derived inflate catch. An over-budget encoded denied marker is recoverable with sufficient budget and must refuse while uninspected. Malformed recognizable candidates retain the same conservative refusal. |
+| 4236571441 | Manifest and file-kind conflicts preserve a complete side instead of merging metadata or aborting the whole tree merge. |
+| 5477799727 outside-diff | Undo/reset descriptions now state that obliterated payloads cannot be recovered. |
+
+The base64-zlib proposal conflates malformed data with output-budget refusal.
+A compressed 20 MiB decoded copy of a synthetic denied marker fails the default
+inspection budget, and the same copy is detected when enough budget is available.
+Ignoring that inflate failure would admit an encoded denied payload. Arbitrary
+binary data that happens to contain a recognizable malformed encoded candidate
+can still receive a conservative refusal; that availability boundary is explicit
+and does not certify uninspected content as clean.
+
+
+Renewed behavioral proof consists of nineteen isolated production-only reversions:
+manifest/kind handling; switch, hard reset, undo and rewrite preflight; retired
+binding; link prefix reads; scan/status snapshots; the writer wait; closure read
+reuse; prune authority, bound-scope refusal and audit recording; repeat series
+walks; held-duplicate validation; metadata no-op exchange; article grammar; and
+the unsafe base64-zlib suggestion. Every case exits nonzero with an assertion
+failure after successful module loading. Production files are restored before
+positive validation. The concurrency fixture preloads the waiter and coordinates
+real processes through standard I/O, so module startup does not consume the lease
+hold under test. It preserves the existing ten-second subprocess bound.

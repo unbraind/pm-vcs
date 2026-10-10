@@ -177,11 +177,12 @@ export class OperationLog {
    * @param refs - The ref store to update.
    * @param sequence - Which operation to reverse, or null for the most recent.
    * @param now - Timestamp for the undo's own log entry.
+   * @param validate - Optional checkout preflight before any ref, HEAD or log mutation.
    * @returns The undo operation that was recorded.
    * @throws ObjectStoreError When the log is empty, the sequence is unknown, or a
    *   ref or HEAD no longer holds the value the operation left it at.
    */
-  undo(refs: RefStore, sequence: number | null, now: Date): Operation {
+  undo(refs: RefStore, sequence: number | null, now: Date, validate?: (target: Operation) => void): Operation {
     const operations = this.read();
     if (operations.length === 0) {
       throw new ObjectStoreError("nothing_to_undo", "The operation log is empty, so there is nothing to undo.");
@@ -202,6 +203,7 @@ export class OperationLog {
         + "Something moved HEAD since then; re-read it and retry.",
       );
     }
+    validate?.(target);
     refs.transaction(target.refs.map((transition) => ({
       name: transition.ref,
       expected: transition.after,

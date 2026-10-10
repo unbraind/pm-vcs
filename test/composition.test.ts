@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { scryptSync, createHash } from "node:crypto";
+import { scryptSync, createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { inflateSync, deflateSync } from "node:zlib";
@@ -19,8 +19,9 @@ import { encodeTombstone, validateDenials, assertArrivalsAllowed } from "../engi
 import { BUNDLE_FORMAT, exportBundle, importBundle, importBundleObjects, parseBundle, serializeBundle } from "../engine/bundle.ts";
 import { hashObject, frameObject, ObjectStore, ObjectStoreError, type ObjectId } from "../engine/objects.ts";
 import { type Signature, readCommit, encodeTree, writeTree, writeCommit, encodeSeries, encodeManifest, encodeCommit, encodeRecord, decodeRecord } from "../engine/model.ts";
-import { writeFragmented } from "../engine/fragments.ts";
-import { mergePath } from "../engine/rewrite.ts";
+import { readFragmented, writeFragmented } from "../engine/fragments.ts";
+import { mergePath, mergeTrees } from "../engine/rewrite.ts";
+import { flattenTree } from "../engine/worktree.ts";
 import { registerInstance } from "../engine/instances.ts";
 import { FileTransport } from "../engine/transport.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
@@ -858,12 +859,13 @@ test("erasing an empty file preserves healthy empty trees while refusing its pay
   refuses(() => repo.objects.write("blob", Buffer.from("replacement"), selected.fileId), "file_obliterated");
 });
 
-test("atomic payload merge handles added records and refuses incompatible base kinds", /** Use real stored typed inputs, including a link base replaced differently on both sides. */ async () => {
+test("atomic payload merge handles added records and reports incompatible base kinds", /** Use real stored typed inputs, including a link base replaced differently on both sides. */ async () => {
   const { repo } = await fixture(); const context = { store: repo.objects, config: repo.config, committer: signature };
   const ourRecord = repo.objects.write("record", encodeRecord({ left: "a" })); const theirRecord = repo.objects.write("record", encodeRecord({ right: "b" })); const merged = mergePath(context, "record.json", null, ourRecord, theirRecord);
   assert.deepEqual(decodeRecord(repo.objects.read(merged.id).payload), { left: "a", right: "b" }); assert.equal(merged.conflict, undefined);
   const ourBlob = repo.objects.write("blob", Buffer.from("ours\n")); const theirBlob = repo.objects.write("blob", Buffer.from("theirs\n"));
-  refuses(() => mergePath(context, "plain.txt", ourRecord, ourBlob, theirBlob), "object_type_mismatch"); refuses(() => mergePath(context, "record.json", ourBlob, ourRecord, theirRecord), "object_type_mismatch");
+  assert.deepEqual(mergePath(context, "plain.txt", ourRecord, ourBlob, theirBlob), { id: ourBlob, conflict: { path: "plain.txt", reason: "content" } });
+  assert.deepEqual(mergePath(context, "record.json", ourBlob, ourRecord, theirRecord), { id: ourRecord, conflict: { path: "record.json", reason: "content" } });
   const link = repo.objects.write("link", encodeLink(linkTo(repo, repo.refs.resolveHead()!)));
   refuses(() => mergePath(context, "descriptor.link", link, ourBlob, theirBlob), "link_merge_conflict");
 });
@@ -1152,4 +1154,309 @@ test("review short owner writes cannot publish a lease", /** A real per-process 
   const child = spawnSync("python3", ["-c", limit, process.execPath, "--input-type=module", "-e", program, repo.root], { env: { ...process.env, NODE_V8_COVERAGE: "", NODE_COMPILE_CACHE: "" }, encoding: "utf8", timeout: 10_000 });
   assert.equal(child.status, 0, child.stderr); assert.deepEqual(JSON.parse(child.stdout), { ran: false, error: "EFBIG", lock: false });
   assert.equal(readdirSync(repo.controlDirectory).some(name => name.startsWith("objects.lock")), false);
+});
+
+
+for (const kinds of [
+  ["manifest", "manifest", "manifest"], ["blob", "manifest", "manifest"],
+  [null, "manifest", "blob"], ["manifest", "blob", "blob"],
+  ["record", "record", "blob"], ["blob", "record", "record"], [null, "blob", "record"],
+] as const) {
+  test(`renewed merge preserves file objects across ${kinds.join("/")} conflicts`, /** Real tree merges must never merge manifest metadata or throw for file-kind disagreement. */ async () => {
+    const { repo } = await fixture();
+    const fileId = "c".repeat(32);
+    const ids = kinds.map((kind, i) => kind === null ? null : kind === "manifest"
+      ? writeFragmented(repo.objects, Buffer.from(`fragmented side ${i}\n`.repeat(10)), 32).manifestId
+      : repo.objects.write(kind, kind === "record" ? encodeRecord({ side: i }) : Buffer.from(`blob side ${i}\n`), fileId));
+    const tree = (id: string | null): string | null => id === null ? null : writeTree(repo.objects, [{ name: "file", mode: "100644", id, fileId }]);
+    let result: ReturnType<typeof mergeTrees> | undefined;
+    assert.doesNotThrow(() => { result = mergeTrees({ store: repo.objects, config: repo.config, committer: signature }, tree(ids[0]), tree(ids[1])!, tree(ids[2])); });
+    assert.ok(result);
+    assert.deepEqual(result.conflicts, [{ path: "file", reason: "content" }]);
+    const entry = flattenTree(repo.objects, result.tree).get("file")!;
+    assert.equal(entry.id, ids[1]); assert.equal(entry.fileId, fileId);
+    repo.materialize(result.tree);
+    const object = repo.objects.read(entry.id);
+    if (object.type === "manifest") assert.deepEqual(readFileSync(join(repo.root, "file")), readFragmented(repo.objects, entry.id));
+    else if (object.type === "blob") assert.deepEqual(readFileSync(join(repo.root, "file")), object.payload);
+    else assert.deepEqual(JSON.parse(readFileSync(join(repo.root, "file"), "utf8")), decodeRecord(object.payload));
+  });
+}
+
+for (const operation of ["switch", "reset", "undo-ref", "undo-head", "rewrite", "rewrite-detached"] as const) {
+  test(`renewed private layer refuses ${operation} before ref HEAD index or oplog mutation`, /** Colliding parent and descendant paths cannot leave HEAD ahead of the checkout. */ async () => {
+    const { repo } = await fixture();
+    const baseline = repo.refs.resolveHead()!;
+    const target = commit(repo, "vendor", Buffer.from("tracked parent file"));
+    rmSync(join(repo.root, "vendor")); repo.stage([]);
+    let current = repo.commit({ message: "remove parent", author: signature }, new Date(2000));
+    if (operation.startsWith("rewrite")) { repo.reset(baseline, "hard", new Date(2500)); current = commit(repo, "safe.txt"); }
+    if (operation === "undo-head") { repo.switchTo(target, new Date(3000)); repo.switchTo(current, new Date(4000)); }
+    if (operation === "rewrite-detached") repo.switchTo(current, new Date(3000));
+    repo.addLayer("private", new Map([["vendor/asset.bin", { content: Buffer.from("private preserved bytes"), executable: false }]]));
+    const snapshot = { head: repo.refs.rawHead(), refs: repo.refs.list("refs/"), index: readFileSync(join(repo.controlDirectory, "index")), log: readFileSync(join(repo.controlDirectory, "oplog.jsonl")) };
+    const action = operation === "switch" ? () => repo.switchTo(target, new Date(5000))
+      : operation === "reset" ? () => repo.reset(target, "hard", new Date(5000))
+      : operation.startsWith("undo") ? () => repo.undo(null, new Date(5000))
+      : () => repo.rebase(current, target, signature, new Date(5000));
+    refuses(action, "layer_checkout_conflict");
+    assert.deepEqual({ head: repo.refs.rawHead(), refs: repo.refs.list("refs/"), index: readFileSync(join(repo.controlDirectory, "index")), log: readFileSync(join(repo.controlDirectory, "oplog.jsonl")) }, snapshot);
+    assert.equal(readFileSync(join(repo.root, "vendor/asset.bin"), "utf8"), "private preserved bytes");
+  });
+}
+
+test("renewed retired-instance binding rejects foreign cleanup before denial", /** Reusing a retired path for another repository must not delete its independently owned bytes. */ async () => {
+  const { repo, parent } = await fixture();
+  commit(repo, "secret.bin", Buffer.from("retired-binding-selected-marker-532794"));
+  const retiredRoot = join(parent, "retired"); repo.linkInstance("retired", retiredRoot); repo.unlinkInstance("retired");
+  rmSync(retiredRoot, { recursive: true }); mkdirSync(retiredRoot);
+  await cloneFrom(repo.root, retiredRoot, new Date());
+  const foreign = Repository.open(retiredRoot);
+  assert.equal(foreign.identity(), repo.identity());
+  const index = readFileSync(join(foreign.controlDirectory, "index"));
+  refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "unbound_instance");
+  assert.deepEqual(repo.objects.denials(), []);
+  assert.deepEqual(readFileSync(join(foreign.controlDirectory, "index")), index);
+  assert.equal(readFileSync(join(foreign.root, "secret.bin"), "utf8"), "retired-binding-selected-marker-532794");
+});
+
+test("renewed base64 zlib refusal cannot certify an uninspected decoded denial", /** Decode-budget failures are recoverable encoded copies, not malformed-token permission to bypass denial. */ async () => {
+  const marker = Buffer.from("base64-zlib-denied-marker-924761");
+  const expanded = Buffer.concat([Buffer.alloc(20 * 1024 * 1024, 0), marker]);
+  const encoded = Buffer.from(deflateSync(expanded).toString("base64"));
+  refuses(() => inspectRepresentations(encoded, bytes => bytes.includes(marker)), "uninspectable_payload");
+  assert.equal(inspectRepresentations(encoded, bytes => bytes.includes(marker), 6, expanded.length * 2), true);
+  const { repo } = await fixture(); commit(repo, "secret.bin", expanded);
+  repo.obliterate("secret.bin", "erase-fixture", "incident", new Date());
+  const before = repo.objects.inventory().map(entry => entry.id).sort();
+  refuses(() => repo.objects.write("blob", encoded, "d".repeat(32)), "uninspectable_payload");
+  assert.deepEqual(repo.objects.inventory().map(entry => entry.id).sort(), before);
+  assert.equal(repo.objects.has(hashObject("blob", encoded)), false);
+  refuses(() => inspectRepresentations(Buffer.from(Buffer.from([0x78, 0x9c, 0xff]).toString("base64")), () => false), "uninspectable_payload");
+});
+
+
+test("renewed no-op fetch validates held closure with one bounded process-byte pass", /** Trace a cold real process, including both transport endpoints, over an incompressible repository payload. */ async () => {
+  const { repo, parent } = await fixture();
+  commit(repo, "large.bin", randomBytes(4 * 1024 * 1024));
+  const root = join(parent, "clone"); await cloneFrom(repo.root, root, new Date());
+  const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
+  const sync = pathToFileURL(join(process.cwd(), "engine/sync.ts")).href;
+  const program = `import { Repository } from ${JSON.stringify(url)}; import { fetchFrom } from ${JSON.stringify(sync)}; const repo=Repository.open(process.argv[1]); const report=await fetchFrom(repo,"origin",new Date()); process.stdout.write(JSON.stringify(report));`;
+  const trace = join(parent, "noop.strace");
+  const child = spawnSync("strace", ["-f", "-yy", "-e", "trace=openat,read", "-o", trace, process.execPath, "--input-type=module", "-e", program, root], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(child.status, 0, child.stderr);
+  const report = JSON.parse(child.stdout) as { upToDate: boolean; added: string[] };
+  assert.equal(report.upToDate, true); assert.deepEqual(report.added, []);
+  const events = readFileSync(trace, "utf8").split("\n");
+  const objects = events.filter(line => /\.pmvcs\/objects\/[a-f0-9]{2}\/[a-f0-9]{62}/.test(line));
+  assert.equal(objects.some(line => line.includes(repo.controlDirectory)), false, "metadata exchange reread source history");
+  const paths = new Map<string, number>();
+  for (const line of objects.filter(line => line.includes("openat("))) {
+    const path = /"([^" ]+\/objects\/[a-f0-9]{2}\/[a-f0-9]{62})"/.exec(line)?.[1];
+    assert.ok(path); paths.set(path, (paths.get(path) ?? 0) + 1);
+  }
+  assert.ok(paths.size > 0);
+  assert.equal([...paths.values()].every(count => count === 1), true, "held closure repeated disk reads");
+  const readBytes = objects.filter(line => line.includes("read(")).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  const clone = Repository.open(root);
+  const compressedBytes = clone.objects.inventory().reduce((total, entry) => total + readFileSync(entry.path).length, 0);
+  assert.ok(readBytes >= 4 * 1024 * 1024 && readBytes <= compressedBytes, `${readBytes} read bytes exceeds ${compressedBytes} held bytes`);
+  assert.ok(events.some(line => line.includes("identity")), "metadata exchange was not exercised");
+  console.log(`renewed no-op cold-process trace: ${paths.size} held objects read once, ${readBytes}/${compressedBytes} compressed bytes, 0 source loose opens`);
+});
+
+test("renewed links read only bounded unrelated prefixes and preserve link validation", /** Native read-byte evidence accompanies sparse/missing/corrupt unrelated content and strict descriptor failures. */ async () => {
+  const { repo, parent } = await fixture();
+  commit(repo, "large.bin", randomBytes(4 * 1024 * 1024));
+  const large = repo.readIndex().find(entry => entry.path === "large.bin")!;
+  const link = repo.stageLink("dependency.link", linkTo(repo, repo.refs.resolveHead()!));
+  const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
+  const program = `import { Repository } from ${JSON.stringify(url)}; process.stdout.write(JSON.stringify(Repository.open(process.argv[1]).links()));`;
+  const trace = join(parent, "links.strace");
+  const child = spawnSync("strace", ["-yy", "-e", "trace=read", "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(child.status, 0, child.stderr); assert.equal(JSON.parse(child.stdout)[0].id, link);
+  const events = readFileSync(trace, "utf8").split("\n").filter(line => line.includes(objectPath(repo, large.id)));
+  const bytes = events.reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  assert.ok(bytes > 0 && bytes <= 64, `unrelated payload read ${bytes} compressed bytes`);
+  console.log(`renewed link trace: 4 MiB payload, ${bytes} unrelated compressed read bytes`);
+  rmSync(objectPath(repo, large.id)); assert.equal(repo.links()[0].id, link);
+  writeFileSync(objectPath(repo, large.id), "corrupt unrelated bytes"); assert.equal(repo.links()[0].id, link);
+  writeFileSync(objectPath(repo, link), deflateSync(frameObject("link", Buffer.from("corrupt descriptor"))));
+  refuses(() => repo.links(), "corrupt_object");
+});
+
+test("renewed scan and status read one private layer snapshot per operation", /** strace counts actual metadata opens with many index entries and a full private snapshot. */ async () => {
+  const { repo, parent } = await fixture();
+  for (let i = 0; i < 12; i++) writeFileSync(join(repo.root, `file-${i}`), `content ${i}`);
+  repo.stage([]); repo.commit({ message: "many files", author: signature }, new Date());
+  repo.addLayer("private", new Map([["private.bin", { content: Buffer.alloc(256 * 1024, 0), executable: false }]]));
+  const path = join(repo.controlDirectory, "layers.json");
+  const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
+  for (const operation of ["scan", "status"] as const) {
+    const program = `import { Repository } from ${JSON.stringify(url)}; const result=Repository.open(process.argv[1]).${operation}(); process.stdout.write(JSON.stringify(result));`;
+    const trace = join(parent, `${operation}.strace`);
+    const child = spawnSync("strace", ["-e", "trace=openat", "-P", path, "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: 10_000 });
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(readFileSync(trace, "utf8").split("\n").filter(line => line.includes("openat(")).length, 1, operation);
+  }
+});
+
+test("renewed live writer lasting beyond one second completes before a bounded waiter", /** Two real processes contend on the native lease without deadline changes or recovery of a live owner. */ async () => {
+  const { repo } = await fixture(); const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
+  const ownerProgram = `import { Repository } from ${JSON.stringify(url)}; Repository.open(process.argv[1]).objects.withWriteLock(()=>{process.stdout.write("ready"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,2500);});`;
+  const waiterProgram = `import { Repository } from ${JSON.stringify(url)}; const repo=Repository.open(process.argv[1]); process.stdout.write("ready"); await new Promise(resolve=>process.stdin.once("data",resolve)); const start=performance.now(); repo.objects.withWriteLock(()=>process.stdout.write(String(performance.now()-start)));`;
+  const waiter = spawn(process.execPath, ["--input-type=module", "-e", waiterProgram, repo.root], { stdio: ["pipe", "pipe", "pipe"], timeout: 10_000 });
+  let output = ""; let errors = "";
+  waiter.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); }); waiter.stderr.on("data", (chunk: Buffer) => { errors += chunk.toString(); });
+  const waiterCompleted = new Promise<number | null>((resolve, reject) => { waiter.on("error", reject); waiter.on("close", resolve); });
+  await new Promise<void>((resolve, reject) => { waiter.stdout.once("data", () => resolve()); waiter.once("error", reject); });
+  const owner = spawn(process.execPath, ["--input-type=module", "-e", ownerProgram, repo.root], { stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 });
+  const completed = new Promise<number | null>((resolve, reject) => { owner.on("error", reject); owner.on("close", resolve); });
+  await new Promise<void>((resolve, reject) => { owner.stdout.once("data", () => resolve()); owner.once("error", reject); });
+  refuses(() => repo.objects.recoverWriterLock(), "store_locked"); waiter.stdin.end("go");
+  const [waiterCode, ownerCode] = await Promise.all([waiterCompleted, completed]);
+  assert.equal(waiterCode, 0, errors); assert.ok(Number(output.slice(5)) >= 1000, output);
+  assert.equal(ownerCode, 0); assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
+});
+
+test("renewed no-op and import refuse real held corruption and missing prerequisites", /** Disk-held bytes never become a trusted publication boundary merely because their address exists. */ async () => {
+  const { repo, parent } = await fixture();
+  commit(repo, "held.bin", Buffer.from("closure integrity baseline bytes"));
+  const root = join(parent, "clone"); await cloneFrom(repo.root, root, new Date());
+  const clone = Repository.open(root); const entry = clone.readIndex().find(entry => entry.path === "held.bin")!;
+  const held = objectPath(clone, entry.id); const bytes = readFileSync(held);
+  const refs = clone.refs.list("refs/"); const log = clone.operations.read();
+  const metadata = Buffer.from(`${BUNDLE_FORMAT}\n${JSON.stringify({ refs: { "refs/heads/new": clone.refs.resolveHead()! }, prerequisites: [clone.refs.resolveHead()!], objects: [] })}\n`);
+  for (const damage of ["missing", "changed"] as const) {
+    if (damage === "missing") rmSync(held);
+    else writeFileSync(held, deflateSync(frameObject("blob", Buffer.from("valid frame with corrupt content"))));
+    await assert.rejects(fetchFrom(clone, "origin", new Date()), error => error instanceof ObjectStoreError && error.code === "incomplete_bundle");
+    refuses(() => importBundle(clone.objects, clone.refs, metadata), "incomplete_bundle");
+    assert.deepEqual(clone.refs.list("refs/"), refs); assert.deepEqual(clone.operations.read(), log);
+    writeFileSync(held, bytes);
+  }
+  const prerequisite = clone.refs.resolveHead()!; const path = objectPath(clone, prerequisite); const commitBytes = readFileSync(path); rmSync(path);
+  refuses(() => importBundle(clone.objects, clone.refs, metadata), "missing_prerequisites");
+  writeFileSync(path, commitBytes);
+  assert.deepEqual(clone.refs.list("refs/"), refs); assert.deepEqual(clone.operations.read(), log);
+  assert.equal((await fetchFrom(clone, "origin", new Date())).upToDate, true);
+});
+
+test("renewed import closes shared payloads and standalone series once before ref publication", /** Native read-byte accounting proves deduplication while retaining every owner and structural role check. */ async () => {
+  const { repo, parent } = await fixture();
+  const payload = randomBytes(256 * 1024); const id = repo.objects.write("blob", payload);
+  const tree = writeTree(repo.objects, [{ name: "one", mode: "100644", id, fileId: "1".repeat(32) }, { name: "two", mode: "100644", id, fileId: "2".repeat(32) }]);
+  const target = writeCommit(repo.objects, { tree, parents: [], author: signature, committer: signature, message: "shared leaf", items: [] });
+  const series = encodeSeries({ base: target, patches: [{ commit: target }], description: "one", author: signature });
+  const seriesId = hashObject("series", series);
+  const archive = Buffer.from(`${BUNDLE_FORMAT}\n${JSON.stringify({ refs: { "refs/heads/imported": target }, prerequisites: [target], objects: [seriesId] })}\nseries ${seriesId} ${series.toString("base64")}\n`);
+  const bundlePath = join(parent, "import.bundle"); writeFileSync(bundlePath, archive);
+  const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href; const bundle = pathToFileURL(join(process.cwd(), "engine/bundle.ts")).href;
+  const program = `import { readFileSync } from "node:fs"; import { Repository } from ${JSON.stringify(url)}; import { importBundle } from ${JSON.stringify(bundle)}; const r=Repository.open(process.argv[1]); process.stdout.write(JSON.stringify(importBundle(r.objects,r.refs,readFileSync(process.argv[2]))));`;
+  const trace = join(parent, "import.strace");
+  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read", "-P", objectPath(repo, id), "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root, bundlePath], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(JSON.parse(child.stdout).added, [seriesId]); assert.equal(repo.refs.read("refs/heads/imported"), target);
+  const events = readFileSync(trace, "utf8").split("\n");
+  assert.equal(events.filter(line => line.includes("openat(")).length, 1);
+  const bytes = events.filter(line => line.includes("read(")).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  assert.equal(bytes, readFileSync(objectPath(repo, id)).length);
+  console.log(`renewed shared import trace: 2 FileIds, series base/patch and ref, 1 payload open, ${bytes} compressed bytes`);
+});
+
+test("renewed retired pruning requires authority audits and never relinquishes a bound instance", /** Explicit scope reduction preserves active/retired bytes and lets missing or reused paths be retired without foreign cleanup. */ async () => {
+  const { repo, parent } = await fixture(); commit(repo, "secret.bin", Buffer.from("prune-selected-marker-528164"));
+  const root = join(parent, "retired"); repo.linkInstance("retired", root); repo.unlinkInstance("retired");
+  const path = "../retired"; const inventory = join(repo.controlDirectory, "unlinked-instances.json"); const before = readFileSync(inventory);
+  refuses(() => repo.pruneRetiredInstance(path, "wrong", "retired", new Date()), "unauthorized");
+  refuses(() => repo.pruneRetiredInstance(path, "erase-fixture", "invalid reason", new Date()), "bad_prune_reason");
+  refuses(() => repo.pruneRetiredInstance("../unknown", "erase-fixture", "retired", new Date()), "unknown_retired_instance");
+  refuses(() => repo.pruneRetiredInstance(path, "erase-fixture", "retired", new Date()), "instance_still_bound");
+  assert.deepEqual(readFileSync(inventory), before);
+  rmSync(root, { recursive: true });
+  refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "unbound_instance");
+  writeFileSync(join(repo.controlDirectory, "oplog.jsonl.lock"), "occupied");
+  refuses(() => repo.pruneRetiredInstance(path, "erase-fixture", "retired", new Date()), "oplog_locked");
+  assert.deepEqual(readFileSync(inventory), before); rmSync(join(repo.controlDirectory, "oplog.jsonl.lock"));
+  repo.pruneRetiredInstance(path, "erase-fixture", "retired", new Date());
+  assert.deepEqual(JSON.parse(readFileSync(inventory, "utf8")), []);
+  const audit = repo.operations.read().at(-1)!; assert.equal(audit.command, "prune-retired-instance"); assert.match(audit.summary, /missing.*reason retired/);
+  repo.linkInstance("reused", root); repo.unlinkInstance("reused"); rmSync(root, { recursive: true }); mkdirSync(root);
+  await cloneFrom(repo.root, root, new Date()); const foreign = Repository.open(root);
+  repo.pruneRetiredInstance(path, "erase-fixture", "reused", new Date());
+  assert.match(repo.operations.read().at(-1)!.summary, /unbound.*reason reused/);
+  repo.obliterate("secret.bin", "erase-fixture", "incident", new Date());
+  assert.equal(readFileSync(join(foreign.root, "secret.bin"), "utf8"), "prune-selected-marker-528164");
+  assert.equal(existsSync(join(repo.root, "secret.bin")), false);
+});
+
+test("renewed listing skips unrelated sparse and malformed prefixes while preserving operational errors", /** A partial type hint cannot excuse corrupt matching descriptors or become verification evidence. */ async () => {
+  const { repo } = await fixture(); const id = repo.objects.write("blob", Buffer.from("ordinary bytes"));
+  const path = objectPath(repo, id);
+  for (const content of [Buffer.alloc(0), Buffer.from("garbage"), deflateSync(Buffer.from("invalid header")), deflateSync(Buffer.from("link x\0bad")), deflateSync(frameObject("record", encodeRecord({ value: 1 })))]) {
+    writeFileSync(path, content); assert.equal(repo.objects.readIfType(id, "link"), undefined);
+  }
+  rmSync(path); assert.equal(repo.objects.readIfType(id, "link"), undefined);
+  mkdirSync(path); assert.throws(() => repo.objects.readIfType(id, "link"), error => (error as NodeJS.ErrnoException).code === "EISDIR"); rmSync(path, { recursive: true });
+  repo.objects.write("blob", Buffer.from("erased-descriptor-list-marker-487293"));
+  const erased = commit(repo, "secret.bin", Buffer.from("erased-descriptor-list-marker-487293"));
+  const selected = repo.readIndex().find(entry => entry.path === "secret.bin")!;
+  repo.obliterate("secret.bin", "erase-fixture", "incident", new Date());
+  assert.equal(repo.objects.readIfType(selected.id, "link"), undefined); assert.deepEqual(repo.links(), []);
+  assert.deepEqual(repo.verify().missing, []); assert.equal(repo.readFileState(erased, "secret.bin").kind, "obliterated");
+});
+
+test("renewed CLI reports missing arguments and audited retired prune explicitly", /** Real installed SDK command contexts exercise public argument grammar and authority boundaries. */ async () => {
+  const { repo, parent } = await fixture();
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const link = await harness.runCommand({ command: "vcs link", pmRoot: repo.root });
+  assert.match(String(link.errorMessage), /requires a descriptor path/); assert.doesNotMatch(String(link.errorMessage), /requires a a/);
+  const layer = await harness.runCommand({ command: "vcs layer", pmRoot: repo.root }); assert.match(String(layer.errorMessage), /requires a layer name/);
+  const prune = await harness.runCommand({ command: "vcs instance prune-retired", args: ["../retired"], pmRoot: repo.root }); assert.match(String(prune.errorMessage), /reason/);
+  const noCredential = await harness.runCommand({ command: "vcs instance prune-retired", args: ["../retired"], options: { reason: "retired" }, pmRoot: repo.root }); assert.match(String(noCredential.errorMessage), /erase-token-file/);
+  repo.linkInstance("retired", join(parent, "retired")); repo.unlinkInstance("retired"); rmSync(join(parent, "retired"), { recursive: true });
+  writeFileSync(join(repo.root, "erase-token"), "erase-fixture\n");
+  const result = await harness.runCommand({ command: "vcs instance prune-retired", args: ["../retired"], options: { reason: "retired", eraseTokenFile: "erase-token" }, pmRoot: repo.root });
+  assert.equal(result.errorMessage, undefined); assert.deepEqual(result.result, { ok: true, pruned: "../retired" });
+});
+
+test("renewed repeated valid arrivals refuse corrupt held duplicates before publication", /** A hash-valid carried object must not certify different bytes already stored under the same address. */ async () => {
+  const { repo, parent } = await fixture();
+  const target = commit(repo, "held.txt", Buffer.from("healthy carried bytes"));
+  const archive = exportBundle(repo.objects, repo.refs, []);
+  const root = join(parent, "clone"); await cloneFrom(repo.root, root, new Date()); const clone = Repository.open(root);
+  const id = clone.readIndex().find(entry => entry.path === "held.txt")!.id;
+  writeFileSync(objectPath(clone, id), deflateSync(frameObject("blob", Buffer.from("bad held duplicate"))));
+  const refs = clone.refs.list("refs/"); const inventory = readdirSync(join(clone.controlDirectory, "objects"), { recursive: true }).sort();
+  refuses(() => importBundle(clone.objects, clone.refs, archive), "corrupt_object");
+  assert.deepEqual(clone.refs.list("refs/"), refs); assert.deepEqual(readdirSync(join(clone.controlDirectory, "objects"), { recursive: true }).sort(), inventory);
+  assert.equal(clone.refs.resolveHead(), target);
+});
+
+test("renewed retired inventory refuses malformed paths and classifies broken bindings without foreign reads", /** Real control-file faults distinguish an explicit scope decision from suppressed operational I/O. */ async () => {
+  const { repo, parent } = await fixture(); commit(repo, "secret.bin", Buffer.from("retired-validation-selected-marker-528913"));
+  const inventory = join(repo.controlDirectory, "unlinked-instances.json");
+  for (const content of [null, [1], [""], ["."], [join(parent, "absolute")], ["../retired/../other"], ["..\\retired"]]) {
+    writeFileSync(inventory, JSON.stringify(content));
+    refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "bad_instances");
+    assert.deepEqual(repo.objects.denials(), []);
+  }
+  writeFileSync(inventory, "[]");
+  const root = join(parent, "retired"); repo.linkInstance("retired", root); repo.unlinkInstance("retired");
+  const link = join(root, ".pmvcs", "link.json"); writeFileSync(link, "invalid JSON");
+  refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "unbound_instance");
+  repo.pruneRetiredInstance("../retired", "erase-fixture", "invalid_binding", new Date());
+  assert.equal(readFileSync(join(root, "secret.bin"), "utf8"), "retired-validation-selected-marker-528913");
+  writeFileSync(inventory, JSON.stringify(["../retired"])); rmSync(link); mkdirSync(link);
+  assert.throws(() => repo.pruneRetiredInstance("../retired", "erase-fixture", "retired", new Date()), error => (error as NodeJS.ErrnoException).code === "EISDIR");
+  assert.deepEqual(JSON.parse(readFileSync(inventory, "utf8")), ["../retired"]);
+});
+
+test("renewed type listing preserves native open errors and rejects invalid addresses", /** A failed open is operational evidence rather than an unrelated corrupt-prefix classification. */ async () => {
+  const { repo } = await fixture(); const id = repo.objects.write("blob", Buffer.from("real permission-bound object"));
+  const path = objectPath(repo, id); chmodSync(path, 0);
+  try { assert.throws(() => repo.objects.readIfType(id, "link"), error => (error as NodeJS.ErrnoException).code === "EACCES"); }
+  finally { chmodSync(path, 0o644); }
+  refuses(() => repo.objects.readIfType("invalid", "link"), "invalid_object_id");
 });

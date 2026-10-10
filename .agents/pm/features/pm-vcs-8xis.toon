@@ -6,13 +6,15 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:34.077Z"
-updated_at: "2026-10-10T05:05:20.067Z"
+updated_at: "2026-10-10T06:07:19.066Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
 parent: pm-vcs-b7cb
 risk: high
-comments[48]{created_at,author,text}:
+comments[53]{created_at,author,text}:
   "2026-09-12T23:35:59.709Z",pi-agent,"Audit 2026-09-13: EXISTS — committed repository links are implemented as sparse linked instances (engine/instances.ts: instance link, shared object store, sparse views; test/instances.test.ts: 'a linked instance materializes its view, shares objects and keeps private state', 'concurrent instances share objects but never overwrite each other's state'). REMAINS — local layers that overlay an instance without changing commit identity are not implemented (grep for local-layer/overlay returns no matches). Typed obliteration is not implemented (grep for obliterate/Obliteration in engine/ returns no matches). Checkout and verify distinguishing obliterated content from missing and corrupt objects is not implemented. Two of four acceptance criteria are not met."
   "2026-10-07T20:55:16.467Z",codex-sol,"Baseline against the built package and a real disposable SDK tracker: a synthetic binary was staged and committed successfully; vcs link, vcs layer and vcs obliterate are absent, and the repository exposes no layer or obliteration API. Acceptance will pin a typed external repository revision and subset across a clone without transferring its payload or credentials; overlay tracked and new paths while preserving commit identity and excluding layers visibly from status and add; authorize FileId-scoped erasure across moves and revisions, byte-scan stored and decoded representations, distinguish obliterated/missing/corrupt state, and reject resurrection through stale fetch/import. The previous audit conflated local shared instances with committed external links. Full item, parent, linked research record and LORE.md were read; the removed historical research-doc link is superseded by LORE.md."
   "2026-10-07T20:56:24.216Z",codex-sol,"Design recorded first in docs/links-layers-obliteration.md: canonical typed committed links with explicit target authorization; private layer snapshots masked from staging/status and preserved across materialization; authorized FileId erasure with durable typed denial, full-store historical inventory, deduplication refusal, byte removal and non-resurrection at every object arrival boundary. Remote tombstones cannot silently authorize deletion of locally held content. Verification and checkout preserve the distinction between intentional erasure, missing data and corruption."
@@ -61,6 +63,11 @@ comments[48]{created_at,author,text}:
   "2026-10-10T04:31:28.644Z",codex-sol,"Final linked integration after complete owner writes passes 319/319, zero failures/skips: node --expose-gc --test test/worktree-races.test.ts test/control-directories.test.ts test/composition*.test.ts test/objects.test.ts test/credentials.test.ts. Built Node, npm-packed Node and native Bun all accept links, layers, version 2 authority, ordinary recovery, readonly legacy identity and intentional absence. Fourteen loaded-module behavioral reverts fail with AssertionError and are restored. Docs and full changelog are updated/generated; final committed-head release:check will retain all source, coverage and production timing gates. Review dispositions: six runtime fixes plus pack-purge/Lore corrections; ordinary size/token scan failures fixed, while malformed encodings and bounded decode refusal intentionally remain for privacy."
   "2026-10-10T05:03:44.269Z",codex-sol,"Exact committed-head release:check ran 1185 tests with zero failures/skips; statements, functions and lines are 100 percent. Strict branches stopped at 99.98 percent on the optional repository identity in HTTP advertisement. Adding a real served-repository regression for both legacy identity absence without mutation and an explicit immutable identity. No production gate or threshold changes; rerun the full exact-head gate after committing this acceptance evidence."
   "2026-10-10T05:05:19.333Z",codex-sol,Real HTTP acceptance passes both legacy identity absence without mutation and explicitly established identity with unchanged refs/config. Reverting readonly advertisement to identity initialization fails that test with AssertionError; restored source. Fifteen behavioral fail-on-revert proofs now pass their failure checks. The new linked HTTP test passed 1/1 with zero failures/skips. Committing acceptance evidence with matching PM history and regenerated selfhost bundle; final full release gate will run at the new exact head.
+  "2026-10-10T05:42:48.042Z",codex-sol,"Renewed PR97 review resumes at 32324d1627cc3051e2c3594b9d068ee603e30eae. Verify all nine inline findings and the undo/reset outside-diff descriptions against real source and filesystem behavior. Prioritize manifest merge integrity, private-layer mutation preflight and retired-instance binding. Preserve corruption/closure and encoded-denial guarantees while measuring repeated reads and ordinary no-op sync. Existing 1186-test release receipt remains the prior-head baseline; no new owner, no upstream or companion changes, no review replies."
+  "2026-10-10T05:50:40.451Z",codex-sol,"Verified renewed data-integrity findings against loaded modules and real storage. Six switch/reset/undo/rebase scenarios failed with changed HEAD/ref/index/oplog state; a retired path reused by an independent clone was actually erased before the binding guard. Manifest-kind matrices now preserve an existing side and return per-path content conflicts. The base64-zlib suggested catch would silently certify a recoverable encoded denied marker when inflation exceeds the decode budget; retain strict refusal and prove the marker is found with sufficient inspection budget. Performance baseline: link listing read 4195608 compressed bytes for a 4 MiB unrelated payload; no-op fetch walked held history. New real strace tests target bounded prefix listing, metadata-only sync and one layer snapshot per operation. No gate thresholds or fixture deadlines changed."
+  "2026-10-10T05:59:14.951Z",codex-sol,"Focused integration passed 193/193 with zero failures/skips; its selected eight-file coverage is diagnostic only, not the 53-file release denominator. Corrected test-authoring fixture errors (manifest return shape, series author/schema and a nonexistent inventory method) are excluded from behavioral red evidence. Corrected regressions pass 25/25 before two additional path/I/O cases. Native traces: cold no-op validates 14 held objects once, 4199457/4199457 compressed bytes and zero source loose opens; unrelated 4 MiB link content reads 64 compressed bytes; shared import with two FileIds plus series base/patch and ref reads one 262245-byte compressed payload. Preserve no-op corruption refusal: constant-byte cold sync is explicitly not claimed. A corrected real held-duplicate arrival test failed with AssertionError before adding full held-copy verification; restored import refuses before refs or inventory change. Stale canonical reports were removed after source changes; final all-source coverage remains pending."
+  "2026-10-10T06:04:51.938Z",codex-sol,"All 27 renewed scenarios pass; the linked command node --test --test-name-pattern=renewed test/composition.test.ts passed through pm test --run --only-last --progress. Nineteen isolated source-only reversions each exit 1 with AssertionError and successful module loading; every production file was restored. The writer case was repeated after preloading its real waiting process, preserving the ten-second child bound and proving that a live lease lasting 2.5 seconds succeeds only with the corrected production wait. Prune authority, still-bound scope refusal and local audit recording have separate fail-on-revert proofs. Production inventory remains exactly 53 source files (no new production files), Node 24.19.0/native Bun 1.3.5, installed SDK 2026.10.4 and actual Node types 26.6.4. Final unchanged all-source release gate, LCOV inventory, packed consumer acceptance and PM history verification follow."
+  "2026-10-10T06:07:19.066Z",codex-sol,"Built Node, npm-packed Node and native Bun consumer acceptance passed 1/1, including the new authorized prune command and its audit. The base64-zlib regression now also uses a real 20 MiB historical payload, authorized erasure and a later encoded arrival: default inspection refuses before publishing bytes, and sufficient-budget inspection identifies the recoverable payload. All nine inline IDs and outside-diff review 5477799727 are dispositioned in docs/links-layers-obliteration.md. Unsafe presence-only closure trust and blanket base64-derived inflate-error suppression are rejected with concrete corruption/encoded-copy evidence; cold no-op remains one complete receiver byte pass and malformed recognizable encodings remain conservative refusal. Preparing a committed candidate with the existing 53-file source inventory and nineteen source-only assertion-failure proofs; no skips, threshold changes, hosted or upstream edits."
 files[28]:
   - path: CHANGELOG.md
     scope: project
@@ -126,7 +133,7 @@ files[28]:
     scope: project
   - path: vcs-commands.ts
     scope: project
-tests[9]:
+tests[10]:
   - command: node --test test/composition.test.ts
     scope: project
     timeout_seconds: 240
@@ -206,6 +213,13 @@ tests[9]:
     provenance:
       author: codex-sol
       created_at: "2026-10-10T05:04:39.334Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: node --test --test-name-pattern=renewed test/composition.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-10T05:56:54.521Z"
       source_kind: local_mutation
       source_ref: feat/links-layers-obliteration
 docs[4]{path,scope}:
