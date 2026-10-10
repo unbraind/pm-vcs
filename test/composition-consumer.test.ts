@@ -51,7 +51,12 @@ const pruned = await harness.runCommand({ command: "vcs instance prune-retired",
 assert.equal(pruned.errorMessage, undefined); assert.equal(repo.operations.read().at(-1).command, "prune-retired-instance");
 writeFileSync(join(root, "secret.bin"), "consumer unique permanent bytes 638529"); repo.stage(["secret.bin"]); const revision = repo.commit({ message: "secret", author }, new Date());
 const token = join(process.cwd(), process.argv[2] + ".erase-token"); writeFileSync(token, "consumer-erase");
-const erased = await harness.runCommand({ command: "vcs obliterate", args: ["secret.bin"], pmRoot: root, options: { eraseTokenFile: token, reason: "incident" } }); assert.equal(erased.errorMessage, undefined);
+writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout); writeFileSync(token, "wrong-consumer-erase");
+const denied = await harness.runCommand({ command: "vcs obliterate", args: ["secret.bin"], pmRoot: root, options: { eraseTokenFile: token, reason: "incident", recoverLock: true } });
+assert.match(String(denied.errorMessage), /authority|credential|Unauthorized/i); assert.equal(readFileSync(join(repo.controlDirectory, "objects.lock"), "utf8"), dead.stdout);
+writeFileSync(token, "consumer-erase");
+const erased = await harness.runCommand({ command: "vcs obliterate", args: ["secret.bin"], pmRoot: root, options: { eraseTokenFile: token, reason: "incident", recoverLock: true } }); assert.equal(erased.errorMessage, undefined);
+assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
 assert.equal(repo.readFileState(revision, "secret.bin").kind, "obliterated"); assert.deepEqual(repo.verify().corrupt, []);
 const clone = Repository.open((await cloneFrom(root, join(process.cwd(), process.argv[2] + "-clone"), new Date())).root);
 assert.equal(clone.identity(), repo.identity()); assert.equal(clone.readFileState(revision, "secret.bin").kind, "obliterated"); assert.equal(clone.links()[0].link.revision, pin);

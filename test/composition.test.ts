@@ -18,7 +18,7 @@ import { inspectClosure } from "../engine/closure.ts";
 import { encodeTombstone, validateDenials, assertArrivalsAllowed } from "../engine/lifecycle.ts";
 import { BUNDLE_FORMAT, exportBundle, importBundle, importBundleObjects, parseBundle, serializeBundle } from "../engine/bundle.ts";
 import { hashObject, frameObject, ObjectStore, ObjectStoreError, type ObjectId } from "../engine/objects.ts";
-import { type Signature, readCommit, encodeTree, writeTree, writeCommit, encodeSeries, encodeManifest, encodeCommit, encodeRecord, decodeRecord } from "../engine/model.ts";
+import { type Signature, type TreeEntry, readCommit, encodeTree, writeTree, writeCommit, encodeSeries, encodeManifest, encodeCommit, encodeRecord, decodeRecord } from "../engine/model.ts";
 import { readFragmented, writeFragmented } from "../engine/fragments.ts";
 import { mergePath, mergeTrees } from "../engine/rewrite.ts";
 import { flattenTree } from "../engine/worktree.ts";
@@ -1469,4 +1469,130 @@ test("renewed type listing preserves native open errors and rejects invalid addr
   try { assert.throws(() => repo.objects.readIfType(id, "link"), error => (error as NodeJS.ErrnoException).code === "EACCES"); }
   finally { chmodSync(path, 0o644); }
   refuses(() => repo.objects.readIfType("invalid", "link"), "invalid_object_id");
+});
+
+for (const linked of [false, true]) test(`renewal erasure recovery authorizes before changing a real dead writer lock (${linked ? "shared" : "hub"})`, /** A wrong erase grant must preserve the crashed owner's lock and every payload byte. */ async () => {
+  const { repo: hub, parent } = await fixture();
+  commit(hub, "selected.bin", Buffer.from("recovery authorization selected marker"));
+  if (linked) hub.linkInstance("recovery", join(parent, "recovery"));
+  const repo = linked ? Repository.open(join(parent, "recovery")) : hub;
+  const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
+  const crash = spawnSync(process.execPath, ["--input-type=module", "-e", `import { Repository } from ${JSON.stringify(url)}; Repository.open(process.argv[1]).objects.withWriteLock(()=>process.kill(process.pid,"SIGKILL"));`, repo.root], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(crash.signal, "SIGKILL");
+  const lock = join(hub.controlDirectory, "objects.lock"); const owner = readFileSync(lock);
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  writeFileSync(join(repo.root, "erase-token"), "wrong-erase-grant");
+  const denied = await harness.runCommand({ command: "vcs obliterate", args: ["selected.bin"], options: { recoverLock: true, eraseTokenFile: "erase-token", reason: "incident" }, pmRoot: repo.root });
+  assert.match(String(denied.errorMessage), /authority|credential|Unauthorized/i);
+  assert.equal(existsSync(lock), true, "unauthorized erasure recovered the dead writer");
+  assert.deepEqual(readFileSync(lock), owner); assert.deepEqual(repo.objects.denials(), []);
+  assert.equal(readFileSync(join(repo.root, "selected.bin"), "utf8"), "recovery authorization selected marker");
+  writeFileSync(join(repo.root, "erase-token"), "erase-fixture");
+  const erased = await harness.runCommand({ command: "vcs obliterate", args: ["selected.bin"], options: { recoverLock: true, eraseTokenFile: "erase-token", reason: "incident" }, pmRoot: repo.root });
+  assert.equal(erased.errorMessage, undefined); assert.equal(existsSync(lock), false);
+  assert.equal(repo.objects.denials().length, 1); assert.equal(existsSync(join(repo.root, "selected.bin")), false);
+});
+
+test("renewal export discovers manifests with bounded prefixes and hashes all serialized bytes", /** Native byte counts and damaged real leaves distinguish discovery hints from serialization integrity. */ async () => {
+  const { repo, parent } = await fixture(); commit(repo, "export.bin", randomBytes(4 * 1024 * 1024));
+  const id = repo.readIndex().find(entry => entry.path === "export.bin")!.id; const path = objectPath(repo, id);
+  const compressed = readFileSync(path);
+  const repoUrl = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
+  const bundleUrl = pathToFileURL(join(process.cwd(), "engine/bundle.ts")).href;
+  const trace = join(parent, "export.strace");
+  const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { exportBundle,parseBundle } from ${JSON.stringify(bundleUrl)}; const r=Repository.open(process.argv[1]); const bundle=exportBundle(r.objects,r.refs,[]); process.stdout.write(JSON.stringify(parseBundle(bundle).header.objects));`;
+  const exported = spawnSync("strace", ["-yy", "-e", "trace=read", "-P", path, "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(exported.status, 0, exported.stderr); assert.ok((JSON.parse(exported.stdout) as string[]).includes(id));
+  const bytes = readFileSync(trace, "utf8").split("\n").filter(line => line.includes("read(")).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  assert.equal(bytes, compressed.length + 64, "export fully read the payload again during discovery");
+  console.log(`renewal export: ${bytes} compressed bytes = ${compressed.length} serialized hash pass + 64 discovery bytes`);
+  writeFileSync(path, deflateSync(frameObject("blob", Buffer.from("different valid framed content"))));
+  refuses(() => exportBundle(repo.objects, repo.refs, []), "corrupt_object");
+  rmSync(path); refuses(() => exportBundle(repo.objects, repo.refs, []), "object_not_found"); writeFileSync(path, compressed);
+  const fragmented = writeFragmented(repo.objects, Buffer.from("export manifest integrity fixture"), 8);
+  repo.writeIndex(repo.readIndex().map(entry => entry.id === id ? { ...entry, id: fragmented.manifestId } : entry));
+  repo.commit({ message: "manifest", author: signature }, new Date(2000));
+  const manifestPath = objectPath(repo, fragmented.manifestId); const manifestBytes = readFileSync(manifestPath);
+  writeFileSync(manifestPath, deflateSync(frameObject("manifest", encodeManifest({ ...fragmented.manifest, mode: "cdc" }))));
+  refuses(() => exportBundle(repo.objects, repo.refs, []), "corrupt_object");
+  writeFileSync(manifestPath, deflateSync(frameObject("manifest", Buffer.from("invalid manifest"))));
+  refuses(() => exportBundle(repo.objects, repo.refs, []), "corrupt_object");
+  rmSync(manifestPath); refuses(() => exportBundle(repo.objects, repo.refs, []), "object_not_found"); writeFileSync(manifestPath, manifestBytes);
+  assert.ok(parseBundle(exportBundle(repo.objects, repo.refs, [])).header.objects.includes(fragmented.manifest.fragments[0].id));
+});
+
+test("renewal closure discards leaf bytes with native memory and one physical hash pass", /** Compare real cold process memory to the measured reachable bytes, and trace every physical object read. */ async () => {
+  const { repo, parent } = await fixture();
+  const entries: TreeEntry[] = [];
+  let payloadBytes = 0; const compressed = new Map<string, number>();
+  for (let index = 0; index < 64; index += 1) {
+    const payload = randomBytes(2 * 1024 * 1024); payloadBytes += payload.length;
+    const id = repo.objects.write(index % 2 === 0 ? "blob" : "record", payload);
+    entries.push({ mode: "100644" as const, name: `leaf-${index}`, id, fileId: index.toString(16).padStart(32, "0") });
+    compressed.set(objectPath(repo, id), readFileSync(objectPath(repo, id)).length);
+  }
+  const fragmented = writeFragmented(repo.objects, randomBytes(2 * 1024 * 1024), 512 * 1024);
+  entries.push({ mode: "100644", name: "fragments", id: fragmented.manifestId, fileId: "e".repeat(32) });
+  const link = repo.objects.write("link", encodeLink({ version: 1, repository: repo.identity(), revision: repo.refs.resolveHead()!, mappings: [{ source: "leaf-0", destination: "pin" }] }));
+  entries.push({ mode: "100644", name: "link", id: link, fileId: "f".repeat(32) });
+  entries.push({ ...entries[0], name: "shared-leaf", fileId: "a".repeat(32) },
+    { mode: "100644", name: "shared-manifest", id: fragmented.manifestId, fileId: "b".repeat(32) },
+    { mode: "100644", name: "shared-link", id: link, fileId: "c".repeat(32) });
+  const tree = writeTree(repo.objects, entries);
+  const target = writeCommit(repo.objects, { tree, parents: [], author: signature, committer: signature, message: "native bounded closure" });
+  for (const id of [fragmented.manifestId, ...fragmented.manifest.fragments.map(fragment => fragment.id), link, tree, target]) compressed.set(objectPath(repo, id), readFileSync(objectPath(repo, id)).length);
+  const repoUrl = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
+  const closureUrl = pathToFileURL(join(process.cwd(), "engine/closure.ts")).href;
+  const trace = join(parent, "memory.strace");
+  const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { inspectClosure } from ${JSON.stringify(closureUrl)}; const r=Repository.open(process.argv[1]); global.gc(); const before=process.memoryUsage(); const peakBefore=process.resourceUsage().maxRSS*1024; const report=r.objects.withWriteLock(()=>inspectClosure(r.objects,[process.argv[2],process.argv[2]])); const after=process.memoryUsage(); process.stdout.write(JSON.stringify({report,before,after,peakBefore,peakAfter:process.resourceUsage().maxRSS*1024}));`;
+  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read", "-o", trace, process.execPath, "--expose-gc", "--max-old-space-size=32", "--input-type=module", "-e", program, repo.root, target], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(child.status, 0, child.stderr);
+  const result = JSON.parse(child.stdout) as { report: ReturnType<typeof inspectClosure>; before: NodeJS.MemoryUsage; after: NodeJS.MemoryUsage; peakBefore: number; peakAfter: number };
+  assert.deepEqual(result.report.missing, []); assert.deepEqual(result.report.corrupt, []);
+  const events = readFileSync(trace, "utf8").split("\n");
+  for (const [path, size] of compressed) {
+    assert.equal(events.filter(line => line.includes("openat(") && line.includes(`"${path}"`)).length, 1);
+    assert.equal(events.filter(line => line.includes("read(") && line.includes(`<${path}>`)).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0), size);
+  }
+  const retained = result.after.arrayBuffers - result.before.arrayBuffers; const peakGrowth = result.peakAfter - result.peakBefore;
+  console.log(`renewal closure: ${payloadBytes} leaf payload bytes, ${compressed.size} reachable objects read once, ${retained} buffer growth, ${peakGrowth} native peak RSS growth`);
+  assert.ok(retained < payloadBytes, `closure retained all ${payloadBytes} payload bytes (${retained} buffer growth)`);
+  assert.ok(peakGrowth < payloadBytes, `closure native peak grew by repository payload size (${peakGrowth}/${payloadBytes})`);
+  for (const [name, type, payload] of [["link", "link", Buffer.from("{}")], ["fragments", "manifest", Buffer.from("malformed\n")]] as const) {
+    const invalid = repo.objects.write(type, payload);
+    const badTree = writeTree(repo.objects, entries.map(entry => entry.name === name ? { ...entry, id: invalid } : entry));
+    const badCommit = writeCommit(repo.objects, { tree: badTree, parents: [], author: signature, committer: signature, message: "hash-valid malformed structure" });
+    assert.equal(inspectClosure(repo.objects, [badCommit]).corrupt.length, 1);
+  }
+  assert.deepEqual(inspectClosure(repo.objects, [target]).corrupt, []);
+});
+
+test("renewal uploads hash the entire batch before denial decoding or publication", /** Real malformed tree/manifest claims and a late corrupt upload cannot publish an earlier valid object. */ async () => {
+  const { repo } = await fixture(); commit(repo, "selected.bin", Buffer.from("upload ordering erased marker"));
+  repo.obliterate("selected.bin", "erase-fixture", "incident", new Date());
+  const transport = new FileTransport(repo.root, repo.root);
+  const inventory = readdirSync(join(repo.controlDirectory, "objects"), { recursive: true }).sort();
+  const denialBytes = readFileSync(join(repo.controlDirectory, "denials.json")); const refs = repo.refs.list("refs/");
+  for (const type of ["tree", "manifest"] as const) {
+    const validPayload = type === "tree" ? encodeTree([]) : encodeManifest({ mode: "fixed", totalLength: 0, fragments: [] });
+    const id = hashObject(type, validPayload);
+    await assert.rejects(() => transport.uploadObjects([{ id, type, payload: Buffer.from("malformed tree or manifest\n") }]), (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_object");
+    assert.deepEqual(readdirSync(join(repo.controlDirectory, "objects"), { recursive: true }).sort(), inventory);
+    assert.deepEqual(readFileSync(join(repo.controlDirectory, "denials.json")), denialBytes); assert.deepEqual(repo.refs.list("refs/"), refs);
+  }
+  const payload = Buffer.from("fresh valid upload before corrupted claim");
+  const healthy = { type: "tombstone" as const, id: hashObject("tombstone", payload), payload };
+  const late = { type: "tree" as const, id: hashObject("tree", encodeTree([])), payload: Buffer.from("malformed late tree\n") };
+  await assert.rejects(() => transport.uploadObjects([healthy, late]), (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_object");
+  assert.equal(repo.objects.has(healthy.id), false);
+  writeFileSync(join(repo.controlDirectory, "denials.json"), "null");
+  await assert.rejects(() => transport.uploadObjects([healthy, late]), (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_object");
+  assert.equal(repo.objects.has(healthy.id), false);
+  await assert.rejects(() => transport.uploadObjects([healthy]), (error: unknown) => error instanceof ObjectStoreError && error.code === "bad_tombstone");
+  writeFileSync(join(repo.controlDirectory, "denials.json"), denialBytes);
+  const clean = Repository.init(join(repo.root, "clean-upload"));
+  const cleanTransport = new FileTransport(clean.root, clean.root);
+  await assert.rejects(() => cleanTransport.uploadObjects([healthy, late]), (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_object");
+  assert.equal(clean.objects.has(healthy.id), false, "an earlier upload was written before the full batch was hashed");
+  await cleanTransport.uploadObjects([healthy]); assert.deepEqual(clean.objects.read(healthy.id).payload, payload);
 });

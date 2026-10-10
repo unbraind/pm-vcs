@@ -384,3 +384,57 @@ failure after successful module loading. Production files are restored before
 positive validation. The concurrency fixture preloads the waiter and coordinates
 real processes through standard I/O, so module startup does not consume the lease
 hold under test. It preserves the existing ten-second subprocess bound.
+
+## Additional renewal: recovery, export and closure memory
+
+The erasure command's `--recover-lock` flag validates the erase credential before
+changing the writer lock, including when invoked from a shared instance. A wrong
+credential leaves a real dead owner's lock and selected bytes untouched. The
+standalone `vcs recover-lock` command still recovers ordinary dead writers without
+erase authority; recovery alone never completes pending erasure.
+
+Export uses bounded manifest discovery for file leaves. Serialization still reads
+and hashes every exported object completely. A real 4 MiB incompressible leaf
+previously cost 8,391,216 compressed read bytes; it now costs 4,195,608 bytes for
+serialization plus 64 discovery bytes. Missing leaves/manifests, damaged hashes
+and malformed matching manifests refuse export. Prefix hints never substitute
+for serialization integrity.
+
+Closure deduplication retains verified kinds for blobs, records and validated
+links, plus decoded commits, trees and manifest fragments. Every reference still
+checks its role and FileId/root denial attribution. Leaf payload bytes do not
+survive in the closure map. Link validation happens before retaining its kind;
+hash-valid malformed links and manifests still produce corruption. Held copies
+are read and hashed within the same publication lease, including duplicates of
+valid incoming objects; presence alone grants no trust.
+
+A native cold process with real 128 MiB blob/record payloads, additional physical
+fragments and shared references measures buffer allocation and peak RSS while
+tracing object opens and compressed bytes. Original source retained 149,097,462
+buffer bytes for 134,217,728 leaf bytes. An initial restored run measured
+14,878,192 buffer growth and 19,529,728 peak RSS growth. The regression compares
+growth against the actual corpus bytes, without a fabricated memory limit, and
+requires one complete physical read per reachable object. These measurements
+cover a bounded synthetic corpus. Metadata still scales with graph size; one
+large inflated object and complete carried bundle payloads still require memory.
+Multi-gigabyte operational readiness is not established by this measurement.
+
+Resumable uploads hash every claimed ID in the entire batch before denial decoding
+or storage mutation. Denial preflight and writes then share one writer lease.
+Malformed tree/manifest bytes under valid claimed addresses return documented
+`corrupt_object`, including with existing or corrupt denial metadata, and a later
+bad object cannot leave earlier valid objects stored. Valid hashes continue
+through the unchanged denial and provenance rules.
+
+| Renewed finding | Verified correction and source-only failure |
+| --- | --- |
+| 4236761416 | Wrong erase credentials previously removed a real crashed writer lock; authorized hub/shared retries now recover and erase. |
+| 4236761421 | Native export read bytes proved duplicate full payload discovery; bounded discovery retains full serialization verification and missing/corrupt manifest refusal. |
+| 4236761429 | Native buffer growth proved all leaf bytes remained held; kind/decoded-structure caching removes those bytes and preserves one read/hash per object and structural validation. |
+| 4236761445 | Real malformed uploaded trees/manifests previously reached denial decoding first; whole-batch hash validation now returns `corrupt_object` before any publication. |
+
+The earlier twenty-one source-only proofs and the root's test relay repair remain
+in place. Four additional isolated source-only reversions retain the tests and
+produce loaded-module assertion failures before restoring production source.
+The `4f3144f` 1,214-test four-dimension coverage receipt remains dated evidence;
+only a new complete committed-head pass certifies the renewed candidate.

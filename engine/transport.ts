@@ -421,7 +421,6 @@ export class FileTransport implements Transport {
   /** Store each arriving object after verifying its content hashes to the id the sender claimed. */
   async uploadObjects(objects: readonly TransferObject[]): Promise<void> {
     const repository = this.open();
-    repository.objects.preflight(objects, false);
     for (const object of objects) {
       // The claim is checked before anything is written. Storing first and
       // hashing later would put tampered or corrupted bytes under an id that
@@ -435,11 +434,16 @@ export class FileTransport implements Transport {
             + "The object was refused and not stored.",
         );
       }
-      // Counted before the write, which no-ops on an existing object: the
-      // receipt names what this transfer delivered, not what the store holds.
-      if (!repository.objects.has(object.id)) this.acceptedThisConnection.push(object.id);
-      repository.objects.write(object.type, object.payload);
     }
+    repository.objects.withWriteLock(/** Denial preflight and publication share one lease after every claimed address is verified. */ () => {
+      repository.objects.preflight(objects, false);
+      for (const object of objects) {
+        // Counted before the write, which no-ops on an existing object: the
+        // receipt names what this transfer delivered, not what the store holds.
+        if (!repository.objects.has(object.id)) this.acceptedThisConnection.push(object.id);
+        repository.objects.write(object.type, object.payload);
+      }
+    });
   }
 
   /** Verify the uploaded closure, then publish every ref move as one compare-and-swap transaction. */

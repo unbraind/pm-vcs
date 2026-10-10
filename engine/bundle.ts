@@ -85,8 +85,8 @@ function closure(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId
       else {
         if (store.denial(entry.id) !== undefined) continue;
         objects.add(entry.id);
-        const object = store.read(entry.id);
-        if (object.type === "manifest") for (const fragment of decodeManifest(object.payload).fragments) objects.add(fragment.id);
+        const manifest = store.readIfType(entry.id, "manifest");
+        if (manifest !== undefined) for (const fragment of decodeManifest(manifest.payload).fragments) objects.add(fragment.id);
       }
     }
   };

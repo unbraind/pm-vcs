@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import type { CommandHandlerContext, ExtensionApi } from "@unbrained/pm-cli/sdk/authoring";
 import { openRepository, optionalString, requiredArgument, sourceWorkingRoot } from "./vcs-commands.ts";
 import { Repository } from "./engine/repo.ts";
-import { decodeLink } from "./engine/composition.ts";
+import { authorize, decodeLink } from "./engine/composition.ts";
 import { ObjectStoreError } from "./engine/objects.ts";
 
 /** Read an explicitly named local credential without storing it in descriptor or command output. */
@@ -137,7 +137,10 @@ export function registerCompositionCommands(api: ExtensionApi): void {
       const token = credential(context, "eraseTokenFile");
       const reason = optionalString(context.options, "reason");
       if (reason === undefined) throw new ObjectStoreError("bad_tombstone", "An explicit --reason code is required.");
-      if (context.options?.recoverLock === true) repo.objects.recoverWriterLock();
+      if (context.options?.recoverLock === true) {
+        authorize(repo.instanceLink?.controlDirectory ?? repo.controlDirectory, "erase", token);
+        repo.objects.recoverWriterLock();
+      }
       return { ok: true, erasure: repo.obliterate(requiredArgument(context, 0, "FileId or indexed path", "pm vcs obliterate file --reason incident"), token, reason, new Date()) };
     },
   });

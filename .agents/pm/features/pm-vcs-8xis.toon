@@ -6,13 +6,15 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:34.077Z"
-updated_at: "2026-10-10T06:59:26.787Z"
+updated_at: "2026-10-10T07:13:25.671Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
 parent: pm-vcs-b7cb
 risk: high
-comments[57]{created_at,author,text}:
+comments[61]{created_at,author,text}:
   "2026-09-12T23:35:59.709Z",pi-agent,"Audit 2026-09-13: EXISTS — committed repository links are implemented as sparse linked instances (engine/instances.ts: instance link, shared object store, sparse views; test/instances.test.ts: 'a linked instance materializes its view, shares objects and keeps private state', 'concurrent instances share objects but never overwrite each other's state'). REMAINS — local layers that overlay an instance without changing commit identity are not implemented (grep for local-layer/overlay returns no matches). Typed obliteration is not implemented (grep for obliterate/Obliteration in engine/ returns no matches). Checkout and verify distinguishing obliterated content from missing and corrupt objects is not implemented. Two of four acceptance criteria are not met."
   "2026-10-07T20:55:16.467Z",codex-sol,"Baseline against the built package and a real disposable SDK tracker: a synthetic binary was staged and committed successfully; vcs link, vcs layer and vcs obliterate are absent, and the repository exposes no layer or obliteration API. Acceptance will pin a typed external repository revision and subset across a clone without transferring its payload or credentials; overlay tracked and new paths while preserving commit identity and excluding layers visibly from status and add; authorize FileId-scoped erasure across moves and revisions, byte-scan stored and decoded representations, distinguish obliterated/missing/corrupt state, and reject resurrection through stale fetch/import. The previous audit conflated local shared instances with committed external links. Full item, parent, linked research record and LORE.md were read; the removed historical research-doc link is superseded by LORE.md."
   "2026-10-07T20:56:24.216Z",codex-sol,"Design recorded first in docs/links-layers-obliteration.md: canonical typed committed links with explicit target authorization; private layer snapshots masked from staging/status and preserved across materialization; authorized FileId erasure with durable typed denial, full-store historical inventory, deduplication refusal, byte removal and non-resurrection at every object arrival boundary. Remote tombstones cannot silently authorize deletion of locally held content. Verification and checkout preserve the distinction between intentional erasure, missing data and corruption."
@@ -70,6 +72,10 @@ comments[57]{created_at,author,text}:
   "2026-10-10T06:28:26.121Z",codex-sol,"Renewed linked acceptance now passes 28/28 with zero failures, skips or cancellations: node --test --test-name-pattern=renewed test/composition.test.ts test/served-sync.test.ts, executed through pm test --run --only-last --progress. Two additional production-only reversions prove the advertised legacy HTTP capability fallback and physical shared-control-directory binding before a foreign repository configuration can be opened. Total isolated proof cases are 21/21 nonzero assertion failures with successfully loaded modules; restored source passes. Typecheck, lint and docstring gate pass, covering 53 production files and 283 documented declarations. Two promise-executor lint errors in the new HTTP fixture were corrected with explicit void executor bodies; they were test-authoring defects, not behavioral evidence. The 53-file production inventory and all strict coverage thresholds remain unchanged. Preparing the immutable final candidate and linked complete release gate; the earlier 1213-test branch-coverage failure remains recorded, with failed reports invalidated."
   "2026-10-10T06:46:53.533Z",codex-sol,"Root renewal: exact-head GitHub CodeQL114154266078 flags SSRF in new legacy-peer test relay test/served-sync.test.ts:753. The relay derives upstream URL from incoming request.url, so an absolute request target can override its loopback fixture origin. This is a test-only URL boundary, not a demonstrated production endpoint finding. Add a real bounded local absolute-target rejection case first; require it to fail old fixture then restrict forwarding to two statically built local endpoints. Production source bytes and prior4f3144f full1214/four100 receipt remain unchanged; new-head CI and reviewers must rerun."
   "2026-10-10T06:59:26.175Z",codex-sol,"Root repaired CodeQL27/inline4236742733 in legacy HTTP test relay: incoming request targets no longer construct upstream URLs; only statically built known loopback advertise/fetch endpoints forward. Real POST absolute-target request returns200 with unsafe original forwarding and404 after repair; normal negative-only source control exits1 with actual200/expected404, without forced-exit flag. Earlier accidental GET baseline threw in advertisement parsing and timed out during teardown, so it is rejected as behavioral proof. Fixed fixture drains unknown requests, disables raw client pooling and closes listener before its sockets. Real ordinary positive1/1 and all28 PM-linked renewed cases pass with normal cleanup; typecheck/build:test/lint pass. All53 production bytes are unchanged from accepted4f3144f1214/four100; new-head CI and source-memory/upload-order review repairs still required. Existingowner staysopen; no tenant/core/hosted/telemetry changes."
+  "2026-10-10T07:00:53.900Z",codex-sol,"Renewed review follow-up on the existing feature branch: preserve root relay repair and dated accepted receipt; verify recovery authorization ordering, bounded export discovery, held closure leaf retention, and batch hash ordering with real source-only negative proofs. Keep immutable integrity and denials under one lease; run the strict complete release gate before branch-only push and handoff. No closure or GitHub feedback actions."
+  "2026-10-10T07:07:03.192Z",codex-sol,All four renewed findings verified by original-source assertion failures. Corrected the memory fixture type and invalid short ChangeId before accepting its red evidence; corrected typecheck access to shared authority scope. Baseline export read 8391216 bytes for a 4195608-byte compressed leaf. Baseline closure kept 149097462 buffer bytes for 134217728 payload bytes; restored source measured 14878192 buffer growth and 19529728 native peak RSS growth with all 64 leaves physically read once. Recovery and upload ordering also fail original source and pass restored source. No gate thresholds or deadlines changed; canonical reports invalidated after source edits. Keep prior accepted source and relay receipts dated.
+  "2026-10-10T07:11:46.804Z",codex-sol,"Root exact20d757c CI38032850029 failure diagnosed: Node22/26 coverage/native gates pass, but accept:self-host correctly rejects three committed differences: test/served-sync.test.ts plus8xis toon/history. Root omitted selfhost.bundle regeneration after test/PM relay change. This is rejected complete-CI evidence; CodeQL is green. Upcoming source-repair candidate must stage all tests/docs/PM metadata, regenerate selfhost.bundle, commit immutable source, then repeat full gate and compare committed byte equality without expanding exclusions. Existing four100 receipt remains4f3144f only; do not accept20d ascomplete release."
+  "2026-10-10T07:13:25.671Z",codex-sol,"Final focused PM run passes 5/5, zero failures/skips/cancellations. All 72 reachable objects, including shared manifest/link leaves and physical fragments, open once and read exactly their compressed bytes. Corpus: 134217728 blob/record bytes plus fragmented data; restored native process measured 21104672 buffer growth and 16384000 peak RSS growth versus original 149097368 retained buffers. Four isolated production-only reversions now each exit 1 with AssertionError and loaded modules; source restored. One preliminary upload reversion hit the deliberately conservative encoded-data refusal during setup and is excluded from red evidence; its confirmed rerun produces the expected malformed-tree ordering assertion. Built Node, npm-packed Node and native Bun consumers pass authorized and denied recover-lock cleanup, with ordinary standalone recovery retained. Prior 21 proofs and root POST relay repair are preserved. Static gates pass; complete committed-head release gate follows."
 files[28]:
   - path: CHANGELOG.md
     scope: project
@@ -135,7 +141,7 @@ files[28]:
     scope: project
   - path: vcs-commands.ts
     scope: project
-tests[10]:
+tests[11]:
   - command: node --test test/composition.test.ts
     scope: project
     timeout_seconds: 240
@@ -222,6 +228,14 @@ tests[10]:
     provenance:
       author: codex-sol
       created_at: "2026-10-10T06:27:03.461Z"
+      source_kind: local_mutation
+      source_ref: feat/links-layers-obliteration
+  - command: node --test --test-name-pattern=renewal test/composition.test.ts
+    scope: project
+    timeout_seconds: 240
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-10T07:08:12.912Z"
       source_kind: local_mutation
       source_ref: feat/links-layers-obliteration
 docs[4]{path,scope}:
