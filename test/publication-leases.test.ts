@@ -130,6 +130,11 @@ test("a merge parent that bypasses the replaced tip does not demand leases for a
   sender.refs.compareAndSwap("refs/heads/main", deleted, merge);
   await wire.push(exportBundle(sender.objects, sender.refs, []), [{ ref: "refs/heads/main", expected: deleted, next: merge }], false, new Date());
   assert.equal(receiver.refs.read("refs/heads/main"), merge);
+  // Building on the merge makes the replaced tip's own history a diamond (merge -> deleted -> first and merge -> first).
+  const onTop = writeCommit(sender.objects, { tree: readCommit(sender.objects, merge).tree, parents: [merge], author, committer: author, message: "after merge" });
+  sender.refs.compareAndSwap("refs/heads/main", merge, onTop);
+  await wire.push(exportBundle(sender.objects, sender.refs, []), [{ ref: "refs/heads/main", expected: merge, next: onTop }], false, new Date());
+  assert.equal(receiver.refs.read("refs/heads/main"), onTop);
 });
 
 test("independent processes contend for acquisition; exactly one generation wins", async () => {
