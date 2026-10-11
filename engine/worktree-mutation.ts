@@ -151,8 +151,8 @@ export class WorktreeMutation {
   }
 
   /** Unlink under a pinned parent and turn concurrent disappearance/type replacement into refusal. */
-  private unlink(parent: { path: string; address: string }, stat: BigIntStats): void {
-    this.verifyLeaf(parent, stat);
+  private unlink(parent: { path: string; address: string }, stat: BigIntStats, erasure = false): void {
+    this.verifyLeaf(parent, stat, erasure);
     try {
       fs.unlinkSync(parent.address);
     } catch {
@@ -163,10 +163,10 @@ export class WorktreeMutation {
   }
 
   /** Verify all ancestors and the leaf's no-follow identity around descriptor operations. */
-  private verifyLeaf(parent: { path: string; address: string }, expected: BigIntStats): void {
+  private verifyLeaf(parent: { path: string; address: string }, expected: BigIntStats, erasure = false): void {
     this.verify(parent.path);
     const observed = fs.lstatSync(parent.address, { bigint: true, throwIfNoEntry: false });
-    if (observed === undefined || observed.isSymbolicLink() || !this.same(expected, observed)) this.changed();
+    if (observed === undefined || (!erasure && observed.isSymbolicLink()) || !this.same(expected, observed)) this.changed();
   }
 
   /** Replace a leaf without ever truncating a link or hardlink; write and chmod only its new fd. */
@@ -208,6 +208,36 @@ export class WorktreeMutation {
     }
     if (stat.isSymbolicLink()) this.changed();
     this.unlink(parent, stat);
+  }
+
+  /** Inspect an erasure leaf through pinned parents; a link contributes only its target text. */
+  inspectForErasure(path: string): { readonly stat: BigIntStats; readonly content: Buffer } | undefined {
+    const parent = this.parent(path, false);
+    if (parent === undefined) return undefined;
+    const stat = fs.lstatSync(parent.address, { bigint: true, throwIfNoEntry: false });
+    if (stat === undefined) return undefined;
+    if (!stat.isFile() && !stat.isSymbolicLink()) this.changed();
+    this.verifyLeaf(parent, stat, true);
+    let content: Buffer;
+    if (stat.isSymbolicLink()) content = fs.readlinkSync(parent.address, { encoding: "buffer" });
+    else {
+      let fd: number;
+      try { fd = fs.openSync(parent.address, fs.constants.O_RDONLY | worktreeMutationCapabilities.noFollow()); }
+      catch { this.changed(); }
+      try {
+        if (!this.same(stat, fs.fstatSync(fd, { bigint: true }))) this.changed();
+        content = fs.readFileSync(fd);
+      } finally { fs.closeSync(fd); }
+    }
+    this.verifyLeaf(parent, stat, true);
+    return { stat, content };
+  }
+
+  /** Erasure alone may unlink a leaf link; require the exact identity inspected before denial. */
+  removeForErasure(path: string, expected: BigIntStats): void {
+    const parent = this.parent(path, false);
+    if (parent === undefined || (!expected.isFile() && !expected.isSymbolicLink())) this.changed();
+    this.unlink(parent, expected, true);
   }
 
   /** Prune only captured empty ordinary directories with non-recursive, verified rmdir. */

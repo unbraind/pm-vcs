@@ -5,9 +5,9 @@
 // "what did I just do" survives a lost transcript, and "put it back" is one
 // command rather than a reasoning problem about which id was the old tip.
 //
-// Undo is always possible because objects are never removed. Rewinding a ref
-// makes a commit unreachable, not absent, so the same undo record can move it
-// forward again.
+// Ordinary undo restores refs and HEAD. Authorized FileId obliteration removes
+// payload bytes permanently; undo can restore a pointer but cannot restore its
+// intentionally absent content.
 
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
@@ -126,6 +126,7 @@ export class OperationLog {
    * @param refs - Every ref the operation moved.
    * @param now - Timestamp to record, injected so callers control it.
    * @param head - How the operation moved HEAD itself, when it did.
+   * @param validate - Optional pre-publication validation of the exact assigned receipt.
    * @returns The recorded operation, including its assigned sequence number.
    * @throws ObjectStoreError When another process holds the log's lock.
    */
@@ -135,6 +136,7 @@ export class OperationLog {
     refs: readonly RefTransition[],
     now: Date,
     head?: HeadTransition,
+    validate?: (operation: Operation) => void,
   ): Operation {
     mkdirSync(dirname(this.path), { recursive: true });
     const lockPath = `${this.path}.lock`;
@@ -153,6 +155,7 @@ export class OperationLog {
         refs,
         ...(head === undefined ? {} : { head }),
       };
+      validate?.(operation);
       appendFileSync(this.path, `${JSON.stringify(operation)}\n`);
       return operation;
     } finally {
@@ -174,11 +177,12 @@ export class OperationLog {
    * @param refs - The ref store to update.
    * @param sequence - Which operation to reverse, or null for the most recent.
    * @param now - Timestamp for the undo's own log entry.
+   * @param validate - Optional checkout preflight before any ref, HEAD or log mutation.
    * @returns The undo operation that was recorded.
    * @throws ObjectStoreError When the log is empty, the sequence is unknown, or a
    *   ref or HEAD no longer holds the value the operation left it at.
    */
-  undo(refs: RefStore, sequence: number | null, now: Date): Operation {
+  undo(refs: RefStore, sequence: number | null, now: Date, validate?: (target: Operation) => void): Operation {
     const operations = this.read();
     if (operations.length === 0) {
       throw new ObjectStoreError("nothing_to_undo", "The operation log is empty, so there is nothing to undo.");
@@ -199,6 +203,7 @@ export class OperationLog {
         + "Something moved HEAD since then; re-read it and retry.",
       );
     }
+    validate?.(target);
     refs.transaction(target.refs.map((transition) => ({
       name: transition.ref,
       expected: transition.after,

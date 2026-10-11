@@ -9,21 +9,21 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
 import { afterEach, test } from "node:test";
 
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension from "../index.ts";
-import type { CloneReport, PushReport } from "../engine/sync.ts";
+import type { CloneReport, FetchReport, PushReport } from "../engine/sync.ts";
 import { cloneFrom, fetchFrom, pushTo } from "../engine/sync.ts";
 import { parseBundle } from "../engine/bundle.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
 import { ObjectStoreError, type ObjectId } from "../engine/objects.ts";
 import { readCommit, readSeries, readTree } from "../engine/model.ts";
 import { createSeries } from "../engine/series.ts";
-import { FileTransport, openTransport, TRANSPORT_CAPABILITIES } from "../engine/transport.ts";
+import { type Advertisement, FileTransport, openTransport, TRANSPORT_CAPABILITIES } from "../engine/transport.ts";
 import { readTokenFile, startRepositoryServer, type ServeHandle } from "../engine/serve.ts";
 import { Repository } from "../engine/repo.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -136,6 +136,22 @@ test("a served repository advertises itself exactly as a file remote does", asyn
   // The record configuration is part of the advertisement, which is what makes a
   // clone adopt it and store the same paths the same way.
   assert.deepEqual(advertisement.config, Repository.open(served.repository.root).config);
+});
+
+test("HTTP advertisement preserves legacy identity absence and reports explicit identity", async () => {
+  const served = await serveSeededRepo();
+  const http = new HttpTransport(served.url);
+  assert.equal(served.repository.objects.recordedIdentity(), undefined);
+  const legacy = await http.advertise();
+  assert.equal(legacy.repositoryId, undefined);
+  assert.equal(served.repository.objects.recordedIdentity(), undefined);
+
+  const identity = served.repository.identity();
+  const established = await http.advertise();
+  assert.equal(established.repositoryId, identity);
+  assert.equal(served.repository.objects.recordedIdentity(), identity);
+  assert.deepEqual(established.refs, legacy.refs);
+  assert.deepEqual(established.config, legacy.config);
 });
 
 test("cloning over HTTP reproduces the same commits and configuration as cloning over a file remote", async () => {
@@ -638,7 +654,7 @@ test("real responders with malformed successful envelopes fail closed", async ()
   const wire = new HttpTransport(`http://127.0.0.1:${address.port}/repo`);
   try {
     const advertisement = { refs: [], head: null, config: {}, formatVersion: "1", capabilities: [] };
-    for (const malformed of [null, [], {}, { ...advertisement, refs: [null] }, { ...advertisement, refs: [[]] }, { ...advertisement, refs: [{}] }, { ...advertisement, refs: [{ name: "main", target: 1 }] }, { ...advertisement, head: 1 }, { ...advertisement, config: null }, { ...advertisement, config: [] }, { ...advertisement, config: "bad" }, { ...advertisement, config: { recordPaths: "x" } }, { ...advertisement, config: { recordPolicy: [] } }, { ...advertisement, formatVersion: 1 }, { ...advertisement, capabilities: [1] }]) {
+    for (const malformed of [null, [], {}, { ...advertisement, refs: [null] }, { ...advertisement, refs: [[]] }, { ...advertisement, refs: [{}] }, { ...advertisement, refs: [{ name: "main", target: 1 }] }, { ...advertisement, head: 1 }, { ...advertisement, config: null }, { ...advertisement, config: [] }, { ...advertisement, config: "bad" }, { ...advertisement, config: { recordPaths: "x" } }, { ...advertisement, config: { recordPolicy: [] } }, { ...advertisement, formatVersion: 1 }, { ...advertisement, capabilities: [1] }, { ...advertisement, repositoryId: null }, { ...advertisement, repositoryId: 1 }, { ...advertisement, repositoryId: "invalid" }]) {
       answer = malformed;
       await assert.rejects(wire.advertise(), { code: "unreachable_remote" });
     }
@@ -724,4 +740,50 @@ test("malformed wire URLs and occupied listen sockets fail through the command s
   assert.match(String(rejected.errorMessage), /EADDRINUSE|port \d+ in use/);
   const malformed = await harness.runCommand({ command: "vcs remote", args: ["wire", "http://[broken"], pmRoot: served.repository.root });
   assert.match(String(malformed.errorMessage), /does not parse/);
+});
+
+test("renewed no-op fetch falls back for a real HTTP peer without object-fetch capability", async () => {
+  const served = await serveSeededRepo();
+  const routes: string[] = [];
+  const legacy = createServer(async (request, response) => {
+    const route = request.url ?? "/"; routes.push(route);
+    if (route.endsWith("/objects/fetch")) { request.resume(); response.writeHead(404); response.end("unsupported endpoint"); return; }
+    const upstreamUrl = route === `/${served.name}/advertise`
+      ? `http://127.0.0.1:${served.server.port}/${served.name}/advertise`
+      : route === `/${served.name}/fetch` ? `http://127.0.0.1:${served.server.port}/${served.name}/fetch` : undefined;
+    if (upstreamUrl === undefined) { request.resume(); response.writeHead(404); response.end("unsupported endpoint"); return; }
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const upstream = await fetch(upstreamUrl, {
+      method: request.method,
+      headers: { "Content-Type": "application/json", Connection: "close" },
+      ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks).toString("utf8") }),
+    });
+    let body = await upstream.text();
+    if (route.endsWith("/advertise")) {
+      const advertisement = JSON.parse(body) as Advertisement;
+      body = JSON.stringify({ ...advertisement, capabilities: advertisement.capabilities.filter(capability => capability !== "object-fetch") });
+    }
+    response.writeHead(upstream.status, { "Content-Type": upstream.headers.get("Content-Type") ?? "application/octet-stream" }); response.end(body);
+  });
+  await new Promise<void>(resolve => { legacy.listen(0, "127.0.0.1", resolve); });
+  const address = legacy.address(); assert.ok(address && typeof address !== "string");
+  try {
+    const absoluteTargetStatus = await new Promise<number | undefined>((resolve, reject) => {
+      const client = httpRequest({ hostname: "127.0.0.1", port: address.port, method: "POST", agent: false, path: `http://127.0.0.1:${served.server.port}/${served.name}/advertise` }, response => {
+        response.resume(); response.once("end", () => resolve(response.statusCode));
+      });
+      client.once("error", reject); client.end();
+    });
+    assert.equal(absoluteTargetStatus, 404, "an absolute request target must not override the fixture origin");
+    const root = tempRoot();
+    await cloneFrom(`http://127.0.0.1:${address.port}/${served.name}`, root, now);
+    const clone = Repository.open(root); const before = clone.operations.read();
+    let report: FetchReport | undefined;
+    await assert.doesNotReject(async () => { report = await fetchFrom(clone, "origin", now); });
+    assert.ok(report); assert.equal(report.upToDate, true); assert.deepEqual(report.added, []);
+    assert.equal(routes.filter(route => route.endsWith("/fetch")).length, 2);
+    assert.equal(routes.some(route => route.endsWith("/objects/fetch")), false);
+    assert.deepEqual(clone.operations.read(), before); assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "one");
+  } finally { await new Promise<void>(resolve => { legacy.close(() => resolve()); legacy.closeAllConnections(); }); }
 });

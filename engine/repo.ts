@@ -1,3 +1,4 @@
+import { inspectClosure, type ClosureReport } from "./closure.ts";
 // The porcelain: init, stage, commit, branch, switch, merge, log, diff.
 //
 // Everything user-facing goes through this class, and it owns two invariants the
@@ -11,13 +12,15 @@
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
   type Commit,
   type FileId,
+  decodeManifest,
+  decodeTree,
   type FileMode,
   type RecordDocument,
   type Signature,
@@ -26,10 +29,17 @@ import {
   effectiveChangeId,
   encodeRecord,
   identityWithoutChangeLine,
+  migratedFileId,
   readCommit,
   writeCommit,
 } from "./model.ts";
-import { type ObjectId, ObjectStore, ObjectStoreError, hashObject, isObjectId } from "./objects.ts";
+import { type ObjectId, type PayloadState, ObjectStore, ObjectStoreError, hashObject, isObjectId, assertRegistryName, readControlJson } from "./objects.ts";
+
+import { assertCompositionPath, assertSafeFilePath, authorize, configureAuthority, decodeLink, encodeLink, pathsOverlap, readLayers, writePrivateJson, type AuthorityChangeAuthorization, type LocalLayer, type RepositoryLink } from "./composition.ts";
+import { eraseFile, type ErasureReceipt } from "./erasure.ts";
+import { readFragmented } from "./fragments.ts";
+
+
 import type { StoredObject } from "./objects.ts";
 import {
   type ConflictLabels,
@@ -76,10 +86,10 @@ import {
   decodeIndex,
   encodeIndex,
   flattenTree,
+  isCanonicalRepoPath,
   isProtectedWorktreePath,
   listWorkingTree,
   materializeTree,
-  pruneEmptyDirectories,
   normalizeRepoPath,
   readWorkingFile,
   readWorkingStat,
@@ -105,16 +115,6 @@ function prefixesOf(path: string): string[] {
   return prefixes;
 }
 
-/** Derive one migration-safe identity from a legacy index entry. */
-function migratedFileId(entry: Pick<IndexEntry, "path" | "id">): FileId {
-  return createHash("sha256")
-    .update("pm-vcs legacy file identity\0", "utf8")
-    .update(entry.path, "utf8")
-    .update("\0", "utf8")
-    .update(entry.id, "utf8")
-    .digest("hex")
-    .slice(0, 32);
-}
 import { splitLines, unifiedDiff } from "./diff.ts";
 import { type IgnoreRules, isIgnored, isRuntimeIgnored, readIgnoreRules } from "./ignore.ts";
 import { parseWorkingRecord, renderWorkingRecord } from "./record-format.ts";
@@ -320,13 +320,17 @@ export class Repository {
    */
   readonly config: RepositoryConfig;
 
+  /** Active SDK tracker root used only for non-negatable local runtime fences. */
+  private readonly pmRoot: string | undefined;
+
   /**
    * @param root - Absolute path to the working tree root.
    * @param config - Settings to use. Defaults to whatever the repository stores.
+   * @param pmRoot - Active SDK tracker root for this invocation's runtime fences.
    * @throws ObjectStoreError When the directory holds an instance link whose hub
    *   is missing — an instance without its shared store cannot answer anything.
    */
-  constructor(root: string, config?: RepositoryConfig) {
+  constructor(root: string, config?: RepositoryConfig, pmRoot?: string) {
     this.root = root;
     this.controlDirectory = join(root, CONTROL_DIRECTORY);
     this.instanceLink = Repository.resolveInstanceLink(this.controlDirectory, root);
@@ -338,6 +342,7 @@ export class Repository {
     this.operations = new OperationLog(join(this.controlDirectory, "oplog.jsonl"));
     this.remotes = new RemoteStore(join(shared, "remotes.json"));
     this.config = config ?? readConfig(join(shared, "config.json"));
+    this.pmRoot = pmRoot;
   }
 
   /**
@@ -447,12 +452,13 @@ export class Repository {
    * Opens an existing repository.
    *
    * @param root - Absolute path to the working tree root.
+   * @param pmRoot - Active SDK tracker root, independent of repository configuration.
    * @returns The opened repository.
    * @throws ObjectStoreError When there is no repository, or its format is one
    *   this build does not understand.
    */
-  static open(root: string): Repository {
-    const repository = new Repository(root);
+  static open(root: string, pmRoot?: string): Repository {
+    const repository = new Repository(root, undefined, pmRoot);
     let format: string;
     try {
       format = readFileSync(join(repository.controlDirectory, "format"), "utf8").trim();
@@ -578,6 +584,7 @@ export class Repository {
    * @returns True when the object is a blob whose text contains a marker line.
    */
   private blobHasConflictMarkers(id: ObjectId): boolean {
+    if (this.objects.denial(id) !== undefined) return false;
     const object = this.objects.read(id);
     if (object.type !== "blob") return false;
     return CONFLICT_MARKER.test(object.payload.toString("utf8"));
@@ -668,7 +675,9 @@ export class Repository {
    * @param entries - The staged entries to record.
    */
   writeIndex(entries: readonly IndexEntry[]): void {
-    this.replaceIndex(entries, null);
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      this.replaceIndex(entries, null);
+    });
   }
 
   /**
@@ -684,13 +693,27 @@ export class Repository {
    * @returns The paths whose staged state changed.
    */
   stage(paths: readonly string[], read: typeof readWorkingFile = readWorkingFile): string[] {
+    return this.objects.withWriteLock(/** Hold layer masking and payload publication in one transaction. */ () => this.stageLocked(paths, read));
+  }
+
+  /** Stage selected working paths with private layers excluded before any byte is read. */
+  private stageLocked(paths: readonly string[], read: typeof readWorkingFile): string[] {
     const originalEntries = this.readIndex();
     const index = new Map(originalEntries.map((entry) => [entry.path, entry]));
     const rules = this.ignoreRules();
     const targets = paths.length === 0
       ? [...new Set([...listWorkingTree(this.root, CONTROL_DIRECTORY, rules), ...index.keys()])]
       : paths.map((path) => normalizeRepoPath(this.root, path));
+    const layers = this.layerPaths();
+    const denied = this.objects.denials();
     const changed: string[] = [];
+    for (const path of targets) {
+      if (layers.has(path) && paths.length > 0) throw new ObjectStoreError("layer_excluded", "Private overlay paths cannot be staged; remove the layer first.");
+      const entry = index.get(path);
+      if (entry?.fileId !== undefined && denied.some(/** A denied identity cannot receive replacement bytes. */ (denial) => denial.tombstone.fileId === entry.fileId) && paths.length > 0) {
+        throw new ObjectStoreError("file_obliterated", "An obliterated FileId cannot be staged again.");
+      }
+    }
     // Control and alias entries are dropped even outside the sparse view.
     // Drop runtime entries inherited from an older index on the next add. A
     // sparse runtime entry is kept: its path is outside this working tree's view, and
@@ -701,6 +724,7 @@ export class Repository {
         || (entry.sparse !== true && isRuntimeIgnored(path, rules))) { index.delete(path); changed.push(path); }
     }
     for (const path of targets) {
+      if (layers.has(path) || denied.some(/** Bulk staging preserves terminal identity references. */ (denial) => denial.tombstone.fileId === index.get(path)?.fileId)) continue;
       // An explicitly named ignored path is refused rather than silently
       // skipped: the caller asked for something specific, and staging nothing
       // while reporting success is how a commit ends up missing a file.
@@ -732,15 +756,19 @@ export class Repository {
         if (existing !== undefined && existing.sparse !== true && index.delete(path)) changed.push(path);
         continue;
       }
-      const id = this.stageContent(path, content);
+      const previous = index.get(path);
+      const isLink = previous !== undefined && this.objects.state(previous.id).kind === "present" && this.objects.read(previous.id).type === "link";
+      const id = isLink ? hashObject("link", encodeLink(decodeLink(content)))
+        : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(parseWorkingRecord(path, content))) : hashObject("blob", content);
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
       let fileId = existing === undefined ? undefined : existing.fileId ?? migratedFileId(existing);
       let copiedFrom = existing?.copiedFrom;
       if (fileId === undefined) {
         const identityMatches = stat === undefined ? [] : originalEntries.filter((entry) => entry.path !== path
+          && !denied.some(/** Erased identities cannot be inferred from a recycled filesystem inode. */ (denial) => denial.tombstone.fileId === entry.fileId)
           && entry.stat?.dev === stat.dev && entry.stat.ino === stat.ino);
-        const contentMatches = originalEntries.filter((entry) => entry.path !== path && entry.id === id
+        const contentMatches = originalEntries.filter((entry) => entry.path !== path && !denied.some(/** A matching denied address is refused at publication, never adopted as a new live identity. */ (denial) => denial.tombstone.fileId === entry.fileId) && entry.id === id
           && entry.mode === mode);
         const matches = identityMatches.length === 1 ? identityMatches : contentMatches;
         if (matches.length === 1) {
@@ -758,6 +786,8 @@ export class Repository {
           fileId = randomBytes(16).toString("hex");
         }
       }
+      if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
+      else this.stageContent(path, content, fileId);
       index.set(path, { path, id, mode, fileId, ...(copiedFrom === undefined ? {} : { copiedFrom }),
         ...(stat === undefined ? {} : { stat }) });
       if (!existing || existing.id !== id || existing.mode !== mode || existing.fileId !== fileId) changed.push(path);
@@ -781,9 +811,9 @@ export class Repository {
    *   object — storing it as a blob instead would silently drop it out of
    *   field-aware merging for the rest of its history.
    */
-  private stageContent(path: string, content: Buffer): ObjectId {
-    if (!isRecordPath(path, this.config)) return this.objects.write("blob", content);
-    return this.objects.write("record", encodeRecord(parseWorkingRecord(path, content)));
+  private stageContent(path: string, content: Buffer, fileId: string): ObjectId {
+    if (!isRecordPath(path, this.config)) return this.objects.write("blob", content, fileId);
+    return this.objects.write("record", encodeRecord(parseWorkingRecord(path, content)), fileId);
   }
 
   /**
@@ -795,8 +825,8 @@ export class Repository {
    *
    * @returns The compiled rules.
    */
-  private ignoreRules(): IgnoreRules {
-    return readIgnoreRules(this.root, this.config.recordPaths);
+  ignoreRules(): IgnoreRules {
+    return readIgnoreRules(this.root, this.config.recordPaths, this.pmRoot);
   }
 
   /**
@@ -814,12 +844,15 @@ export class Repository {
    */
   status(read: typeof readWorkingFile = readWorkingFile): StatusReport {
     const snapshot = this.readIndexSnapshot();
-    const indexedPaths = new Set(snapshot.entries.map((entry) => entry.path));
+    const indexedPaths = new Map(snapshot.entries.map((entry) => [entry.path, entry.id]));
     const refreshed = new Map<string, IndexEntry["stat"]>();
     // Dirty hints may only force content comparisons, never skip one, so they
     // are passed as the extra-check set: a hinted path is re-read even when its
     // cached stat matches. The report below is what rewrites them, and `scan`
     // is the authority both derive from.
+    const layers = this.layers();
+    const obliterated = this.obliteratedPaths();
+    const excluded = new Set([...layers.flatMap(/** Use one validated layer snapshot for this status operation. */ (layer) => layer.files.map(/** Exclude exact overlay ownership. */ (file) => file.path)), ...snapshot.entries.filter(/** Terminal absence is visible independently of ordinary modifications. */ (entry) => this.objects.denial(entry.id) !== undefined).map(/** Mask absent payloads while preserving their staged structural identity. */ (entry) => entry.path)]);
     const report = computeStatus(
       this.objects,
       this.root,
@@ -827,17 +860,14 @@ export class Repository {
       snapshot.entries,
       CONTROL_DIRECTORY,
       this.ignoreRules(),
-      (path, content) => (
-        isRecordPath(path, this.config)
-          ? hashObject("record", encodeRecord(parseWorkingRecord(path, content)))
-          : hashObject("blob", content)
-      ),
+      (path, content) => this.workingIdentifier(path, content, indexedPaths.get(path)),
       read,
       (path, stat) => refreshed.set(path, stat),
       // Hinted paths are intersected with the index through a set: hints may
       // name paths the index no longer holds (stale after a switch), and a
       // linear scan per hint made the filter quadratic in hints x entries.
       new Set(readHints(this.controlDirectory).filter((path) => indexedPaths.has(path))),
+      excluded,
     );
     if (refreshed.size > 0) {
       this.replaceIndex(snapshot.entries.map((entry) => {
@@ -846,12 +876,15 @@ export class Repository {
       }), snapshot.contents);
     }
     const merge = this.readMergeState();
-    if (merge === null) return report;
+    const annotated: StatusReport = { ...report,
+      ...(layers.length > 0 ? { excludedLayers: layers.map(/** Make private exclusions visible in status. */ (layer) => ({ name: layer.name, paths: layer.files.map(/** Report names without exposing snapshot bytes. */ (file) => file.path) })) } : {}),
+      ...(obliterated.length > 0 ? { obliterated } : {}) };
+    if (merge === null) return annotated;
     // The merge state is authoritative for `clean`: even if HEAD, index and
     // working tree momentarily agree, the repository is not in a settled state
     // until the merge is completed or aborted.
     return {
-      ...report,
+      ...annotated,
       clean: false,
       merge: {
         revision: merge.revision,
@@ -859,6 +892,13 @@ export class Repository {
         conflicts: merge.conflicts.map((conflict) => conflict.path),
       },
     };
+  }
+
+  /** Identify working bytes without reading stored payloads; exact descriptor hashes retain their typed identity. */
+  private workingIdentifier(path: string, content: Buffer, expected: ObjectId | undefined): ObjectId {
+    const link = hashObject("link", content);
+    if (link === expected) return link;
+    return isRecordPath(path, this.config) ? hashObject("record", encodeRecord(parseWorkingRecord(path, content))) : hashObject("blob", content);
   }
 
   /**
@@ -869,7 +909,8 @@ export class Repository {
    * @returns Native PM TOON for item records, or the object's raw bytes otherwise.
    */
   private workingContent(path: string, object: StoredObject): Buffer {
-    return object.type === "record" ? renderWorkingRecord(path, decodeRecord(object.payload)) : object.payload;
+    return object.type === "record" ? renderWorkingRecord(path, decodeRecord(object.payload))
+      : object.type === "manifest" ? readFragmented(this.objects, hashObject("manifest", object.payload)) : object.payload;
   }
 
   /**
@@ -916,12 +957,21 @@ export class Repository {
    * @param tree - Tree to materialize, or null for an empty one.
    */
   materialize(tree: ObjectId | null): void {
+    this.objects.withWriteLock(/** Serialize checkout with layer ownership and permanent erasure. */ () => this.materializeLocked(tree));
+  }
+
+  /** Write visible underlying paths while leaving all private overlay bytes untouched. */
+  private materializeLocked(tree: ObjectId | null): void {
     const view = this.view();
-    const visible = view === null ? undefined : (path: string) => viewIncludes(view, path);
+    const overlays = this.layerPaths();
+    this.assertLayersAcceptTree(tree, overlays);
+    const flat = overlays.size > 0 || this.objects.denials().length > 0 ? flattenTree(this.objects, tree) : new Map();
+    const blocked = new Set([...overlays, ...[...flat].filter(/** Obliterated payloads are intentional absence, not checkout failures. */ ([, entry]) => this.objects.denial(entry.id) !== undefined).map(/** Keep every terminal path out of the write set. */ ([path]) => path)]);
+    const visible = (path: string): boolean => !blocked.has(path) && (view === null || viewIncludes(view, path));
     // Only non-sparse entries are removable: a path this working tree never
     // materialized is not its content to delete, and an untracked file that
     // happens to sit at a sparse path must survive every switch.
-    const removablePaths = new Set(this.readIndex().filter((entry) => entry.sparse !== true).map((entry) => entry.path));
+    const removablePaths = new Set(this.readIndex().filter((entry) => entry.sparse !== true && !overlays.has(entry.path)).map((entry) => entry.path));
     const rules = this.ignoreRules();
     const written = materializeTree(
       this.objects,
@@ -931,15 +981,254 @@ export class Repository {
       rules,
       (path, object) => this.workingContent(path, object),
       removablePaths,
-      visible ?? (() => true),
+      visible,
     );
     // Out-of-view paths join the index as sparse entries holding their committed
     // content — filtered by the same ignore rules as the write set, so an ignored
     // path never becomes staged content merely by sitting outside the view.
-    this.writeIndex(visible === undefined ? written : [...written, ...this.indexEntriesForTree(tree)
-      .filter((entry) => entry.sparse === true && !isIgnored(entry.path, rules))]);
+    this.writeIndex(view === null && blocked.size === 0 ? written : [...written, ...this.indexEntriesForTree(tree)
+      .filter((entry) => (entry.sparse === true || blocked.has(entry.path)) && !isIgnored(entry.path, rules))]);
     // The tree was just written, so no path can be dirty with respect to it.
     writeHints(this.controlDirectory, []);
+  }
+
+  /** Return the clone-stable immutable identity used by pinned repository links. */
+  identity(): string { return this.objects.withWriteLock(/** Create a legacy identity once under the store lock. */ () => this.objects.identity()); }
+
+  /** Configure separate local link-read and permanent-erasure credentials. */
+  setAuthority(principal: string, readCredential: string, eraseCredential: string, authorization?: AuthorityChangeAuthorization): void {
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      configureAuthority(this.sharedControlDirectory, principal, readCredential, eraseCredential, authorization);
+    });
+  }
+
+  /** List private snapshots belonging exclusively to this instance. */
+  layers(): LocalLayer[] { return readLayers(this.controlDirectory, this.ignoreRules()); }
+
+  /** Collect exact overlay ownership for every staging and materialization boundary. */
+  private layerPaths(): Set<string> {
+    return new Set(this.layers().flatMap(/** Flatten private layer ownership without reading working bytes. */ (layer) => layer.files.map(/** Extract one path without exposing private payload. */ (file) => file.path)));
+  }
+
+  /** Refuse unsafe overlay paths and parent collisions before moving refs, HEAD or the operation log. */
+  private assertLayersAcceptTree(tree: ObjectId | null, overlays = this.layerPaths()): void {
+    if (overlays.size === 0) return;
+    const incoming = [...flattenTree(this.objects, tree).keys()];
+    for (const path of overlays) {
+      assertSafeFilePath(this.root, path, this.ignoreRules());
+      if (incoming.some(/** Exact overlays mask underlying files, while directory collisions refuse. */ (candidate) => candidate !== path && pathsOverlap(candidate, path))) {
+        throw new ObjectStoreError("layer_checkout_conflict", "Checkout collides with a private layer directory; remove the layer first.");
+      }
+    }
+  }
+
+  /** Add an instance-private overlay after proving ownership, cleanliness and safe paths. */
+  addLayer(name: string, files: ReadonlyMap<string, { content: Buffer; executable: boolean }>): LocalLayer {
+    return this.objects.withWriteLock(/** Layer publication cannot race staging or erasure. */ () => {
+      this.objects.preflight([], true);
+      const layers = this.layers();
+      assertRegistryName(name, "bad_layers", "Layer");
+      if (files.size === 0 || layers.some(/** Refuse a local name collision. */ (layer) => layer.name === name)) throw new ObjectStoreError("bad_layers", "Layer is empty or its name already exists.");
+      const owned = this.layerPaths();
+      const index = new Map(this.readIndex().map(/** Resolve current ownership independently of disk contents. */ (entry) => [entry.path, entry]));
+      const status = this.status();
+      const dirty = new Set([...status.staged, ...status.unstaged].map(/** Refuse both staged and unstaged changes before overlaying. */ (change) => change.path));
+      const layer: LocalLayer = { name, files: [...files].map(/** Store snapshots only in private control metadata. */ ([path, value]) => {
+        assertCompositionPath(path, this.ignoreRules());
+        assertSafeFilePath(this.root, path, this.ignoreRules());
+        this.objects.preflight([{ type: "blob", payload: value.content, id: hashObject("blob", value.content) }], true);
+        if (dirty.has(path) || (existsSync(join(this.root, ...path.split("/"))) && !index.has(path))
+          || [...owned, ...files.keys()].some(/** Parent collisions and existing private ownership are never implicit. */ (other) => (other !== path || owned.has(path)) && pathsOverlap(other, path))
+          || this.objects.denial(index.get(path)?.id ?? "") !== undefined) {
+          throw new ObjectStoreError("layer_collision", "Layer would overwrite dirty, untracked, obliterated or privately owned content.");
+        }
+        return { path, content: value.content.toString("base64"), executable: value.executable };
+      }).sort(/** Make local metadata stable for inspection and recovery. */ (a, b) => compareByteOrder(a.path, b.path)) };
+      writePrivateJson(join(this.controlDirectory, "layers.json"), [...layers, layer]);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      try {
+        for (const file of layer.files) {
+          mutation.write(file.path, Buffer.from(file.content, "base64"), file.executable ? 0o755 : 0o644);
+        }
+      } finally {
+        mutation.close();
+      }
+      return layer;
+    });
+  }
+
+  /** Remove a layer, restoring current underlying index bytes; edited overlays require explicit discard. */
+  removeLayer(name: string, discardEdits = false): void {
+    this.objects.withWriteLock(/** Restore and remove ownership atomically with respect to other writers. */ () => {
+      const layers = this.layers();
+      const layer = layers.find(/** Select only this instance's named snapshot. */ (entry) => entry.name === name);
+      if (layer === undefined) throw new ObjectStoreError("unknown_layer", "No private layer has that name.");
+      const index = new Map(this.readIndex().map(/** Restore the current checkout's underlying state. */ (entry) => [entry.path, entry]));
+      const restore = new Map<string, Buffer>();
+      for (const file of layer.files) {
+        assertSafeFilePath(this.root, file.path, this.ignoreRules());
+        if (!discardEdits && (!existsSync(join(this.root, ...file.path.split("/")))
+          || !readFileSync(join(this.root, ...file.path.split("/"))).equals(Buffer.from(file.content, "base64"))
+          || ((statSync(join(this.root, ...file.path.split("/"))).mode & 0o100) !== 0) !== file.executable)) {
+          throw new ObjectStoreError("layer_edited", "Layer has edited or missing bytes; explicitly discard edits to remove it.");
+        }
+        const entry = index.get(file.path);
+        if (entry !== undefined && entry.sparse !== true) restore.set(file.path, this.workingContent(file.path, this.objects.read(entry.id)));
+      }
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      try {
+        for (const file of layer.files) {
+          const content = restore.get(file.path);
+          if (content === undefined) mutation.remove(file.path);
+          else mutation.write(file.path, content, index.get(file.path)!.mode === "100755" ? 0o755 : 0o644);
+        }
+      } finally {
+        mutation.close();
+      }
+      writePrivateJson(join(this.controlDirectory, "layers.json"), layers.filter(/** Retain every other private snapshot. */ (entry) => entry.name !== name));
+    });
+  }
+
+  /** Stage a canonical typed link without copying target payloads or target credentials. */
+  stageLink(path: string, link: RepositoryLink): ObjectId {
+    return this.objects.withWriteLock(/** Keep descriptor publication and index ownership together. */ () => {
+      assertCompositionPath(path, this.ignoreRules());
+      assertSafeFilePath(this.root, path, this.ignoreRules());
+      if (this.layerPaths().has(path)) throw new ObjectStoreError("layer_excluded", "A private overlay cannot hold a staged descriptor.");
+      const payload = encodeLink(link);
+      for (const mapping of link.mappings) assertCompositionPath(mapping.destination, this.ignoreRules());
+      const index = this.readIndex();
+      const previous = index.find(/** Preserve stable descriptor identity across a deliberate pin update. */ (entry) => entry.path === path);
+      if (existsSync(join(this.root, path)) && previous === undefined) throw new ObjectStoreError("link_collision", "Descriptor path already holds untracked content.");
+      if (previous !== undefined && this.status().unstaged.some(/** Preserve edits to an existing descriptor. */ (entry) => entry.path === path)) throw new ObjectStoreError("link_collision", "Descriptor has unstaged edits.");
+      const fileId = previous?.fileId ?? randomBytes(16).toString("hex");
+      const id = this.objects.write("link", payload, fileId);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      try {
+        mutation.write(path, payload, 0o644);
+      } finally {
+        mutation.close();
+      }
+      this.writeIndex([...index.filter(/** Replace exactly one descriptor binding. */ (entry) => entry.path !== path),
+        { path, id, mode: "100644", fileId }]);
+      return id;
+    });
+  }
+
+  /** List typed links in the complete staged tree, independent of local target bindings. */
+  links(): { path: string; id: ObjectId; link: RepositoryLink }[] {
+    return this.readIndex().flatMap(/** A terminal erased descriptor is no longer resolvable. */ (entry) => {
+      if (this.objects.denial(entry.id) !== undefined) return [];
+      const object = this.objects.readIfType(entry.id, "link");
+      return object === undefined ? [] : [{ path: entry.path, id: entry.id, link: decodeLink(object.payload) }];
+    });
+  }
+
+  /** Explicitly resolve a pinned target under its own read authority into a private layer. */
+  resolveLink(path: string, target: Repository, credential: string, layerName: string): LocalLayer {
+    return this.objects.withWriteLock(/** Link publication cannot retain local cached bytes across erasure. */ () => target.objects.withWriteLock(/** Keep pinned target reads inside its independent erasure lease too. */ () => {
+        assertCompositionPath(path, this.ignoreRules());
+        authorize(target.sharedControlDirectory, "read", credential);
+        const descriptor = this.links().find(/** Resolve the named committed descriptor, never a branch. */ (entry) => entry.path === path);
+        if (descriptor === undefined) throw new ObjectStoreError("unknown_link", "No typed link exists at that descriptor path.");
+        if (target.identity() !== descriptor.link.repository) throw new ObjectStoreError("link_identity_mismatch", "Target repository identity does not match the immutable pin.");
+        const tree = flattenTree(target.objects, readCommit(target.objects, descriptor.link.revision).tree);
+        const files = new Map<string, { content: Buffer; executable: boolean }>();
+        for (const mapping of descriptor.link.mappings) {
+          assertCompositionPath(mapping.source, target.ignoreRules());
+          assertSafeFilePath(target.root, mapping.source, target.ignoreRules());
+          const entry = tree.get(mapping.source);
+          if (entry === undefined) throw new ObjectStoreError("link_subset_missing", "Pinned revision does not contain a mapped source file.");
+          const object = target.objects.read(entry.id);
+          if (object.type === "link") throw new ObjectStoreError("nested_link", "Explicit resolution does not recursively follow links.");
+          files.set(mapping.destination, { content: target.workingContent(mapping.source, object), executable: entry.mode === "100755" });
+        }
+        return this.addLayer(layerName, files);
+    }));
+  }
+
+  /** Report intentional checkout absence with its permanent audit address. */
+  obliteratedPaths(): { path: string; tombstone: string }[] {
+    return this.readIndex().flatMap(/** Preserve a typed distinction from ordinary sparse or missing files. */ (entry) => {
+      const denial = this.objects.denial(entry.id);
+      return denial === undefined ? [] : [{ path: entry.path, tombstone: denial.id }];
+    });
+  }
+
+  /** Read a historical file as one of four explicit payload states. */
+  readFileState(revision: string, path: string): PayloadState {
+    const entry = flattenTree(this.objects, readCommit(this.objects, this.resolve(revision)).tree).get(path);
+    if (entry === undefined) return { kind: "missing", code: "path_not_found" };
+    return this.objects.state(entry.id, /** A file's present state includes all fragments rather than only manifest metadata. */ () => {
+      const object = this.objects.read(entry.id);
+      return object.type === "manifest" ? { type: "blob", payload: readFragmented(this.objects, entry.id) } : object;
+    });
+  }
+
+  /** Verify the entire ref closure, including fragments and intentional terminal absence. */
+  verify(): ClosureReport {
+    const targets = [...this.refs.list(BRANCH_PREFIX), ...this.refs.list(TAG_PREFIX)].map(/** Branches and tags require complete typed commit structure. */ (entry) => entry.target);
+    return inspectClosure(this.objects, targets, [], this.objects.denials(), true);
+  }
+
+  /** Read the retired cleanup scope without accepting absolute, empty or malformed paths. */
+  private retiredInstances(): string[] {
+    const path = join(this.sharedControlDirectory, "unlinked-instances.json");
+    const retired = readControlJson(path, "bad_instances", "retired instance inventory");
+    if (retired === null && !existsSync(path)) return [];
+    if (!Array.isArray(retired) || retired.some(/** Only canonical relative paths previously emitted by unlink can be inventoried. */ (entry) =>
+      typeof entry !== "string" || entry === "" || entry === "." || isAbsolute(entry)
+      || entry.includes("\\") || relative(this.hubRoot, resolve(this.hubRoot, entry)).split(sep).join("/") !== entry)) {
+      throw new ObjectStoreError("bad_instances", "Retired instance inventory is corrupt.");
+    }
+    return retired;
+  }
+
+  /** Check the physical shared-store binding before opening or touching another instance's index or worktree. */
+  private instanceIsBound(path: string): boolean {
+    try {
+      const link = Repository.resolveInstanceLink(join(path, CONTROL_DIRECTORY), path);
+      return link !== null && realpathSync(link.controlDirectory) === realpathSync(this.sharedControlDirectory);
+    } catch (error) {
+      if (error instanceof ObjectStoreError && error.code === "broken_instance_link") return false;
+      throw error;
+    }
+  }
+
+  /** Explicitly relinquish a missing or unbound retired cleanup path under erasure authority, recording the reason locally. */
+  pruneRetiredInstance(path: string, credential: string, reason: string, now: Date): void {
+    this.objects.withWriteLock(/** Scope reduction is serialized with instance creation and physical erasure. */ () => {
+      const principal = authorize(this.sharedControlDirectory, "erase", credential);
+      if (!/^[a-z][a-z0-9_-]{0,63}$/.test(reason)) throw new ObjectStoreError("bad_prune_reason", "Pruning requires a bounded reason code.");
+      const retired = this.retiredInstances();
+      if (!retired.includes(path)) throw new ObjectStoreError("unknown_retired_instance", "No retired instance has that stored relative path.");
+      const root = resolve(this.hubRoot, path);
+      const missing = lstatSync(root, { throwIfNoEntry: false }) === undefined;
+      if (!missing && this.instanceIsBound(root)) throw new ObjectStoreError("instance_still_bound", "The retired instance still reads this hub; its held bytes remain in erasure scope.");
+      this.operations.append("prune-retired-instance", `Pruned ${path} (${missing ? "missing" : "unbound"}); principal ${principal}; reason ${reason}. Cleanup at this path is no longer claimed.`, [], now);
+      writePrivateJson(join(this.sharedControlDirectory, "unlinked-instances.json"), retired.filter(/** Remove only the explicitly named scope entry after recording its audit. */ (entry) => entry !== path));
+    });
+  }
+
+  /** Permanently erase all payloads of a FileId, including every shared instance. */
+  obliterate(selector: string, credential: string, reason: string, now: Date): ErasureReceipt {
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      let pmRoot = this.pmRoot;
+      if (pmRoot !== undefined && pmRoot !== "") {
+        const absolute = resolve(this.root, pmRoot);
+        const coordinate = relative(this.root, absolute).split(sep).join("/");
+        // Only the caller's known in-tree tracker is rebased into other instances.
+        // An external tracker keeps its absolute boundary, never a guessed basename.
+        pmRoot = coordinate === "" || (isCanonicalRepoPath(coordinate) && !isAbsolute(coordinate)) ? coordinate || "." : absolute;
+      }
+      const paths = [this.hubRoot, ...readInstances(this.sharedControlDirectory).map(/** Registered instances share this denial and physical cleanup scope. */ (entry) => resolve(this.hubRoot, entry.path))];
+      paths.push(...this.retiredInstances().map(/** Unlink never silently relinquishes held private or working bytes. */ (path) => resolve(this.hubRoot, path)));
+      const instances = [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
+        if (path !== this.hubRoot && !this.instanceIsBound(path)) throw new ObjectStoreError("unbound_instance", "An inventoried instance is missing or no longer linked to this hub; explicitly prune retired paths before erasure.");
+        return Repository.open(path, pmRoot);
+      });
+      return eraseFile(this, instances, selector, credential, reason, now);
+    });
   }
 
   /**
@@ -983,139 +1272,135 @@ export class Repository {
     path: string,
     options?: { readonly branch?: string; readonly include?: readonly string[] },
   ): InstanceSummary {
-    assertInstanceName(name);
-    const branch = options?.branch ?? name;
-    assertRefName(branch);
-    const branchRef = `${BRANCH_PREFIX}${branch}`;
-    const include = options?.include ?? [];
-    // Validated through the same rule the view file uses, so a pattern that can
-    // never match a canonical path is refused at creation, not discovered later.
-    parseView({ include: [...include] });
-    const instanceRoot = resolve(path);
-    // Nesting an instance inside the hub's tree (or the hub inside the
-    // instance's) would put one working tree inside another: every status scan
-    // would descend into the other's control directory, and moving the outer
-    // tree would move the inner one's link target. Refused outright.
-    // `relative` answers nesting in one call: an empty result is the same
-    // directory, a `..`-prefixed or absolute result escapes it, and anything
-    // else lands inside it. Inside, in either direction, is refused: each
-    // working tree's scans would descend into the other's.
-    const relativeInstance = relative(this.hubRoot, instanceRoot);
-    if (relativeInstance === "") {
-      throw new ObjectStoreError(
-        "instance_nested",
-        `The instance path ${instanceRoot} is the hub's own working tree.`,
-      );
-    }
-    if (relativeInstance !== "" && !relativeInstance.startsWith("..") && !isAbsolute(relativeInstance)) {
-      throw new ObjectStoreError(
-        "instance_nested",
-        `The instance path ${instanceRoot} sits inside the hub's working tree ${this.hubRoot}. Link it outside, so the two working trees do not scan each other.`,
-      );
-    }
-    const relativeHub = relative(instanceRoot, this.hubRoot);
-    if (relativeHub !== "" && !relativeHub.startsWith("..") && !isAbsolute(relativeHub)) {
-      throw new ObjectStoreError(
-        "instance_nested",
-        `The hub's working tree ${this.hubRoot} sits inside the instance path ${instanceRoot}. Link it outside, so the two working trees do not scan each other.`,
-      );
-    }
-    // The registry is the record of what already is an instance, so its word
-    // comes before the directory's: a registered path refuses as a duplicate
-    // even once its directory has files, while an unregistered occupied
-    // directory refuses as occupied. `registerInstance` re-checks under the
-    // registry lock, so a concurrent link cannot slip past this pre-check.
-    const registered = readInstances(this.sharedControlDirectory);
-    if (registered.some((existing) => existing.name === name)) {
-      throw new ObjectStoreError(
-        "instance_exists",
-        `An instance named ${name} is already registered. Unlink it first or choose another name.`,
-      );
-    }
-    if (registered.some((existing) => resolve(this.hubRoot, ...existing.path.split("/")) === instanceRoot)) {
-      throw new ObjectStoreError(
-        "instance_exists",
-        `An instance is already registered at ${instanceRoot}. Unlink it first or choose another path.`,
-      );
-    }
-    if (isDirectoryOccupied(instanceRoot)) {
-      throw new ObjectStoreError(
-        "instance_path_occupied",
-        `The directory ${instanceRoot} is not empty. Link an instance into an empty or absent directory, never over existing files.`,
-      );
-    }
-    let head = this.refs.read(branchRef);
-    let createdBranch = false;
-    if (head === null) {
-      const target = this.refs.resolveHead();
-      if (target === null) {
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      assertInstanceName(name);
+      const branch = options?.branch ?? name;
+      assertRefName(branch);
+      const branchRef = `${BRANCH_PREFIX}${branch}`;
+      const include = options?.include ?? [];
+      // Validated through the same rule the view file uses, so a pattern that can
+      // never match a canonical path is refused at creation, not discovered later.
+      parseView({ include: [...include] });
+      const instanceRoot = resolve(path);
+      // Nesting an instance inside the hub's tree (or the hub inside the
+      // instance's) would put one working tree inside another: every status scan
+      // would descend into the other's control directory, and moving the outer
+      // tree would move the inner one's link target. Refused outright.
+      // `relative` answers nesting in one call: an empty result is the same
+      // directory, a `..`-prefixed or absolute result escapes it, and anything
+      // else lands inside it. Inside, in either direction, is refused: each
+      // working tree's scans would descend into the other's.
+      const relativeInstance = relative(this.hubRoot, instanceRoot);
+      if (relativeInstance === "") {
         throw new ObjectStoreError(
-          "unborn_head",
-          `The hub's HEAD has no commit yet, so the new branch ${branch} for instance ${name} would be born empty. Commit once first, or pass an existing branch.`,
+          "instance_nested",
+          `The instance path ${instanceRoot} is the hub's own working tree.`,
         );
       }
-      this.refs.compareAndSwap(branchRef, null, target);
-      createdBranch = true;
-      // The swap just installed `target`, so it is the tip without a re-read.
-      head = target;
-    }
-    // Everything from here to the registration is one creation that either
-    // completes or leaves no trace. A failure part-way — most commonly a
-    // missing fragment while materializing the view — would otherwise strand
-    // a shared branch and a half-built directory with no instance registered,
-    // which is exactly the state nothing else knows how to name or clean up.
-    // The instance control directory is written before the registry entry, so
-    // a half-created instance is an unregistered directory rather than a
-    // registry entry whose directory cannot be opened.
-    const instanceControl = join(instanceRoot, CONTROL_DIRECTORY);
-    const createdRoot = !existsSync(instanceRoot);
-    try {
-      mkdirSync(instanceControl, { recursive: true });
-      writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`);
-      writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`);
-      if (include.length > 0) writeView(instanceControl, { include });
-      const instance = new Repository(instanceRoot);
-      instance.refs.setHeadToRef(branchRef);
-      instance.materialize(readCommit(this.objects, head).tree);
-      registerInstance(this.sharedControlDirectory, { name, path: relative(this.hubRoot, instanceRoot).split(sep).join("/") });
-    } catch (error) {
-      // Undo only what this call did, and only while it is still ours to undo:
-      // the branch is deleted by compare-and-swap, so a concurrent move wins
-      // and is left alone. Cleanup is best-effort — the original failure is
-      // the truthful one to surface; a cleanup fault must not replace it, and
-      // what it leaves behind is ordinary unregistered state.
-      try {
-        // When this call created the root, the root goes. When the caller
-        // supplied it, only its CONTENTS go — the pre-flight refused a
-        // non-empty directory, so everything inside it now is something this
-        // call wrote, including any files materialized before the failure.
-        // Removing just the control directory would leave the caller with a
-        // half-materialized tree in a directory they handed over empty.
-        if (createdRoot) {
-          rmSync(instanceRoot, { recursive: true, force: true });
-        } else {
-          for (const entry of readdirSync(instanceRoot)) {
-            rmSync(join(instanceRoot, entry), { recursive: true, force: true });
-          }
-        }
-        if (createdBranch) this.refs.compareAndSwap(branchRef, head, null);
-      /* c8 ignore start -- unreachable in a single process, and deliberately kept.
-         Both cleanup steps can only fail against a CONCURRENT change: `rmSync`
-         with `force` is a no-op on an absent path and can otherwise only hit a
-         permission change racing us on a directory this call just created, and
-         `compareAndSwap` throws only if the branch moved after we installed it.
-         Neither is producible in-process — every in-process way to fail this
-         creation is refused by the pre-flight before the branch exists, which
-         `a pre-existing non-empty instance path is refused before anything is
-         created` pins. The guard stays because under real concurrency a
-         cleanup fault must not replace the original error. */
-      } catch {
-        // The original error below names the real failure.
+      if (relativeInstance !== "" && !relativeInstance.startsWith("..") && !isAbsolute(relativeInstance)) {
+        throw new ObjectStoreError(
+          "instance_nested",
+          `The instance path ${instanceRoot} sits inside the hub's working tree ${this.hubRoot}. Link it outside, so the two working trees do not scan each other.`,
+        );
       }
-      /* c8 ignore stop */
-      throw error;
-    }
-    return { name, path: instanceRoot, branch, head, include };
+      const relativeHub = relative(instanceRoot, this.hubRoot);
+      if (relativeHub !== "" && !relativeHub.startsWith("..") && !isAbsolute(relativeHub)) {
+        throw new ObjectStoreError(
+          "instance_nested",
+          `The hub's working tree ${this.hubRoot} sits inside the instance path ${instanceRoot}. Link it outside, so the two working trees do not scan each other.`,
+        );
+      }
+      // The registry is the record of what already is an instance, so its word
+      // comes before the directory's: a registered path refuses as a duplicate
+      // even once its directory has files, while an unregistered occupied
+      // directory refuses as occupied. `registerInstance` re-checks under the
+      // registry lock, so a concurrent link cannot slip past this pre-check.
+      const registered = readInstances(this.sharedControlDirectory);
+      if (registered.some((existing) => existing.name === name)) {
+        throw new ObjectStoreError(
+          "instance_exists",
+          `An instance named ${name} is already registered. Unlink it first or choose another name.`,
+        );
+      }
+      if (registered.some((existing) => resolve(this.hubRoot, ...existing.path.split("/")) === instanceRoot)) {
+        throw new ObjectStoreError(
+          "instance_exists",
+          `An instance is already registered at ${instanceRoot}. Unlink it first or choose another path.`,
+        );
+      }
+      if (isDirectoryOccupied(instanceRoot)) {
+        throw new ObjectStoreError(
+          "instance_path_occupied",
+          `The directory ${instanceRoot} is not empty. Link an instance into an empty or absent directory, never over existing files.`,
+        );
+      }
+      let head = this.refs.read(branchRef);
+      let createdBranch = false;
+      if (head === null) {
+        const target = this.refs.resolveHead();
+        if (target === null) {
+          throw new ObjectStoreError(
+            "unborn_head",
+            `The hub's HEAD has no commit yet, so the new branch ${branch} for instance ${name} would be born empty. Commit once first, or pass an existing branch.`,
+          );
+        }
+        this.refs.compareAndSwap(branchRef, null, target);
+        createdBranch = true;
+        // The swap just installed `target`, so it is the tip without a re-read.
+        head = target;
+      }
+      // Everything from here to the registration is one creation that either
+      // completes or leaves no trace. A failure part-way — most commonly a
+      // missing fragment while materializing the view — would otherwise strand
+      // a shared branch and a half-built directory with no instance registered,
+      // which is exactly the state nothing else knows how to name or clean up.
+      // Register recovery scope before copying payloads. A crash leaves a
+      // discoverable instance, and incomplete state makes erasure refuse.
+      // Ordinary failure removes its entry after cleaning its working bytes.
+      const instanceControl = join(instanceRoot, CONTROL_DIRECTORY);
+      const createdRoot = !existsSync(instanceRoot);
+      let registeredHere = false;
+      try {
+        mkdirSync(instanceControl, { recursive: true });
+        writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`);
+        writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`);
+        if (include.length > 0) writeView(instanceControl, { include });
+        const instance = new Repository(instanceRoot);
+        instance.refs.setHeadToRef(branchRef);
+        registerInstance(this.sharedControlDirectory, { name, path: relative(this.hubRoot, instanceRoot).split(sep).join("/") });
+        registeredHere = true;
+        instance.materialize(readCommit(this.objects, head).tree);
+      } catch (error) {
+        // Undo only what this call did. The shared-store lease excludes
+        // cooperative branch writers throughout creation and cleanup; the
+        // compare-and-swap also guards against a writer bypassing that lease.
+        // Cleanup is best-effort: its first fault stops rollback, and the
+        // original creation error must still reach the caller unchanged.
+        try {
+          // When this call created the root, the root goes. When the caller
+          // supplied it, only its CONTENTS go — the pre-flight refused a
+          // non-empty directory, so everything inside it now is something this
+          // call wrote, including any files materialized before the failure.
+          // Removing just the control directory would leave the caller with a
+          // half-materialized tree in a directory they handed over empty.
+          if (createdRoot) {
+            rmSync(instanceRoot, { recursive: true, force: true });
+          } else {
+            for (const entry of readdirSync(instanceRoot)) {
+              rmSync(join(instanceRoot, entry), { recursive: true, force: true });
+            }
+          }
+          if (registeredHere) unregisterInstance(this.sharedControlDirectory, name);
+          if (createdBranch) this.refs.compareAndSwap(branchRef, head, null);
+        } catch {
+          // A regular file passed as the destination makes mkdir fail during
+          // creation and readdir fail during cleanup, without any concurrency.
+          // Keep the original mkdir error, including its syscall and path.
+        }
+        throw error;
+      }
+      return { name, path: instanceRoot, branch, head, include };
+    });
   }
 
   /**
@@ -1161,7 +1446,14 @@ export class Repository {
    * @throws ObjectStoreError When no instance is registered under that name.
    */
   unlinkInstance(name: string): void {
-    unregisterInstance(this.sharedControlDirectory, name);
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      const entry = readInstances(this.sharedControlDirectory).find(/** Retain a bound working tree's cleanup scope after registry unlink. */ (candidate) => candidate.name === name);
+      if (entry !== undefined) {
+        const retired = this.retiredInstances();
+        writePrivateJson(join(this.sharedControlDirectory, "unlinked-instances.json"), [...new Set([...retired, entry.path])]);
+      }
+      unregisterInstance(this.sharedControlDirectory, name);
+    });
   }
 
   /**
@@ -1183,84 +1475,89 @@ export class Repository {
    *   visible to be resolvable).
    */
   setView(include: readonly string[] | null): ViewChange {
-    this.assertNoMergeInProgress();
-    const view = include === null || include.length === 0 ? null : parseView({ include: [...include] });
-    const entryVisible = (path: string): boolean => view === null || viewIncludes(view, path);
-    const index = this.readIndex().filter((entry) => !isProtectedWorktreePath(this.root, entry.path));
-    const widened: string[] = [];
-    const narrowed: string[] = [];
-    const next: IndexEntry[] = [];
-    // Refused before any write: a file no object holds at a widened path would
-    // be overwritten by the materialization below, and untracked content is the
-    // one thing this engine never destroys silently.
-    const present = new Set(listWorkingTree(this.root, CONTROL_DIRECTORY, this.ignoreRules()));
-    for (const entry of index) {
-      if (entry.sparse === true && entryVisible(entry.path) && present.has(entry.path)) {
-        throw new ObjectStoreError(
-          "view_would_overwrite_untracked",
-          `Widening the view would overwrite ${entry.path}, which holds an untracked file. Move it aside, stage it, or widen around it.`,
-        );
-      }
-    }
-    // Plan first, mutate second. Everything that can be decided or fetched
-    // without touching the working tree happens before the first byte moves:
-    // widened content is read from the store here (the dominant failure is a
-    // missing fragment, and failing there must leave the tree untouched), and
-    // narrowed paths are checked to hold a file rather than a directory (a
-    // directory cannot be removed as if it were this view's file). Only then
-    // does the apply loop run, so a refusal leaves the working tree, the index
-    // and the old view exactly as they were.
-    const materialized = new Map<string, Buffer>();
-    for (const entry of index) {
-      const wasVisible = entry.sparse !== true;
-      const nowVisible = entryVisible(entry.path);
-      if (wasVisible && !nowVisible) {
-        const absolute = join(this.root, ...entry.path.split("/"));
-        if (existsSync(absolute) && statSync(absolute).isDirectory()) {
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      if (this.layers().length > 0) throw new ObjectStoreError("layer_view_conflict", "Remove private layers before changing the sparse view.");
+      this.assertNoMergeInProgress();
+      const view = include === null || include.length === 0 ? null : parseView({ include: [...include] });
+      const entryVisible = (path: string): boolean => view === null || viewIncludes(view, path);
+      const index = this.readIndex().filter((entry) => !isProtectedWorktreePath(this.root, entry.path));
+      const widened: string[] = [];
+      const narrowed: string[] = [];
+      const next: IndexEntry[] = [];
+      // Refused before any write: a file no object holds at a widened path would
+      // be overwritten by the materialization below, and untracked content is the
+      // one thing this engine never destroys silently.
+      const present = new Set(listWorkingTree(this.root, CONTROL_DIRECTORY, this.ignoreRules()));
+      for (const entry of index) {
+        if (entry.sparse === true && entryVisible(entry.path) && present.has(entry.path)) {
           throw new ObjectStoreError(
-            "narrow_path_is_directory",
-            `Narrowing the view would remove ${entry.path}, which holds a directory rather than this view's file. Move it aside or widen the view around it.`,
+            "view_would_overwrite_untracked",
+            `Widening the view would overwrite ${entry.path}, which holds an untracked file. Move it aside, stage it, or widen around it.`,
           );
         }
-        continue;
       }
-      if (!wasVisible && nowVisible) materialized.set(entry.path, this.workingContent(entry.path, this.objects.read(entry.id)));
-    }
-    for (const entry of index) {
-      const wasVisible = entry.sparse !== true;
-      const nowVisible = entryVisible(entry.path);
-      if (wasVisible && !nowVisible) {
-        narrowed.push(entry.path);
-        rmSync(join(this.root, ...entry.path.split("/")), { force: true });
-        // The filesystem stat stops describing anything once the file is gone;
-        // dropping it here keeps the sparse entry pure tree content.
-        const { stat: _stat, ...rest } = entry;
-        next.push({ ...rest, sparse: true });
-        continue;
+      // Plan first, mutate second. Everything that can be decided or fetched
+      // without touching the working tree happens before the first byte moves:
+      // widened content is read from the store here (the dominant failure is a
+      // missing fragment, and failing there must leave the tree untouched), and
+      // narrowed paths are checked to hold a file rather than a directory (a
+      // directory cannot be removed as if it were this view's file). Only then
+      // does the apply loop run, so a refusal leaves the working tree, the index
+      // and the old view exactly as they were.
+      const materialized = new Map<string, Buffer>();
+      for (const entry of index) {
+        const wasVisible = entry.sparse !== true;
+        const nowVisible = entryVisible(entry.path);
+        if (wasVisible && !nowVisible) {
+          const absolute = join(this.root, ...entry.path.split("/"));
+          if (existsSync(absolute) && statSync(absolute).isDirectory()) {
+            throw new ObjectStoreError(
+              "narrow_path_is_directory",
+              `Narrowing the view would remove ${entry.path}, which holds a directory rather than this view's file. Move it aside or widen the view around it.`,
+            );
+          }
+          continue;
+        }
+        if (!wasVisible && nowVisible) materialized.set(entry.path, this.workingContent(entry.path, this.objects.read(entry.id)));
       }
-      if (!wasVisible && nowVisible) {
-        widened.push(entry.path);
-        const absolute = join(this.root, ...entry.path.split("/"));
-        mkdirSync(dirname(absolute), { recursive: true });
-        writeFileSync(absolute, materialized.get(entry.path) as Buffer);
-        chmodSync(absolute, entry.mode === "100755" ? 0o755 : 0o644);
-        // Materialized afresh from the object, so the staged identity carries
-        // over but the sparse flag goes and no cached stat exists yet.
-        const { sparse: _sparse, stat: _stat, ...rest } = entry;
-        next.push(rest);
-        continue;
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      try {
+        for (const entry of index) {
+          const wasVisible = entry.sparse !== true;
+          const nowVisible = entryVisible(entry.path);
+          if (wasVisible && !nowVisible) {
+            narrowed.push(entry.path);
+            mutation.remove(entry.path);
+            // The filesystem stat stops describing anything once the file is gone;
+            // dropping it here keeps the sparse entry pure tree content.
+            const { stat: _stat, ...rest } = entry;
+            next.push({ ...rest, sparse: true });
+            continue;
+          }
+          if (!wasVisible && nowVisible) {
+            widened.push(entry.path);
+            mutation.write(entry.path, materialized.get(entry.path) as Buffer, entry.mode === "100755" ? 0o755 : 0o644);
+            // Materialized afresh from the object, so the staged identity carries
+            // over but the sparse flag goes and no cached stat exists yet.
+            const { sparse: _sparse, stat: _stat, ...rest } = entry;
+            next.push(rest);
+            continue;
+          }
+          next.push(entry);
+        }
+        if (view === null) {
+          const viewPath = join(this.controlDirectory, VIEW_FILE);
+          if (existsSync(viewPath)) unlinkSync(viewPath);
+        } else {
+          writeView(this.controlDirectory, view);
+        }
+        this.writeIndex(next);
+        mutation.prune();
+        return { widened: widened.sort(compareByteOrder), narrowed: narrowed.sort(compareByteOrder) };
+      } finally {
+        mutation.close();
       }
-      next.push(entry);
-    }
-    if (view === null) {
-      const viewPath = join(this.controlDirectory, VIEW_FILE);
-      if (existsSync(viewPath)) unlinkSync(viewPath);
-    } else {
-      writeView(this.controlDirectory, view);
-    }
-    this.writeIndex(next);
-    pruneEmptyDirectories(this.root, this.root, CONTROL_DIRECTORY);
-    return { widened: widened.sort(compareByteOrder), narrowed: narrowed.sort(compareByteOrder) };
+    });
   }
 
   /**
@@ -1283,7 +1580,9 @@ export class Repository {
     const hints = readHints(this.controlDirectory);
     const dirty = new Set<string>();
     let checked = 0;
+    const overlays = this.layerPaths();
     for (const entry of index) {
+      if (overlays.has(entry.path) || this.objects.denial(entry.id) !== undefined) continue;
       const absolute = join(this.root, ...entry.path.split("/"));
       if (!existsSync(absolute)) {
         if (entry.sparse !== true) dirty.add(entry.path);
@@ -1292,9 +1591,7 @@ export class Repository {
       checked += 1;
       const { content, executable } = read(this.root, entry.path);
       const mode = executable ? "100755" : "100644";
-      const id = isRecordPath(entry.path, this.config)
-        ? hashObject("record", encodeRecord(parseWorkingRecord(entry.path, content)))
-        : hashObject("blob", content);
+      const id = this.workingIdentifier(entry.path, content, entry.id);
       if (mode !== entry.mode || id !== entry.id) dirty.add(entry.path);
     }
     const corrections: ScanCorrection[] = [];
@@ -1325,50 +1622,52 @@ export class Repository {
    *   and `allowEmpty` is not set.
    */
   commit(options: CommitOptions, now: Date): ObjectId {
-    this.assertNoMergeInProgress();
-    const index = this.committableIndex();
-    const head = this.refs.readHead();
-    const parent = head.target;
-    // A sparse entry whose content differs from HEAD describes a change to a
-    // path this working tree never materialized, so nothing the caller did could
-    // have made it — and committing it would silently attribute an invisible
-    // change. The one honest answer is a refusal naming every path, because a
-    // commit that changes files the committer cannot see is exactly the silent
-    // drop this engine refuses to perform.
-    const committedPaths = new Map(flattenTree(this.objects, parent === null ? null : readCommit(this.objects, parent).tree));
-    const unseen = index.filter((entry) => entry.sparse === true
-      && (committedPaths.get(entry.path)?.id !== entry.id || committedPaths.get(entry.path)?.mode !== entry.mode))
-      .map((entry) => entry.path)
-      .sort(compareByteOrder);
-    if (unseen.length > 0) {
-      throw new ObjectStoreError(
-        "out_of_view_change",
-        `The staged change includes ${unseen.join(", ")}, which is outside this working tree's view. `
-        + "Widen the view with `pm vcs view <patterns>`, review the change, and commit it from a working tree that can see it.",
-      );
-    }
-    const tree = this.indexTree(index);
-    if (!options.allowEmpty && parent !== null && readCommit(this.objects, parent).tree === tree) {
-      throw new ObjectStoreError(
-        "empty_commit",
-        "Nothing staged differs from HEAD. Stage a change, or pass allowEmpty to record one anyway.",
-      );
-    }
-    const base = {
-      tree,
-      parents: parent === null ? [] : [parent],
-      author: options.author,
-      committer: options.committer ?? options.author,
-      message: options.message,
-      ...(options.items === undefined ? {} : { items: options.items }),
-    };
-    // A new commit's change id is the id it would have with no change line, so
-    // the identity is a function of the content the commit describes rather than
-    // of the metadata rewriting later changes. Deriving it here, before the
-    // commit is stored, is what keeps the property deterministic with no seed.
-    const id = writeCommit(this.objects, { ...base, changeId: identityWithoutChangeLine(base) });
-    this.advanceHead(head, parent, id, "commit", `Committed ${id.slice(0, 12)}: ${splitLines(options.message)[0] ?? ""}`, now);
-    return id;
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      this.assertNoMergeInProgress();
+      const index = this.committableIndex();
+      const head = this.refs.readHead();
+      const parent = head.target;
+      // A sparse entry whose content differs from HEAD describes a change to a
+      // path this working tree never materialized, so nothing the caller did could
+      // have made it — and committing it would silently attribute an invisible
+      // change. The one honest answer is a refusal naming every path, because a
+      // commit that changes files the committer cannot see is exactly the silent
+      // drop this engine refuses to perform.
+      const committedPaths = new Map(flattenTree(this.objects, parent === null ? null : readCommit(this.objects, parent).tree));
+      const unseen = index.filter((entry) => entry.sparse === true
+        && (committedPaths.get(entry.path)?.id !== entry.id || committedPaths.get(entry.path)?.mode !== entry.mode))
+        .map((entry) => entry.path)
+        .sort(compareByteOrder);
+      if (unseen.length > 0) {
+        throw new ObjectStoreError(
+          "out_of_view_change",
+          `The staged change includes ${unseen.join(", ")}, which is outside this working tree's view. `
+          + "Widen the view with `pm vcs view <patterns>`, review the change, and commit it from a working tree that can see it.",
+        );
+      }
+      const tree = this.indexTree(index);
+      if (!options.allowEmpty && parent !== null && readCommit(this.objects, parent).tree === tree) {
+        throw new ObjectStoreError(
+          "empty_commit",
+          "Nothing staged differs from HEAD. Stage a change, or pass allowEmpty to record one anyway.",
+        );
+      }
+      const base = {
+        tree,
+        parents: parent === null ? [] : [parent],
+        author: options.author,
+        committer: options.committer ?? options.author,
+        message: options.message,
+        ...(options.items === undefined ? {} : { items: options.items }),
+      };
+      // A new commit's change id is the id it would have with no change line, so
+      // the identity is a function of the content the commit describes rather than
+      // of the metadata rewriting later changes. Deriving it here, before the
+      // commit is stored, is what keeps the property deterministic with no seed.
+      const id = writeCommit(this.objects, { ...base, changeId: identityWithoutChangeLine(base) });
+      this.advanceHead(head, parent, id, "commit", `Committed ${id.slice(0, 12)}: ${splitLines(options.message)[0] ?? ""}`, now);
+      return id;
+    });
   }
 
   /**
@@ -1455,14 +1754,16 @@ export class Repository {
    * @throws ObjectStoreError When the branch already exists.
    */
   createBranch(name: string, revision: string, now: Date): ObjectId {
-    const ref = `${BRANCH_PREFIX}${name}`;
-    assertRefName(ref);
-    const target = this.resolve(revision);
-    this.refs.compareAndSwap(ref, null, target);
-    this.operations.append("branch", `Created ${name} at ${target.slice(0, 12)}.`, [
-      { ref, before: null, after: target },
-    ], now);
-    return target;
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      const ref = `${BRANCH_PREFIX}${name}`;
+      assertRefName(ref);
+      const target = this.resolve(revision);
+      this.refs.compareAndSwap(ref, null, target);
+      this.operations.append("branch", `Created ${name} at ${target.slice(0, 12)}.`, [
+        { ref, before: null, after: target },
+      ], now);
+      return target;
+    });
   }
 
   /**
@@ -1473,15 +1774,17 @@ export class Repository {
    * @throws ObjectStoreError When the branch does not exist or HEAD is on it.
    */
   deleteBranch(name: string, now: Date): void {
-    const ref = `${BRANCH_PREFIX}${name}`;
-    const head = this.refs.readHead();
-    if (head.kind === "branch" && head.ref === ref) {
-      throw new ObjectStoreError("branch_checked_out", `Cannot delete ${name}: HEAD is on it. Switch away first.`);
-    }
-    const target = this.refs.read(ref);
-    if (target === null) throw new ObjectStoreError("unknown_branch", `No branch named ${name}.`);
-    this.refs.compareAndSwap(ref, target, null);
-    this.operations.append("branch", `Deleted ${name}.`, [{ ref, before: target, after: null }], now);
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      const ref = `${BRANCH_PREFIX}${name}`;
+      const head = this.refs.readHead();
+      if (head.kind === "branch" && head.ref === ref) {
+        throw new ObjectStoreError("branch_checked_out", `Cannot delete ${name}: HEAD is on it. Switch away first.`);
+      }
+      const target = this.refs.read(ref);
+      if (target === null) throw new ObjectStoreError("unknown_branch", `No branch named ${name}.`);
+      this.refs.compareAndSwap(ref, target, null);
+      this.operations.append("branch", `Deleted ${name}.`, [{ ref, before: target, after: null }], now);
+    });
   }
 
   /**
@@ -1505,55 +1808,58 @@ export class Repository {
    * @throws ObjectStoreError When uncommitted or untracked work would be lost.
    */
   switchTo(revision: string, now: Date): ObjectId {
-    this.assertNoMergeInProgress();
-    const target = this.resolve(revision);
-    const targetTree = readCommit(this.objects, target).tree;
-    const current = flattenTree(this.objects, this.headTree());
-    const next = flattenTree(this.objects, targetTree);
-    const status = this.status();
-    const dirty = new Set([
-      ...status.unstaged.map((change) => change.path),
-      ...status.staged.map((change) => change.path),
-    ]);
-    const wouldOverwrite = [...dirty].filter((path) => (
-      (current.get(path)?.id ?? null) !== (next.get(path)?.id ?? null)
-    )).sort(compareByteOrder);
-    if (wouldOverwrite.length > 0) {
-      throw new ObjectStoreError(
-        "switch_would_overwrite",
-        `Switching to ${revision} would overwrite uncommitted changes to ${wouldOverwrite.join(", ")}. `
-        + "Commit or discard them first.",
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      this.assertNoMergeInProgress();
+      const target = this.resolve(revision);
+      const targetTree = readCommit(this.objects, target).tree;
+      const current = flattenTree(this.objects, this.headTree());
+      const next = flattenTree(this.objects, targetTree);
+      const status = this.status();
+      const dirty = new Set([
+        ...status.unstaged.map((change) => change.path),
+        ...status.staged.map((change) => change.path),
+      ]);
+      const wouldOverwrite = [...dirty].filter((path) => (
+        (current.get(path)?.id ?? null) !== (next.get(path)?.id ?? null)
+      )).sort(compareByteOrder);
+      if (wouldOverwrite.length > 0) {
+        throw new ObjectStoreError(
+          "switch_would_overwrite",
+          `Switching to ${revision} would overwrite uncommitted changes to ${wouldOverwrite.join(", ")}. `
+          + "Commit or discard them first.",
+        );
+      }
+      const untrackedLoss = status.untracked.filter((path) => next.has(path)).sort(compareByteOrder);
+      if (untrackedLoss.length > 0) {
+        throw new ObjectStoreError(
+          "switch_would_overwrite",
+          `Switching to ${revision} would overwrite untracked ${untrackedLoss.join(", ")}, which no commit holds. `
+          + "Stage and commit them, move them aside, or delete them first.",
+        );
+      }
+      const branchRef = `${BRANCH_PREFIX}${revision}`;
+      let exists = false;
+      try {
+        exists = this.refs.read(branchRef) !== null;
+      } catch {
+        exists = false;
+      }
+      this.assertLayersAcceptTree(targetTree);
+      const before = this.refs.readHead();
+      const beforeTarget = before.kind === "branch" ? before.ref : before.target;
+      const rawBefore = this.refs.rawHead();
+      if (exists) this.refs.setHeadToRef(branchRef);
+      else this.refs.setHeadDetached(target);
+      this.materialize(targetTree);
+      this.operations.append(
+        "switch",
+        `Switched from ${beforeTarget} to ${exists ? revision : target.slice(0, 12)}.`,
+        [],
+        now,
+        { before: rawBefore, after: this.refs.rawHead() },
       );
-    }
-    const untrackedLoss = status.untracked.filter((path) => next.has(path)).sort(compareByteOrder);
-    if (untrackedLoss.length > 0) {
-      throw new ObjectStoreError(
-        "switch_would_overwrite",
-        `Switching to ${revision} would overwrite untracked ${untrackedLoss.join(", ")}, which no commit holds. `
-        + "Stage and commit them, move them aside, or delete them first.",
-      );
-    }
-    const branchRef = `${BRANCH_PREFIX}${revision}`;
-    let exists = false;
-    try {
-      exists = this.refs.read(branchRef) !== null;
-    } catch {
-      exists = false;
-    }
-    const before = this.refs.readHead();
-    const beforeTarget = before.kind === "branch" ? before.ref : before.target;
-    const rawBefore = this.refs.rawHead();
-    if (exists) this.refs.setHeadToRef(branchRef);
-    else this.refs.setHeadDetached(target);
-    this.materialize(targetTree);
-    this.operations.append(
-      "switch",
-      `Switched from ${beforeTarget} to ${exists ? revision : target.slice(0, 12)}.`,
-      [],
-      now,
-      { before: rawBefore, after: this.refs.rawHead() },
-    );
-    return target;
+      return target;
+    });
   }
 
   /**
@@ -1664,115 +1970,117 @@ export class Repository {
    *   unborn, the working tree is dirty, or the two sides share no history.
    */
   merge(revision: string, options: CommitOptions, now: Date, labels?: ConflictLabels): MergeReport {
-    const head = this.refs.readHead();
-    const ours = head.target;
-    if (ours === null) {
-      throw new ObjectStoreError("unborn_head", "HEAD has no commit yet, so there is nothing to merge into.");
-    }
-    // A merge in progress is refused before the dirty check: the in-progress
-    // state makes the worktree dirty by design, so the dirty check would fire
-    // and report a symptom instead of the cause.
-    this.assertNoMergeInProgress();
-    const theirs = this.resolve(revision);
-    if (isAncestor(this.objects, theirs, ours)) {
-      return { kind: "up_to_date", head: ours, bases: [theirs], merged: [], conflicts: [], clean: true };
-    }
-    this.assertWorktreeAcceptsTree(
-      theirs,
-      "Merging would mix them into the result.",
-      "Merging would overwrite it.",
-    );
-    if (isAncestor(this.objects, ours, theirs)) {
-      const tree = readCommit(this.objects, theirs).tree;
-      // Ref first, working tree second. `advanceHead` compare-and-swaps, so it can
-      // refuse — and materializing before that refusal would leave the index and
-      // working tree holding a result HEAD does not name, with nothing in the
-      // operation log describing it. That is the one state this engine promises
-      // cannot happen. Object writes before the ref update are harmless: they are
-      // content-addressed and simply unreferenced if the update fails.
-      this.advanceHead(head, ours, theirs, "merge", `Fast-forwarded to ${theirs.slice(0, 12)}.`, now);
-      this.materialize(tree);
-      return { kind: "fast_forward", head: theirs, bases: [ours], merged: [], conflicts: [], clean: true };
-    }
-
-    const bases = mergeBases(this.objects, ours, theirs);
-    if (bases.length === 0) {
-      throw new ObjectStoreError(
-        "unrelated_histories",
-        `${revision} and HEAD share no common ancestor, so there is no base to merge against.`,
-      );
-    }
-    const baseTree = this.virtualBaseTree(bases, options.committer ?? options.author);
-    const { tree, merged, conflicts } = mergeTrees(
-      this.rewriteContext(options.committer ?? options.author),
-      baseTree,
-      readCommit(this.objects, ours).tree,
-      readCommit(this.objects, theirs).tree,
-      labels,
-    );
-    // The merged tree is fixed for the whole conflict scan: `tree` is one
-    // content-addressed id computed before this loop, and the object store is
-    // not mutated during the filter, so flattening it once is behaviour-
-    // preserving with respect to re-walking it per conflict. Hoisting avoids n
-    // full tree walks and n re-reads of every entry from the object store.
-    const mergedTree = flattenTree(this.objects, tree);
-    const markerConflicts = conflicts.filter((conflict) => {
-      const entry = mergedTree.get(conflict.path);
-      return entry === undefined ? false : this.blobHasConflictMarkers(entry.id);
-    });
-    // A conflict outside this working tree's view cannot be resolved here: the
-    // path is not materialized, so no edit the caller makes could address it,
-    // and `merge --continue` would record whatever the tree already held. The
-    // refusal happens before anything is written, so the merge leaves no state
-    // behind — unlike an in-view conflict, which deliberately stops with state.
-    // The view is read once for the whole filter rather than once per path:
-    // `view()` deliberately reads view.json fresh on every call, which is right
-    // for a single question and wasteful for a scan over every conflict.
-    const conflictView = this.view();
-    const outOfView = markerConflicts
-      .map((conflict) => conflict.path)
-      .filter((path) => conflictView !== null && !viewIncludes(conflictView, path));
-    if (outOfView.length > 0) {
-      throw new ObjectStoreError(
-        "conflict_out_of_view",
-        `Merging ${revision} conflicts at ${outOfView.join(", ")}, which this working tree's view does not materialize. `
-        + "Widen the view with `pm vcs view <patterns>` and merge again, or merge in a working tree that can see those paths.",
-      );
-    }
-    if (markerConflicts.length > 0) {
-      // No commit: the merged tree carries conflict markers, and recording it
-      // would put an unbuildable revision into history. The working tree and
-      // index still receive the merged tree so the markers and the cleanly
-      // merged paths are visible and `add` can stage resolutions; the merge
-      // state persists everything `--continue` needs to finish the commit
-      // without the caller re-supplying it.
-      this.materialize(tree);
-      this.writeMergeState({
-        ours,
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      const head = this.refs.readHead();
+      const ours = head.target;
+      if (ours === null) {
+        throw new ObjectStoreError("unborn_head", "HEAD has no commit yet, so there is nothing to merge into.");
+      }
+      // A merge in progress is refused before the dirty check: the in-progress
+      // state makes the worktree dirty by design, so the dirty check would fire
+      // and report a symptom instead of the cause.
+      this.assertNoMergeInProgress();
+      const theirs = this.resolve(revision);
+      if (isAncestor(this.objects, theirs, ours)) {
+        return { kind: "up_to_date", head: ours, bases: [theirs], merged: [], conflicts: [], clean: true };
+      }
+      this.assertWorktreeAcceptsTree(
         theirs,
-        revision,
-        bases,
-        merged,
-        conflicts,
-        message: options.message,
+        "Merging would mix them into the result.",
+        "Merging would overwrite it.",
+      );
+      if (isAncestor(this.objects, ours, theirs)) {
+        const tree = readCommit(this.objects, theirs).tree;
+        // Ref first, working tree second. `advanceHead` compare-and-swaps, so it can
+        // refuse — and materializing before that refusal would leave the index and
+        // working tree holding a result HEAD does not name, with nothing in the
+        // operation log describing it. That is the one state this engine promises
+        // cannot happen. Object writes before the ref update are harmless: they are
+        // content-addressed and simply unreferenced if the update fails.
+        this.advanceHead(head, ours, theirs, "merge", `Fast-forwarded to ${theirs.slice(0, 12)}.`, now);
+        this.materialize(tree);
+        return { kind: "fast_forward", head: theirs, bases: [ours], merged: [], conflicts: [], clean: true };
+      }
+
+      const bases = mergeBases(this.objects, ours, theirs);
+      if (bases.length === 0) {
+        throw new ObjectStoreError(
+          "unrelated_histories",
+          `${revision} and HEAD share no common ancestor, so there is no base to merge against.`,
+        );
+      }
+      const baseTree = this.virtualBaseTree(bases, options.committer ?? options.author);
+      const { tree, merged, conflicts } = mergeTrees(
+        this.rewriteContext(options.committer ?? options.author),
+        baseTree,
+        readCommit(this.objects, ours).tree,
+        readCommit(this.objects, theirs).tree,
+        labels,
+      );
+      // The merged tree is fixed for the whole conflict scan: `tree` is one
+      // content-addressed id computed before this loop, and the object store is
+      // not mutated during the filter, so flattening it once is behaviour-
+      // preserving with respect to re-walking it per conflict. Hoisting avoids n
+      // full tree walks and n re-reads of every entry from the object store.
+      const mergedTree = flattenTree(this.objects, tree);
+      const markerConflicts = conflicts.filter((conflict) => {
+        const entry = mergedTree.get(conflict.path);
+        return entry === undefined ? false : this.blobHasConflictMarkers(entry.id);
+      });
+      // A conflict outside this working tree's view cannot be resolved here: the
+      // path is not materialized, so no edit the caller makes could address it,
+      // and `merge --continue` would record whatever the tree already held. The
+      // refusal happens before anything is written, so the merge leaves no state
+      // behind — unlike an in-view conflict, which deliberately stops with state.
+      // The view is read once for the whole filter rather than once per path:
+      // `view()` deliberately reads view.json fresh on every call, which is right
+      // for a single question and wasteful for a scan over every conflict.
+      const conflictView = this.view();
+      const outOfView = markerConflicts
+        .map((conflict) => conflict.path)
+        .filter((path) => conflictView !== null && !viewIncludes(conflictView, path));
+      if (outOfView.length > 0) {
+        throw new ObjectStoreError(
+          "conflict_out_of_view",
+          `Merging ${revision} conflicts at ${outOfView.join(", ")}, which this working tree's view does not materialize. `
+          + "Widen the view with `pm vcs view <patterns>` and merge again, or merge in a working tree that can see those paths.",
+        );
+      }
+      if (markerConflicts.length > 0) {
+        // No commit: the merged tree carries conflict markers, and recording it
+        // would put an unbuildable revision into history. The working tree and
+        // index still receive the merged tree so the markers and the cleanly
+        // merged paths are visible and `add` can stage resolutions; the merge
+        // state persists everything `--continue` needs to finish the commit
+        // without the caller re-supplying it.
+        this.materialize(tree);
+        this.writeMergeState({
+          ours,
+          theirs,
+          revision,
+          bases,
+          merged,
+          conflicts,
+          message: options.message,
+          author: options.author,
+          committer: options.committer ?? options.author,
+          ...(labels === undefined ? {} : { labels }),
+        });
+        return { kind: "conflicted", head: ours, bases, merged, conflicts, clean: false };
+      }
+      const draft = {
+        tree,
+        parents: [ours, theirs],
         author: options.author,
         committer: options.committer ?? options.author,
-        ...(labels === undefined ? {} : { labels }),
-      });
-      return { kind: "conflicted", head: ours, bases, merged, conflicts, clean: false };
-    }
-    const draft = {
-      tree,
-      parents: [ours, theirs],
-      author: options.author,
-      committer: options.committer ?? options.author,
-      message: options.message,
-    };
-    const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
-    // Ref before working tree, as in the fast-forward above and for the same reason.
-    this.advanceHead(head, ours, id, "merge", `Merged ${revision} as ${id.slice(0, 12)}.`, now);
-    this.materialize(tree);
-    return { kind: "merged", head: id, bases, merged, conflicts, clean: conflicts.length === 0 };
+        message: options.message,
+      };
+      const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
+      // Ref before working tree, as in the fast-forward above and for the same reason.
+      this.advanceHead(head, ours, id, "merge", `Merged ${revision} as ${id.slice(0, 12)}.`, now);
+      this.materialize(tree);
+      return { kind: "merged", head: id, bases, merged, conflicts, clean: conflicts.length === 0 };
+    });
   }
 
   /**
@@ -1794,40 +2102,42 @@ export class Repository {
    *   carries conflict markers.
    */
   mergeContinue(now: Date): MergeReport {
-    const state = this.readMergeState();
-    if (state === null) {
-      throw new ObjectStoreError(
-        "no_merge_in_progress",
-        "There is no merge in progress to continue. Run `pm vcs merge <revision>` to start one.",
-      );
-    }
-    const index = this.committableIndex();
-    const marked = index
-      .filter((entry) => this.blobHasConflictMarkers(entry.id))
-      .map((entry) => entry.path)
-      .sort(compareByteOrder);
-    if (marked.length > 0) {
-      throw new ObjectStoreError(
-        "merge_conflicts_not_resolved",
-        `Cannot complete the merge: ${marked.join(", ")} still contain conflict markers. Edit the listed paths to remove the markers, stage them with \`pm vcs add\`, then run \`pm vcs merge --continue\` again.`,
-      );
-    }
-    const tree = this.indexTree(index);
-    const draft = {
-      tree,
-      parents: [state.ours, state.theirs],
-      author: state.author,
-      committer: state.committer,
-      message: state.message,
-    };
-    const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
-    const head = this.refs.readHead();
-    // The merge state recorded `ours` as the expected HEAD; a concurrent move
-    // would have cleared or changed it, so the compare-and-swap in `advanceHead`
-    // refuses rather than committing over a moved branch.
-    this.advanceHead(head, state.ours, id, "merge", `Merged ${state.revision} as ${id.slice(0, 12)}.`, now);
-    this.clearMergeState();
-    return { kind: "merged", head: id, bases: state.bases, merged: state.merged, conflicts: [], clean: true };
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      const state = this.readMergeState();
+      if (state === null) {
+        throw new ObjectStoreError(
+          "no_merge_in_progress",
+          "There is no merge in progress to continue. Run `pm vcs merge <revision>` to start one.",
+        );
+      }
+      const index = this.committableIndex();
+      const marked = index
+        .filter((entry) => this.blobHasConflictMarkers(entry.id))
+        .map((entry) => entry.path)
+        .sort(compareByteOrder);
+      if (marked.length > 0) {
+        throw new ObjectStoreError(
+          "merge_conflicts_not_resolved",
+          `Cannot complete the merge: ${marked.join(", ")} still contain conflict markers. Edit the listed paths to remove the markers, stage them with \`pm vcs add\`, then run \`pm vcs merge --continue\` again.`,
+        );
+      }
+      const tree = this.indexTree(index);
+      const draft = {
+        tree,
+        parents: [state.ours, state.theirs],
+        author: state.author,
+        committer: state.committer,
+        message: state.message,
+      };
+      const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
+      const head = this.refs.readHead();
+      // The merge state recorded `ours` as the expected HEAD; a concurrent move
+      // would have cleared or changed it, so the compare-and-swap in `advanceHead`
+      // refuses rather than committing over a moved branch.
+      this.advanceHead(head, state.ours, id, "merge", `Merged ${state.revision} as ${id.slice(0, 12)}.`, now);
+      this.clearMergeState();
+      return { kind: "merged", head: id, bases: state.bases, merged: state.merged, conflicts: [], clean: true };
+    });
   }
 
   /**
@@ -1856,41 +2166,43 @@ export class Repository {
    * @throws ObjectStoreError When no merge is in progress (no state file at all).
    */
   mergeAbort(now: Date): { ours: ObjectId; theirs?: ObjectId; revision?: string } {
-    void now;
-    let state: MergeState | null = null;
-    let unreadable = false;
-    try {
-      state = this.readMergeState();
-    } catch {
-      // `readMergeState` returns null only for ENOENT (no state file). Any throw
-      // means the file is present but damaged, which is exactly what `--abort`
-      // must be able to clear rather than propagate.
-      unreadable = true;
-    }
-    if (state === null && !unreadable) {
-      throw new ObjectStoreError(
-        "no_merge_in_progress",
-        "There is no merge in progress to abort. Run `pm vcs merge <revision>` to start one.",
-      );
-    }
-    // The stopped merge never moved HEAD, so even with a corrupt state HEAD
-    // still names the pre-merge commit to restore the working tree to.
-    const ours = state !== null ? state.ours : this.refs.resolveHead();
-    if (ours === null) {
-      // HEAD unborn with a present-but-unreadable state means the control
-      // directory is damaged beyond what abort can fully undo. Still clear the
-      // state so the repository is not permanently stuck, then report.
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      void now;
+      let state: MergeState | null = null;
+      let unreadable = false;
+      try {
+        state = this.readMergeState();
+      } catch {
+        // `readMergeState` returns null only for ENOENT (no state file). Any throw
+        // means the file is present but damaged, which is exactly what `--abort`
+        // must be able to clear rather than propagate.
+        unreadable = true;
+      }
+      if (state === null && !unreadable) {
+        throw new ObjectStoreError(
+          "no_merge_in_progress",
+          "There is no merge in progress to abort. Run `pm vcs merge <revision>` to start one.",
+        );
+      }
+      // The stopped merge never moved HEAD, so even with a corrupt state HEAD
+      // still names the pre-merge commit to restore the working tree to.
+      const ours = state !== null ? state.ours : this.refs.resolveHead();
+      if (ours === null) {
+        // HEAD unborn with a present-but-unreadable state means the control
+        // directory is damaged beyond what abort can fully undo. Still clear the
+        // state so the repository is not permanently stuck, then report.
+        this.clearMergeState();
+        throw new ObjectStoreError(
+          "unborn_head",
+          "HEAD has no commit, so the aborted merge's pre-merge tree cannot be restored; the unreadable merge state was cleared.",
+        );
+      }
+      this.materialize(readCommit(this.objects, ours).tree);
       this.clearMergeState();
-      throw new ObjectStoreError(
-        "unborn_head",
-        "HEAD has no commit, so the aborted merge's pre-merge tree cannot be restored; the unreadable merge state was cleared.",
-      );
-    }
-    this.materialize(readCommit(this.objects, ours).tree);
-    this.clearMergeState();
-    return state !== null
-      ? { ours, theirs: state.theirs, revision: state.revision }
-      : { ours };
+      return state !== null
+        ? { ours, theirs: state.theirs, revision: state.revision }
+        : { ours };
+    });
   }
 
   /**
@@ -1931,11 +2243,19 @@ export class Repository {
    * @returns The undo operation that was recorded.
    */
   undo(sequence: number | null, now: Date): Operation {
-    this.assertNoMergeInProgress();
-    const operation = this.operations.undo(this.refs, sequence, now);
-    const head = this.refs.resolveHead();
-    this.materialize(head === null ? null : readCommit(this.objects, head).tree);
-    return operation;
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      this.assertNoMergeInProgress();
+      const operation = this.operations.undo(this.refs, sequence, now, /** Validate the post-undo checkout while its transitions are still only a plan. */ (target) => {
+        const raw = target.head?.before ?? this.refs.rawHead();
+        const name = raw.startsWith("ref: ") ? raw.slice(5).trim() : "HEAD";
+        const transition = target.refs.find(/** A restored attached HEAD may name a ref that this undo also moves. */ (entry) => entry.ref === name);
+        const restored = transition !== undefined ? transition.before : name === "HEAD" ? raw : this.refs.read(name);
+        this.assertLayersAcceptTree(restored === null ? null : readCommit(this.objects, restored).tree);
+      });
+      const head = this.refs.resolveHead();
+      this.materialize(head === null ? null : readCommit(this.objects, head).tree);
+      return operation;
+    });
   }
 
   /**
@@ -2068,6 +2388,7 @@ export class Repository {
    * @throws ObjectStoreError When any untracked path collides with the tree.
    */
   private assertNoUntrackedCollisions(tree: ObjectId | null, overwriteReason: string): void {
+    this.assertLayersAcceptTree(tree);
     const untracked = this.status().untracked;
     if (untracked.length === 0 || tree === null) return;
     const incomingPaths = [...flattenTree(this.objects, tree).keys()];
@@ -2153,6 +2474,10 @@ export class Repository {
    * @returns The commit HEAD ends up at, or null on an unborn branch.
    */
   private applyRewrite(plan: RewritePlan, now: Date): ObjectId | null {
+    const current = this.refs.readHead();
+    const name = current.kind === "branch" ? current.ref : "HEAD";
+    const target = plan.moves.find(/** Both attached and detached rewrites preflight the checkout they will publish. */ (move) => move.ref === name)?.after ?? current.target;
+    this.assertLayersAcceptTree(target === null ? null : readCommit(this.objects, target).tree);
     this.refs.transaction(plan.moves.map((move) => ({
       name: move.ref,
       expected: move.before,
@@ -2174,12 +2499,14 @@ export class Repository {
    * @returns The commit HEAD ends up at.
    */
   describe(revision: string, message: string, committer: Signature, now: Date): ObjectId | null {
-    this.assertCleanWorktree();
-    const id = this.resolve(revision);
-    const plan = this.planned(() => (
-        planDescribe(this.rewriteContext(committer), id, message, this.refSnapshots(), this.headSnapshot())
-    ));
-    return this.applyRewrite(plan, now);
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      this.assertCleanWorktree();
+      const id = this.resolve(revision);
+      const plan = this.planned(() => (
+          planDescribe(this.rewriteContext(committer), id, message, this.refSnapshots(), this.headSnapshot())
+      ));
+      return this.applyRewrite(plan, now);
+    });
   }
 
   /**
@@ -2192,17 +2519,19 @@ export class Repository {
    * @returns The commit HEAD ends up at.
    */
   rebase(source: string, onto: string, committer: Signature, now: Date): ObjectId | null {
-    this.assertCleanWorktree();
-    const plan = this.planned(() => (
-        planRebase(
-          this.rewriteContext(committer),
-          this.resolve(source),
-          this.resolve(onto),
-          this.refSnapshots(),
-          this.headSnapshot(),
-        )
-    ));
-    return this.applyRewrite(plan, now);
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      this.assertCleanWorktree();
+      const plan = this.planned(() => (
+          planRebase(
+            this.rewriteContext(committer),
+            this.resolve(source),
+            this.resolve(onto),
+            this.refSnapshots(),
+            this.headSnapshot(),
+          )
+      ));
+      return this.applyRewrite(plan, now);
+    });
   }
 
   /**
@@ -2214,11 +2543,13 @@ export class Repository {
    * @returns The commit HEAD ends up at.
    */
   squash(revision: string, committer: Signature, now: Date): ObjectId | null {
-    this.assertCleanWorktree();
-    const plan = this.planned(() => (
-        planSquash(this.rewriteContext(committer), this.resolve(revision), this.refSnapshots(), this.headSnapshot())
-    ));
-    return this.applyRewrite(plan, now);
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      this.assertCleanWorktree();
+      const plan = this.planned(() => (
+          planSquash(this.rewriteContext(committer), this.resolve(revision), this.refSnapshots(), this.headSnapshot())
+      ));
+      return this.applyRewrite(plan, now);
+    });
   }
 
   /**
@@ -2231,11 +2562,13 @@ export class Repository {
    * @returns The commit HEAD ends up at.
    */
   split(revision: string, patterns: readonly string[], committer: Signature, now: Date): ObjectId | null {
-    this.assertCleanWorktree();
-    const plan = this.planned(() => (
-        planSplit(this.rewriteContext(committer), this.resolve(revision), patterns, this.refSnapshots(), this.headSnapshot())
-    ));
-    return this.applyRewrite(plan, now);
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      this.assertCleanWorktree();
+      const plan = this.planned(() => (
+          planSplit(this.rewriteContext(committer), this.resolve(revision), patterns, this.refSnapshots(), this.headSnapshot())
+      ));
+      return this.applyRewrite(plan, now);
+    });
   }
 
   /**
@@ -2247,15 +2580,7 @@ export class Repository {
    * @returns The new commit's id.
    */
   cherryPick(revision: string, committer: Signature, now: Date): ObjectId {
-    this.assertCleanWorktree();
-    const head = this.refs.readHead();
-    const ours = head.target;
-    if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to cherry-pick onto.");
-    const commit = this.planned(() => planCherryPick(this.rewriteContext(committer), this.resolve(revision), ours));
-    this.assertNoUntrackedCollisions(readCommit(this.objects, commit).tree, "Cherry-picking would overwrite it.");
-    this.advanceHead(head, ours, commit, "cherry-pick", `Cherry-picked ${revision} as ${commit.slice(0, 12)}.`, now);
-    this.materialize(readCommit(this.objects, commit).tree);
-    return commit;
+    return this.replayRevision(revision, committer, now, "cherry-pick");
   }
 
   /**
@@ -2268,15 +2593,26 @@ export class Repository {
    * @returns The new commit's id.
    */
   revert(revision: string, message: string, committer: Signature, now: Date): ObjectId {
-    this.assertCleanWorktree();
-    const head = this.refs.readHead();
-    const ours = head.target;
-    if (ours === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to revert onto.");
-    const commit = this.planned(() => planRevert(this.rewriteContext(committer), this.resolve(revision), ours, message));
-    this.assertNoUntrackedCollisions(readCommit(this.objects, commit).tree, "Reverting would overwrite it.");
-    this.advanceHead(head, ours, commit, "revert", `Reverted ${revision} as ${commit.slice(0, 12)}.`, now);
-    this.materialize(readCommit(this.objects, commit).tree);
-    return commit;
+    return this.replayRevision(revision, committer, now, "revert", message);
+  }
+
+  /** Plan an attributed single-commit replay, check collisions, and publish its ref, audit and worktree inside one erasure lease. */
+  private replayRevision(revision: string, committer: Signature, now: Date, command: "cherry-pick" | "revert", message = ""): ObjectId {
+    return this.objects.withWriteLock(/** Replay planning and materialization cannot retain a payload across an intervening erasure. */ () => {
+      this.assertCleanWorktree();
+      const head = this.refs.readHead();
+      const expected = head.target;
+      if (expected === null) throw new ObjectStoreError("unborn_head", `HEAD has no commit yet to ${command} onto.`);
+      const commit = this.planned(/** Both replay kinds preserve the tree merge's FileId provenance. */ () => command === "cherry-pick"
+        ? planCherryPick(this.rewriteContext(committer), this.resolve(revision), expected)
+        : planRevert(this.rewriteContext(committer), this.resolve(revision), expected, message));
+      const tree = readCommit(this.objects, commit).tree;
+      const verb = command === "cherry-pick" ? "Cherry-picked" : "Reverted";
+      this.assertNoUntrackedCollisions(tree, `${verb} changes would overwrite it.`);
+      this.advanceHead(head, expected, commit, command, `${verb} ${revision} as ${commit.slice(0, 12)}.`, now);
+      this.materialize(tree);
+      return commit;
+    });
   }
 
   /**
@@ -2293,29 +2629,32 @@ export class Repository {
    * @returns The commit HEAD moves to.
    */
   reset(revision: string, mode: ResetMode, now: Date): ObjectId {
-    this.assertNoMergeInProgress();
-    const head = this.refs.readHead();
-    if (head.target === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to reset.");
-    const target = this.resolve(revision);
-    const targetTree = readCommit(this.objects, target).tree;
-    if (mode === "hard") {
-      const untracked = [...this.status().untracked].sort(compareByteOrder);
-      if (untracked.length > 0) {
-        throw new ObjectStoreError(
-          "reset_would_discard_untracked",
-          `A hard reset would delete untracked ${untracked.join(", ")}, which no commit holds. `
-          + "Stage and commit them, move them aside, or delete them first.",
-        );
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      this.assertNoMergeInProgress();
+      const head = this.refs.readHead();
+      if (head.target === null) throw new ObjectStoreError("unborn_head", "HEAD has no commit yet to reset.");
+      const target = this.resolve(revision);
+      const targetTree = readCommit(this.objects, target).tree;
+      if (mode === "hard") {
+        this.assertLayersAcceptTree(targetTree);
+        const untracked = [...this.status().untracked].sort(compareByteOrder);
+        if (untracked.length > 0) {
+          throw new ObjectStoreError(
+            "reset_would_discard_untracked",
+            `A hard reset would delete untracked ${untracked.join(", ")}, which no commit holds. `
+            + "Stage and commit them, move them aside, or delete them first.",
+          );
+        }
       }
-    }
-    this.advanceHead(head, head.target, target, "reset", `Reset to ${target.slice(0, 12)} (${mode}).`, now);
-    if (mode === "soft") return target;
-    if (mode === "mixed") {
-      this.writeIndex(this.indexEntriesForTree(targetTree));
+      this.advanceHead(head, head.target, target, "reset", `Reset to ${target.slice(0, 12)} (${mode}).`, now);
+      if (mode === "soft") return target;
+      if (mode === "mixed") {
+        this.writeIndex(this.indexEntriesForTree(targetTree));
+        return target;
+      }
+      this.materialize(targetTree);
       return target;
-    }
-    this.materialize(targetTree);
-    return target;
+    });
   }
 
   /**
@@ -2331,35 +2670,41 @@ export class Repository {
    * @returns The paths that were restored.
    */
   restore(paths: readonly string[], revision: string): string[] {
-    const normalized = paths.map((candidate) => normalizeRepoPath(this.root, candidate));
-    const rules = this.ignoreRules();
-    for (const path of normalized) {
-      if (isIgnored(path, rules) || isProtectedWorktreePath(this.root, path)) {
-        throw new ObjectStoreError("path_ignored", `"${path}" is protected or ignored, so it cannot be restored.`);
-      }
-    }
-    const source = flattenTree(this.objects, readCommit(this.objects, this.resolve(revision)).tree);
-    const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
-    const restored: string[] = [];
-    const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
-    try {
+    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+      if (this.layers().length > 0) throw new ObjectStoreError("layer_restore_conflict", "Remove private layers before restoring individual paths.");
+      const normalized = paths.map((candidate) => normalizeRepoPath(this.root, candidate));
+      const rules = this.ignoreRules();
       for (const path of normalized) {
-        const entry = source.get(path);
-        if (entry === undefined) {
-          mutation.remove(path);
-          index.delete(path);
-        } else {
-          const content = this.workingContent(path, this.objects.read(entry.id));
-          mutation.write(path, content, entry.mode === "100755" ? 0o755 : 0o644);
-          index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644" });
+        if (isIgnored(path, rules) || isProtectedWorktreePath(this.root, path)) {
+          throw new ObjectStoreError("path_ignored", `"${path}" is protected or ignored, so it cannot be restored.`);
         }
-        restored.push(path);
       }
-      this.writeIndex([...index.values()]);
-      return restored.sort();
-    } finally {
-      mutation.close();
-    }
+      const source = flattenTree(this.objects, readCommit(this.objects, this.resolve(revision)).tree);
+      const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
+      const restored: string[] = [];
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      try {
+        for (const path of normalized) {
+          const entry = source.get(path);
+          if (entry === undefined) {
+            mutation.remove(path);
+            index.delete(path);
+          } else {
+            const content = this.workingContent(path, this.objects.read(entry.id));
+            mutation.write(path, content, entry.mode === "100755" ? 0o755 : 0o644);
+            index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644",
+              ...(entry.fileId === undefined ? {} : { fileId: entry.fileId }),
+              ...(entry.copiedFrom === undefined ? {} : { copiedFrom: entry.copiedFrom }),
+            });
+          }
+          restored.push(path);
+        }
+        this.writeIndex([...index.values()]);
+        return restored.sort();
+      } finally {
+        mutation.close();
+      }
+    });
   }
 
 }

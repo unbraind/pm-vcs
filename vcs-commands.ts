@@ -14,6 +14,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
+import { registerCompositionCommands } from "./composition-commands.ts";
 import { VcsError } from "./git.ts";
 import {
   type ImportReport,
@@ -105,7 +106,7 @@ export function openRepository(context: CommandHandlerContext): Repository {
       "Run `pm vcs init` to create one here, or run this command inside an existing repository.",
     );
   }
-  return Repository.open(root);
+  return Repository.open(root, context.pm_root);
 }
 
 /** Return the host-bound SDK client, with a tracker-bound fallback for test and legacy hosts. */
@@ -274,7 +275,7 @@ function readServeGrants(authPath: string | undefined, workingRoot: string): Tok
  * @returns The trimmed value.
  * @throws VcsError When the argument is absent or blank.
  */
-function requiredArgument(
+export function requiredArgument(
   context: CommandHandlerContext,
   index: number,
   name: string,
@@ -356,6 +357,7 @@ function remoteListing(repository: Repository, head: ObjectId | null): RemoteBra
  * @param api - The host-supplied extension API.
  */
 export function registerVcsCommands(api: ExtensionApi): void {
+  registerCompositionCommands(api);
   api.registerCommand({
     name: "vcs init",
     description:
@@ -756,7 +758,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
   api.registerCommand({
     name: "vcs undo",
     description:
-      "Reverse a recorded operation, restoring every ref it moved and re-materializing the working tree. Objects are never removed, so any operation stays reversible.",
+      "Reverse a recorded operation, restoring every ref it moved and re-materializing the working tree. Undo restores refs; payloads erased by vcs obliterate cannot be restored.",
     flags: [{ long: "--operation", value_name: "number", description: "Which operation to reverse (default the most recent)", value_type: "string" }],
     run(context: CommandHandlerContext): VcsEnvelope & { undo: Operation } {
       const repository = openRepository(context);
@@ -1061,7 +1063,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
 
   api.registerCommand({
     name: "vcs reset",
-    description: "Move HEAD to a revision. --mode soft moves only the branch; mixed also rewrites the index; hard also rewrites the working tree. Objects are never deleted, so undo recovers.",
+    description: "Move HEAD to a revision. --mode soft moves only the branch; mixed also rewrites the index; hard also rewrites the working tree. Undo restores refs; obliterated payloads remain unavailable.",
     arguments: [{ name: "revision", description: "Where HEAD should move", required: true }],
     flags: [{ long: "--mode", value_name: "mode", description: "How far to reset: soft, mixed or hard (default mixed)", value_type: "string" }],
     run(context: CommandHandlerContext): VcsEnvelope & { head: ObjectId } {
@@ -1142,46 +1144,14 @@ export function registerVcsCommands(api: ExtensionApi): void {
       "Re-read every object reachable from any ref and check it against its own id. A content-addressed store's one unacceptable failure is returning altered content silently, so this makes that detectable on demand.",
     run(context: CommandHandlerContext): VcsEnvelope & { verified: number; corrupt: readonly string[] } {
       const repository = openRepository(context);
-      const corrupt: string[] = [];
-      let verified = 0;
-      // Walk the full object closure from every ref, not only the commits: a
-      // corrupted blob or tree is the corruption most likely to occur in
-      // practice, and reading only commits (what allReachable yields) would miss
-      // it entirely. Reading each object re-hashes it, which is the check.
-      const seen = new Set<string>();
-      const queue: string[] = [
-        ...repository.refs.list(BRANCH_PREFIX),
-        ...repository.refs.list(TAG_PREFIX),
-      ].map((entry) => entry.target);
-      while (queue.length > 0) {
-        const id = queue.pop() as string;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        try {
-          const object = repository.objects.read(id);
-          verified += 1;
-          if (object.type === "commit") {
-            const commit = decodeCommit(object.payload);
-            queue.push(commit.tree, ...commit.parents);
-          } else if (object.type === "tree") {
-            for (const entry of decodeTree(object.payload)) queue.push(entry.id);
-          }
-        } catch (error) {
-          // Only ObjectStoreError is caught. `read` raises nothing else, and
-          // labelling an unexpected failure "unreadable" would report a bug in
-          // this process as corruption in the user's repository.
-          if (!(error instanceof ObjectStoreError)) throw error;
-          corrupt.push(`${id}: ${error.code}`);
-        }
+      const result = repository.verify();
+      const failures = [...result.missing, ...result.corrupt];
+      if (failures.length > 0) {
+        throw new VcsError("corrupt_objects", `${failures.length} reachable objects did not verify: ${failures.join("; ")}.`,
+          "Repair missing or corrupt history from a trusted peer; incomplete erasure requires authorized cleanup.");
       }
-      if (corrupt.length > 0) {
-        throw new VcsError(
-          "corrupt_objects",
-          `${corrupt.length} of ${corrupt.length + verified} reachable objects did not verify: ${corrupt.join("; ")}.`,
-          "Re-import the affected history from a bundle or another copy of the repository.",
-        );
-      }
-      return { ok: true, verified, corrupt };
+      return { ok: true, ...result };
+
     },
   });
 

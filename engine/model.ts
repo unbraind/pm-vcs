@@ -7,6 +7,8 @@
 // the system makes (has this already been imported, is this a fast-forward, do
 // these two branches share a subtree) would quietly stop working.
 
+import { createHash } from "node:crypto";
+
 import {
   hashObject,
   isObjectId,
@@ -23,6 +25,24 @@ export type FileMode = (typeof FILE_MODES)[number];
 
 /** Stable identity of one logical file across path and content changes. */
 export type FileId = string;
+
+/**
+ * Derive the established migration identity from one legacy file's provenance.
+ *
+ * @param entry - Repository-relative path and original object address. Staging
+ *   uses its existing index entry; a two-sided merge uses the common base when
+ *   available so both descendants retain the same pre-edit identity.
+ * @returns The deterministic identity used by legacy index migration.
+ */
+export function migratedFileId(entry: { readonly path: string; readonly id: ObjectId }): FileId {
+  return createHash("sha256")
+    .update("pm-vcs legacy file identity\0", "utf8")
+    .update(entry.path, "utf8")
+    .update("\0", "utf8")
+    .update(entry.id, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+}
 
 /** Validate that a candidate uses the fixed-width lowercase hexadecimal representation of a stable file identity. */
 export function isFileId(value: string): boolean {
@@ -1092,10 +1112,13 @@ export function decodeManifest(payload: Buffer): FragmentManifest {
  *
  * @param store - Destination object store.
  * @param manifest - The manifest to write.
+ * @param fileId - Owning file identity, forwarded to the object store. Optional
+ *   before any erasure; required after a denial exists. A denied owner or
+ *   fragment reference still refuses before publishing the manifest.
  * @returns The stored manifest's id.
  */
-export function writeManifest(store: ObjectStore, manifest: FragmentManifest): ObjectId {
-  return store.write("manifest", encodeManifest(manifest));
+export function writeManifest(store: ObjectStore, manifest: FragmentManifest, fileId?: FileId): ObjectId {
+  return store.write("manifest", encodeManifest(manifest), fileId);
 }
 
 /**
