@@ -82,6 +82,11 @@ test("authenticated HTTP uses receiver principals, explicit break grants and pre
     const bob = new HttpTransport(`http://${server.host}:${server.port}`, { token: "bob-secret" });
     const admin = new HttpTransport(`http://${server.host}:${server.port}`, { token: "admin-secret" });
     const lease = await alice.lease({ action: "acquire", fileId, refs: ["refs/heads/main"], ttlMs: 60000 });
+    // Inspection by another principal reveals the generation, never the holder's fencing secret.
+    const seenByBob = await bob.lease({ action: "inspect", fileId });
+    assert.equal(seenByBob!.holder, "alice"); assert.equal(seenByBob!.generation, lease!.generation);
+    assert.equal(seenByBob!.token, `${lease!.generation}:${"0".repeat(32)}`); assert.notEqual(seenByBob!.token, lease!.token);
+    assert.equal((await alice.lease({ action: "inspect", fileId }))!.token, lease!.token);
     const bundle = exportBundle(sender.objects, sender.refs, []);
     await assert.rejects(bob.push(bundle, updates, true, new Date(), [lease!]), (error: unknown) => {
       assert.ok(error instanceof PublicationLeaseError); assert.equal(error.reason, "wrong_principal");
@@ -111,6 +116,20 @@ test("leases survive renames and deletion publication still needs the deleted st
   await wire.lease({ action: "release", fileId, token: initial!.token });
   await assert.rejects(wire.push(exportBundle(sender.objects, sender.refs, []), [{ ref: "refs/heads/main", expected: renamed, next: deleted }], false, new Date()), { code: "lease_missing" });
   assert.equal(receiver.resolve("main"), renamed);
+});
+
+test("a merge parent that bypasses the replaced tip does not demand leases for already-published history", async () => {
+  const { sender, receiver, wire, fileId, first, updates } = fixture();
+  const initial = await wire.lease({ action: "acquire", fileId, refs: ["refs/heads/main"], ttlMs: 60000 });
+  await wire.push(exportBundle(sender.objects, sender.refs, []), updates, false, new Date());
+  rmSync(join(sender.root, "asset")); sender.stage([]); const deleted = sender.commit({ message: "delete", author }, new Date());
+  await wire.push(exportBundle(sender.objects, sender.refs, []), [{ ref: "refs/heads/main", expected: first, next: deleted }], false, new Date());
+  await wire.lease({ action: "release", fileId, token: initial!.token });
+  // The merge keeps the post-deletion tree but lists `first` (already reachable from `deleted`) as a second parent.
+  const merge = writeCommit(sender.objects, { tree: readCommit(sender.objects, deleted).tree, parents: [deleted, first], author, committer: author, message: "merge published history" });
+  sender.refs.compareAndSwap("refs/heads/main", deleted, merge);
+  await wire.push(exportBundle(sender.objects, sender.refs, []), [{ ref: "refs/heads/main", expected: deleted, next: merge }], false, new Date());
+  assert.equal(receiver.refs.read("refs/heads/main"), merge);
 });
 
 test("independent processes contend for acquisition; exactly one generation wins", async () => {

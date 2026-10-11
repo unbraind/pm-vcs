@@ -171,7 +171,10 @@ export class PublicationLeases {
     const valid = parseLeaseRequest({ ...request });
     return this.store.withWriteLock(/** Lease generations and publications use exactly the same interprocess lock. */ () => {
       const current = this.inspect(valid.fileId);
-      if (valid.action === "inspect") return current;
+      if (valid.action === "inspect") {
+        // Only the holder may read its fencing proof; other principals see the generation without the secret.
+        return current === null || current.holder === this.principal.principal ? current : { ...current, token: `${current.generation}:${"0".repeat(32)}` };
+      }
       const now = Date.now();
       if (valid.action === "acquire") {
         if (current?.active === true && current.expiry > now) throw new ObjectStoreError("lease_held", "An active generation already holds this FileId; renew it or obtain explicit break authority.");
@@ -230,6 +233,20 @@ export class PublicationLeases {
           else if (entry.fileId !== undefined) fileIds.add(entry.fileId);
         }
       };
+      // Everything reachable from the replaced tip is already published; a merge
+      // parent that bypasses `expected` must not drag that history back in.
+      const known = new Set<string>();
+      if (update.expected !== null) {
+        const stack = [update.expected];
+        while (stack.length > 0) {
+          const id = stack.pop() as string;
+          if (known.has(id)) continue;
+          known.add(id);
+          const commit = metadata.commits.get(id) ?? readCommit(this.store, id);
+          metadata.commits.set(id, commit);
+          stack.push(...commit.parents);
+        }
+      }
       while (pending.length > 0) {
         const id = pending.pop() as string;
         if (seen.has(id)) continue;
@@ -238,7 +255,7 @@ export class PublicationLeases {
         metadata.commits.set(id, commit);
         walk(commit.tree);
         // Historical payloads introduced and deleted before the tip are still published.
-        if (id !== update.expected) pending.push(...commit.parents);
+        if (id !== update.expected) pending.push(...commit.parents.filter((parent) => !known.has(parent)));
       }
       for (const fileId of [...fileIds].sort()) checks.push({ fileId, ref: update.ref, lease: this.inspect(fileId) });
     }

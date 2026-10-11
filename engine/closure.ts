@@ -30,6 +30,8 @@ interface Reference {
   readonly id: ObjectId;
   readonly role: "commit" | "tree" | "payload" | "fragment" | "manifest" | "tombstone";
   readonly parent?: ReturnType<typeof decodeManifest>;
+  /** Content address of `parent`; the dedup key uses it instead of the parent's full page list. */
+  readonly parentId?: ObjectId;
   readonly page?: NonNullable<ReturnType<typeof decodeManifest>["pages"]>[number];
   readonly length?: number;
   readonly fileId?: string;
@@ -57,7 +59,9 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
   while (pending.length > 0) {
     const reference = pending.pop() as Reference;
     const { id, role, fileId, root } = reference;
-    const key = JSON.stringify(reference);
+    // Scalar key: the parent is content-addressed, so its id stands in for its
+    // (up to 128-page) structure and keys stay O(1) per child.
+    const key = JSON.stringify([id, role, fileId, root, reference.length, reference.page?.length, reference.page?.count, reference.parentId]);
     if (seen.has(key)) continue;
     seen.add(key);
     const denial = denied.get(id);
@@ -97,7 +101,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
       } else if (object.type === "manifest") {
         const node = object.structure;
         if (node.pages !== undefined) {
-          for (const page of node.pages) pending.push({ id: page.id, role: "manifest", fileId, root, parent: node, page });
+          for (const page of node.pages) pending.push({ id: page.id, role: "manifest", fileId, root, parent: node, parentId: id, page });
         } else {
           for (const fragment of node.fragments) pending.push({ id: fragment.id, role: "fragment", fileId, root, length: fragment.length });
         }

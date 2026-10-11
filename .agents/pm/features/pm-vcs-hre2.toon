@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:14.894Z"
-updated_at: "2026-10-11T09:36:57.210Z"
+updated_at: "2026-10-11T14:47:44.846Z"
 author: pi-agent
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:45.240Z",claude,"cli:update:dep",detected
-comments[28]{created_at,author,text}:
+comments[29]{created_at,author,text}:
   "2026-08-28T20:11:19.721Z",pi-agent,"PR #48 review confirmed this acceptance criterion is intentionally not implemented. The branch contains no publication lock-lease implementation or passing acceptance evidence for this child, so it remains open with its written specification."
   "2026-09-12T23:35:49.681Z",pi-agent,"Audit 2026-09-13: EXISTS — nothing. The description says spec only. grep for lease/Lease/stable-FileId in engine/ returns no matches. No lock lease implementation exists. REMAINS — the full feature: publication refusal for missing, expired, wrong-principal, or out-of-scope lock leases, with four distinct named refusals."
   "2026-10-11T05:07:14.215Z",codex-agent,"Orchestrator read the merged architecture and feature specification. One integrated implementation will enforce stable FileId leases at the receiver publication boundary, with distinct missing, expired, wrong-principal and branch-scope refusals, and real process race evidence. Independent review and verification follow before one unmerged PR."
@@ -39,6 +39,7 @@ comments[28]{created_at,author,text}:
   "2026-10-11T09:28:24.372Z",codex-agent,"Orchestrator took over final verification from the implementation worker. Publication preflight, durable generations and lease race proofs are unchanged. The first package gate found one streaming-buffer margin failure; the manifest feature now uses a 32 KiB output buffer and all package gates will run again at the next frozen commit."
   "2026-10-11T09:35:35.505Z",codex-sol,"After the first HEAD npm gate reported one narrow restore buffer assertion failure (1418/1419 passed; 100/100/100/100 source coverage, zero skips), reduced actual streaming output allocation from 64 to 32 KiB without changing budgets or assertions. Refreshed pm test pm-vcs-hre2 --run --progress passed lease/CLI 11/11 and built/packed/served integrations 6/6, zero failures/cancellations/skips/todo. Manifest linked checks also pass 31/31, 55/55 and 80/80. Publication ownership, receiver-clock expiry, fencing and atomic preflight are unchanged; root audit directory synchronization remains. Releasing the claim again while leaving this item in_progress/open. Final tracker writes precede changelog, bundle regeneration and the correction commit; all three required complete release gates will be rerun against that committed unchanged HEAD."
   "2026-10-11T09:36:50.853Z",codex-agent,"Implementation, real process races, typed diagnostics and behavioral preflight revert evidence are linked in this item and https://github.com/unbraind/pm-vcs/pull/100. The linked lease and installed/served integration commands passed 11 of 11 and 6 of 6, zero failures or skips. Package validation and review receipts are maintained in that PR. This item remains open after claim release."
+  "2026-10-11T14:47:44.845Z",claude-hub,"Review fixes: (1) publication walks skip every commit reachable from the replaced tip, so a merge parent that bypasses expected no longer drags published history (and lease demands for long-deleted FileIds) into the check; (2) lease inspect returns the fencing token only to the holder, other principals see generation:000.. ; (3) closure dedup keys use scalar fields plus the parent's content address instead of the parent's full page list. Regressions in test/publication-leases.test.ts; reverting (1) fails with lease_missing, reverting (2) fails the HTTP principal test."
 files[27]{path,scope}:
   engine/bundle.ts,project
   engine/closure.ts,project
