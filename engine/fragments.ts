@@ -280,7 +280,7 @@ export function readFragmentedToFile(
     const fd = openSync(destinationPath, "wx");
     let complete = false;
     let previous: { fragment: FragmentEntry; data: Buffer } | undefined;
-    const buffer = Buffer.allocUnsafe(65_536);
+    const buffer = Buffer.allocUnsafe(32_768);
     let filled = 0;
     /** Transfer a bounded buffer completely, including real short writes. */
     const write = (data: Buffer): void => {

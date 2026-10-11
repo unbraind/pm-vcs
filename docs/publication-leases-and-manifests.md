@@ -76,7 +76,7 @@ passing a large flat v1 descriptor to them explicitly opts into materialization.
 They are not used by the streaming file or range reader to load legacy metadata.
 
 `readFragmentedToFile` retains bounded metadata, one fragment payload and a
-64 KiB output buffer. `readFragmentRange` retains bounded metadata and allocates
+32 KiB output buffer. `readFragmentRange` retains bounded metadata and allocates
 only its requested result buffer plus one fragment payload. `readFragmented`
 allocates one full content buffer and copies fragments directly into it while
 retaining bounded metadata. Fixed chunk size or
