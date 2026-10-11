@@ -1,3 +1,4 @@
+import { grantRemoteLeases } from "./helpers/publication-consumers.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -128,6 +129,7 @@ test("clone, fetch and push work end to end through the command surface", async 
   await harness.runCommand({
     command: "vcs commit", options: { message: "second" }, global: { author: "B <b@c>" }, pmRoot: report.root,
   });
+  await grantRemoteLeases(Repository.open(report.root), "origin");
   const pushed = await harness.runCommand({ command: "vcs push", pmRoot: report.root });
   assert.equal(pushed.errorMessage, undefined, String(pushed.errorMessage));
   assert.equal((pushed.result as { push: PushReport }).push.upToDate, false);
@@ -188,6 +190,7 @@ test("push refuses a non-fast-forward from the command surface and force overrid
   assert.equal(refused.handled, false);
   assert.match(String(refused.errorMessage), /would discard commits/);
 
+  await grantRemoteLeases(Repository.open(root));
   const forced = await harness.runCommand({
     command: "vcs push", options: { branch: "main", force: true }, pmRoot: root,
   });
@@ -328,6 +331,7 @@ test("branch --remotes lists what the fetch recorded, with divergence from HEAD"
     global: { author: "C <c@d>" }, pmRoot: clone,
   });
   assert.equal(merged.errorMessage, undefined, String(merged.errorMessage));
+  await grantRemoteLeases(Repository.open(clone), "origin");
   const pushed = await harness.runCommand({ command: "vcs push", pmRoot: clone });
   assert.equal(pushed.errorMessage, undefined, String(pushed.errorMessage));
   assert.equal((pushed.result as { push: PushReport }).push.upToDate, false);

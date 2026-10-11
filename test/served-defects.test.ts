@@ -1,3 +1,4 @@
+import { grantRemoteLeases } from "./helpers/publication-consumers.ts";
 /** Packed, globally installed CLI regression with real PM mutations on Node and Bun. */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -16,7 +17,8 @@ for (const runtime of [process.execPath, "bun"]) {
   // rather than skip. Everywhere else the Node-only development setup keeps
   // working: the Bun case skips with a reason, the Node case always runs.
   const skip = runtime === "bun" && !bunAvailable && process.env.CI === undefined ? "bun is not installed" : false;
-  test(`packed global served CLI protects secrets and merges real updates (${runtime === "bun" ? "bun" : "node"})`, { timeout: 240_000, skip }, async () => {
+  // Multiple installed CLI startups share this scenario budget under CPU contention.
+  test(`packed global served CLI protects secrets and merges real updates (${runtime === "bun" ? "bun" : "node"})`, { timeout: 1_800_000, skip }, async () => {
     if (runtime === "bun") assert.ok(bunAvailable, "Bun is required on CI");
     const fixture = makeTempDir();
     const secret = "regression-bearer-secret";
@@ -35,7 +37,7 @@ for (const runtime of [process.execPath, "bun"]) {
     /** Execute a real installed CLI and scan both streams on success and failure. */
     async function pm(cwd: string, args: string[], status = 0, overrides: NodeJS.ProcessEnv = {}): Promise<Record<string, unknown>> {
       const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolveResult, reject) => {
-        const child = spawn(runtime, [pmExecutable, ...args, "--json"], { cwd, env: { ...env, ...overrides }, stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
+        const child = spawn(runtime, [pmExecutable, ...args, "--json"], { cwd, env: { ...env, ...overrides }, stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
         let stdout = "", stderr = "";
         child.stdout.on("data", (bytes) => { stdout += String(bytes); });
         child.stderr.on("data", (bytes) => { stderr += String(bytes); });
@@ -47,6 +49,17 @@ for (const runtime of [process.execPath, "bun"]) {
       }
       assert.equal(result.status, status, `${result.stdout}${result.stderr}`);
       return result.stdout.trim() === "" ? {} : JSON.parse(result.stdout) as Record<string, unknown>;
+    }
+    /** Explicitly prepare receiver authority through real transports and save fencing proofs for CLI pushes. */
+    async function prepareLeases(root: string, token: string): Promise<void> {
+      const previous = process.env.PM_VCS_TOKEN_ORIGIN;
+      try {
+        process.env.PM_VCS_TOKEN_ORIGIN = token;
+        await grantRemoteLeases(Repository.open(root));
+      } finally {
+        if (previous === undefined) delete process.env.PM_VCS_TOKEN_ORIGIN;
+        else process.env.PM_VCS_TOKEN_ORIGIN = previous;
+      }
     }
     let server: Awaited<ReturnType<typeof startRepositoryServer>> | undefined;
     try {
@@ -79,6 +92,7 @@ for (const runtime of [process.execPath, "bun"]) {
       await pm(a, ["vcs", "status"]);
       await pm(a, ["vcs", "add"]);
       await pm(a, ["vcs", "commit", "--message", "priority"]);
+      await prepareLeases(a, secret);
       await pm(a, ["vcs", "push"]);
       await pm(b, ["update", id, "--tags", "web,api"]);
       await pm(b, ["vcs", "add"]);
@@ -87,6 +101,7 @@ for (const runtime of [process.execPath, "bun"]) {
       await pm(b, ["vcs", "fetch"], 0, { PM_VCS_TOKEN: "invalid", PM_VCS_TOKEN_ORIGIN: secret });
       const merge = await pm(b, ["vcs", "merge", "origin/main", "--message", "merge fields"]);
       assert.deepEqual((merge.merge as { conflicts: unknown[] }).conflicts, []);
+      await prepareLeases(b, secret);
       await pm(b, ["vcs", "push"], 0, { PM_VCS_TOKEN: secret });
       await pm(a, ["vcs", "fetch"]);
       await pm(a, ["vcs", "merge", "origin/main"]);

@@ -352,11 +352,12 @@ test("chunking the same bytes in a separate process produces the same manifest i
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env, CDC_OBJECTS_PATH: join(dir.root, "objects-2") },
   });
+  const exited = new Promise<number>((resolve) => { child.on("exit", (c: number | null) => resolve(c ?? 1)); });
   let stdout = "";
   let stderr = "";
   for await (const chunk of child.stdout) stdout += chunk.toString();
   for await (const chunk of child.stderr) stderr += chunk.toString();
-  const code = await new Promise<number>((resolve) => { child.on("exit", (c: number | null) => resolve(c ?? 1)); });
+  const code = await exited;
   assert.equal(code, 0, `child process exited with ${code}: ${stderr}`);
   assert.equal(stdout, result1.manifestId, "cross-process manifest id should match");
 });

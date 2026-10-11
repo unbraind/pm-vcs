@@ -7,17 +7,9 @@ import { type ObjectId, ObjectStoreError } from "../engine/objects.ts";
 import { readCommit, readTree } from "../engine/model.ts";
 import { BRANCH_PREFIX } from "../engine/refs.ts";
 import { REPOSITORY_FORMAT, Repository } from "../engine/repo.ts";
-import {
-  type Advertisement,
-  assertCompatiblePeer,
-  type PushUpdate,
-  REQUIRED_TRANSPORT_CAPABILITIES,
-  type TransferObject,
-  type Transport,
-  FileTransport,
-  translatePublicationRace,
-} from "../engine/transport.ts";
-import { pushTo } from "../engine/sync.ts";
+import { type Advertisement, assertCompatiblePeer, type PushUpdate, REQUIRED_TRANSPORT_CAPABILITIES, type TransferObject, type Transport, translatePublicationRace } from "../engine/transport.ts";
+import { LeasedFileTransport as FileTransport, leasedPushTo as pushTo } from "./helpers/publication-consumers.ts";
+
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const handles: Array<{ root: string; cleanup(): void }> = [];

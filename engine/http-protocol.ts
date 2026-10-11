@@ -1,3 +1,4 @@
+import { PublicationLeaseError, type LeaseProof } from "./publication-leases.ts";
 // The wire vocabulary shared by the served repository and the HTTP client.
 //
 // Both sides of the socket speak the same JSON envelopes, so a refusal read by
@@ -34,9 +35,12 @@ export const UPLOAD_ENDPOINT = "objects/upload";
 
 /** The endpoint publishing ref moves after a resumable upload. */
 export const PUBLISH_ENDPOINT = "publish";
+/** Explicit receiver-authenticated FileId lease operations. */
+export const LEASE_ENDPOINT = "leases";
 
 /** Endpoint suffixes an HTTP request path may end with, longest first so nested ones match. */
 const ENDPOINT_SUFFIXES = [
+  LEASE_ENDPOINT,
   UPLOAD_ENDPOINT,
   OBJECT_FETCH_ENDPOINT,
   MISSING_ENDPOINT,
@@ -57,7 +61,7 @@ const ENDPOINT_SUFFIXES = [
  * @returns True when only a write grant may perform it.
  */
 export function isWriteEndpoint(endpoint: string): boolean {
-  return endpoint === PUSH_ENDPOINT || endpoint === UPLOAD_ENDPOINT || endpoint === PUBLISH_ENDPOINT;
+  return endpoint === LEASE_ENDPOINT || endpoint === PUSH_ENDPOINT || endpoint === UPLOAD_ENDPOINT || endpoint === PUBLISH_ENDPOINT;
 }
 
 /**
@@ -120,8 +124,8 @@ export const INTERNAL_ERROR_STATUS = 500;
  * @param message - The message the client will re-raise it with.
  * @returns The response bytes.
  */
-export function encodeErrorBody(code: string, message: string): Buffer {
-  return Buffer.from(`${JSON.stringify({ error: { code, message } })}\n`, "utf8");
+export function encodeErrorBody(code: string, message: string, lease?: PublicationLeaseError): Buffer {
+  return Buffer.from(`${JSON.stringify({ error: { code, message, ...(lease === undefined ? {} : { fileId: lease.fileId, holder: lease.holder, expiry: lease.expiry, reason: lease.reason }) } })}\n`, "utf8");
 }
 
 /**
@@ -430,13 +434,9 @@ export function encodePushRequest(
   updates: ReadonlyArray<{ ref: string; expected: ObjectId | null; next: ObjectId }>,
   force: boolean,
   now: Date,
+  proofs: readonly LeaseProof[] = [],
 ): string {
-  return `${JSON.stringify({
-    bundle: bundle.toString("base64"),
-    updates: encodePushUpdates(updates),
-    force,
-    now: now.getTime(),
-  })}\n`;
+  return encodePublicationEnvelope({ bundle: bundle.toString("base64") }, updates, force, now, proofs);
 }
 
 /**
@@ -530,8 +530,9 @@ export function encodePublishRequest(
   updates: ReadonlyArray<{ ref: string; expected: ObjectId | null; next: ObjectId }>,
   force: boolean,
   now: Date,
+  proofs: readonly LeaseProof[] = [],
 ): string {
-  return `${JSON.stringify({ session, updates: encodePushUpdates(updates), force, now: now.getTime() })}\n`;
+  return encodePublicationEnvelope({ session }, updates, force, now, proofs);
 }
 
 /**
@@ -590,10 +591,21 @@ export function assertWireSuccess(status: number, payload: Buffer, url: string):
   if (status >= 200 && status < 300) return;
   const wireError = decodeErrorBody(payload);
   if (wireError !== null) {
+    const record = decodeWireObject(payload)?.error as Record<string, unknown>;
+    if (["missing", "expired", "wrong_principal", "out_of_scope", "fenced"].includes(String(record.reason))
+      && typeof record.fileId === "string" && (record.holder === null || typeof record.holder === "string")
+      && (record.expiry === null || typeof record.expiry === "number")) {
+      throw new PublicationLeaseError(record.reason as PublicationLeaseError["reason"], record.fileId,
+        record.holder === null ? null : { holder: record.holder, expiry: record.expiry as number });
+    }
     throw new ObjectStoreError(wireError.code, redactUserinfo(wireError.message));
   }
   throw new ObjectStoreError(
     "unreachable_remote",
     `${redactUserinfo(url)} answered status ${status} without an error body. Check the remote's URL, or whether the server is a served repository.`,
   );
+}
+/** Encode shared publication policy fields without granting any sender principal authority. */
+function encodePublicationEnvelope(arrival: { bundle: string } | { session: string }, updates: readonly WirePushUpdate[], force: boolean, now: Date, proofs: readonly LeaseProof[]): string {
+  return JSON.stringify({ ...arrival, updates: encodePushUpdates(updates), force, now: now.getTime(), ...(proofs.length === 0 ? {} : { proofs }) }) + "\n";
 }

@@ -1,3 +1,4 @@
+import { manifestFragments } from "./manifest-pages.ts";
 // History rewriting, and the three-way tree merge rewriting shares with `merge`.
 //
 // Two responsibilities live here because they are one mechanism seen twice. A
@@ -39,7 +40,7 @@ import {
   readCommit,
   writeCommit,
 } from "./model.ts";
-import { type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
+import { hashObject, type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
 import {
   type ConflictLabels,
   type ContentMergeResult,
@@ -163,7 +164,7 @@ export function mergePath(
       if (object !== null && !["blob", "record", "manifest", "link"].includes(object.type)) {
         throw new ObjectStoreError("object_type_mismatch", `Merge payload at ${path} has structural object kind ${object.type}.`);
       }
-      if (object?.type === "manifest") for (const fragment of decodeManifest(object.payload).fragments) readFragmentBlob(ctx.store, fragment);
+      if (object?.type === "manifest") for (const { fragment } of manifestFragments(ctx.store, hashObject("manifest", object.payload))) readFragmentBlob(ctx.store, fragment);
     }
     if (ourObject?.type === "link" || theirObject?.type === "link" || baseObject?.type === "link") {
       throw new ObjectStoreError("link_merge_conflict", `Competing link descriptors at ${path} require explicit pin reconciliation before merging.`);

@@ -10,17 +10,10 @@ import { type ObjectId, ObjectStoreError } from "../engine/objects.ts";
 import { BRANCH_PREFIX, TAG_PREFIX } from "../engine/refs.ts";
 import { REMOTE_PREFIX, trackingRef } from "../engine/remotes.ts";
 import { Repository } from "../engine/repo.ts";
-import { cloneFrom, fetchFrom, pushTo } from "../engine/sync.ts";
-import {
-  type Advertisement,
-  FileTransport,
-  type PushReceipt,
-  type PushUpdate,
-  type TransferObject,
-  type Transport,
-  openTransport,
-  resolveRemoteLocation,
-} from "../engine/transport.ts";
+import { cloneFrom, fetchFrom } from "../engine/sync.ts";
+import { leasedPushTo as pushTo, LeasedFileTransport as FileTransport } from "./helpers/publication-consumers.ts";
+import { FileTransport as ProductionFileTransport, type Advertisement, type PushReceipt, type PushUpdate, type TransferObject, type Transport, openTransport, resolveRemoteLocation } from "../engine/transport.ts";
+
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const handles: Array<{ root: string; cleanup(): void }> = [];
@@ -651,7 +644,7 @@ test("a Windows drive letter is a path, not a scheme this build cannot serve", a
   // scheme rule would refuse it as a remote over "c". The path itself need not
   // exist on this platform: resolution is what is under test, not reachability.
   const transport = openTransport("C:\\repo", tempRoot());
-  assert.ok(transport instanceof FileTransport);
+  assert.ok(transport instanceof ProductionFileTransport);
   assert.equal(transport.url, "C:\\repo");
   assert.equal(resolveRemoteLocation("C:\\repo", "/tmp"), resolve("/tmp", "C:\\repo"));
 });

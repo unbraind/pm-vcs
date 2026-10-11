@@ -19,7 +19,7 @@ import { mergeRecords } from "../engine/records.ts";
 import { BRANCH_PREFIX, RefStore } from "../engine/refs.ts";
 import { Repository } from "../engine/repo.ts";
 import { mergePath, mergeTrees } from "../engine/rewrite.ts";
-import { FileTransport } from "../engine/transport.ts";
+import { LeasedFileTransport as FileTransport } from "./helpers/publication-consumers.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { runGit, VcsError } from "../git.ts";
 import { makeTempDir } from "./helpers/tmp.ts";

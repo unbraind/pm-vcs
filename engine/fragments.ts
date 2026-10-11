@@ -34,7 +34,8 @@ import {
   type ObjectStore,
 } from "./objects.ts";
 import type { CdcParams, FileId, FragmentEntry, FragmentManifest, FragmentWriteResult } from "./model.ts";
-import { manifestId as computeManifestId, readManifest, writeManifest } from "./model.ts";
+
+import { ManifestWriter, manifestFragments, manifestHeader } from "./manifest-pages.ts";
 
 /** Default fragment size: 1 MiB. Large enough to amortise per-fragment overhead, small enough to bound memory. */
 export const DEFAULT_FRAGMENT_SIZE = 1 << 20;
@@ -68,7 +69,8 @@ function assertFragmentSize(fragmentSize: number, code: string): void {
  * @param sourcePath - Source path, used in error messages.
  * @param fileId - Owning stable identity for every fragment; optional before
  *   erasure, required after it. Store denial and byte inspection remain active.
- * @returns The ordered fragment entries.
+ * @param accept - Optional incremental sink; when present no full entry list is retained.
+ * @returns The ordered fragment entries, or an empty list when an incremental sink is supplied.
  * @throws ObjectStoreError When `readSync` returns fewer bytes than requested.
  */
 export function writeFragmentsFromFd(
@@ -78,6 +80,7 @@ export function writeFragmentsFromFd(
   fragmentSize: number,
   sourcePath: string,
   fileId?: FileId,
+  accept?: (entry: FragmentEntry) => void,
 ): FragmentEntry[] {
   // This helper is exported, so its callers are not only the two in this module
   // that validate first. A fragmentSize of 0 makes `toRead` 0, the inner read
@@ -115,7 +118,8 @@ export function writeFragmentsFromFd(
       }
       const chunk = buffer.subarray(0, toRead);
       const id = store.write("blob", chunk, fileId);
-      fragments.push({ id, length: toRead });
+      if (accept === undefined) fragments.push({ id, length: toRead });
+      else accept({ id, length: toRead });
       remaining -= toRead;
     }
     return fragments;
@@ -134,7 +138,7 @@ export function writeFragmentsFromFd(
  * @param fragmentSize - Maximum bytes per fragment. Defaults to 1 MiB.
  * @param fileId - Owning stable identity for every fragment and the manifest;
  *   optional before erasure, required after it. Never inferred from content.
- * @returns The manifest id and the manifest.
+ * @returns The manifest id and bounded root descriptor; interior roots have pages and an empty fragments list.
  * @throws ObjectStoreError When the fragment size is not a positive integer.
  */
 export function writeFragmented(
@@ -145,17 +149,12 @@ export function writeFragmented(
 ): FragmentWriteResult {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
   return store.withWriteLock(/** Publish all fixed fragments and their manifest under one reentrant lease. */ () => {
-    const totalLength = content.length;
-    const fragments: FragmentEntry[] = [];
-    for (let offset = 0; offset < totalLength; offset += fragmentSize) {
-      const end = Math.min(offset + fragmentSize, totalLength);
-      const chunk = content.subarray(offset, end);
-      const id = store.write("blob", chunk, fileId);
-      fragments.push({ id, length: end - offset });
+    const writer = new ManifestWriter(store, fileId);
+    for (let offset = 0; offset < content.length; offset += fragmentSize) {
+      const chunk = content.subarray(offset, Math.min(offset + fragmentSize, content.length));
+      writer.add({ id: store.write("blob", chunk, fileId), length: chunk.length });
     }
-    const manifest: FragmentManifest = { totalLength, fragments };
-    const id = writeManifest(store, manifest, fileId);
-    return { manifestId: id, manifest };
+    return writer.finish();
   });
 }
 
@@ -165,7 +164,7 @@ export function writeFragmented(
  * The source file is read through a file descriptor in fixed-size chunks — each
  * chunk is at most `fragmentSize` bytes — and written as a blob immediately.
  * The buffer is allocated once and reused for every chunk, so peak additional
- * heap is bounded by `fragmentSize` plus the manifest entry list, regardless of
+ * heap is bounded by `fragmentSize` plus at most 128 entries at each of seven bounded manifest levels, regardless of
  * how large the source file is. A multi-gigabyte file is therefore stored
  * within a fixed memory ceiling.
  *
@@ -174,7 +173,7 @@ export function writeFragmented(
  * @param fragmentSize - Maximum bytes per fragment. Defaults to 1 MiB.
  * @param fileId - Owning stable identity for every fragment and the manifest;
  *   optional before erasure, required after it. Never inferred from the path.
- * @returns The manifest id and the manifest.
+ * @returns The manifest id and bounded root descriptor; interior roots have pages and an empty fragments list.
  * @throws ObjectStoreError When the fragment size is not a positive integer, or
  *   a short read is encountered on the source file.
  */
@@ -194,10 +193,10 @@ export function writeFragmentedFile(
       // whose bytes are stored — a manifest that is internally consistent and
       // wrong. The descriptor names one file for its whole lifetime.
       const totalLength = fstatSync(fd).size;
-      const fragments = writeFragmentsFromFd(store, fd, totalLength, fragmentSize, sourcePath, fileId);
-      const manifest: FragmentManifest = { totalLength, fragments };
-      const id = writeManifest(store, manifest, fileId);
-      return { manifestId: id, manifest };
+      const writer = new ManifestWriter(store, fileId);
+      writeFragmentsFromFd(store, fd, totalLength, fragmentSize, sourcePath, fileId,
+        /** Retire each fragment into a bounded node immediately. */ (entry) => writer.add(entry));
+      return writer.finish();
     } finally {
       closeSync(fd);
     }
@@ -236,7 +235,8 @@ export function readFragmentBlob(store: ObjectStore, fragment: FragmentEntry): B
 /**
  * Reads the full content of a fragmented file into a single buffer.
  *
- * This is the convenience path for small files. The streaming path for large
+ * This convenience path allocates the complete result while retaining bounded
+ * manifest metadata and one fragment payload. The streaming path for large
  * files is {@link readFragmentedToFile}, which never holds more than one
  * fragment in memory at a time.
  *
@@ -246,20 +246,21 @@ export function readFragmentBlob(store: ObjectStore, fragment: FragmentEntry): B
  * @throws ObjectStoreError When the manifest is absent, corrupt, or a fragment is missing.
  */
 export function readFragmented(store: ObjectStore, id: ObjectId): Buffer {
-  const manifest = readManifest(store, id);
-  const parts: Buffer[] = [];
-  for (const fragment of manifest.fragments) {
-    parts.push(readFragmentBlob(store, fragment));
+  const manifest = manifestHeader(store, id);
+  const content = Buffer.allocUnsafe(manifest.totalLength);
+  for (const { fragment, offset } of manifestFragments(store, id, 0, manifest.totalLength, manifest)) {
+    readFragmentBlob(store, fragment).copy(content, offset);
   }
-  return Buffer.concat(parts, manifest.totalLength);
+  return content;
 }
 
 /**
  * Streams the full content of a fragmented file to a destination path.
  *
  * Each fragment is read from the store and written to the destination file
- * immediately, so only one fragment is in memory at a time. A multi-gigabyte
- * file is therefore restored within a fixed memory ceiling. The destination
+ * through a bounded output buffer, retaining at most one fragment payload
+ * and one metadata page at each of the eight bounded hierarchy levels. Large
+ * legacy v1 metadata uses a backpressured verified decompression stream. The destination
  * is fsynced before the file descriptor is closed, so a crash after the
  * function returns leaves a complete file on disk.
  *
@@ -275,21 +276,40 @@ export function readFragmentedToFile(
   destinationPath: string,
 ): void {
   return store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
-    const manifest = readManifest(store, id);
+    const manifest = manifestHeader(store, id);
     const fd = openSync(destinationPath, "wx");
     let complete = false;
+    let previous: { fragment: FragmentEntry; data: Buffer } | undefined;
+    const buffer = Buffer.allocUnsafe(32_768);
+    let filled = 0;
+    /** Transfer a bounded buffer completely, including real short writes. */
+    const write = (data: Buffer): void => {
+      let written = 0;
+      while (written < data.length) written += writeSync(fd, data, written, data.length - written);
+    };
     try {
-      for (const fragment of manifest.fragments) {
-        const data = readFragmentBlob(store, fragment);
+      for (const { fragment } of manifestFragments(store, id, 0, manifest.totalLength, manifest)) {
+        const data = previous?.fragment.id === fragment.id && previous.fragment.length === fragment.length
+          ? previous.data : readFragmentBlob(store, fragment);
+        previous = { fragment, data };
         // writeSync returns the bytes actually written and is not guaranteed to
         // transfer the whole buffer in one call. Ignoring the return value
         // truncates the output on a short write while reporting success, which
         // for a restore path means silent corruption of the restored file.
-        let written = 0;
-        while (written < data.length) {
-          written += writeSync(fd, data, written, data.length - written);
+        if (data.length > buffer.length) {
+          write(buffer.subarray(0, filled));
+          filled = 0;
+          write(data);
+        } else {
+          if (filled + data.length > buffer.length) {
+            write(buffer.subarray(0, filled));
+            filled = 0;
+          }
+          data.copy(buffer, filled);
+          filled += data.length;
         }
       }
+      write(buffer.subarray(0, filled));
       fsyncSync(fd);
       complete = true;
     } finally {
@@ -306,37 +326,14 @@ export function readFragmentedToFile(
 }
 
 /**
- * Computes the fragments that overlap a byte range [start, end).
- *
- * @param manifest - The manifest whose fragments to scan.
- * @param start - Inclusive start offset.
- * @param end - Exclusive end offset.
- * @returns Fragments with their absolute offsets that overlap the range.
- */
-function fragmentsInRange(
-  manifest: FragmentManifest,
-  start: number,
-  end: number,
-): readonly { fragment: FragmentEntry; offset: number }[] {
-  const result: { fragment: FragmentEntry; offset: number }[] = [];
-  let offset = 0;
-  for (const fragment of manifest.fragments) {
-    const fragStart = offset;
-    const fragEnd = offset + fragment.length;
-    if (fragEnd > start && fragStart < end) {
-      result.push({ fragment, offset });
-    }
-    offset = fragEnd;
-  }
-  return result;
-}
-
-/**
  * Reads a byte range [start, end) from a fragmented file.
  *
  * Only the fragments whose byte ranges overlap [start, end) are read from
  * the store; non-overlapping fragments are never touched. Each overlapping
- * fragment is sliced to the requested range before being concatenated.
+ * fragment is copied into the requested result buffer. Metadata stays bounded
+ * independently of the number of overlapping fragments. Large legacy v1
+ * metadata is scanned and verified completely; paged manifests seek through
+ * only overlapping subtrees. The returned bytes occupy O(end - start) memory.
  *
  * @param store - Source object store.
  * @param id - The manifest id.
@@ -352,7 +349,7 @@ export function readFragmentRange(
   start: number,
   end: number,
 ): Buffer {
-  const manifest = readManifest(store, id);
+  const manifest = manifestHeader(store, id);
   if (!Number.isInteger(start) || !Number.isInteger(end)) {
     throw new ObjectStoreError(
       "range_out_of_bounds",
@@ -377,16 +374,15 @@ export function readFragmentRange(
       `Range [${start}, ${end}) extends beyond the content length ${manifest.totalLength}.`,
     );
   }
-  if (start === end) return Buffer.alloc(0);
-  const overlapping = fragmentsInRange(manifest, start, end);
-  const parts: Buffer[] = [];
+  const overlapping = manifestFragments(store, id, start, end, manifest);
+  const result = Buffer.allocUnsafe(end - start);
   for (const { fragment, offset } of overlapping) {
     const data = readFragmentBlob(store, fragment);
     const sliceStart = Math.max(0, start - offset);
     const sliceEnd = Math.min(fragment.length, end - offset);
-    parts.push(data.subarray(sliceStart, sliceEnd));
+    data.copy(result, Math.max(0, offset - start), sliceStart, sliceEnd);
   }
-  return Buffer.concat(parts, end - start);
+  return result;
 }
 
 /**
@@ -403,14 +399,12 @@ export function fragmentedContentId(
   fragmentSize: number = DEFAULT_FRAGMENT_SIZE,
 ): ObjectId {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
-  const fragments: FragmentEntry[] = [];
+  const writer = new ManifestWriter();
   for (let offset = 0; offset < content.length; offset += fragmentSize) {
-    const end = Math.min(offset + fragmentSize, content.length);
-    const chunk = content.subarray(offset, end);
-    const id = hashObject("blob", chunk);
-    fragments.push({ id, length: end - offset });
+    const chunk = content.subarray(offset, Math.min(offset + fragmentSize, content.length));
+    writer.add({ id: hashObject("blob", chunk), length: chunk.length });
   }
-  return computeManifestId({ totalLength: content.length, fragments });
+  return writer.finish().manifestId;
 }
 
 // ─── Content-defined chunking ──────────────────────────────────────────────
@@ -512,8 +506,8 @@ function assertCdcParams(params: CdcParams, code: string): void {
 }
 
 /**
- * Computes content-defined chunk boundaries for a buffer and returns the
- * fragment entries, without writing them to a store.
+ * Computes content-defined chunk boundaries for a buffer and emits each entry
+ * to the required incremental sink.
  *
  * Extracted from {@link writeCdcFragmented} so the CDC write path from a file
  * descriptor can share the boundary logic and so the pure computation can be
@@ -524,15 +518,15 @@ function assertCdcParams(params: CdcParams, code: string): void {
  * @param content - The content to chunk.
  * @param params - CDC parameters.
  * @param writeChunk - Called for each chunk; returns the blob id.
- * @returns The ordered fragment entries.
+ * @param accept - Required incremental sink; no full entry list is retained.
  */
 function cdcBoundaries(
   content: Buffer,
   params: CdcParams,
   writeChunk: (chunk: Buffer) => ObjectId,
-): FragmentEntry[] {
+  accept: (entry: FragmentEntry) => void,
+): void {
   const { minChunkSize, maxChunkSize, mask } = params;
-  const fragments: FragmentEntry[] = [];
   let chunkStart = 0;
   let hash = 0;
   for (let i = 0; i < content.length; i++) {
@@ -541,7 +535,7 @@ function cdcBoundaries(
     if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
       const chunk = content.subarray(chunkStart, i + 1);
       const id = writeChunk(chunk);
-      fragments.push({ id, length: chunkLen });
+      accept({ id, length: chunkLen });
       chunkStart = i + 1;
       hash = 0;
     }
@@ -549,9 +543,8 @@ function cdcBoundaries(
   if (chunkStart < content.length) {
     const chunk = content.subarray(chunkStart);
     const id = writeChunk(chunk);
-    fragments.push({ id, length: content.length - chunkStart });
+    accept({ id, length: content.length - chunkStart });
   }
-  return fragments;
 }
 
 /**
@@ -571,7 +564,8 @@ function cdcBoundaries(
  * @param sourcePath - Source path, used in error messages.
  * @param fileId - Owning stable identity for every fragment; optional before
  *   erasure, required after it. Store denial and byte inspection remain active.
- * @returns The ordered fragment entries.
+ * @param accept - Optional incremental sink; when present no full entry list is retained.
+ * @returns The ordered fragment entries, or an empty list when an incremental sink is supplied.
  * @throws ObjectStoreError When CDC parameters are invalid, or a short read is
  *   encountered on the source file.
  */
@@ -582,6 +576,7 @@ export function writeCdcFragmentsFromFd(
   params: CdcParams,
   sourcePath: string,
   fileId?: FileId,
+  accept?: (entry: FragmentEntry) => void,
 ): FragmentEntry[] {
   assertCdcParams(params, "invalid_cdc_params");
   if (!Number.isInteger(totalLength) || totalLength < 0) {
@@ -596,6 +591,12 @@ export function writeCdcFragmentsFromFd(
     const readBuf = Buffer.allocUnsafe(readSize);
     const chunkBuf = Buffer.allocUnsafe(maxChunkSize);
     const fragments: FragmentEntry[] = [];
+    /** Publish the current CDC chunk and immediately retire its metadata. */
+    const emit = (length: number): void => {
+      const entry = { id: store.write("blob", chunkBuf.subarray(0, length), fileId), length };
+      if (accept === undefined) fragments.push(entry);
+      else accept(entry);
+    };
     let chunkLen = 0;
     let hash = 0;
     let remaining = totalLength;
@@ -619,9 +620,7 @@ export function writeCdcFragmentsFromFd(
         chunkLen++;
         hash = ((hash << 1) + GEAR_TABLE[readBuf[i]!]!) | 0;
         if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
-          const chunk = chunkBuf.subarray(0, chunkLen);
-          const id = store.write("blob", chunk, fileId);
-          fragments.push({ id, length: chunkLen });
+          emit(chunkLen);
           chunkLen = 0;
           hash = 0;
         }
@@ -629,11 +628,7 @@ export function writeCdcFragmentsFromFd(
       remaining -= filled;
     }
 
-    if (chunkLen > 0) {
-      const chunk = chunkBuf.subarray(0, chunkLen);
-      const id = store.write("blob", chunk, fileId);
-      fragments.push({ id, length: chunkLen });
-    }
+    if (chunkLen > 0) emit(chunkLen);
     return fragments;
   });
 }
@@ -650,7 +645,7 @@ export function writeCdcFragmentsFromFd(
  * @param params - CDC parameters. Defaults to {@link DEFAULT_CDC_PARAMS}.
  * @param fileId - Owning stable identity for every fragment and the manifest;
  *   optional before erasure, required after it. Denied encodings still refuse.
- * @returns The manifest id and the manifest.
+ * @returns The manifest id and bounded root descriptor; interior roots have pages and an empty fragments list.
  * @throws ObjectStoreError When CDC parameters are invalid.
  */
 export function writeCdcFragmented(
@@ -661,10 +656,10 @@ export function writeCdcFragmented(
 ): FragmentWriteResult {
   assertCdcParams(params, "invalid_cdc_params");
   return store.withWriteLock(/** Publish all content-defined fragments and their manifest in one lease. */ () => {
-    const fragments = cdcBoundaries(content, params, (chunk) => store.write("blob", chunk, fileId));
-    const manifest: FragmentManifest = { totalLength: content.length, fragments, mode: "cdc" };
-    const id = writeManifest(store, manifest, fileId);
-    return { manifestId: id, manifest };
+    const writer = new ManifestWriter(store, fileId, "cdc");
+    cdcBoundaries(content, params, /** Store each CDC payload before referring to it. */ (chunk) => store.write("blob", chunk, fileId),
+      /** Retain only the partial bounded node. */ (entry) => writer.add(entry));
+    return writer.finish();
   });
 }
 
@@ -681,7 +676,7 @@ export function writeCdcFragmented(
  * @param params - CDC parameters. Defaults to {@link DEFAULT_CDC_PARAMS}.
  * @param fileId - Owning stable identity for every fragment and the manifest;
  *   optional before erasure, required after it. Denied encodings still refuse.
- * @returns The manifest id and the manifest.
+ * @returns The manifest id and bounded root descriptor; interior roots have pages and an empty fragments list.
  * @throws ObjectStoreError When CDC parameters are invalid, or a short read is
  *   encountered on the source file.
  */
@@ -696,10 +691,10 @@ export function writeCdcFragmentedFile(
     const fd = openSync(sourcePath, "r");
     try {
       const totalLength = fstatSync(fd).size;
-      const fragments = writeCdcFragmentsFromFd(store, fd, totalLength, params, sourcePath, fileId);
-      const manifest: FragmentManifest = { totalLength, fragments, mode: "cdc" };
-      const id = writeManifest(store, manifest, fileId);
-      return { manifestId: id, manifest };
+      const writer = new ManifestWriter(store, fileId, "cdc");
+      writeCdcFragmentsFromFd(store, fd, totalLength, params, sourcePath, fileId,
+        /** Promote bounded nodes while the descriptor is read. */ (entry) => writer.add(entry));
+      return writer.finish();
     } finally {
       closeSync(fd);
     }
@@ -720,6 +715,8 @@ export function cdcFragmentedContentId(
   params: CdcParams = DEFAULT_CDC_PARAMS,
 ): ObjectId {
   assertCdcParams(params, "invalid_cdc_params");
-  const fragments = cdcBoundaries(content, params, (chunk) => hashObject("blob", chunk));
-  return computeManifestId({ totalLength: content.length, fragments, mode: "cdc" });
+  const writer = new ManifestWriter(undefined, undefined, "cdc");
+  cdcBoundaries(content, params, /** Address CDC payloads without retaining bytes. */ (chunk) => hashObject("blob", chunk),
+    /** Retire fragment metadata into the bounded hashing hierarchy. */ (entry) => writer.add(entry));
+  return writer.finish().manifestId;
 }

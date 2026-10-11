@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { PublicationLeaseError, parseLeaseProofs, parseLeaseRequest, type ReceiverPrincipal } from "./publication-leases.ts";
 // Serving a repository over HTTP: the same transport, on a socket.
 //
 // Every policy a repository enforces lives in `FileTransport` — the fast-forward
@@ -23,6 +25,7 @@ import { FileTransport } from "./transport.ts";
 import { isServableRepositoryDirectory, ServedRepositoryDirectories } from "./served-repositories.ts";
 import {
   ADVERTISE_ENDPOINT,
+  LEASE_ENDPOINT,
   BAD_REQUEST_STATUS,
   BODY_TOO_LARGE_STATUS,
   BUNDLE_CONTENT_TYPE,
@@ -66,6 +69,10 @@ interface StoredToken {
   readonly repository: string;
   /** What it may do there. */
   readonly access: TokenAccess;
+  /** Operator-assigned stable principal; defaults to a one-way credential identity. */
+  readonly principal?: string;
+  /** Explicit administrative lease-break permission. */
+  readonly breakLeases?: boolean;
 }
 
 /**
@@ -79,6 +86,8 @@ interface StoredToken {
 export class TokenGrants {
   /** Token to repository to access. */
   private readonly scopes: Map<string, Map<string, TokenAccess>>;
+  /** Receiver-assigned ownership independent of request text. */
+  private readonly principals = new Map<string, ReceiverPrincipal>();
 
   /**
    * @param tokens - The grants to hold.
@@ -92,6 +101,7 @@ export class TokenGrants {
       // entry a map iteration happened to visit last.
       if (repositories.get(entry.repository) !== "write") repositories.set(entry.repository, entry.access);
       this.scopes.set(entry.token, repositories);
+      this.principals.set(JSON.stringify([entry.token, entry.repository]), { principal: entry.principal ?? `credential:${createHash("sha256").update(entry.token).digest("hex")}`, breakLeases: entry.breakLeases === true });
     }
   }
 
@@ -108,6 +118,11 @@ export class TokenGrants {
    */
   scope(token: string, repository: string): TokenAccess | null {
     return this.scopes.get(token)?.get(repository) ?? null;
+  }
+
+  /** Resolve ownership and administrative grants only from operator-loaded credentials. */
+  principal(token: string, repository: string): ReceiverPrincipal {
+    return this.principals.get(JSON.stringify([token, repository])) as ReceiverPrincipal;
   }
 
   /**
@@ -181,7 +196,10 @@ export function parseTokenText(text: string): readonly StoredToken[] | null {
     if (typeof token !== "string" || !/^[!-~]+$/.test(token)) return null;
     if (typeof repository !== "string" || (repository !== "" && !isServedRepositoryName(repository))) return null;
     if (access !== "read" && access !== "write") return null;
-    tokens.push({ token, repository, access });
+    if (record.principal !== undefined && (typeof record.principal !== "string" || !/^[!-~]{1,128}$/.test(record.principal))) return null;
+    if (record.breakLeases !== undefined && typeof record.breakLeases !== "boolean") return null;
+    tokens.push({ token, repository, access, ...(record.principal === undefined ? {} : { principal: record.principal as string }),
+      ...(record.breakLeases === undefined ? {} : { breakLeases: record.breakLeases as boolean }) });
   }
   return tokens;
 }
@@ -551,7 +569,7 @@ async function handleServedRequest(
           // A body past the bound is refused with the status that names it, so a
           // client sizing its retries can distinguish "send less" from "send right".
           status: error.code === "body_too_large" ? BODY_TOO_LARGE_STATUS : BAD_REQUEST_STATUS,
-          body: encodeErrorBody(error.code, error.message),
+          body: encodeErrorBody(error.code, error.message, error instanceof PublicationLeaseError ? error : undefined),
           contentType: JSON_CONTENT_TYPE,
         }
         : {
@@ -628,7 +646,7 @@ async function routeServedRequest(
     const served = openServedRepository(context, addressed.repository);
     if (served === null) return { response: denial(), addressed };
     const body = await readBoundedBody(request, mutating ? context.limits.maxBodyBytes : Math.min(context.limits.maxBodyBytes, context.limits.maxReadBodyBytes));
-    return { response: await dispatchServedRequest(served, addressed.endpoint, body, context), addressed };
+    return { response: await dispatchServedRequest(served, addressed.endpoint, body, context, { principal: "http:open", breakLeases: false }), addressed };
   }
   const token = bearerToken(request.headers.authorization) ?? "";
   const grants = context.grants;
@@ -649,7 +667,7 @@ async function routeServedRequest(
     return { response: { status: FORBIDDEN_STATUS, body: FORBIDDEN_BODY, contentType: JSON_CONTENT_TYPE }, addressed };
   }
   const body = await readBoundedBody(request, mutating ? context.limits.maxBodyBytes : Math.min(context.limits.maxBodyBytes, context.limits.maxReadBodyBytes));
-  return { response: await dispatchServedRequest(served, addressed.endpoint, body, context), addressed };
+  return { response: await dispatchServedRequest(served, addressed.endpoint, body, context, grants.principal(token, addressed.repository)), addressed };
 }
 
 /**
@@ -799,6 +817,7 @@ async function dispatchServedRequest(
   endpoint: string,
   body: Buffer,
   context: ServeContext,
+  principal: ReceiverPrincipal,
 ): Promise<ServedResponse> {
   const limits = context.limits;
   if (endpoint === ADVERTISE_ENDPOINT) {
@@ -828,13 +847,13 @@ async function dispatchServedRequest(
       payload: Buffer.from(object.payload, "base64"),
     }));
     const bytes = objects.reduce((total, object) => total + object.payload.length, 0);
-    const state = served.uploadSession(upload.session, limits.maxSessions);
+    const state = served.uploadSession(JSON.stringify([principal.principal, upload.session]), limits.maxSessions);
     // Cumulative, not per request: a reused session keeps every receipt it has
     // accepted since its last publication, so per-request bounds alone cannot
     // stop one caller growing that memory without end. Past either bound the
     // refusal releases the session's receipts with it, so the caller that is
     // told to stop is not the one left holding them.
-    if (!served.chargeUpload(upload.session, state, objects.length, bytes, limits)) {
+    if (!served.chargeUpload(JSON.stringify([principal.principal, upload.session]), state, objects.length, bytes, limits)) {
       throw limitExceeded(
         `An upload session may accept at most ${limits.maxSessionObjects} objects and ${limits.maxSessionBytes} object bytes `
         + "before it publishes, and this session has reached one of them. Publish, then resume with a fresh session.",
@@ -845,6 +864,10 @@ async function dispatchServedRequest(
   }
   const request = decodeWireObject(body);
   if (request === null) throw new ObjectStoreError("bad_request", `The ${endpoint} request body is not a JSON object.`);
+  if (endpoint === LEASE_ENDPOINT) {
+    const lease = await served.transport().lease(parseLeaseRequest(request), principal);
+    return { status: 200, body: Buffer.from(JSON.stringify({ lease }) + "\n"), contentType: JSON_CONTENT_TYPE };
+  }
   if (endpoint === FETCH_ENDPOINT) {
     const fetchRequest = decodeFetchRequest(request);
     if (fetchRequest === null) throw new ObjectStoreError("bad_request", "The fetch request does not hold a well-formed ref and have list.");
@@ -862,7 +885,7 @@ async function dispatchServedRequest(
     return { status: 200, body: bundle, contentType: BUNDLE_CONTENT_TYPE };
   }
   // The path splitter admits only known endpoints; the remaining two move refs.
-  return await dispatchRefMoves(served, endpoint, request, context);
+  return await dispatchRefMoves(served, endpoint, request, context, principal);
 }
 
 /**
@@ -886,8 +909,10 @@ async function dispatchRefMoves(
   endpoint: string,
   request: Record<string, unknown>,
   context: ServeContext,
+  principal: ReceiverPrincipal,
 ): Promise<ServedResponse> {
   const updates = decodePushUpdates(request, "updates");
+  const proofs = parseLeaseProofs(request.proofs);
   const force = request.force === true;
   const now = decodeWireDate(request, "now");
   if (updates === null) throw new ObjectStoreError("bad_request", `The ${endpoint} request does not name well-formed ref moves.`);
@@ -900,13 +925,13 @@ async function dispatchRefMoves(
     // Count the object lines the importer would store, not the header's object
     // list: the header is the sender's claim and nothing ties the two together.
     if (parseBundle(bundle).lines.length > context.limits.maxUploadObjects) throw limitExceeded(`A push may carry at most ${context.limits.maxUploadObjects} objects.`);
-    const receipt = await served.transport().push(bundle, updates, force, now);
+    const receipt = await served.transport().push(bundle, updates, force, now, proofs, principal);
     return { status: 200, body: Buffer.from(encodePushReceipt(receipt), "utf8"), contentType: JSON_CONTENT_TYPE };
   }
   const session = typeof request.session === "string" ? request.session : "";
-  const state = served.uploadSession(session, context.limits.maxSessions);
+  const state = served.uploadSession(JSON.stringify([principal.principal, session]), context.limits.maxSessions);
   try {
-    const receipt = await state.transport.publish(updates, force, now);
+    const receipt = await state.transport.publish(updates, force, now, proofs, principal);
     return { status: 200, body: Buffer.from(encodePushReceipt(receipt), "utf8"), contentType: JSON_CONTENT_TYPE };
   } finally {
     // Publication clears the session's receipts on every attempt, refused ones

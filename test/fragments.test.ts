@@ -99,6 +99,12 @@ class TrackingStore extends ObjectStore {
     return this.inner.read(id);
   }
 
+  /** Record bounded node reads without retaining unrelated fragment metadata. */
+  readBoundedTyped(id: ObjectId, type: ObjectType, limit?: number): Buffer {
+    this.readIds.push(id);
+    return this.inner.readBoundedTyped(id, type, limit);
+  }
+
   /** Record and delegate a typed read. */
   readTyped(id: ObjectId, type: ObjectType): Buffer {
     this.readIds.push(id);

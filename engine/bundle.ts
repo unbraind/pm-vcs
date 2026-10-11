@@ -24,7 +24,7 @@ import {
   isObjectId,
 } from "./objects.ts";
 import { assertArrivalsAllowed, validateDenials, type ErasureDenial } from "./lifecycle.ts";
-import { requireClosure } from "./closure.ts";
+import { requireClosure, type ClosureMetadata } from "./closure.ts";
 import { reachable } from "./merge.ts";
 import { BRANCH_PREFIX, type RefStore, TAG_PREFIX } from "./refs.ts";
 
@@ -76,6 +76,16 @@ interface BundleLine {
  */
 function closure(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId> {
   const objects = new Set<ObjectId>();
+  /** Include all bounded manifest descendants and blobs in an export closure. */
+  const walkPayload = (id: ObjectId): void => {
+    if (objects.has(id)) return;
+    objects.add(id);
+    const manifest = store.readIfType(id, "manifest");
+    if (manifest !== undefined) {
+      const node = decodeManifest(manifest.payload);
+      for (const entry of node.pages ?? node.fragments) walkPayload(entry.id);
+    }
+  };
   /** Add a tree and every descendant tree or leaf object without revisiting shared subtrees. */
   const walkTree = (treeIdentifier: ObjectId): void => {
     if (objects.has(treeIdentifier)) return;
@@ -84,9 +94,7 @@ function closure(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId
       if (entry.mode === "40000") walkTree(entry.id);
       else {
         if (store.denial(entry.id) !== undefined) continue;
-        objects.add(entry.id);
-        const manifest = store.readIfType(entry.id, "manifest");
-        if (manifest !== undefined) for (const fragment of decodeManifest(manifest.payload).fragments) objects.add(fragment.id);
+        walkPayload(entry.id);
       }
     }
   };
@@ -101,6 +109,8 @@ function closure(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId
  * What {@link importBundleObjects} stored, before any ref is published.
  */
 export interface ObjectImportReport {
+  /** Receiver-validated structure reusable under the same uninterrupted store write lease. */
+  readonly metadata: ClosureMetadata;
   /** The bundle's validated header. */
   readonly header: BundleContents;
   /** Objects newly written to the store. */
@@ -320,7 +330,7 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
       targets.push(series.base, ...series.patches.map(/** Standalone series cannot launder denied structural commits. */ (patch) => patch.commit));
     }
   }
-  requireClosure(store, targets, lines, combined, lines.filter(/** Standalone tree arrivals must also retain structural closure. */ (line) => line.type === "tree").map(/** Validate trees even when no advertised ref reaches them. */ (line) => line.id));
+  const metadata = requireClosure(store, targets, lines, combined, lines.filter(/** Standalone tree arrivals must also retain structural closure. */ (line) => line.type === "tree").map(/** Validate trees even when no advertised ref reaches them. */ (line) => line.id));
   // Registry validation proves canonical metadata, not physical audit durability.
   // Verify held audits before omitting their rewrite or extending the registry.
   for (const denial of local) store.readTyped(denial.id, "tombstone");
@@ -336,7 +346,7 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
     added.push(line.id);
   }
   store.accept(lines, true);
-  return { header, added, skipped };
+  return { header, added, skipped, metadata };
 }
 
 /**

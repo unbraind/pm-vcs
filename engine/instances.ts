@@ -23,7 +23,7 @@ import { randomBytes } from "node:crypto";
 
 import { matchesGlob } from "./config.ts";
 import { compareByteOrder } from "./model.ts";
-import { ObjectStore, ObjectStoreError, type ObjectId, type StoredObject, assertRegistryName, readControlJson } from "./objects.ts";
+import { ObjectStore, ObjectStoreError, type ObjectId, type StoredObject, type ObjectType, assertRegistryName, readControlJson } from "./objects.ts";
 
 /** File inside an instance's control directory naming the hub it belongs to. */
 export const INSTANCE_LINK_FILE = "link.json";
@@ -273,19 +273,27 @@ export class SharedObjectStore extends ObjectStore {
    *   holds no object with this id; the message names the id and how to fetch it.
    */
   read(id: ObjectId): StoredObject {
-    try {
-      return super.read(id);
-    } catch (error) {
-      if (error instanceof ObjectStoreError && error.code === "object_not_found") {
-        throw new ObjectStoreError(
-          "missing_fragment",
-          `Object ${id} is missing from the shared object store this instance reads. `
-          + "Fetch it with `pm vcs fetch <remote>` from the hub or any linked instance, "
-          + "or import a bundle that carries it with `pm vcs import <file>`, then retry.",
-        );
-      }
-      throw error;
+    try { return super.read(id); } catch (error) { return this.missing(id, error); }
+  }
+
+  /** Preserve actionable missing-object diagnostics for bounded manifest node readers. */
+  readBoundedTyped(id: ObjectId, type: ObjectType, limit?: number): Buffer {
+    try { return super.readBoundedTyped(id, type, limit); } catch (error) { return this.missing(id, error); }
+  }
+
+  /** Preserve actionable diagnostics throughout the verified legacy compatibility stream. */
+  *readLines(id: ObjectId, type: ObjectType): Generator<string> {
+    try { yield* super.readLines(id, type); } catch (error) { this.missing(id, error); }
+  }
+
+  /** Translate only absence; preserve corruption and operational filesystem failures. */
+  private missing(id: ObjectId, error: unknown): never {
+    if (error instanceof ObjectStoreError && error.code === "object_not_found") {
+      throw new ObjectStoreError("missing_fragment", `Object ${id} is missing from the shared object store this instance reads. `
+        + "Fetch it with `pm vcs fetch <remote>` from the hub or any linked instance, "
+        + "or import a bundle that carries it with `pm vcs import <file>`, then retry.");
     }
+    throw error;
   }
 }
 

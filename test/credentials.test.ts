@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { environmentToken, readCredentials, redactRemoteUrl, redactUserinfo, splitRemoteCredentials, writeRemoteMap } from "../engine/credentials.ts";
 import { RemoteStore } from "../engine/remotes.ts";
-import { HttpTransport } from "../engine/http-transport.ts";
+import { LeasedHttpTransport as HttpTransport } from "./helpers/publication-consumers.ts";
 import { resolveRemoteLocation } from "../engine/transport.ts";
 import { createServer } from "node:http";
 import { makeTempDir } from "./helpers/tmp.ts";

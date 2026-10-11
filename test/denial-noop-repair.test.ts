@@ -9,7 +9,7 @@ import { type Signature } from "../engine/model.ts";
 import { hashObject, ObjectStore, type ObjectId } from "../engine/objects.ts";
 import { Repository } from "../engine/repo.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
-import { FileTransport } from "../engine/transport.ts";
+import { LeasedFileTransport as FileTransport } from "./helpers/publication-consumers.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const temps: ReturnType<typeof makeTempDir>[] = [];

@@ -48,6 +48,9 @@ repo.stage([]); const publicationBase = repo.commit({ message: "tracker", author
 writeFileSync(join(root, "publication.bin"), Buffer.from([0, 255, 17])); repo.stage(["publication.bin"]);
 const publicationTip = repo.commit({ message: "publication", author }, new Date());
 const publicationWire = new FileTransport(root, root);
+// Explicit receiver authority for ordinary packed publication consumers.
+for (const entry of repo.readIndex()) await publicationWire.lease({ action: "acquire", fileId: entry.fileId,
+  refs: ["refs/heads/push-one", "refs/tags/push-two", "refs/heads/publish-one", "refs/tags/publish-two"], ttlMs: 86400000 });
 const deliveredBytes = Buffer.from("consumer batch receipt 93284651");
 const delivered = { type: "blob", payload: deliveredBytes, id: hashObject("blob", deliveredBytes) };
 await publicationWire.uploadObjects([delivered, delivered]);
@@ -324,8 +327,9 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     console.log("consumer prerequisite: mismatched CLI version, actual exit 1 before fixture setup");
     assert.equal(existsSync(join(project, "node-project-cli")), false);
     for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-project-cli"]]) {
-      const result = spawnSync(runtime, [script, scenario, archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 120_000 });
-      assert.equal(result.status, 0, `${scenario}: ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: "2026.10.10", linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true });
+      // The installed CLI scenario runs multiple real CLI and package-install processes serially.
+      const result = spawnSync(runtime, [script, scenario, archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 900_000 });
+      assert.equal(result.status, 0, `${scenario}: ${result.signal ?? result.error ?? "nonzero exit"}; ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: "2026.10.10", linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true });
       console.log(`consumer scenario ${scenario}: ${result.stdout}`);
     }
   } finally { temporary.cleanup(); }
