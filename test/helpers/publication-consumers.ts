@@ -22,16 +22,17 @@ export async function acquirePublicationLeases(wire: Transport, updates: readonl
   if (wire.fetchObjects !== undefined) {
     const pending = updates.flatMap(update => [update.next, ...(update.expected === null ? [] : [update.expected])]);
     const seen = new Set<string>();
-    try {
-      while (pending.length > 0) {
-        const id = pending.pop()!; if (seen.has(id)) continue; seen.add(id);
-        for (const object of parseBundle(await wire.fetchObjects([id])).lines) {
-          collect(object.type, object.payload);
-          if (object.type === "commit") { const commit = decodeCommit(object.payload); pending.push(commit.tree, ...commit.parents); }
-          if (object.type === "tree") for (const entry of decodeTree(object.payload)) if (entry.mode === "40000") pending.push(entry.id);
-        }
+    while (pending.length > 0) {
+      const id = pending.pop()!; if (seen.has(id)) continue; seen.add(id);
+      let lines: ReturnType<typeof parseBundle>["lines"];
+      // A missing or not-yet-uploaded object skips only itself; other held tips still contribute their FileIds.
+      try { lines = parseBundle(await wire.fetchObjects([id])).lines; } catch { continue; }
+      for (const object of lines) {
+        collect(object.type, object.payload);
+        if (object.type === "commit") { const commit = decodeCommit(object.payload); pending.push(commit.tree, ...commit.parents); }
+        if (object.type === "tree") for (const entry of decodeTree(object.payload)) if (entry.mode === "40000") pending.push(entry.id);
       }
-    } catch { /* Invalid or not-yet-uploaded closure remains the production receiver's refusal to make. */ }
+    }
   }
   const refs = [...new Set(updates.map(update => update.ref))];
   const proofs: LeaseProof[] = [];

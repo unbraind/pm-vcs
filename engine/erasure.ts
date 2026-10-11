@@ -102,7 +102,11 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     for (const { id, path, object } of store.walkInventory()) {
       const digest = payloadDigest(object.payload);
       physical.set(path, id);
-      if (object.type === "manifest") inventory.set(id, { type: object.type, digest, fragments: decodeManifest(object.payload).pages ?? decodeManifest(object.payload).fragments });
+      if (object.type === "manifest") {
+        // Decode once: a legacy manifest has no pages, and decoding parses its complete fragment list.
+        const manifest = decodeManifest(object.payload);
+        inventory.set(id, { type: object.type, digest, fragments: manifest.pages ?? manifest.fragments });
+      }
       else if (object.type === "tree") inventory.set(id, { type: object.type, digest, entries: decodeTree(object.payload) });
       else inventory.set(id, { type: object.type, digest });
     }
