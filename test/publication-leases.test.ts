@@ -137,6 +137,20 @@ test("a merge parent that bypasses the replaced tip does not demand leases for a
   assert.equal(receiver.refs.read("refs/heads/main"), onTop);
 });
 
+test("a non-holder inspect through the same transport keeps the holder's cached proof; release drops it", async () => {
+  const { sender, receiver, wire, fileId, updates } = fixture();
+  await wire.lease({ action: "acquire", fileId, refs: ["refs/heads/main"], ttlMs: 60000 });
+  const seen = await wire.lease({ action: "inspect", fileId }, { principal: "observer", breakLeases: false });
+  assert.equal(seen!.token, `${seen!.generation}:${"0".repeat(32)}`);
+  // The default push uses cached proofs; a redacted inspect result must not have replaced the holder's.
+  await wire.push(exportBundle(sender.objects, sender.refs, []), updates, false, new Date());
+  assert.equal(receiver.resolve("main"), updates[0].next);
+  const released = await wire.lease({ action: "release", fileId, token: (await wire.lease({ action: "inspect", fileId }))!.token });
+  assert.equal(released!.active, false);
+  rmSync(join(sender.root, "asset")); sender.stage([]); const deleted = sender.commit({ message: "delete", author }, new Date());
+  await assert.rejects(wire.push(exportBundle(sender.objects, sender.refs, []), [{ ref: "refs/heads/main", expected: updates[0].next, next: deleted }], false, new Date()), { code: "lease_missing" });
+});
+
 test("independent processes contend for acquisition; exactly one generation wins", async () => {
   const { receiver, fileId } = fixture();
   const children = [0, 1].map(() => fork(join(packageRoot, "test/helpers/publication-lease-worker.ts"), [receiver.root, fileId, "acquire"],

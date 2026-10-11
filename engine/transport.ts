@@ -325,7 +325,11 @@ export class FileTransport implements Transport {
   async lease(request: LeaseRequest, principal: ReceiverPrincipal = filesystemPrincipal()): Promise<FileLease | null> {
     const repository = this.open();
     const result = new PublicationLeases(repository.objects, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, principal).change(request);
-    if (result !== null) this.proofs.set(result.fileId, result);
+    // Inspection never replaces a proof (a non-holder sees a redacted token); inactive results drop it.
+    if (result !== null && request.action !== "inspect") {
+      if (result.active) this.proofs.set(result.fileId, result);
+      else this.proofs.delete(result.fileId);
+    }
     return result;
   }
 
