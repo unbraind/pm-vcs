@@ -1,3 +1,4 @@
+import { grantRemoteLeases, leasedPushTo as pushTo, LeasedHttpTransport as HttpTransport, LeasedFileTransport as FileTransport } from "./helpers/publication-consumers.ts";
 // The HTTP client against the served repository, and the command surface above it.
 //
 // The claim under test is parity: a served repository answers clone, fetch and
@@ -17,13 +18,16 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension from "../index.ts";
 import type { CloneReport, FetchReport, PushReport } from "../engine/sync.ts";
-import { cloneFrom, fetchFrom, pushTo } from "../engine/sync.ts";
+import { HttpTransport as ProductionHttpTransport } from "../engine/http-transport.ts";
+import { cloneFrom, fetchFrom } from "../engine/sync.ts";
+
 import { parseBundle } from "../engine/bundle.ts";
-import { HttpTransport } from "../engine/http-transport.ts";
+
 import { ObjectStoreError, type ObjectId } from "../engine/objects.ts";
 import { readCommit, readSeries, readTree } from "../engine/model.ts";
 import { createSeries } from "../engine/series.ts";
-import { type Advertisement, FileTransport, openTransport, TRANSPORT_CAPABILITIES } from "../engine/transport.ts";
+import { FileTransport as ProductionFileTransport, type Advertisement, openTransport, TRANSPORT_CAPABILITIES } from "../engine/transport.ts";
+
 import { readTokenFile, startRepositoryServer, type ServeHandle } from "../engine/serve.ts";
 import { Repository } from "../engine/repo.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -527,6 +531,7 @@ test("remote add, fetch, push and clone reach a served repository through the co
   writeFileSync(join(root, "pushed.txt"), "over the wire\n");
   await harness.runCommand({ command: "vcs add", pmRoot: root });
   await harness.runCommand({ command: "vcs commit", options: { message: "wire" }, global: { author: "A <a@b>" }, pmRoot: root });
+  await grantRemoteLeases(Repository.open(root), "wire");
   const pushed = await harness.runCommand({ command: "vcs push", args: ["wire"], pmRoot: root });
   assert.equal(pushed.errorMessage, undefined, String(pushed.errorMessage));
   const report = (pushed.result as { push: PushReport }).push;
@@ -625,10 +630,10 @@ test("vcs serve serves a repository a real process can clone from, until it is s
 
 test("openTransport builds an HTTP transport for wire locations and a file transport for paths", () => {
   const http = openTransport("http://127.0.0.1:9/repo", tempRoot());
-  assert.ok(http instanceof HttpTransport);
+  assert.ok(http instanceof ProductionHttpTransport);
   assert.equal(http.url, "http://127.0.0.1:9/repo");
   const file = openTransport("repo", tempRoot());
-  assert.ok(file instanceof FileTransport);
+  assert.ok(file instanceof ProductionFileTransport);
 });
 test("one repository root is served at the base URL, with force and review-record parity", async () => {
   const repository = Repository.init(tempRoot(), "main", { recordPaths: ["reviews/*.json"], recordPolicy: {} });

@@ -11,7 +11,8 @@ import { frameObject, hashObject, ObjectStore, ObjectStoreError, type ObjectId }
 import { OperationLog } from "../engine/oplog.ts";
 import { RefStore } from "../engine/refs.ts";
 import { Repository } from "../engine/repo.ts";
-import { FileTransport, type PushUpdate } from "../engine/transport.ts";
+import { type PushUpdate } from "../engine/transport.ts";
+import { LeasedFileTransport as FileTransport, acquirePublicationLeases } from "./helpers/publication-consumers.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const signature: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
@@ -42,6 +43,7 @@ for (const mode of ["push", "publish"] as const) {
       { ref: "refs/heads/second", expected: null, next: right },
     ];
     const bundle = serializeBundle(repo.objects, { refs: { "refs/heads/advertised": left }, prerequisites: [], objects: [] });
+    const proofs = await acquirePublicationLeases(transport, updates, bundle);
     const original = ObjectStore.prototype.read;
     const reads = new Map<ObjectId, number>(); const owners: string[] = []; const leases: bigint[] = [];
     const originalTransaction = RefStore.prototype.transaction; const originalAppend = OperationLog.prototype.append;
@@ -51,11 +53,11 @@ for (const mode of ["push", "publish"] as const) {
       if (existsSync(lock)) leases.push(lstatSync(lock, { bigint: true }).ino);
       return originalAppend.apply(this, args);
     };
-    RefStore.prototype.transaction = function (moves) {
+    RefStore.prototype.transaction = function (moves, preflight) {
       const lock = join(repo.controlDirectory, "objects.lock");
       owners.push(existsSync(lock) ? readFileSync(lock, "utf8") : "absent");
       if (existsSync(lock)) leases.push(lstatSync(lock, { bigint: true }).ino);
-      return originalTransaction.call(this, moves);
+      return originalTransaction.call(this, moves, preflight);
     };
     ObjectStore.prototype.read = function (id) {
       const object = original.call(this, id);
@@ -69,8 +71,8 @@ for (const mode of ["push", "publish"] as const) {
     };
     try {
       const receipt = mode === "push"
-        ? await transport.push(bundle, updates, false, new Date(1000))
-        : await transport.publish(updates, false, new Date(1000));
+        ? await transport.push(bundle, updates, false, new Date(1000), proofs)
+        : await transport.publish(updates, false, new Date(1000), proofs);
       assert.deepEqual(receipt.updated, updates); assert.deepEqual(receipt.added, []);
     } finally {
       Object.defineProperty(ObjectStore.prototype, "read", { value: original });

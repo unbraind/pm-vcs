@@ -12,6 +12,8 @@ import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:
 import { join } from "node:path";
 import { connect } from "node:net";
 import { exportBundle } from "../engine/bundle.ts";
+import { HttpTransport } from "../engine/http-transport.ts";
+import type { LeaseProof } from "../engine/publication-leases.ts";
 import { afterEach, test } from "node:test";
 
 import { hashObject, ObjectStoreError } from "../engine/objects.ts";
@@ -113,6 +115,20 @@ async function serveRoot(
   });
   servers.push(server);
   return { server, root, repository };
+}
+
+/** Acquire explicit synthetic authority before successful session publication. */
+async function sessionPublicationProofs(server: ServeHandle, repository: Repository, name: string): Promise<LeaseProof[]> {
+  const wire = new HttpTransport(`http://${server.host}:${server.port}/${name}`);
+  const proofs: LeaseProof[] = [];
+  for (const entry of repository.readIndex()) {
+    const fileId = entry.fileId;
+    assert.ok(fileId);
+    const lease = await wire.lease({ action: "acquire", fileId, refs: ["refs/heads/main"], ttlMs: 86_400_000 });
+    assert.ok(lease);
+    proofs.push({ fileId, token: lease.token });
+  }
+  return proofs;
 }
 
 /**
@@ -448,6 +464,7 @@ test("an upload session is bounded and its oldest eviction reports an empty rece
   });
   const name = repository.root.slice(join(repository.root, "..").length + 1);
   const tip = repository.refs.read("refs/heads/main");
+  const proofs = await sessionPublicationProofs(server, repository, name);
 
   const first = await rawRequest(server, `/${name}/objects/upload`, {
     body: JSON.stringify({ session: "one", objects: [] }),
@@ -463,6 +480,7 @@ test("an upload session is bounded and its oldest eviction reports an empty rece
   const publish = await rawRequest(server, `/${name}/publish`, {
     body: JSON.stringify({
       session: "one",
+      proofs,
       updates: [{ ref: "refs/heads/main", expected: tip, next: tip }],
       force: true,
       now: 0,
@@ -486,6 +504,7 @@ test("one reused upload session's receipts are bounded cumulatively and released
   });
   const name = repository.root.slice(join(repository.root, "..").length + 1);
   const tip = repository.refs.read("refs/heads/main");
+  const proofs = await sessionPublicationProofs(server, repository, name);
 
   /** Hashes one fresh blob and encodes it exactly as the wire expects. */
   const freshBlob = (text: string) => {
@@ -514,6 +533,7 @@ test("one reused upload session's receipts are bounded cumulatively and released
   const publish = await rawRequest(server, `/${name}/publish`, {
     body: JSON.stringify({
       session: "session",
+      proofs,
       updates: [{ ref: "refs/heads/main", expected: tip, next: tip }],
       force: true,
       now: 0,
@@ -543,6 +563,7 @@ test("one reused upload session's receipts are bounded cumulatively and released
   const settle = await rawRequest(server, `/${name}/publish`, {
     body: JSON.stringify({
       session: "reset",
+      proofs,
       updates: [{ ref: "refs/heads/main", expected: tip, next: tip }],
       force: true,
       now: 0,

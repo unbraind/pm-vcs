@@ -107,7 +107,8 @@ export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects
         }
       }
     } else if (object.type === "manifest") {
-      if (decodeManifest(object.payload).fragments.some(/** A new manifest cannot retain erased fragments. */ (fragment) => deniedObjects.has(fragment.id))) {
+      const manifest = decodeManifest(object.payload);
+      if ((manifest.pages ?? manifest.fragments).some(/** A new manifest cannot retain erased fragments. */ (fragment) => deniedObjects.has(fragment.id))) {
         throw new ObjectStoreError("object_obliterated", "Arrival manifest refers to permanently denied fragments.");
       }
     }

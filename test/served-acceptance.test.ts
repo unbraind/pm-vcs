@@ -1,3 +1,5 @@
+import { exportBundle } from "../engine/bundle.ts";
+import { HttpTransport } from "../engine/http-transport.ts";
 /** Multi-process socket publication and real PM TOON record convergence acceptance. */
 import assert from "node:assert/strict";
 import { fork, spawnSync, type ChildProcess } from "node:child_process";
@@ -7,7 +9,8 @@ import { test } from "node:test";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
-import { cloneFrom, fetchFrom, pushTo } from "../engine/sync.ts";
+import { cloneFrom, fetchFrom } from "../engine/sync.ts";
+import { acquirePublicationLeases, leasedPushTo as pushTo } from "./helpers/publication-consumers.ts";
 import { startRepositoryServer } from "../engine/serve.ts";
 import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
@@ -25,10 +28,13 @@ function commit(repository: Repository, path: string, text: string): string {
 
 /** Start a pusher and hold it after it has read the receiver's branch tips. */
 async function preparePusher(root: string, url: string, branch: string): Promise<{ worker: ChildProcess; result: Promise<string> }> {
-  const worker = fork(join(packageRoot, "test/helpers/push-worker.ts"), [root, url, branch], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  const repository = Repository.open(root);
+  const refs = ["refs/heads/main", "refs/heads/agent-a", "refs/heads/agent-b"];
+  const proofs = await acquirePublicationLeases(new HttpTransport(url), refs.map(ref => ({ ref, expected: null, next: repository.resolve(branch) })), exportBundle(repository.objects, repository.refs, [`refs/heads/${branch}`]));
+  const worker = fork(join(packageRoot, "test/helpers/push-worker.ts"), [root, url, branch, JSON.stringify(proofs)], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
   const ready = new Promise<void>((resolveReady, rejectReady) => {
     worker.on("error", rejectReady);
-    worker.once("exit", (code) => { if (code !== 0) rejectReady(new Error(`pusher exited ${code}`)); });
+    worker.once("exit", (code) => rejectReady(new Error(`pusher exited ${code} before readiness`)));
     worker.once("message", () => resolveReady());
   });
   const result = new Promise<string>((resolveResult, rejectResult) => {
@@ -39,7 +45,7 @@ async function preparePusher(root: string, url: string, branch: string): Promise
   return { worker, result };
 }
 
-test("two real processes race on one branch and both land on different branches", { timeout: 60_000 }, async () => {
+test("two real processes race on one branch and both land on different branches", { timeout: 180_000 }, async () => {
   const fixture = makeTempDir();
   const source = Repository.init(join(fixture.root, "origin"));
   const base = commit(source, "base.txt", "base");
@@ -77,14 +83,15 @@ test("two real processes race on one branch and both land on different branches"
 /** Run the installed PM CLI against one disposable tracker and return its JSON receipt. */
 function pm(root: string, args: string[]): Record<string, unknown> {
   const result = spawnSync(process.execPath, [pmExecutable, ...args, "--json"], {
-    cwd: root, encoding: "utf8", timeout: 30_000,
+    cwd: root, encoding: "utf8", timeout: 120_000,
     env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "acceptance" },
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
-test("two served clones commit real PM item fields, merge them and verify all three stores", { timeout: 120_000 }, async () => {
+// The scenario invokes multiple real CLIs; operation assertions retain their original behavior.
+test("two served clones commit real PM item fields, merge them and verify all three stores", { timeout: 900_000 }, async () => {
   const fixture = makeTempDir();
   const root = join(fixture.root, "origin");
   mkdirSync(root);

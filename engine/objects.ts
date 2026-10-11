@@ -1,3 +1,4 @@
+import { objectPayloadChunks, objectPayloadLines } from "./object-stream.ts";
 // Content-addressed object store.
 //
 // Eight object kinds are framed identically — `<type> <byteLength>\0<payload>` —
@@ -412,6 +413,49 @@ export class ObjectStore {
       }
     } finally { closeSync(fd); }
     return matching ? this.read(id) : undefined;
+  }
+
+  /** Read a verified small object with bounded compressed input and inflation; larger payloads select streaming compatibility. */
+  readBoundedTyped(id: ObjectId, type: ObjectType, limit = 16_384): Buffer {
+    this.assertId(id);
+    const denial = this.denial(id);
+    if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
+    const path = this.pathFor(id);
+    let fd: number;
+    try { fd = openSync(path, "r"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ObjectStoreError("object_not_found", `No object ${id} in the store.`);
+      throw error;
+    }
+    let compressed: Buffer;
+    let size: number;
+    try {
+      size = fstatSync(fd).size;
+      if (size > limit + 1024) throw new ObjectStoreError("object_payload_limit", "Object requires bounded streaming decoding.");
+      compressed = Buffer.alloc(size);
+      let offset = 0;
+      while (offset < size) {
+        const count = readSync(fd, compressed, offset, size - offset, null);
+        if (count === 0) throw new ObjectStoreError("corrupt_object", "Compressed object was truncated during its bounded read.");
+        offset += count;
+      }
+    } finally { closeSync(fd); }
+    let framed: Buffer;
+    try { framed = inflateSync(compressed, { maxOutputLength: limit + 32 }); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") throw new ObjectStoreError("object_payload_limit", "Object requires bounded streaming decoding.");
+      throw new ObjectStoreError("corrupt_object", "Object could not be decompressed.");
+    }
+    const object = parseFramedObject(framed);
+    if (hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("corrupt_object", "Object does not match its address.");
+    if (object.type !== type) throw new ObjectStoreError("object_type_mismatch", "Object has the wrong kind.");
+    return object.payload;
+  }
+
+  /** Stream newline-terminated metadata with bounded decompression, full frame/hash verification and erasure denial enforcement. */
+  *readLines(id: ObjectId, type: ObjectType): Generator<string> {
+    this.assertId(id);
+    const denial = this.denial(id);
+    if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
+    yield* objectPayloadLines(objectPayloadChunks(this.pathFor(id), id, type));
   }
 
   /**

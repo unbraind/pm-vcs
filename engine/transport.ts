@@ -1,3 +1,4 @@
+import { PublicationLeases, filesystemPrincipal, type FileLease, type LeaseRequest, type LeaseProof, type ReceiverPrincipal } from "./publication-leases.ts";
 // The boundary between "what distribution means" and "how the bytes travel".
 //
 // Fetch, push and clone are algorithms about reachability, fast-forwards and
@@ -16,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve } from "node:path";
 
 import { serializeBundle, exportBundle, importBundleObjects } from "./bundle.ts";
-import { requireClosure } from "./closure.ts";
+import { requireClosure, type ClosureMetadata } from "./closure.ts";
 import { isAncestor } from "./merge.ts";
 import { type ObjectId, type ObjectType, ObjectStoreError, hashObject } from "./objects.ts";
 import { assertRefName, BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./refs.ts";
@@ -59,7 +60,7 @@ export interface Advertisement {
 }
 
 /** Capabilities this build's transports speak. */
-export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival", "object-fetch"] as const;
+export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival", "object-fetch", "publication-leases"] as const;
 
 /** Capabilities a peer must offer before this build will transfer anything. */
 export const REQUIRED_TRANSPORT_CAPABILITIES: readonly string[] = ["fetch", "push", "resumable-upload", "verified-arrival"];
@@ -133,6 +134,8 @@ export interface TransferObject {
  * different product, not a different transport.
  */
 export interface Transport {
+  /** Explicit receiver-authenticated lease operation. */
+  lease?(request: LeaseRequest): Promise<FileLease | null>;
   /** Fetch individually named verified objects, including standalone series; optional for older peers. */
   fetchObjects?(ids: readonly ObjectId[]): Promise<Buffer>;
   /** Where this transport points, as the remote was configured. */
@@ -172,7 +175,7 @@ export interface Transport {
    * @throws ObjectStoreError When a move is not a fast-forward and `force` is
    *   false, or when another writer changed a ref between observation and write.
    */
-  push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt>;
+  push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date, proofs?: readonly LeaseProof[]): Promise<PushReceipt>;
 
   /**
    * Asks the receiver which of the offered objects it still lacks.
@@ -218,7 +221,7 @@ export interface Transport {
    *   observation and this publication; with the {@link Transport.push} refusal
    *   codes for non-fast-forward moves and unpushable refs.
    */
-  publish(updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt>;
+  publish(updates: readonly PushUpdate[], force: boolean, now: Date, proofs?: readonly LeaseProof[]): Promise<PushReceipt>;
 }
 
 /**
@@ -286,6 +289,8 @@ export class FileTransport implements Transport {
    * already hold, reported by {@link FileTransport.publish} and cleared with it.
    */
   private readonly acceptedThisConnection: ObjectId[] = [];
+  /** Proofs explicitly acquired by this connection; never implicitly acquired during publication. */
+  private readonly proofs = new Map<string, LeaseProof>();
 
   /**
    * @param url - The location as configured, for error messages.
@@ -314,6 +319,14 @@ export class FileTransport implements Transport {
       }
       throw error;
     }
+  }
+
+  /** Perform an explicit lease operation as the receiver principal and retain acquired fencing proofs. */
+  async lease(request: LeaseRequest, principal: ReceiverPrincipal = filesystemPrincipal()): Promise<FileLease | null> {
+    const repository = this.open();
+    const result = new PublicationLeases(repository.objects, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, principal).change(request);
+    if (result !== null) this.proofs.set(result.fileId, result);
+    return result;
   }
 
   /** Read the receiver's public refs, attached branch, history-shaping record configuration, and peer description. */
@@ -349,11 +362,11 @@ export class FileTransport implements Transport {
   }
 
   /** Verify incoming closure and fast-forward policy before atomically publishing requested receiver refs. */
-  async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
+  async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date, proofs: readonly LeaseProof[] = [...this.proofs.values()], principal: ReceiverPrincipal = filesystemPrincipal()): Promise<PushReceipt> {
     const repository = this.open();
     return repository.objects.withWriteLock(/** Import validation, policy, refs and receipt share one synchronous publication lease. */ () => {
       for (const update of updates) assertPushableRef(update);
-      const { added } = importBundleObjects(repository.objects, bundle, [...new Set(updates.map(/** Include every requested target, even when absent from advertised refs. */ (update) => update.next))]);
+      const { added, metadata } = importBundleObjects(repository.objects, bundle, [...new Set(updates.map(/** Include every requested target, even when absent from advertised refs. */ (update) => update.next))]);
       for (const update of updates) {
         const current = repository.refs.read(update.ref);
         if (current === null || current === update.next) continue;
@@ -381,14 +394,17 @@ export class FileTransport implements Transport {
       // both pass the fast-forward check above against the same old tip; without the
       // swap the second write would land on top of the first and the first agent's
       // commit would be reachable from nothing.
-      repository.refs.transaction(updates.map((update) => ({
-        name: update.ref,
-        expected: update.expected,
-        next: update.next,
-      })));
+      this.moveRefs(repository, updates, proofs, principal, metadata);
       this.logPublication(repository, `Received ${updates.length} ref(s) from ${this.url}${force ? " (forced)" : ""}.`, updates, force, now);
       return { updated: updates, added };
     });
+  }
+
+  /** Apply a complete ref batch with authoritative lease validation under both store and ref locks. */
+  private moveRefs(repository: Repository, updates: readonly PushUpdate[], proofs: readonly LeaseProof[], principal: ReceiverPrincipal, metadata: ClosureMetadata): void {
+    const leases = new PublicationLeases(repository.objects, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, principal);
+    repository.refs.transaction(updates.map(/** Preserve the sender observation as the receiver CAS expectation. */ (update) => ({ name: update.ref, expected: update.expected, next: update.next })),
+      /** Check expiry at the publication linearization point, using only the receiver clock. */ () => leases.assertPublication(updates, proofs, metadata));
   }
 
   /**
@@ -451,7 +467,7 @@ export class FileTransport implements Transport {
   }
 
   /** Verify the uploaded closure, then publish every ref move as one compare-and-swap transaction. */
-  async publish(updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
+  async publish(updates: readonly PushUpdate[], force: boolean, now: Date, proofs: readonly LeaseProof[] = [...this.proofs.values()], principal: ReceiverPrincipal = filesystemPrincipal()): Promise<PushReceipt> {
     const repository = this.open();
     // Claimed at entry and cleared on every attempt, refused ones included:
     // an accumulator that survives a refusal would report this attempt's
@@ -461,7 +477,7 @@ export class FileTransport implements Transport {
     this.acceptedThisConnection.length = 0;
     return repository.objects.withWriteLock(/** Held objects cannot be erased between the shared integrity walk and atomic ref publication. */ () => {
       for (const update of updates) assertPushableRef(update);
-      requireClosure(repository.objects, [...new Set(updates.map(/** Share verified structure across all publication roots, without retaining leaf bytes. */ (update) => update.next))]);
+      const metadata = requireClosure(repository.objects, [...new Set(updates.map(/** Share verified structure across all publication roots, without retaining leaf bytes. */ (update) => update.next))]);
       for (const update of updates) {
         const current = repository.refs.read(update.ref);
         if (current === update.next) continue;
@@ -483,11 +499,7 @@ export class FileTransport implements Transport {
         }
       }
       try {
-        repository.refs.transaction(updates.map((update) => ({
-          name: update.ref,
-          expected: update.expected,
-          next: update.next,
-        })));
+        this.moveRefs(repository, updates, proofs, principal, metadata);
       } catch (caught) {
         throw translatePublicationRace(caught);
       }
@@ -571,7 +583,7 @@ export function resolveRemoteLocation(url: string, base: string): string {
  * @throws ObjectStoreError When the URL cannot be resolved to a reachable
  *   repository.
  */
-export function openTransport(url: string, base: string, token?: string | null): Transport {
+export function openTransport(url: string, base: string, token?: string | null): FileTransport | HttpTransport {
   const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]+):/.exec(url);
   if (scheme !== null && (scheme[1].toLowerCase() === "http" || scheme[1].toLowerCase() === "https")) {
     return new HttpTransport(resolveRemoteLocation(url, base), { token });

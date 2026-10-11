@@ -1,3 +1,5 @@
+import { remoteLeaseProofs } from "./lease-workflows.ts";
+import type { LeaseProof } from "./publication-leases.ts";
 // Fetch, push and clone.
 //
 // Everything here is stated in terms of reachability and ref identity, never in
@@ -224,6 +226,7 @@ export async function pushTo(
   force: boolean,
   now: Date,
   transport?: Transport,
+  proofs: readonly LeaseProof[] = remoteLeaseProofs(repository, remoteName),
 ): Promise<PushReport> {
   const remote = repository.remotes.require(remoteName);
   const wire = transport ?? openTransport(remote.url, repository.root, /^https?:/i.test(remote.url) ? repository.remotes.token(remoteName) : null);
@@ -281,7 +284,7 @@ export async function pushTo(
     const name = trackingRef(remoteName, update.ref.slice(BRANCH_PREFIX.length));
     return { name, before: repository.refs.read(name), next: update.next };
   });
-  const receipt = await wire.push(bundle, updates, force, now);
+  const receipt = await wire.push(bundle, updates, force, now, proofs);
 
   // The remote accepted, so its branches are now where this side just put them and
   // the tracking refs can say so without another round trip — but only when

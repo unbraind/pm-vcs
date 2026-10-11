@@ -1,3 +1,4 @@
+import { parseFileLease, type FileLease, type LeaseProof, type LeaseRequest } from "./publication-leases.ts";
 // The HTTP client transport: a remote repository on the other end of a socket.
 //
 // This class adds no policy of its own. It turns the `Transport` operations into
@@ -17,6 +18,7 @@ import { type ObjectId, isObjectId, ObjectStoreError } from "./objects.ts";
 import type { Advertisement, PushReceipt, PushUpdate, TransferObject, Transport } from "./transport.ts";
 import {
   ADVERTISE_ENDPOINT,
+  LEASE_ENDPOINT,
   assertWireSuccess,
   decodePushReceipt,
   decodeWireObject,
@@ -61,6 +63,8 @@ interface WireAnswer {
 export class HttpTransport implements Transport {
   /** The URL the remote was configured with, kept for messages. */
   readonly url: string;
+  /** Fences obtained only through explicit lease operations. */
+  private readonly proofs = new Map<string, LeaseProof>();
 
   /** The origin the requests go to, `scheme://host:port`. */
   private readonly origin: string;
@@ -121,6 +125,18 @@ export class HttpTransport implements Transport {
     // deliveries and a second transport is a second session — the same shape a
     // local connection has, where a second FileTransport reports its own arrivals.
     this.session = randomBytes(16).toString("hex");
+  }
+
+  /** Perform an explicit lease operation; authentication determines ownership at the receiver. */
+  async lease(request: LeaseRequest): Promise<FileLease | null> {
+    const answer = await this.roundTrip(LEASE_ENDPOINT, JSON.stringify(request));
+    assertWireSuccess(answer.status, answer.payload, this.url);
+    const value = decodeWireObject(answer.payload)?.lease;
+    if (value === null) return null;
+    const lease = parseFileLease(value);
+    if (lease === null) throw new ObjectStoreError("unreachable_remote", "The peer answered with an invalid lease.");
+    this.proofs.set(lease.fileId, lease);
+    return lease;
   }
 
   /**
@@ -259,8 +275,8 @@ export class HttpTransport implements Transport {
    * @param now - Timestamp recorded in the remote's operation log.
    * @returns What moved and what was stored.
    */
-  async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
-    const answer = await this.roundTrip(PUSH_ENDPOINT, encodePushRequest(bundle, updates, force, now));
+  async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date, proofs: readonly LeaseProof[] = [...this.proofs.values()]): Promise<PushReceipt> {
+    const answer = await this.roundTrip(PUSH_ENDPOINT, encodePushRequest(bundle, updates, force, now, proofs));
     assertWireSuccess(answer.status, answer.payload, this.url);
     return this.receipt(answer.payload, PUSH_ENDPOINT);
   }
@@ -306,8 +322,8 @@ export class HttpTransport implements Transport {
    * @param now - Timestamp recorded in the remote's operation log.
    * @returns What moved and what was stored.
    */
-  async publish(updates: readonly PushUpdate[], force: boolean, now: Date): Promise<PushReceipt> {
-    const answer = await this.roundTrip(PUBLISH_ENDPOINT, encodePublishRequest(this.session, updates, force, now));
+  async publish(updates: readonly PushUpdate[], force: boolean, now: Date, proofs: readonly LeaseProof[] = [...this.proofs.values()]): Promise<PushReceipt> {
+    const answer = await this.roundTrip(PUBLISH_ENDPOINT, encodePublishRequest(this.session, updates, force, now, proofs));
     assertWireSuccess(answer.status, answer.payload, this.url);
     return this.receipt(answer.payload, PUBLISH_ENDPOINT);
   }

@@ -1,3 +1,4 @@
+import { assertManifestChild, assertManifestRoot } from "./manifest-pages.ts";
 /** Role-aware history validation: only attributed payload leaves can be intentionally absent. */
 import { decodeLink } from "./composition.ts";
 import { decodeCommit, decodeManifest, decodeTree } from "./model.ts";
@@ -16,10 +17,21 @@ export interface ClosureReport {
   corrupt: string[];
 }
 
+/** Receiver-validated structural metadata reusable only while its object-store write lease remains held. */
+export interface ClosureMetadata {
+  /** Decoded commits, excluding payload bytes. */
+  readonly commits: Map<ObjectId, ReturnType<typeof decodeCommit>>;
+  /** Decoded directory entries, excluding payload bytes. */
+  readonly trees: Map<ObjectId, ReturnType<typeof decodeTree>>;
+}
+
 /** Context follows tree ownership through a payload manifest to its physical fragments. */
 interface Reference {
   readonly id: ObjectId;
-  readonly role: "commit" | "tree" | "payload" | "fragment" | "tombstone";
+  readonly role: "commit" | "tree" | "payload" | "fragment" | "manifest" | "tombstone";
+  readonly parent?: ReturnType<typeof decodeManifest>;
+  readonly page?: NonNullable<ReturnType<typeof decodeManifest>["pages"]>[number];
+  readonly length?: number;
   readonly fileId?: string;
   readonly root?: ObjectId;
 }
@@ -29,10 +41,10 @@ type VerifiedObject =
   | { readonly type: "commit"; readonly structure: ReturnType<typeof decodeCommit> }
   | { readonly type: "tree"; readonly structure: ReturnType<typeof decodeTree> }
   | { readonly type: "manifest"; readonly structure: ReturnType<typeof decodeManifest> }
-  | { readonly type: Exclude<ObjectType, "commit" | "tree" | "manifest"> };
+  | { readonly type: Exclude<ObjectType, "commit" | "tree" | "manifest">; readonly length: number };
 
 /** Validate commit roots against held objects plus an unpublished arrival, without mutating storage. */
-export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), audits = false, trees: readonly ObjectId[] = []): ClosureReport {
+export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), audits = false, trees: readonly ObjectId[] = [], metadata: ClosureMetadata = { commits: new Map(), trees: new Map() }): ClosureReport {
   const result: ClosureReport = { verified: 0, obliterated: [], missing: [], corrupt: [] };
   const denied = new Map(denials.flatMap(/** Index addresses once while retaining each leaf's original attribution. */ (entry) => entry.tombstone.objects.map(/** Preserve the first denial when identical payloads have multiple terminal owners. */ (id) => [id, entry] as const)).reverse());
   const carried = new Map(arrivals.map(/** Resolve incoming objects before publication. */ (object) => [object.id, object]));
@@ -64,19 +76,31 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
         else if (bytes.type === "manifest") object = { type: bytes.type, structure: decodeManifest(bytes.payload) };
         else {
           if (bytes.type === "link") decodeLink(bytes.payload);
-          object = { type: bytes.type };
+          object = { type: bytes.type, length: bytes.payload.length };
         }
         held.set(id, object);
       }
       const allowed = role === "payload" ? ["blob", "record", "link", "manifest"] : [role === "fragment" ? "blob" : role];
       if (!allowed.includes(object.type)) throw new ObjectStoreError("object_type_mismatch", "History reference has the wrong object kind.");
+      if (reference.length !== undefined && object.type === "blob" && object.length !== reference.length) {
+        throw new ObjectStoreError("fragment_length_mismatch", "Fragment length disagrees with its manifest.");
+      }
+      if (role === "payload" && object.type === "manifest") assertManifestRoot(object.structure);
+      if (reference.parent !== undefined && object.type === "manifest") assertManifestChild(reference.parent, reference.page!, object.structure);
       if (object.type === "commit") {
         const commit = object.structure;
+        metadata.commits.set(id, commit);
         pending.push({ id: commit.tree, role: "tree" }, ...commit.parents.map(/** Parent references always require real commits. */ (parent) => ({ id: parent, role: "commit" as const })));
       } else if (object.type === "tree") {
+        metadata.trees.set(id, object.structure);
         for (const entry of object.structure) pending.push(entry.mode === "40000" ? { id: entry.id, role: "tree" } : { id: entry.id, role: "payload", fileId: entry.fileId, root: entry.id });
       } else if (object.type === "manifest") {
-        for (const fragment of object.structure.fragments) pending.push({ id: fragment.id, role: "fragment", fileId, root });
+        const node = object.structure;
+        if (node.pages !== undefined) {
+          for (const page of node.pages) pending.push({ id: page.id, role: "manifest", fileId, root, parent: node, page });
+        } else {
+          for (const fragment of node.fragments) pending.push({ id: fragment.id, role: "fragment", fileId, root, length: fragment.length });
+        }
       }
 
       verified.add(id);
@@ -94,7 +118,9 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
 }
 
 /** Refuse publication of an incomplete or incorrectly typed commit closure before any mutation. */
-export function requireClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), trees: readonly ObjectId[] = []): void {
-  const report = inspectClosure(store, targets, arrivals, denials, false, trees);
+export function requireClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), trees: readonly ObjectId[] = []): ClosureMetadata {
+  const metadata: ClosureMetadata = { commits: new Map(), trees: new Map() };
+  const report = inspectClosure(store, targets, arrivals, denials, false, trees, metadata);
   if (report.missing.length + report.corrupt.length > 0) throw new ObjectStoreError("incomplete_bundle", `History closure is invalid: ${[...report.missing, ...report.corrupt].join(", ")}.`);
+  return metadata;
 }

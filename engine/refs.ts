@@ -210,11 +210,12 @@ export class RefStore {
    * @param updates - The updates to apply, each stating the value it believes the
    *   ref currently holds. `expected: null` requires that the ref not exist;
    *   `next: null` deletes it.
+   * @param preflight - Receiver policy run after all locks and CAS checks, before any ref write.
    * @throws ObjectStoreError When two updates name one ref, when a ref no longer
    *   holds its expected value, or when another process holds a lock. In every
    *   case no ref has been written.
    */
-  transaction(updates: readonly RefUpdate[]): void {
+  transaction(updates: readonly RefUpdate[], preflight?: () => void): void {
     for (const update of updates) assertRefName(update.name);
     const ordered = [...updates].sort((left, right) => compareByteOrder(left.name, right.name));
     for (let index = 1; index < ordered.length; index += 1) {
@@ -248,6 +249,7 @@ export class RefStore {
           );
         }
       }
+      preflight?.();
       for (const update of ordered) {
         const path = this.pathFor(update.name);
         if (update.next === null) rmSync(path, { force: true });

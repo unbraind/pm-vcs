@@ -51,11 +51,20 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, Inventory
 
 /** Refuse unsupported control storage and temporary metadata copies before reporting physical erasure. */
 function assertSupportedControl(control: string): void {
-  const supported = new Set(["objects", "refs", "format", "index", "config.json", "HEAD", "oplog.jsonl", "remotes.json",
+  const supported = new Set(["objects", "refs", "leases", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "remotes.json",
     "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
   for (const entry of readdirSync(control, { withFileTypes: true })) {
     if ((!supported.has(entry.name) && !(entry.isFile() && /^objects\.lock\.[0-9]+\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Unknown control storage or symlinks prevent a complete erasure receipt.");
+    }
+  }
+  const leases = join(control, "leases");
+  if (existsSync(leases)) {
+    if (!lstatSync(leases).isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Lease audits must occupy a real directory.");
+    for (const entry of readdirSync(leases, { withFileTypes: true })) {
+      if (!entry.isFile() || !/^[0-9a-f]{32}\.jsonl$/.test(entry.name)) {
+        throw new ObjectStoreError("unsupported_erasure_storage", "Unknown lease audit storage prevents a complete erasure receipt.");
+      }
     }
   }
   if (existsSync(join(control, "MERGE_STATE"))) {
@@ -93,7 +102,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     for (const { id, path, object } of store.walkInventory()) {
       const digest = payloadDigest(object.payload);
       physical.set(path, id);
-      if (object.type === "manifest") inventory.set(id, { type: object.type, digest, fragments: decodeManifest(object.payload).fragments });
+      if (object.type === "manifest") inventory.set(id, { type: object.type, digest, fragments: decodeManifest(object.payload).pages ?? decodeManifest(object.payload).fragments });
       else if (object.type === "tree") inventory.set(id, { type: object.type, digest, entries: decodeTree(object.payload) });
       else inventory.set(id, { type: object.type, digest });
     }
@@ -149,6 +158,14 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     }
     if (inspected.size !== physical.size) throw new ObjectStoreError("incomplete_erasure_inventory", "Physical inventory lost a copy between verified passes.");
     for (const instance of instances) {
+      const leaseDirectory = join(instance.controlDirectory, "leases");
+      if (existsSync(leaseDirectory)) {
+        for (const name of readdirSync(leaseDirectory)) {
+          if (containsSelectedBytes(readFileSync(join(leaseDirectory, name)), payloads)) {
+            throw new ObjectStoreError("unsupported_erasure_storage", "Lease audit metadata retains selected payload bytes; clean the ambiguous copy before retrying.");
+          }
+        }
+      }
       for (const entry of readdirSync(instance.controlDirectory, { withFileTypes: true })) {
         if (entry.isFile() && entry.name !== "layers.json" && containsSelectedBytes(readFileSync(join(instance.controlDirectory, entry.name)), payloads)) {
           throw new ObjectStoreError("unsupported_erasure_storage", "Control metadata retains selected payload bytes; clean the ambiguous copy before retrying.");

@@ -626,3 +626,20 @@ the file stays intact, and the shared-store lease is released. Rollback stops at
 its first cleanup fault, so a newly created branch can remain for recovery. A real
 socket EOF before the declared HTTP body length exercises request-body rejection;
 the outcome hook settles and a subsequent advertisement proves service survival.
+
+## Receiver publication authority and bounded fragment metadata
+
+`engine/publication-leases.ts` owns durable stable FileId generations, receiver
+principals, exact ref scopes and explicit fencing proofs. Both transports enforce
+leases inside the ref transaction while holding the shared object write lock.
+`engine/lease-workflows.ts` exposes explicit remote acquisition and private proof
+persistence; push never silently acquires authority.
+
+`engine/manifest-pages.ts` writes canonical 128-way hierarchies incrementally and
+traverses one page per bounded level. `engine/object-stream.ts` and its worker
+verify large legacy v1 frames and canonical lines with bounded backpressure.
+File restores and range reads use these readers; explicit full-buffer or
+full-manifest convenience APIs retain their materializing contracts. Closure,
+bundles, linked instances and erasure follow manifest pages. See the
+[workflow and API contracts](docs/publication-leases-and-manifests.md) for clocks,
+refusal fields, traversal guarantees and measured regression scenarios.

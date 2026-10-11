@@ -14,7 +14,8 @@ import { frameObject, hashObject, ObjectStore } from "../engine/objects.ts";
 import { type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
 import { fetchFrom } from "../engine/sync.ts";
-import { FileTransport, type Transport } from "../engine/transport.ts";
+import { type Transport } from "../engine/transport.ts";
+import { LeasedFileTransport as FileTransport } from "./helpers/publication-consumers.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const temps: ReturnType<typeof makeTempDir>[] = [];

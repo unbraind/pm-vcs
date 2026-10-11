@@ -1,3 +1,5 @@
+import { changeRemoteLease } from "./engine/lease-workflows.ts";
+import type { LeaseRequest } from "./engine/publication-leases.ts";
 // The `pm vcs` command surface over the engine.
 //
 // Three conventions hold across every command here, each of them a lesson the
@@ -868,6 +870,29 @@ export function registerVcsCommands(api: ExtensionApi): void {
         ok: true,
         fetch: await fetchFrom(repository, remote === undefined || remote === "" ? "origin" : remote, new Date()),
       };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs lease",
+    description: "Explicitly acquire, renew, release, break or inspect a receiver-owned stable FileId publication lease. Acquired fencing proofs are saved privately for push.",
+    arguments: [
+      { name: "action", description: "acquire, renew, release, break or inspect", required: true },
+      { name: "file-id", description: "Stable FileId shown by vcs trace", required: true },
+      { name: "remote", description: "Configured receiver (default origin)", required: false },
+    ],
+    flags: [
+      { long: "--refs", value_name: "refs", description: "Comma-separated full ref scopes for acquisition", value_type: "string" },
+      { long: "--ttl-ms", value_name: "milliseconds", description: "Lifetime for acquisition or renewal, up to one day (default 300000)", value_type: "string" },
+      { long: "--fence", value_name: "token", description: "Explicit fencing proof; otherwise use the saved generation", value_type: "string" },
+    ],
+    async run(context: CommandHandlerContext) {
+      const action = context.args[0];
+      if (!["acquire", "renew", "release", "break", "inspect"].includes(action)) throw new VcsError("invalid_lease_action", "Unknown lease action.", "Use acquire, renew, release, break or inspect.");
+      return { ok: true, lease: await changeRemoteLease(openRepository(context), context.args[2]?.trim() || "origin", {
+        action: action as LeaseRequest["action"], fileId: context.args[1], refs: commaSeparated(context.options, "refs"),
+        ttlMs: Number(optionalString(context.options, "ttlMs") ?? "300000"), token: optionalString(context.options, "fence"),
+      }) };
     },
   });
 

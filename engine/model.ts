@@ -8,6 +8,7 @@
 // these two branches share a subtree) would quietly stop working.
 
 import { createHash } from "node:crypto";
+import { decodePagedManifest, encodePagedManifest, PAGED_MANIFEST_FORMAT } from "./manifest-pages.ts";
 
 import {
   hashObject,
@@ -874,12 +875,22 @@ export interface FragmentEntry {
  */
 export type FragmentMode = "fixed" | "cdc";
 
+/** One authenticated child of a bounded manifest node. */
+export interface ManifestPage extends FragmentEntry {
+  /** Number of logical fragments below this child. */
+  readonly count: number;
+}
+
 /** A fragment manifest: the total content length, the ordered fragments, and how they were chunked. */
 export interface FragmentManifest {
   /** Total byte length of the logical content the fragments reconstruct. */
   readonly totalLength: number;
-  /** Ordered fragments; concatenating their blobs yields the original content. */
+  /** v1 leaf fragments. A v2 interior root has an empty list; traverse pages with manifestFragments or explicitly call materializeManifest. */
   readonly fragments: readonly FragmentEntry[];
+  /** Bounded child references for v2 interior nodes; absent for v1 leaves. */
+  readonly pages?: readonly ManifestPage[];
+  /** Interior height; leaves have implicit height zero. */
+  readonly height?: number;
   /**
    * The chunking strategy that produced the fragments. Omitted (treated as
    * `"fixed"`) for backward compatibility with manifests written before the
@@ -909,19 +920,21 @@ export interface CdcParams {
   readonly mask: number;
 }
 
-/** Result of writing fragmented content: the manifest id and the manifest itself. */
+/** Result of writing fragmented content: address and bounded root descriptor, never an implicit full logical list. */
 export interface FragmentWriteResult {
   /** Object id of the stored manifest. */
   readonly manifestId: ObjectId;
-  /** The manifest that was written. */
+  /** The bounded root that was written; pages reference descendants when fragments is empty. */
   readonly manifest: FragmentManifest;
 }
 
 /**
- * Encodes a fragment manifest as canonical bytes.
+ * Encodes one bounded node, or an explicitly supplied flat legacy descriptor, as canonical bytes.
+ * Large-file writers use ManifestWriter to avoid constructing a full logical list.
  *
  * The encoding is line-oriented and deterministic: the format marker, the
- * total length, then one `frag` line per fragment in order. Given the same
+ * total length, then ordered `frag` lines for v1 or authenticated page descriptors
+ * and height for v2. Given the same
  * fragments and total length, the same bytes result — which is what makes the
  * manifest id a function of the content alone, and what lets two agents that
  * fragment the same file independently converge on one manifest id.
@@ -935,7 +948,8 @@ export interface FragmentWriteResult {
  *   back to this value.
  */
 export function encodeManifest(manifest: FragmentManifest): Buffer {
-  if (!Number.isInteger(manifest.totalLength) || manifest.totalLength < 0) {
+  if (manifest.pages !== undefined || manifest.height !== undefined) return encodePagedManifest(manifest);
+  if (!Number.isSafeInteger(manifest.totalLength) || manifest.totalLength < 0) {
     throw new ObjectStoreError(
       "invalid_manifest",
       `Manifest total length ${manifest.totalLength} is not a non-negative integer.`,
@@ -952,7 +966,7 @@ export function encodeManifest(manifest: FragmentManifest): Buffer {
     if (!isObjectId(fragment.id)) {
       throw new ObjectStoreError("invalid_object_id", `Manifest fragment id "${fragment.id}" is not a valid object id.`);
     }
-    if (!Number.isInteger(fragment.length) || fragment.length <= 0) {
+    if (!Number.isSafeInteger(fragment.length) || fragment.length <= 0) {
       throw new ObjectStoreError(
         "invalid_manifest",
         `Manifest fragment length ${fragment.length} is not a positive integer.`,
@@ -977,21 +991,23 @@ export function encodeManifest(manifest: FragmentManifest): Buffer {
   if (manifest.mode === "cdc") {
     lines.push("mode cdc");
   }
-  lines.push(...manifest.fragments.map((fragment) => `frag ${fragment.id} ${fragment.length}`));
+  for (const fragment of manifest.fragments) lines.push(`frag ${fragment.id} ${fragment.length}`);
   return Buffer.from(`${lines.join("\n")}\n`, "utf8");
 }
 
 /**
- * Decodes manifest bytes back into a {@link FragmentManifest}.
+ * Decodes one node or an explicitly supplied flat legacy buffer into a {@link FragmentManifest}.
+ * Large-file readers instead traverse bounded nodes or verified legacy lines.
  *
  * @param payload - Canonical manifest bytes.
- * @returns The parsed manifest.
+ * @returns The parsed node; v2 interior descriptors have pages and an empty fragments list.
  * @throws ObjectStoreError When the format marker is wrong, the total header is
  *   absent or repeated, a fragment line is malformed, an id is not an object id,
  *   a length is not a positive integer, or the fragment lengths do not sum to
  *   the total.
  */
 export function decodeManifest(payload: Buffer): FragmentManifest {
+  if (payload.subarray(0, PAGED_MANIFEST_FORMAT.length).toString() === PAGED_MANIFEST_FORMAT) return decodePagedManifest(payload);
   const text = payload.toString("utf8");
   // encodeManifest terminates every manifest with a newline, and ObjectStore
   // hashes raw payload bytes. Accepting a payload without it would let the same
@@ -1044,6 +1060,7 @@ export function decodeManifest(payload: Buffer): FragmentManifest {
         throw new ObjectStoreError("malformed_object", `Manifest total "${value}" is not a non-negative integer.`);
       }
       totalLength = Number(value);
+      if (!Number.isSafeInteger(totalLength)) throw new ObjectStoreError("malformed_object", "Manifest total exceeds safe integer addressing.");
     } else if (keyword === "mode") {
       if (mode !== undefined) {
         throw new ObjectStoreError("malformed_object", "Manifest carries more than one mode header.");
@@ -1082,7 +1099,7 @@ export function decodeManifest(payload: Buffer): FragmentManifest {
         throw new ObjectStoreError("malformed_object", `Manifest fragment length "${lengthStr}" is not a non-negative integer.`);
       }
       const length = Number(lengthStr);
-      if (length <= 0) {
+      if (!Number.isSafeInteger(length) || length <= 0) {
         throw new ObjectStoreError("malformed_object", `Manifest fragment length ${length} is not a positive integer.`);
       }
       fragments.push({ id, length });
@@ -1126,7 +1143,7 @@ export function writeManifest(store: ObjectStore, manifest: FragmentManifest, fi
  *
  * @param store - Source object store.
  * @param id - The manifest's id.
- * @returns The parsed manifest.
+ * @returns The parsed node; v2 interior descriptors have pages and an empty fragments list.
  * @throws ObjectStoreError When the object is absent, corrupt, or not a manifest.
  */
 export function readManifest(store: ObjectStore, id: ObjectId): FragmentManifest {

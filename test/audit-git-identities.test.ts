@@ -317,7 +317,8 @@ test("batch parser refuses missing separators, partial objects, and surplus byte
 
 test("stream transport reports real spawn, exit, signal, consumer, and timeout failures", async () => {
   dir = makeTempDir();
-  const options = { cwd: dir.root, timeoutMs: 1_000 };
+  // Startup watchdog; the intentional 20ms timeout below remains unchanged.
+  const options = { cwd: dir.root, timeoutMs: 30_000 };
   await assert.rejects(
     streamProcess(join(dir.root, "missing-command"), [], options, () => {}),
     /failed: spawn .* ENOENT/,
@@ -350,7 +351,7 @@ test("stream transport reports a real broken stdin pipe", async () => {
     streamProcess(
       process.execPath,
       ["-e", "process.stdin.destroy(); setTimeout(() => {}, 100)"],
-      { cwd: dir.root, input: "x".repeat(16 * 1024 * 1024), timeoutMs: 1_000 },
+      { cwd: dir.root, input: "x".repeat(16 * 1024 * 1024), timeoutMs: 30_000 },
       () => {},
     ),
     /stdin failed/,

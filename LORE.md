@@ -124,9 +124,10 @@ oracles. The future pm-vcs service must carry an authorized repository partition
 read, write, copy, list and ref operation.
 
 Files that cannot merge need remote-enforced leases. A local lock cannot stop another machine
-from publishing. pm-vcs locks must key on `FileId`, survive rename, and record owner, branch
-scope, expiry, renewal, break authority and an append-only audit trail. Enforcement belongs at
-the atomic publication boundary.
+from publishing. pm-vcs ships receiver-owned fenced leases keyed on `FileId`, surviving rename, with
+owner, exact ref scope, expiry, explicit renewal and break authority, and durable
+append-only audit. Both filesystem and HTTP publication enforce them under the
+same critical section as ref CAS. See the [workflows and metadata contracts](docs/publication-leases-and-manifests.md).
 
 ## Links, layers and lifecycle deletion
 
@@ -169,8 +170,9 @@ is not a second source of truth and does not mutate an item when a file changes.
 | `pm vcs items [from..to]` | Which items are explicit or linked to files changed by this range? |
 
 The first implementation derives answers from canonical trees, commits and current PM links.
-Historical link-at-event-time indexing, at-scale persistent indexes and enforced leases
-remain separately tracked work.
+Historical link-at-event-time indexing and at-scale persistent indexes remain
+separately tracked work. Publication leases and bounded manifest traversal are
+implemented with real filesystem and process regressions.
 
 ## Capability decisions
 

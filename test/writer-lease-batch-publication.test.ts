@@ -12,7 +12,8 @@ import { cdcFragmentedContentId, fragmentedContentId, readFragmented, writeCdcFr
 import { encodeCommit, manifestId, type FragmentManifest, type Signature, writeManifest } from "../engine/model.ts";
 import { frameObject, hashObject, ObjectStore } from "../engine/objects.ts";
 import { Repository } from "../engine/repo.ts";
-import { FileTransport, type TransferObject } from "../engine/transport.ts";
+import { type TransferObject } from "../engine/transport.ts";
+import { LeasedFileTransport as FileTransport } from "./helpers/publication-consumers.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 

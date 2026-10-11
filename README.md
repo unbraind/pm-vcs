@@ -139,7 +139,8 @@ pm vcs diff main feature
 | `pm vcs remote [name] [url]` | List remotes, add a file or HTTP(S) remote, or remove one (`--remove`). `remote add <name> <url>` is also accepted. |
 | `pm vcs clone <url> [dir]` | Create a repository from another one, adopting its record configuration. |
 | `pm vcs fetch [remote]` | Bring a remote's branches onto `refs/remotes/<remote>/`. Touches no local branch. |
-| `pm vcs push [remote]` | Send branches (`--branch`). Refuses a non-fast-forward unless `--force`. |
+| `pm vcs push [remote]` | Send branches (`--branch`) with explicit live FileId leases. Refuses a non-fast-forward unless `--force`. |
+| `pm vcs lease <acquire\|renew\|release\|break\|inspect> <FileId> [remote]` | Manage receiver-owned fenced publication leases (`--refs`, `--ttl-ms`, `--fence`). |
 | `pm vcs serve` | Serve one repository or a directory of repositories over HTTP. `--listen`, `--root` and `--auth` configure the address, root and bearer grants. |
 | `pm vcs verify` | Re-read every reachable object and check it against its id. |
 | `pm vcs trace <path-or-file-id>` | Trace one logical file across edits, moves, copies and deletion. |
@@ -664,3 +665,8 @@ assert against the suite's own assumptions.
 ## License
 
 MIT
+
+Publication requires explicit stable FileId leases, including renamed, deleted and
+historical files. Large fragmented content uses bounded manifest hierarchies;
+legacy flat manifests remain readable through verified bounded streams. See
+[publication lease workflows and manifest API contracts](docs/publication-leases-and-manifests.md).
