@@ -27,6 +27,10 @@ test("real extension lease and push workflows persist __proto__, constructor and
       const acquire = await harness.runCommand({ command: "vcs lease", args: ["acquire", fileId, remote], options: { refs: "refs/heads/main", ttlMs: "60000" }, pmRoot: sandbox.pmRoot });
       assert.equal(acquire.handled, true, acquire.errorMessage ?? "Acquire failed");
       assert.equal(remoteLeaseProofs(sender, remote).length, 1);
+      // A non-numeric lifetime is refused at the CLI boundary with the flag name, before contacting the receiver.
+      const invalidTtl = await harness.runCommand({ command: "vcs lease", args: ["renew", fileId, remote], options: { ttlMs: "abc" }, pmRoot: sandbox.pmRoot });
+      assert.equal(invalidTtl.handled, false);
+      assert.match(invalidTtl.errorMessage ?? "", /--ttl-ms must be a positive integer, not "abc"/);
       const pushed = await harness.runCommand({ command: "vcs push", args: [remote], pmRoot: sandbox.pmRoot });
       assert.equal(pushed.handled, true, pushed.errorMessage ?? "Push failed"); assert.equal(receiver.resolve("main"), sender.resolve("main"));
       for (const action of ["inspect", "renew", "release"]) {

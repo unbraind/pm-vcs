@@ -891,7 +891,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       if (!["acquire", "renew", "release", "break", "inspect"].includes(action)) throw new VcsError("invalid_lease_action", "Unknown lease action.", "Use acquire, renew, release, break or inspect.");
       return { ok: true, lease: await changeRemoteLease(openRepository(context), context.args[2]?.trim() || "origin", {
         action: action as LeaseRequest["action"], fileId: context.args[1], refs: commaSeparated(context.options, "refs"),
-        ttlMs: Number(optionalString(context.options, "ttlMs") ?? "300000"), token: optionalString(context.options, "fence"),
+        ttlMs: positiveInteger(context.options, "ttlMs", 300_000), token: optionalString(context.options, "fence"),
       }) };
     },
   });

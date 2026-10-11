@@ -220,6 +220,7 @@ export class PublicationLeases {
   assertPublication(updates: readonly PushUpdate[], proofs: readonly LeaseProof[], metadata: ClosureMetadata): void {
     const fences = new Map(proofs.map(/** A publisher must carry the current generation proof for each stable identity. */ (proof) => [proof.fileId, proof.token]));
     const checks: { fileId: FileId; ref: string; lease: FileLease | null }[] = [];
+    const audits = new Map<FileId, FileLease | null>();
     for (const update of updates) {
       const seen = new Set<string>();
       const pending = [update.next, ...(update.expected === null ? [] : [update.expected])];
@@ -260,7 +261,12 @@ export class PublicationLeases {
         // Historical payloads introduced and deleted before the tip are still published.
         if (id !== update.expected) pending.push(...commit.parents.filter((parent) => !known.has(parent)));
       }
-      for (const fileId of [...fileIds].sort()) checks.push({ fileId, ref: update.ref, lease: this.inspect(fileId) });
+      for (const fileId of [...fileIds].sort()) {
+        // Read each FileId's audit once per batch; validation still runs per ref.
+        let lease = audits.get(fileId);
+        if (lease === undefined) { lease = this.inspect(fileId); audits.set(fileId, lease); }
+        checks.push({ fileId, ref: update.ref, lease });
+      }
     }
     const now = Date.now();
     for (const check of checks) this.validate(check.lease, check.fileId, fences.get(check.fileId), check.ref, now);
