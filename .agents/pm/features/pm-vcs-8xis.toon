@@ -2,16 +2,21 @@ id: pm-vcs-8xis
 title: Design committed repository links local layers and typed obliteration
 description: "Add native repository composition and lifecycle operations: committed links pin authorized repository and revision identities, local layers overlay an instance without changing commits, and authorized obliteration produces a typed payload state distinct from garbage collection, missing data or corruption."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-08-01T19:32:34.077Z"
-updated_at: "2026-10-10T19:23:47.977Z"
+updated_at: "2026-10-12T00:58:09.669Z"
+closed_at: "2026-10-11T23:28:52.201Z"
+completed_at: "2026-10-11T23:28:52.201Z"
 author: "harness:codex"
 estimated_minutes: 1800
 acceptance_criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects
 parent: pm-vcs-b7cb
 risk: high
+resolution: "Implemented and merged in https://github.com/unbraind/pm-vcs/pull/97: repository links, private layers and typed obliteration with complete writer leases"
+expected_result: "Meets its recorded acceptance criteria: Committed links are reproducible and retain the linked repository authorization boundary; Local layers never alter commit identity and are visibly excluded from ordinary status; Obliteration is authorized audited and scoped by stable file identity; Checkout and verify distinguish obliterated content from missing and corrupt objects"
+actual_result: "Merged in https://github.com/unbraind/pm-vcs/pull/97 with green required CI checks and a completed CodeRabbit full review with every finding resolved; repository links, private layers and typed obliteration with complete writer leases"
 comments[111]{created_at,author,text}:
   "2026-09-12T23:35:59.709Z",pi-agent,"Audit 2026-09-13: EXISTS — committed repository links are implemented as sparse linked instances (engine/instances.ts: instance link, shared object store, sparse views; test/instances.test.ts: 'a linked instance materializes its view, shares objects and keeps private state', 'concurrent instances share objects but never overwrite each other's state'). REMAINS — local layers that overlay an instance without changing commit identity are not implemented (grep for local-layer/overlay returns no matches). Typed obliteration is not implemented (grep for obliterate/Obliteration in engine/ returns no matches). Checkout and verify distinguishing obliterated content from missing and corrupt objects is not implemented. Two of four acceptance criteria are not met."
   "2026-10-07T20:55:16.467Z",codex-sol,"Baseline against the built package and a real disposable SDK tracker: a synthetic binary was staged and committed successfully; vcs link, vcs layer and vcs obliterate are absent, and the repository exposes no layer or obliteration API. Acceptance will pin a typed external repository revision and subset across a clone without transferring its payload or credentials; overlay tracked and new paths while preserving commit identity and excluding layers visibly from status and add; authorize FileId-scoped erasure across moves and revisions, byte-scan stored and decoded representations, distinguish obliterated/missing/corrupt state, and reject resurrection through stale fetch/import. The previous audit conflated local shared instances with committed external links. Full item, parent, linked research record and LORE.md were read; the removed historical research-doc link is superseded by LORE.md."
@@ -437,4 +442,5 @@ docs[4]:
     scope: project
   - path: README.md
     scope: project
+close_reason: "Delivered by https://github.com/unbraind/pm-vcs/pull/97 (merged); repository links, private layers and typed obliteration with complete writer leases"
 body: ""

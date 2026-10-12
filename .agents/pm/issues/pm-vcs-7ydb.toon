@@ -1,0 +1,12 @@
+id: pm-vcs-7ydb
+title: selfhost.bundle crossed GitHub's 50 MiB per-file warning and keeps growing with history toward the 100 MiB per-file limit
+description: "Measured on the 2026-10-12 close-out branch (pm-vcs#101): selfhost.bundle grew from 49,260,541 bytes (about 46.98 MiB) at the merge base to 53,183,829 bytes (about 50.72 MiB) at the head, and changed in six of that branch's eight commits. The push emitted GitHub's large-file warning, which appears for any single file over 50 MiB. Each commit that changes the self-hosted source or tracker data regenerates the bundle, so it grows with history. GitHub rejects a single repository file over 100 MiB, so any pull request or release commit that adds or updates selfhost.bundle as a Git file would then be blocked. Release assets have a separate, much larger limit, and the release workflow checks the committed bundle without adding it to its release commit. Options: an incremental or thin bundle against a recorded base; compressing or pruning objects that self-host verification does not need; moving the full bundle to a release asset and committing only its digest; or Git LFS, which would need evaluating against the self-host contract."
+type: Issue
+status: open
+priority: 1
+tags[3]: ci,self-host,size
+created_at: "2026-10-12T00:59:40.128Z"
+updated_at: "2026-10-12T05:33:09.421Z"
+author: claude-hub
+acceptance_criteria: "Measure the bundle size per regenerating commit over the last 30 days of main and project one year at that writer cadence (bytes and MiB). The committed self-host artifact then stays well below GitHub's 50 MiB per-file warning over that projection, accept:self-host still proves byte-identity of the committed source, and pushes no longer emit the large-file warning."
+body: ""
