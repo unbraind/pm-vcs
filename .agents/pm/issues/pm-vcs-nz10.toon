@@ -2,16 +2,19 @@ id: pm-vcs-nz10
 title: Exclude nested pm-vcs control directories from staging and materialization
 description: "Separate follow-up to the existing control-directory fence in pm-vcs-aujy. The working-tree walker excludes .pmvcs only at the repository root, while ALWAYS_IGNORED omits .pmvcs. A scratch parent repository with a nested agent-a repository stages agent-a/.pmvcs/credentials.json on unrestricted add; this can publish clone credentials and other private control state. Fix the general staging, explicit-add, status and materialization fence; cover nested control directories and malicious stored trees. This is outside the two requested PR #91 defects."
 type: Issue
-status: in_progress
+status: closed
 priority: 0
 tags: []
 created_at: "2026-10-05T08:48:37.876Z"
-updated_at: "2026-10-08T00:39:18.871Z"
+updated_at: "2026-10-12T00:58:12.470Z"
+closed_at: "2026-10-11T23:28:52.913Z"
+completed_at: "2026-10-11T23:28:52.913Z"
 author: codex-sol
 parent: pm-vcs-5h6j
 repro_steps: "Initialize a scratch parent Repository and agent-a child Repository; add an authenticated origin to the child RemoteStore; call parent.stage([]); parent.readIndex() contains agent-a/.pmvcs/credentials.json."
+resolution: "Implemented and merged in https://github.com/unbraind/pm-vcs/pull/96: nested pm-vcs control directories are excluded from staging and materialization"
 expected_result: Own control directories remain private at every nesting depth and cannot be materialized from stored trees.
-actual_result: The synthetic reproduction at e131473 returned nestedControlTracked=true.
+actual_result: "Merged in https://github.com/unbraind/pm-vcs/pull/96 with green required CI checks and a completed CodeRabbit full review with every finding resolved; nested pm-vcs control directories are excluded from staging and materialization"
 dependencies[2]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-aujy,related,"2026-10-05T08:48:37.876Z",codex-sol,"cli:create:dep",detected
   pm-vcs-ttc0,related,"2026-10-05T08:48:37.876Z",codex-sol,"cli:create:dep",detected
@@ -119,4 +122,5 @@ docs[3]{path,scope}:
   ARCHITECTURE.md,project
   docs/working-tree-mutations.md,project
   README.md,project
+close_reason: "Delivered by https://github.com/unbraind/pm-vcs/pull/96 (merged); nested pm-vcs control directories are excluded from staging and materialization"
 body: ""
