@@ -84,15 +84,17 @@ and six capability/selection and lock-cleanup cases.
 
 Revert receipt for the sparse-view coverage: restore only the path-based apply loop of
 `Repository.setView` — `rmSync`, recursive `mkdirSync`, `writeFileSync` and `chmodSync`
-with pathname pruning — leaving the tests unchanged, and run:
+with the necessary imports restored and the existing shared pruning helper retained —
+leaving the tests unchanged, and run:
 
 ```sh
 node --test --test-name-pattern=setView test/worktree-races.test.ts
 ```
 
-The command exits 1 with 0 passing and 40 failing cases: the path-based widening
-succeeds through the swapped ancestor and overwrites the outside or control sentinel,
-while the path-based narrowing deletes it. Restoring the boundary-routed `setView`
+The command exits 1 with 0 passing and 40 failing cases. The syscall-boundary widening
+cases overwrite outside or control sentinels, and syscall-boundary narrowing deletes
+them. Other failures include absent observation hooks after removing the boundary and
+metadata published before pruning refusal. Restoring the boundary-routed `setView`
 passes all 40 cases across the same four runs, each refusal leaving the recorded view
 and index untouched. Reverting only the pruning-before-publication change to `setView`
 also makes this command fail: 24 pass and 16 fail because widening and narrowing
