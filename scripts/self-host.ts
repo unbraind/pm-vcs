@@ -1,12 +1,21 @@
 // The self-hosting gate: pm-vcs versions its own source, and a CI gate proves it.
 //
-// A tracked text bundle (`selfhost.bundle`) holds a pm-vcs history of the
-// package's git-tracked source. `accept:self-host` (the `--check` mode below)
-// reads the **committed** bundle and the **committed** source, both straight
-// out of `HEAD`, and rejects any byte difference. `self-host:write` (the
-// `--write` mode) is the only thing that regenerates the bundle; the gate never
-// writes, so regenerating the bundle from a dirty tree and leaving it
-// uncommitted changes the verdict by exactly nothing.
+// A tracked text bundle (`selfhost.bundle`) holds a bounded pm-vcs archive of the
+// package's git-tracked source: exactly one commit, naming the source snapshot,
+// with no history behind it. `accept:self-host` (the `--check` mode below) reads
+// the **committed** bundle and the **committed** source, both straight out of
+// `HEAD`, and rejects any byte difference. `self-host:write` (the `--write`
+// mode) is the only thing that regenerates the bundle; the gate never writes, so
+// regenerating the bundle from a dirty tree and leaving it uncommitted changes
+// the verdict by exactly nothing.
+//
+// The archive is bounded on purpose. The gate's contract is tip-tree equality —
+// a full history satisfied it too, but every regeneration appended one commit
+// and kept every superseded blob, so the committed artifact grew without limit
+// (measured: 46.88 MiB after one month of growth) while the proof it carried
+// never got stronger. A single snapshot is a complete, self-contained, and
+// importable pm-vcs repository that proves exactly the same fact at a size
+// that is a function of the source, not of the commit count.
 //
 // The engine already serializes, hashes, bundles and verifies. This script
 // orchestrates those primitives against a real git checkout; it introduces no
@@ -30,6 +39,7 @@ import {
   type Commit,
   type FileMode,
   type Signature,
+  decodeCommit,
   readCommit,
   writeCommit,
 } from "../engine/model.ts";
@@ -475,20 +485,84 @@ export function compareTrees(
 }
 
 /**
- * Regenerates the bundle, appending one commit when the source tree changed and
- * leaving the history untouched when it has not.
+ * Whether the committed bundle already is a bounded snapshot of exactly this
+ * source tree, so regeneration can leave the file byte-untouched.
  *
- * The existing committed bundle is imported so a new commit descends from the
- * real previous tip rather than restarting history. When the new source tree
- * already equals that tip's tree, the existing bundle is returned unchanged —
- * regenerating from identical source must not churn the file. Otherwise a commit
- * is written with a deterministic signature and message derived from the git
- * commit, so two runs over the same `HEAD` produce the same bytes.
+ * Three things make a bundle "the same snapshot": it advertises the configured
+ * ref, it carries exactly one commit — the advertised tip — with no
+ * prerequisites behind it, and that commit's tree is the source tree. Anything
+ * else is stale in one of two directions, and the two directions are treated
+ * differently:
  *
- * @param store - Object store holding the source tree and the imported history.
+ * - A bundle with the right ref but the wrong *shape* (a pre-bounding history
+ *   bundle, a thin bundle declaring prerequisites, a ref pointing somewhere a
+ *   snapshot would not) is regenerated, not reused. Reusing it would keep an
+ *   unbounded artifact committed forever — its tip tree matches, so the no-op
+ *   shortcut alone could never shrink it — and the bound is an invariant of the
+ *   artifact, not a hope about how it was last written.
+ * - A bundle that does not advertise the ref at all is not this gate's
+ *   artifact, and the writer refuses rather than overwrite it: the file is
+ *   supposed to be one specific thing, and silently replacing something else
+ *   that happens to sit at its path is how an anomaly gets buried instead of
+ *   investigated. Deleting the bundle deliberately is the documented remedy.
+ *
+ * Only the header and the object lines are inspected — the bundle is parsed
+ * (which re-hashes nothing but validates structure and every advertised id)
+ * rather than imported, because a superseded snapshot contributes nothing to
+ * the next one and importing it would just hold its bytes in memory for no
+ * decision.
+ *
+ * @param existingBundle - The committed bundle, never null at this call site.
+ * @param ref - Full ref name the snapshot must advertise.
+ * @param sourceTreeId - The tree id built from the current source.
+ * @returns True when the committed bundle already proves this exact tree.
+ * @throws Error When the bundle is malformed, or does not advertise the ref.
+ */
+export function snapshotIsUnchanged(
+  existingBundle: Buffer,
+  ref: string,
+  sourceTreeId: ObjectId,
+): boolean {
+  const parsed = parseBundle(existingBundle);
+  const tip = parsed.header.refs[ref];
+  if (tip === undefined) {
+    const advertised = Object.keys(parsed.header.refs).sort().join(", ") || "(none)";
+    throw new Error(
+      `self-host: the existing bundle does not advertise ${ref} (advertised: ${advertised}). `
+        + `Refusing to overwrite a bundle that is not this gate's artifact — delete the bundle `
+        + `deliberately if that is what you intend.`,
+    );
+  }
+  const commits = parsed.lines.filter((line) => line.type === "commit");
+  if (commits.length !== 1) return false;
+  const commit = commits[0];
+  if (commit.id !== tip) return false;
+  if ((parsed.header.prerequisites ?? []).length > 0) return false;
+  return decodeCommit(commit.payload).tree === sourceTreeId;
+}
+
+/**
+ * Regenerates the bundle as a bounded archive: one parentless commit naming
+ * the current source tree, and nothing else.
+ *
+ * The superseded snapshot is discarded rather than appended to. Appending
+ * kept every prior tree in the committed artifact — the gate compares tip
+ * trees, so the accumulated history proved nothing extra while the file grew
+ * without bound, which is the defect this exists to fix. A single commit is
+ * still a complete pm-vcs repository: it verifies through the same import, the
+ * same isolated store and the same ancestry walk the gate has always used,
+ * because a parentless commit *is* a whole ancestry.
+ *
+ * When the committed bundle already is a bounded snapshot of exactly this
+ * source tree, it is returned unchanged — regenerating from identical source
+ * must not churn the file. Otherwise a fresh root commit is written with a
+ * deterministic signature and message derived from the git commit, so two
+ * runs over the same `HEAD` produce the same bytes.
+ *
+ * @param store - Object store holding the source tree.
  * @param refs - Ref store used to publish the tip for export.
  * @param existingBundle - The committed bundle, or null on the first run.
- * @param ref - The ref to advance.
+ * @param ref - The ref to publish the snapshot under.
  * @param sourceTreeId - The tree id built from the current source.
  * @param signature - Author and committer signature.
  * @param message - Commit message.
@@ -503,42 +577,22 @@ export function writeSelfHostBundle(
   signature: Signature,
   message: string,
 ): Buffer {
-  let parent: ObjectId | null = null;
-  let existingTipTree: ObjectId | null = null;
-  if (existingBundle !== null) {
-    const imported = importBundleObjects(store, existingBundle);
-    const tip = imported.header.refs[ref];
-    if (tip === undefined) {
-      // Silently continuing here destroys history. `parent` would stay null, the
-      // new commit would be parentless, and `exportBundle` only walks from the
-      // new tip — so every prior snapshot would vanish from the regenerated
-      // bundle. The verify gate compares tip trees only, so it would call the
-      // truncated result byte-identical and nothing downstream would notice.
-      const advertised = Object.keys(imported.header.refs).sort().join(", ") || "(none)";
-      throw new Error(
-        `self-host: the existing bundle does not advertise ${ref} (advertised: ${advertised}). `
-          + `Refusing to restart history — delete the bundle deliberately if that is what you intend.`,
-      );
-    }
-    parent = tip;
-    existingTipTree = readCommit(store, tip).tree;
-  }
-  if (existingBundle !== null && existingTipTree !== null && existingTipTree === sourceTreeId) {
+  if (existingBundle !== null && snapshotIsUnchanged(existingBundle, ref, sourceTreeId)) {
     return existingBundle;
   }
   const commit: Commit = {
     tree: sourceTreeId,
-    parents: parent === null ? [] : [parent],
+    parents: [],
     author: signature,
     committer: signature,
     message,
   };
   const tipId = writeCommit(store, commit);
   // The scratch ref store is fresh on a real run, so the expected value is the
-  // ref's current state (null until something publishes it), not the parent
-  // commit id. Using the parent here would make every run after the first fail
-  // with a compare-and-swap mismatch, because the imported bundle's objects are
-  // in the store but its ref was never published into this scratch ref store.
+  // ref's current state (null until something publishes it), not the previous
+  // commit id. Comparing against anything else would make every run after the
+  // first fail the swap, because a superseded snapshot is discarded, not
+  // published into this ref store first.
   refs.compareAndSwap(ref, refs.read(ref), tipId);
   return exportBundle(store, refs, [ref]);
 }
