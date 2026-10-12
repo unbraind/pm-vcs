@@ -474,26 +474,30 @@ has no evidence behind its claims, and every bug that only appears at real scale
 tree, a long history, a rename, a file that stops existing — stays undiscovered. Dogfooding is
 the only test that exercises the system against the one workload nobody wrote a fixture for.
 
-The mechanism: the self-hosted history ships as a tracked bundle. A gate imports it into a
+The mechanism: the self-hosted source ships as a tracked bundle. A gate imports it into a
 scratch repository, re-verifies every object against its own id, and asserts the tip tree is
 **byte-identical** to the git-tracked source. Source therefore cannot change without the
-pm-vcs history following it, and the check cannot be satisfied by regenerating from a dirty
+pm-vcs snapshot following it, and the check cannot be satisfied by regenerating from a dirty
 tree.
 
 The concrete artefacts and their contract:
 
 - **`selfhost.bundle`** is the tracked text bundle, produced by the engine's own `exportBundle`.
-  It advertises one ref, `refs/heads/self-host`, whose tip commits the source snapshot. The
+  It advertises one ref, `refs/heads/self-host`, whose tip commits the source snapshot. It is
+  **bounded**: the archive carries exactly one commit — the snapshot — with no history behind
+  it, so its size is a function of the source, not of the number of regenerations. (It grew
+  from 13.58 MiB to 46.88 MiB in one month while every regeneration appended a commit and kept
+  every superseded blob; the gate compares tip trees, so the accumulated history proved
+  nothing the snapshot alone does not.) The
   trees inside it use the legacy (FileId-free) encoding, which drops FileId metadata from the
   hash — names, modes and directory structure still contribute, so a tree id is a function of
   the *shape and content* of the source rather than of content alone. Dropping FileId is what
   makes it reproducible: two runs over identical source produce identical tree ids.
 
   The *bundle file* is not a pure function of the source, though, and it is worth being precise
-  about that: it accumulates one commit per regeneration, and each commit carries the `HEAD` sha
-  in its message. Identical source with a different history therefore yields a different bundle.
-  The gate does not compare bundle bytes — it compares the tip **tree** id, which is the part
-  that is determined by the source.
+  about that: the snapshot commit carries the `HEAD` sha in its message, so identical source
+  with a different history yields a different bundle. The gate does not compare bundle bytes —
+  it compares the tip **tree** id, which is the part that is determined by the source.
 - **`self-host.json`** is the gate's data file. It records the bundle path, names the ref, and
   holds the **exclusion set**: the *tracked* paths deliberately kept out of the history. The
   exclusion set is data, not scattered literals — the only entry is the bundle file itself,
@@ -506,9 +510,11 @@ The concrete artefacts and their contract:
   a write primitive aimable at `README.md` or `.git/hooks/pre-commit`. Git-ignored paths (`dist/`, `coverage/`, `node_modules/`) never appear in
   `git ls-files` and need no entry. A tracked path in neither the bundle nor the exclusion set
   fails the gate closed.
-- **`npm run self-host:write`** regenerates the bundle. It snapshots the current source, appends
-  one commit when the tree changed and leaves the history untouched when it has not, and writes
-  the file. It is the **only** path that writes the bundle.
+- **`npm run self-host:write`** regenerates the bundle. It snapshots the current source, writes
+  one parentless commit naming that tree when it changed and leaves the committed file
+  untouched when it has not (a stale *shape* — a pre-bounding history bundle or a thin bundle —
+  is regenerated rather than reused, so the bound is an invariant, not a hope), and writes the
+  file. It is the **only** path that writes the bundle.
 - **`npm run accept:self-host`** is the gate, and it **never writes**. It reads the **committed**
   bundle and the **committed** source both straight out of `HEAD` — the bundle through
   `git cat-file`, the source through a detached `git worktree` — so a dirty working tree cannot

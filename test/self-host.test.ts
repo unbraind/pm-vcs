@@ -39,6 +39,7 @@ import {
   resolveBundleTarget,
   readSourceFiles,
   runGit,
+  snapshotIsUnchanged,
   verifySelfHost,
   writeSelfHostBundle,
 } from "../scripts/self-host.ts";
@@ -379,22 +380,33 @@ test("writeSelfHostBundle is a no-op when the source tree is unchanged", () => {
   }
 });
 
-test("writeSelfHostBundle appends a commit when the source tree changes", () => {
+// The writer is bounded: a regeneration replaces the snapshot, it never adds to
+// a history. These are the invariants that fail closed if the writer ever
+// regresses to appending — each one asserts a property the append form cannot
+// satisfy.
+test("writeSelfHostBundle replaces the snapshot with a fresh parentless commit when the source tree changes", () => {
   const { store, refs, cleanup } = own();
   try {
     const treeA = buildSourceTree(store, files([["a.txt", "x"]]));
     const first = writeSelfHostBundle(store, refs, null, ref, treeA, signature, "first\n");
-    const rootTip = refs.read(ref);
-    assert.ok(rootTip !== null);
+    const supersededTip = refs.read(ref);
+    assert.ok(supersededTip !== null);
     const treeB = buildSourceTree(store, files([["a.txt", "x"], ["b.txt", "y"]]));
     const second = writeSelfHostBundle(store, refs, first, ref, treeB, signature, "second\n");
     assert.notEqual(second, first);
     const newTip = refs.read(ref);
     assert.ok(newTip !== null);
-    assert.notEqual(newTip, rootTip);
+    assert.notEqual(newTip, supersededTip);
     const commit = readCommit(store, newTip!);
-    assert.deepEqual(commit.parents, [rootTip]);
+    assert.deepEqual(commit.parents, []);
     assert.equal(commit.tree, treeB);
+    // Bounded: exactly one commit, no prerequisites, and no trace of the
+    // superseded snapshot. An appending writer carries the old tip commit (and,
+    // with it, its whole tree) inside every later bundle.
+    const parsed = parseBundle(second);
+    assert.equal(parsed.lines.filter((line) => line.type === "commit").length, 1);
+    assert.deepEqual(parsed.header.prerequisites, []);
+    assert.equal(parsed.lines.some((line) => line.id === supersededTip), false);
     // The new bundle verifies against the new source tree.
     const result = verifySelfHost(store, second, ref, treeB);
     assert.equal(result.ok, true, result.problems.join("\n"));
@@ -403,11 +415,130 @@ test("writeSelfHostBundle appends a commit when the source tree changes", () => 
   }
 });
 
-// Silently continuing here would destroy history: the new commit would be
-// parentless, `exportBundle` walks only from the new tip, and every prior
-// snapshot would vanish. The verify gate compares tip trees, so it would call
-// the truncated result byte-identical and nothing downstream would notice.
-test("writeSelfHostBundle refuses to restart history when the bundle lacks the ref", () => {
+test("writeSelfHostBundle stays bounded across repeated source changes", () => {
+  const { store, refs, cleanup } = own();
+  try {
+    // A large file dominates the bundle, so accumulated history would be
+    // unmistakable: an appending writer carries one 64 KiB blob per round.
+    const big = "z".repeat(64 * 1024);
+    let tree = buildSourceTree(store, files([["a.txt", big]]));
+    let bytes = writeSelfHostBundle(store, refs, null, ref, tree, signature, "first\n");
+    const firstSize = bytes.length;
+    for (let round = 0; round < 10; round += 1) {
+      tree = buildSourceTree(store, files([["a.txt", big + round]]));
+      bytes = writeSelfHostBundle(store, refs, bytes, ref, tree, signature, `round ${round}\n`);
+    }
+    const parsed = parseBundle(bytes);
+    assert.equal(parsed.lines.filter((line) => line.type === "commit").length, 1);
+    assert.equal(parsed.header.prerequisites.length, 0);
+    // Ten regenerations later the artifact is the size of one snapshot of one
+    // file, not eleven of them.
+    assert.ok(
+      bytes.length < firstSize * 2,
+      `the bundle grew to ${bytes.length} bytes after ten regenerations (first snapshot: ${firstSize})`,
+    );
+    const result = verifySelfHost(store, bytes, ref, tree);
+    assert.equal(result.ok, true, result.problems.join("\n"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("writeSelfHostBundle regenerates a pre-bounding history bundle even when its tip tree matches", () => {
+  // Migration: the committed artifact from before the bound could be a full
+  // multi-commit history whose tip tree equals the source tree. Reusing it
+  // would keep an unbounded artifact committed forever, so a matching tip is
+  // not enough — the *shape* must be a single-commit snapshot too.
+  const { store, refs, cleanup } = own();
+  try {
+    const treeA = buildSourceTree(store, files([["a.txt", "x"]]));
+    const root = writeCommit(store, {
+      tree: treeA, parents: [], author: signature, committer: signature, message: "root\n",
+    });
+    refs.compareAndSwap(ref, null, root);
+    const treeB = buildSourceTree(store, files([["a.txt", "x"], ["b.txt", "y"]]));
+    const second = writeCommit(store, {
+      tree: treeB, parents: [root], author: signature, committer: signature, message: "second\n",
+    });
+    refs.compareAndSwap(ref, root, second);
+    const legacy = exportBundle(store, refs, [ref]);
+    const bounded = writeSelfHostBundle(store, refs, legacy, ref, treeB, signature, "snapshot\n");
+    assert.notEqual(bounded, legacy);
+    const parsed = parseBundle(bounded);
+    assert.equal(parsed.lines.filter((line) => line.type === "commit").length, 1);
+    assert.equal(parsed.lines.some((line) => line.id === root), false);
+    const result = verifySelfHost(store, bounded, ref, treeB);
+    assert.equal(result.ok, true, result.problems.join("\n"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("writeSelfHostBundle regenerates rather than reuses a thin bundle that declares prerequisites", () => {
+  // A thin bundle is not a bounded snapshot: it leans on history the reader is
+  // expected to already have. The gate's verify path would reject it as
+  // non-self-contained, and the writer must not launder it into a no-op either.
+  const { bytes } = bundleFor([["a.txt", "x"]]);
+  const lines = bytes.toString("utf8").split("\n");
+  const header = JSON.parse(lines[1]) as { refs: Record<string, string>; prerequisites?: string[] };
+  header.prerequisites = [header.refs[ref]];
+  lines[1] = JSON.stringify(header);
+  const thin = Buffer.from(lines.join("\n"), "utf8");
+  const { store, refs, cleanup } = own();
+  try {
+    const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"]]));
+    const bounded = writeSelfHostBundle(store, refs, thin, ref, sourceTreeId, signature, "snapshot\n");
+    assert.notEqual(bounded, thin);
+    const result = verifySelfHost(store, bounded, ref, sourceTreeId);
+    assert.equal(result.ok, true, result.problems.join("\n"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("writeSelfHostBundle regenerates rather than reuses a bundle whose advertised tip is not the snapshot commit", () => {
+  // The ref exists but points elsewhere (here: a blob the bundle carries), so
+  // the bundle is not interpretable as a snapshot of this source and the writer
+  // builds a fresh one from the source rather than trusting a repointed header.
+  const { bytes } = bundleFor([["a.txt", "x"]]);
+  const lines = bytes.toString("utf8").split("\n");
+  const header = JSON.parse(lines[1]) as { refs: Record<string, string> };
+  const blobLine = lines.find((line) => line.startsWith("blob "));
+  assert.ok(blobLine, "the bundle should carry at least one blob");
+  header.refs[ref] = blobLine.split(" ")[1];
+  lines[1] = JSON.stringify(header);
+  const repointed = Buffer.from(lines.join("\n"), "utf8");
+  const { store, refs, cleanup } = own();
+  try {
+    const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"]]));
+    const bounded = writeSelfHostBundle(store, refs, repointed, ref, sourceTreeId, signature, "snapshot\n");
+    assert.notEqual(bounded, repointed);
+    const result = verifySelfHost(store, bounded, ref, sourceTreeId);
+    assert.equal(result.ok, true, result.problems.join("\n"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("writeSelfHostBundle fails loudly when the committed bundle is malformed", () => {
+  // A garbage file at the bundle path is an anomaly about the repository, not
+  // an input to interpret; the writer surfaces the parse failure instead of
+  // quietly replacing whatever it was.
+  const { store, refs, cleanup } = own();
+  try {
+    const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"]]));
+    assert.throws(() =>
+      writeSelfHostBundle(store, refs, Buffer.from("not a bundle\n", "utf8"), ref, sourceTreeId, signature, "snapshot\n"));
+  } finally {
+    cleanup();
+  }
+});
+
+// The bundle path holds the gate's own artifact. A bundle advertising a foreign
+// ref — or nothing at all — is not that artifact, and overwriting it silently
+// would bury the anomaly instead of surfacing it, whatever writer sits behind
+// the regeneration.
+test("writeSelfHostBundle refuses to overwrite a bundle that does not advertise the gate's ref", () => {
   const other = "refs/heads/some-other-ref";
   const { store: writeStore, refs: writeRefs, cleanup: writeCleanup } = own();
   const foreignTree = buildSourceTree(writeStore, files([["a.txt", "x"]]));
@@ -419,7 +550,7 @@ test("writeSelfHostBundle refuses to restart history when the bundle lacks the r
     const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"]]));
     assert.throws(
       () => writeSelfHostBundle(store, refs, foreign, ref, sourceTreeId, signature, "snapshot\n"),
-      /does not advertise|Refusing to restart history/,
+      /does not advertise|not this gate's artifact/,
     );
 
     // And the degenerate case: a bundle that advertises nothing at all. The
@@ -446,10 +577,10 @@ test("writeSelfHostBundle refuses to restart history when the bundle lacks the r
   }
 });
 
-test("writeSelfHostBundle appends against a fresh scratch ref store", () => {
-  // Mirrors the real script: the existing bundle's objects are imported into the
-  // store, but its ref is never published into the scratch ref store. The append
-  // must still succeed and the ref must end up at the new tip.
+test("writeSelfHostBundle publishes the snapshot against a fresh scratch ref store", () => {
+  // Mirrors the real script: the writer never imports the committed bundle, so
+  // its objects and its ref are absent from the scratch stores and the fresh
+  // snapshot must still publish and verify.
   const write = own();
   const treeA = buildSourceTree(write.store, files([["a.txt", "x"]]));
   const first = writeSelfHostBundle(write.store, write.refs, null, ref, treeA, signature, "first\n");
@@ -461,6 +592,25 @@ test("writeSelfHostBundle appends against a fresh scratch ref store", () => {
   assert.equal(result.ok, true, result.problems.join("\n"));
   write.cleanup();
   verify.cleanup();
+});
+
+test("snapshotIsUnchanged treats a header without prerequisites as a bounded snapshot", () => {
+  // `prerequisites` is validated by `parseBundle` only when present, so a
+  // header may legitimately omit it. Absence means the bundle leans on no
+  // base history — the bounded shape — so a matching snapshot must be reused,
+  // not crashed on and not pointlessly regenerated.
+  const { bytes, treeId } = bundleFor([["a.txt", "x"]]);
+  const lines = bytes.toString("utf8").split("\n");
+  const header = JSON.parse(lines[1]) as { prerequisites?: unknown };
+  delete header.prerequisites;
+  lines[1] = JSON.stringify(header);
+  const sparse = Buffer.from(lines.join("\n"), "utf8");
+  assert.equal(snapshotIsUnchanged(sparse, ref, treeId), true);
+});
+
+test("snapshotIsUnchanged reports an already-bounded matching bundle", () => {
+  const { bytes, treeId } = bundleFor([["a.txt", "x"]]);
+  assert.equal(snapshotIsUnchanged(bytes, ref, treeId), true);
 });
 
 test("a bundle written by exportBundle round-trips through verifySelfHost", () => {
@@ -1051,4 +1201,38 @@ test("self-host verification reports physical history loss after a validated imp
 test("self-host comparison names one missing payload without truncating its diagnostic", /** Validate a physically incomplete comparison store separately from complete-bundle publication. */ () => {
   const { store } = own(); const tree = buildSourceTree(store, files([["one.txt", "payload"]])); const target = own(); target.store.write("tree", store.readTyped(tree, "tree"));
   const result = compareTrees(store, target.store, tree, tree); assert.equal(result.ok, false); assert.ok(result.problems.some(/** A short missing-path list must remain complete and readable. */ (problem) => problem.includes("one.txt") && !problem.includes("…")));
+});
+
+/** Drop the object lines (and header entries) for the given ids, as a truncated or hand-edited bundle would. */
+function withoutObjects(bytes: Buffer, ids: ReadonlySet<string>): Buffer {
+  const lines = bytes.toString("utf8").split("\n");
+  const header = JSON.parse(lines[1]) as { objects?: string[] };
+  header.objects = (header.objects ?? []).filter((id) => !ids.has(id));
+  lines[1] = JSON.stringify(header);
+  return Buffer.from(lines.filter((line, index) => index < 2 || !ids.has(line.split(" ")[1] ?? "")).join("\n"), "utf8");
+}
+
+test("snapshotIsUnchanged refuses a sole commit that still names a parent, even with a matching tree", () => {
+  const { store, refs } = own();
+  const treeId = buildSourceTree(store, files([["a.txt", "x"]]));
+  const parent = writeCommit(store, { tree: treeId, parents: [], author: signature, committer: signature, message: "parent\n" });
+  const child = writeCommit(store, { tree: treeId, parents: [parent], author: signature, committer: signature, message: "child\n" });
+  refs.compareAndSwap(ref, refs.read(ref), child);
+  const orphaned = withoutObjects(exportBundle(store, refs, [ref]), new Set([parent]));
+  assert.equal(parseBundle(orphaned).lines.filter((line) => line.type === "commit").length, 1);
+  assert.equal(snapshotIsUnchanged(orphaned, ref, treeId), false);
+});
+
+test("writeSelfHostBundle rebuilds a parentless snapshot that is missing a reachable object", () => {
+  const { bytes } = bundleFor([["a.txt", "x"], ["b.txt", "y"]]);
+  const blob = parseBundle(bytes).lines.find((line) => line.type === "blob");
+  assert.ok(blob, "the bundle should carry a blob");
+  const incomplete = withoutObjects(bytes, new Set([blob.id]));
+  const { store, refs } = own();
+  const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"], ["b.txt", "y"]]));
+  assert.equal(snapshotIsUnchanged(incomplete, ref, sourceTreeId), true, "shape alone looks reusable");
+  const rebuilt = writeSelfHostBundle(store, refs, incomplete, ref, sourceTreeId, signature, "snapshot\n");
+  assert.notEqual(rebuilt, incomplete);
+  const result = verifySelfHost(store, rebuilt, ref, sourceTreeId);
+  assert.equal(result.ok, true, result.problems.join("\n"));
 });
