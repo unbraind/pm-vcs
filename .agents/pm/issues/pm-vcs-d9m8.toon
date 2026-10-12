@@ -1,0 +1,11 @@
+id: pm-vcs-d9m8
+title: Snapshot-bounded self-host artifact still grows with source size (~39 MiB/yr linear) and could approach the 50 MiB warning within a year
+description: "With the bounded single-snapshot writer (pm-vcs-7ydb), selfhost.bundle is a function of source size only: measured snapshot growth over the same 30-day window was 4,037,205 -> 7,394,951 bytes (~0.106 MiB/day), dominated by accumulating tracker history files (three .agents/pm history JSONL files are among the ten largest tracked paths). Linear projection puts the artifact near ~46 MiB within a year, under but approaching the 50 MiB per-file warning. Options to evaluate when it matters: excluding .agents/pm runtime/history payload from the bundled source, compressing the archive, or trimming tracker history growth."
+type: Issue
+status: open
+priority: 2
+tags[3]: bundle,growth,self-host
+created_at: "2026-10-12T07:01:35.310Z"
+updated_at: "2026-10-12T07:01:35.310Z"
+author: pi-agent
+body: ""
