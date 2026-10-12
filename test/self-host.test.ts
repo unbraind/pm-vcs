@@ -1202,3 +1202,37 @@ test("self-host comparison names one missing payload without truncating its diag
   const { store } = own(); const tree = buildSourceTree(store, files([["one.txt", "payload"]])); const target = own(); target.store.write("tree", store.readTyped(tree, "tree"));
   const result = compareTrees(store, target.store, tree, tree); assert.equal(result.ok, false); assert.ok(result.problems.some(/** A short missing-path list must remain complete and readable. */ (problem) => problem.includes("one.txt") && !problem.includes("…")));
 });
+
+/** Drop the object lines (and header entries) for the given ids, as a truncated or hand-edited bundle would. */
+function withoutObjects(bytes: Buffer, ids: ReadonlySet<string>): Buffer {
+  const lines = bytes.toString("utf8").split("\n");
+  const header = JSON.parse(lines[1]) as { objects?: string[] };
+  header.objects = (header.objects ?? []).filter((id) => !ids.has(id));
+  lines[1] = JSON.stringify(header);
+  return Buffer.from(lines.filter((line, index) => index < 2 || !ids.has(line.split(" ")[1] ?? "")).join("\n"), "utf8");
+}
+
+test("snapshotIsUnchanged refuses a sole commit that still names a parent, even with a matching tree", () => {
+  const { store, refs } = own();
+  const treeId = buildSourceTree(store, files([["a.txt", "x"]]));
+  const parent = writeCommit(store, { tree: treeId, parents: [], author: signature, committer: signature, message: "parent\n" });
+  const child = writeCommit(store, { tree: treeId, parents: [parent], author: signature, committer: signature, message: "child\n" });
+  refs.compareAndSwap(ref, refs.read(ref), child);
+  const orphaned = withoutObjects(exportBundle(store, refs, [ref]), new Set([parent]));
+  assert.equal(parseBundle(orphaned).lines.filter((line) => line.type === "commit").length, 1);
+  assert.equal(snapshotIsUnchanged(orphaned, ref, treeId), false);
+});
+
+test("writeSelfHostBundle rebuilds a parentless snapshot that is missing a reachable object", () => {
+  const { bytes } = bundleFor([["a.txt", "x"], ["b.txt", "y"]]);
+  const blob = parseBundle(bytes).lines.find((line) => line.type === "blob");
+  assert.ok(blob, "the bundle should carry a blob");
+  const incomplete = withoutObjects(bytes, new Set([blob.id]));
+  const { store, refs } = own();
+  const sourceTreeId = buildSourceTree(store, files([["a.txt", "x"], ["b.txt", "y"]]));
+  assert.equal(snapshotIsUnchanged(incomplete, ref, sourceTreeId), true, "shape alone looks reusable");
+  const rebuilt = writeSelfHostBundle(store, refs, incomplete, ref, sourceTreeId, signature, "snapshot\n");
+  assert.notEqual(rebuilt, incomplete);
+  const result = verifySelfHost(store, rebuilt, ref, sourceTreeId);
+  assert.equal(result.ok, true, result.problems.join("\n"));
+});

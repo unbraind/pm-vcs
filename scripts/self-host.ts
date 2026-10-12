@@ -538,7 +538,9 @@ export function snapshotIsUnchanged(
   const commit = commits[0];
   if (commit.id !== tip) return false;
   if ((parsed.header.prerequisites ?? []).length > 0) return false;
-  return decodeCommit(commit.payload).tree === sourceTreeId;
+  const decoded = decodeCommit(commit.payload);
+  // A sole commit that still names a parent is not a bounded snapshot, even if its tree matches.
+  return decoded.parents.length === 0 && decoded.tree === sourceTreeId;
 }
 
 /**
@@ -577,7 +579,10 @@ export function writeSelfHostBundle(
   signature: Signature,
   message: string,
 ): Buffer {
-  if (existingBundle !== null && snapshotIsUnchanged(existingBundle, ref, sourceTreeId)) {
+  // Reuse only a bundle that is shaped as this snapshot AND passes the gate's own isolated verification,
+  // so a snapshot missing any reachable object is rebuilt instead of being kept.
+  if (existingBundle !== null && snapshotIsUnchanged(existingBundle, ref, sourceTreeId)
+    && verifySelfHost(store, existingBundle, ref, sourceTreeId).ok) {
     return existingBundle;
   }
   const commit: Commit = {
