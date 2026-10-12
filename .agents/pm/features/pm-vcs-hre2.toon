@@ -1,12 +1,12 @@
 id: pm-vcs-hre2
 title: Publication refuses without a valid stable-FileId lock lease
-description: "Publication refuses without a valid stable FileId lease at the receiver ref transaction. Missing, expired, wrong-principal and out-of-scope leases have distinct typed refusals with FileId, holder and expiry diagnostics. Explicit authenticated acquisition, renewal, release and administrator break use durable fenced generations across rename and process boundaries. Implementation and regression evidence are linked; package validation and review receipts are maintained in PR #100, and this item stays open."
+description: "Publication refuses without a valid stable FileId lease at the receiver ref transaction. Missing, expired, wrong-principal and out-of-scope leases have distinct typed refusals with FileId, holder and expiry diagnostics. Explicit authenticated acquisition, renewal, release and administrator break use durable fenced generations across rename and process boundaries. Implementation and regression evidence are linked; package validation and review receipts are in PR #100, which merged."
 type: Feature
 status: closed
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:14.894Z"
-updated_at: "2026-10-11T23:28:50.421Z"
+updated_at: "2026-10-12T00:29:07.768Z"
 closed_at: "2026-10-11T23:28:50.410Z"
 completed_at: "2026-10-11T23:28:50.410Z"
 author: pi-agent

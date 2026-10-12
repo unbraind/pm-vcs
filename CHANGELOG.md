@@ -5,7 +5,7 @@
 ### Added
 
 - Design committed repository links local layers and typed obliteration ([pm-vcs-8xis](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-8xis.toon))
-- Bound manifest metadata so a fragmented file's memory ceiling does not scale with its length ([pm-vcs-8qyx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-8qyx.toon))
+- Bound manifest metadata so a fragmented file's memory grows logarithmically, not linearly, with its length ([pm-vcs-8qyx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-8qyx.toon))
 - Publication refuses without a valid stable-FileId lock lease ([pm-vcs-hre2](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-hre2.toon))
 - Cross-tenant denial without existence leakage ([pm-vcs-4ff1](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-4ff1.toon))
 - Served repository over the Phase 3 transport ([pm-vcs-ttc0](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ttc0.toon))
