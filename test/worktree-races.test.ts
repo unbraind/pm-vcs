@@ -44,7 +44,7 @@ function setup(control: boolean = false): { repo: Repository; destination: strin
 }
 
 /** Hook both descriptor-safe syscalls and their old pathname equivalents for behavioral revert proofs. */
-function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: string, swap: () => void, erasure = false): () => boolean {
+function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: string, swap: () => void, erasure = false, observation = 0): () => boolean {
   let swapped = false;
   const trigger = (path: unknown): void => {
     if (!swapped && typeof path === "string" && path.endsWith(`/${leaf}`)) {
@@ -68,8 +68,8 @@ function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: strin
       if (String(args[0]).endsWith(`/${leaf}`)) {
         observations += 1;
         // Unlink's second observation (first with a retained erasure identity), open's post-unlink absence observation,
-        // mkdir's first missing-child observation, or rmdir's repeated child check.
-        const boundary = operation === "unlink" ? (erasure ? 1 : 2) : operation === "open" ? 3 : 1;
+        // mkdir's first missing-child observation, or rmdir's repeated child check; an explicit observation overrides the calibration.
+        const boundary = observation > 0 ? observation : operation === "unlink" ? (erasure ? 1 : 2) : operation === "open" ? 3 : 1;
         if (operation === "rmdir" ? pruning : observations === boundary) trigger(args[0]);
       }
       return lstat(...args);
@@ -195,6 +195,44 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
               if (action === "obliterate") assert.equal(repo.objects.denials()[0]!.pending, true, "a failed removal cannot report completed erasure");
             });
           }
+        }
+      }
+
+      for (const control of [false, true]) {
+        for (const action of ["narrow", "widen-write", "widen-mkdir", "narrow-prune", "widen-prune"] as const) {
+          const operation = action.endsWith("prune") ? "rmdir" : action === "widen-mkdir" ? "mkdir" : action === "narrow" ? "unlink" : "open";
+          test(`setView ${action} refuses ancestor replacement at ${operation} into ${control ? "control state" : "outside"}`, () => {
+            const { repo, destination } = setup(control);
+            // An untracked file keeps `branch` alive through the earlier narrowing, exactly as the reported reproduction.
+            writeFileSync(join(repo.root, "branch/untracked.txt"), "keep\n");
+            const path = operation === "mkdir" ? "branch/new/leaf.txt" : "branch/leaf.txt";
+            if (operation === "mkdir") {
+              repo.writeIndex([{ path, id: repo.objects.write("blob", Buffer.from("replacement\n")), mode: "100755" }]);
+            }
+            // Reach the starting sparse state without the intercept armed: the earlier narrowing is not the step under test.
+            if (action.startsWith("widen")) repo.setView(["visible/**"]);
+            if (action === "widen-prune") mkdirSync(join(repo.root, "branch/new"));
+            const index = repo.readIndex();
+            const recorded = repo.view();
+            // Sparse preflight contributes the first leaf observation; arm the second, at mutation.
+            const swapped = intercept(operation, operation === "mkdir" || operation === "rmdir" ? "new" : "leaf.txt", () => {
+              renameSync(join(repo.root, "branch"), join(repo.root, "parked"));
+              symlinkSync(destination, join(repo.root, "branch"), "dir");
+            }, false, 2);
+            let failure: unknown;
+            try {
+              repo.setView(action === "narrow" || action === "narrow-prune" ? ["visible/**"] : null);
+            } catch (error) { failure = error; }
+            assert.equal(swapped(), true, "the selected mutation boundary was exercised");
+            for (const sentinel of ["leaf.txt", "new/leaf.txt", "droppable/sentinel"]) {
+              assert.deepEqual(readFileSync(join(destination, sentinel)), Buffer.from("sentinel\n"));
+              assert.equal(statSync(join(destination, sentinel)).mode & 0o777, 0o600);
+            }
+            assert.ok(failure instanceof ObjectStoreError);
+            assert.equal(failure.code, "worktree_path_changed");
+            assert.deepEqual(repo.view(), recorded, "a refused view change keeps the previous view recorded");
+            assert.deepEqual(repo.readIndex(), index, "a refused view change keeps the index untouched");
+          });
         }
       }
 

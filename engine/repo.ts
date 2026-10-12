@@ -1472,7 +1472,8 @@ export class Repository {
    * @returns Which paths became visible and which stopped being so.
    * @throws ObjectStoreError When a pattern is invalid, a widened path holds an
    *   untracked file, or a merge is in progress (its conflicted paths must stay
-   *   visible to be resolvable).
+   *   visible to be resolvable). Concurrent filesystem replacement raises
+   *   worktree_path_changed before the replacement view and index are recorded.
    */
   setView(include: readonly string[] | null): ViewChange {
     return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
@@ -1502,8 +1503,9 @@ export class Repository {
       // missing fragment, and failing there must leave the tree untouched), and
       // narrowed paths are checked to hold a file rather than a directory (a
       // directory cannot be removed as if it were this view's file). Only then
-      // does the apply loop run, so a refusal leaves the working tree, the index
-      // and the old view exactly as they were.
+      // does the apply loop run. Preflight refusals leave the working tree
+      // untouched; mutation refusals retain the index and old view but may
+      // leave earlier filesystem steps applied.
       const materialized = new Map<string, Buffer>();
       for (const entry of index) {
         const wasVisible = entry.sparse !== true;
@@ -1545,6 +1547,9 @@ export class Repository {
           }
           next.push(entry);
         }
+        // Pruning can also refuse a concurrent ancestor replacement. Complete
+        // every working-tree mutation before publishing the view or sparse index.
+        mutation.prune();
         if (view === null) {
           const viewPath = join(this.controlDirectory, VIEW_FILE);
           if (existsSync(viewPath)) unlinkSync(viewPath);
@@ -1552,7 +1557,6 @@ export class Repository {
           writeView(this.controlDirectory, view);
         }
         this.writeIndex(next);
-        mutation.prune();
         return { widened: widened.sort(compareByteOrder), narrowed: narrowed.sort(compareByteOrder) };
       } finally {
         mutation.close();
