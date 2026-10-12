@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags[3]: fragments,memory,scale
 created_at: "2026-09-08T17:34:52.473Z"
-updated_at: "2026-10-12T00:40:32.707Z"
+updated_at: "2026-10-12T00:58:08.267Z"
 closed_at: "2026-10-11T23:28:51.376Z"
 completed_at: "2026-10-11T23:28:51.376Z"
 author: claude-orchestrator
@@ -14,7 +14,7 @@ acceptance_criteria: "Peak metadata memory for a read and for a range read is bo
 parent: pm-vcs-b7cb
 resolution: "Implemented and merged in https://github.com/unbraind/pm-vcs/pull/100: paged v2 manifests keep metadata memory bounded independent of file length"
 expected_result: "Meets its recorded acceptance criteria: Peak metadata memory for a read and for a range read is bounded independently of totalLength, proven the same way the content proofs are: sample while the operation is in flight and fail against an implementation that materializes every entry; encode and decode do not require the whole manifest resident; existing manifests remain readable"
-actual_result: "Merged in https://github.com/unbraind/pm-vcs/pull/100 after its full CI, an isolated release gate and a CodeRabbit full review with every finding resolved; paged v2 manifests keep metadata memory bounded independent of file length"
+actual_result: "Merged in https://github.com/unbraind/pm-vcs/pull/100 with green required CI checks and a completed CodeRabbit full review with every finding resolved; paged v2 manifests keep metadata memory bounded independent of file length"
 comments[23]{created_at,author,text}:
   "2026-09-12T23:35:49.174Z",pi-agent,"Audit 2026-09-13: EXISTS — content streaming is implemented (engine/fragments.ts: writeFragmentedFile reads the source in bounded chunks, peak heap bounded by fragmentSize). Range reads touch only overlapping fragments (test/fragments.test.ts). REMAINS — the manifest metadata path is NOT bounded independently of totalLength: writeFragmentedFile materializes the full manifest entry list (line 158: peak heap bounded by fragmentSize plus the manifest entry list), encodeManifest builds all lines into one buffer, and decodeManifest splits the full payload. No multi-level manifest exists (grep for multi-level/level manifest returns no matches). A 1 TiB file at 1 MiB fragments would produce about a million manifest entries, all resident. The acceptance criteria require peak metadata memory bounded independently of totalLength and encode/decode not requiring the whole manifest resident."
   "2026-10-11T05:07:26.998Z",codex-agent,"Orchestrator confirmed the current streaming content path retains a full fragment metadata array. The implementation will bound manifest metadata for write, read and range operations, retain legacy readability, and add a measured regression with behavioral revert evidence at unchanged coverage thresholds."

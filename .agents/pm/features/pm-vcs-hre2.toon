@@ -6,13 +6,13 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-08-28T13:43:14.894Z"
-updated_at: "2026-10-12T00:40:37.197Z"
+updated_at: "2026-10-12T00:58:11.059Z"
 closed_at: "2026-10-11T23:28:50.410Z"
 completed_at: "2026-10-11T23:28:50.410Z"
 author: pi-agent
 resolution: "Implemented and merged in https://github.com/unbraind/pm-vcs/pull/100: publication requires receiver-owned, unexpired, scoped and fenced FileId leases"
 expected_result: "Delivered outcome: Publication refuses without a valid stable-FileId lock lease."
-actual_result: "Merged in https://github.com/unbraind/pm-vcs/pull/100 after its full CI, an isolated release gate and a CodeRabbit full review with every finding resolved; publication requires receiver-owned, unexpired, scoped and fenced FileId leases"
+actual_result: "Merged in https://github.com/unbraind/pm-vcs/pull/100 with green required CI checks and a completed CodeRabbit full review with every finding resolved; publication requires receiver-owned, unexpired, scoped and fenced FileId leases"
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-5h6j,parent,"2026-08-28T15:22:45.240Z",claude,"cli:update:dep",detected
 comments[29]{created_at,author,text}:
