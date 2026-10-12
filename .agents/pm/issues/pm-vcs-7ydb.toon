@@ -1,12 +1,12 @@
 id: pm-vcs-7ydb
-title: selfhost.bundle crossed GitHub's 50 MB warning and grows with every commit toward the 100 MB push limit
-description: "On 2026-10-12, pushing the close-out branch warned that selfhost.bundle is 50.53 MB, above GitHub's recommended 50 MB maximum. The bundle is regenerated for every commit, including tracker-only commits, and grows with history; at 100 MB GitHub rejects the push outright, which would block every PR and release. Options: an incremental or thin bundle against a recorded base, compressing or pruning objects that are not needed for self-host verification, moving the full bundle to a release asset with only its digest committed, or Git LFS (which needs evaluation against the self-host contract)."
+title: selfhost.bundle crossed GitHub's 50 MiB per-file warning and grows with every commit toward the 100 MiB per-file limit
+description: "On 2026-10-12 a push of the close-out branch warned that selfhost.bundle is 50.53 MB, above the 50 MiB size at which GitHub warns about a single file. The bundle is regenerated for every commit, including tracker-only commits, and grows with history. GitHub rejects any single file over 100 MiB, which would block every PR and release that touches it. Options: an incremental or thin bundle against a recorded base; compressing or pruning objects that self-host verification does not need; moving the full bundle to a release asset and committing only its digest; or Git LFS, which would need evaluating against the self-host contract."
 type: Issue
 status: open
 priority: 1
 tags[3]: ci,self-host,size
 created_at: "2026-10-12T00:59:40.128Z"
-updated_at: "2026-10-12T00:59:40.816Z"
+updated_at: "2026-10-12T01:42:18.043Z"
 author: claude-hub
-acceptance_criteria: "A committed self-host artifact stays well below 50 MB as history grows (measured over a projected year of commits), accept:self-host still proves byte-identity of the committed source, and pushes no longer emit the GitHub large-file warning."
+acceptance_criteria: "The committed self-host artifact stays well below GitHub's 50 MiB per-file warning as history grows (measured over a projected year of commits), accept:self-host still proves byte-identity of the committed source, and pushes no longer emit the large-file warning."
 body: ""
