@@ -46,6 +46,7 @@
 
 ### Fixed
 
+- Make sparse view widening and narrowing descriptor-safe against ancestor replacement ([pm-vcs-74qw](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-74qw.toon))
 - selfhost.bundle crossed GitHub's 50 MiB per-file warning and keeps growing with history toward the 100 MiB per-file limit ([pm-vcs-7ydb](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-7ydb.toon))
 - Exclude nested pm-vcs control directories from staging and materialization ([pm-vcs-nz10](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-nz10.toon))
 - Reconcile duplicate-event semantics between the identical-blob shortcut and the append-only history union ([pm-vcs-3orq](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-3orq.toon))
