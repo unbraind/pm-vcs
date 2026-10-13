@@ -127,7 +127,7 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
       if (partial?.promised.includes(id) === true && !store.has(id)) continue;
       const object = store.read(id);
       retained.add(id);
-      if (object.type === "commit") { const commit = decodeCommit(object.payload); pending.push(commit.tree, ...(partial?.shallow.includes(id) === true ? [] : commit.parents)); }
+      if (object.type === "commit") { const commit = decodeCommit(object.payload); pending.push(commit.tree, ...commit.parents.filter(/** A shallow boundary permits absent parents, never deletion of an ancestor already held. */ (parent) => partial?.shallow.includes(id) !== true || store.has(parent))); }
       else if (object.type === "tree") pending.push(...decodeTree(object.payload).map(/** Trees own every sparse and visible entry. */ (entry) => entry.id));
       else if (object.type === "manifest") { const manifest = decodeManifest(object.payload); pending.push(...(manifest.pages ?? manifest.fragments).map(/** Traverse bounded manifest pages and their leaves. */ (entry) => entry.id)); }
       else if (object.type === "series") { const series = decodeSeries(object.payload); pending.push(series.base, ...series.patches.map(/** Review series keep all patch commits. */ (patch) => patch.commit)); }

@@ -40,7 +40,8 @@ Clone-local `partial.json` records exactly the commits whose parents were omitte
 log and ancestry stop at those explicit boundaries. Fetching greater depth also
 works when the remote tip has not moved. An ordinary fetch restores complete
 advertised history. Operation-log history keeps its older boundaries until their
-parents have actually arrived.
+parents have actually arrived. GC also retains physically present ancestors behind
+a still-recorded shallow boundary, including arrivals from an interrupted fetch.
 
 `blob:none` carries commits, trees, records, links and every manifest page; only
 blob payloads become promises. Checkout retrieves the current files. Historical

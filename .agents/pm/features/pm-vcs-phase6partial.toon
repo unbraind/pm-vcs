@@ -6,7 +6,7 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-13T12:06:46.293Z"
-updated_at: "2026-10-13T13:01:02.233Z"
+updated_at: "2026-10-13T13:39:39.371Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
@@ -14,19 +14,28 @@ acceptance_criteria: "Depth-limited clones retain unchanged commit identities an
 parent: pm-vcs-b7cb
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-phase6gc,blocked_by,"2026-10-13T12:06:46.293Z",codex-agent,"cli:create:dep",detected
-comments[5]{created_at,author,text}:
+comments[6]{created_at,author,text}:
   "2026-10-13T12:22:54.219Z",codex-agent,"Implemented explicit shallow boundaries and blob-only promises, optional file/HTTP transfer bounds, depth-aware log and ancestry, metadata-only blob:none export, and hash/type-verified demand hydration. Fragment manifests remain present and range reads hydrate requested leaves. Partial bundles require opt-in fetch and cannot bypass ordinary import/push closure validation."
   "2026-10-13T12:36:14.030Z",codex-agent,"Behavioural revert proof: removing only the depth cutoff from exportPartialBundle makes depth-one clone retain omitted ancestors and fail its object-presence assertions. The original implementation is restored. HTTP acceptance now exercises a separately running server and isolated synchronous demand client."
   "2026-10-13T12:36:56.605Z",codex-agent,"Additional revert proof: removing only ObjectStore.read demand hydration makes blob:none clone fail on its promised checkout payload. Restored the reader. HTTP bounded fetch and historical blob hydration pass against an independent served repository, including unavailable-promisor and wrong-kind refusals."
   "2026-10-13T12:49:52.178Z",codex-agent,"Verification covers unchanged commit IDs at depth one/two, ordinary full fetch, filesystem and HTTP blob:none, historical demand cache verification, fragment-range retrieval, filtered-source changes only after prior promises are fulfilled, shallow push to a full receiver and reclone. Production demand-fetch modules measured 100 percent in all four coverage dimensions. Final full-scope gates remain pending."
   "2026-10-13T13:01:02.233Z",codex-agent,"Current focused verification: node --test test/gc.test.ts test/partial-history.test.ts passes 26/26, including the built JavaScript HTTP demand reader. Tracker-linked partial-history execution passes 7/7. A full fetch fulfills existing promises before a new filtered source can become authoritative. Full release evidence is still pending."
-files[6]{path,scope}:
+  "2026-10-13T13:32:16.801Z",codex-agent,"Expanded acceptance passes 10/10: linked-instance deepening updates shared omission metadata; direct file-URL demand reads verify/cache payloads; legacy peers refuse bounded clone without leaving a destination; clone/fetch depth-only, filter-only and combined flags run through the real extension loader; range reads add exactly one requested fragment. The unchanged CI gate previously passed 1496/1496 tests but rejected eight uncovered branches, now addressed by these cases and the existing worker-path convention."
+files[14]{path,scope}:
   engine/bundle.ts,project
   engine/closure.ts,project
+  engine/http-protocol.ts,project
+  engine/http-transport.ts,project
+  engine/merge.ts,project
+  engine/objects.ts,project
   engine/partial-fetch-worker.ts,project
   engine/partial.ts,project
+  engine/repo.ts,project
   engine/sync.ts,project
+  engine/transport.ts,project
+  test/helpers/partial-server.ts,project
   test/partial-history.test.ts,project
+  vcs-commands.ts,project
 tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/partial-history.test.ts,project,900,codex-agent,"2026-10-13T12:39:53.055Z",local_mutation,feat/phase6-oplog-safe-gc-partial-history
 docs[1]{path,scope}:

@@ -36,7 +36,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { decodeManifest, decodeTree } from "./model.ts";
 import { encodeTombstone, assertArrivalsAllowed, readDenials, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { writePrivateJson } from "./composition.ts";
@@ -583,8 +583,7 @@ export class ObjectStore {
     const remote = remotes.require(state.remote);
     let object: StoredObject;
     if (/^https?:/i.test(remote.url)) {
-      const worker = new URL("./partial-fetch-worker.ts", import.meta.url);
-      if (import.meta.url.endsWith(".js")) worker.pathname = worker.pathname.replace(/\.ts$/, ".js");
+      const worker = new URL(`./partial-fetch-worker${extname(fileURLToPath(import.meta.url))}`, import.meta.url);
       const child = spawnSync(process.execPath, [fileURLToPath(worker)], { input: JSON.stringify({ url: remote.url, token: remotes.token(state.remote), id }), maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
       if (child.status !== 0) throw new ObjectStoreError("promisor_unavailable", "The promisor could not supply the requested blob.");
       object = parseFramedObject(child.stdout);

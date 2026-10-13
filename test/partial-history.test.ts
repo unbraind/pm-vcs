@@ -1,3 +1,6 @@
+import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import extension from "../index.ts";
+import { FileTransport } from "../engine/transport.ts";
 /** Real shallow and blob-filtered repositories with verified range-demand hydration. */
 import { fork } from "node:child_process";
 import { once } from "node:events";
@@ -6,7 +9,7 @@ import { HttpTransport } from "../engine/http-transport.ts";
 import { fetchPromisedBlob } from "../engine/partial-fetch-worker.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -45,7 +48,8 @@ test("depth one keeps original tip identity and GC preserves shallow boundaries;
   assert.equal(clone.objects.has(commits[0]), false); assert.equal(clone.objects.has(commits[1]), false);
   assert.equal(clone.log("HEAD").length, 1); assert.equal(clone.verify().missing.length, 0);
   assert.equal(collectGarbage(clone, true).removed, 0);
-  await fetchFrom(clone, "origin", new Date(), undefined, { depth: 2 });
+  const instancePath = root(); clone.linkInstance("reader", instancePath, { include: ["asset"] });
+  await fetchFrom(Repository.open(instancePath), "origin", new Date(), undefined, { depth: 2 });
   assert.equal(clone.log("HEAD").length, 2); assert.ok(!clone.objects.has(commits[0]));
   await fetchFrom(clone, "origin", new Date()); assert.equal(clone.log("HEAD").length, 3); assert.equal(clone.objects.partialState()!.shallow.length, 0);
   assert.equal(readCommit(clone.objects, commits[2]).parents[0], commits[1]);
@@ -92,7 +96,10 @@ test("fragment manifests remain available and range reads fetch exactly the blob
   const clone = Repository.open(path); assert.ok(clone.objects.has(previous));
   const manifest = decodeManifest(clone.objects.read(manifestId).payload); assert.ok(manifest.fragments.length > 0);
   const fragment = manifest.fragments[0].id; assert.ok(!clone.objects.has(fragment));
+  const heldBefore = clone.objects.inventory().length;
   assert.deepEqual(readFragmentRange(clone.objects, manifestId, 0, 4), Buffer.from("aaaa")); assert.ok(clone.objects.has(fragment));
+  assert.equal(clone.objects.inventory().length, heldBefore + 1);
+  assert.ok(manifest.fragments.slice(1).every(entry => !clone.objects.has(entry.id)));
 });
 
 test("invalid bounds, omission lists, partial imports and malformed wire options fail closed", async () => {
@@ -141,10 +148,58 @@ test("HTTP bounded transfer and isolated demand reads verify only the requested 
 test("file URL promisor rejects wrong-kind or corrupt promised data and preserves held corruption", async () => {
   const { repo } = await source(); const path = root(); await cloneFrom(pathToFileURL(repo.root).href, path, new Date(), "origin", repo.root, undefined, { filter: "blob:none" });
   const clone = Repository.open(path); const state = clone.objects.partialState()!;
+  clone.remotes.remove("origin"); clone.remotes.add("origin", pathToFileURL(repo.root).href);
+  const historical = repo.objects.inventory().find(entry => entry.object.type === "blob" && entry.object.payload.toString() === "one")!.id;
+  assert.equal(clone.objects.read(historical).payload.toString(), "one");
   const commit = repo.refs.resolveHead()!;
   // A forged promise cannot turn a commit into a blob or overwrite an existing object.
   const alien = repo.objects.write("tree", Buffer.alloc(0));
   writeFileSync(join(clone.controlDirectory, "partial.json"), JSON.stringify({ ...state, promised: [...state.promised, alien] }));
   assert.throws(() => clone.objects.read(alien), /wrong type/);
   assert.ok(clone.objects.has(commit));
+});
+
+/** A real filesystem peer exposing only its pre-scale transport capability set. */
+class CompleteHistoryPeer extends FileTransport {
+  /** Preserve the actual repository advertisement while accurately withholding the new opt-in feature. */
+  async advertise() {
+    const advertisement = await super.advertise();
+    return { ...advertisement, capabilities: advertisement.capabilities.filter(capability => capability !== "partial-history") };
+  }
+}
+
+test("a complete-history-only peer refuses depth before any clone ref or directory survives", async () => {
+  const { repo } = await source(); const destination = root();
+  await assert.rejects(cloneFrom(repo.root, destination, new Date(), "origin", repo.root, new CompleteHistoryPeer(repo.root, repo.root), { depth: 1 }), /does not support bounded history/);
+  assert.equal(existsSync(destination), false);
+});
+
+test("clone and fetch command flags apply depth and blob filters through the real extension loader", async () => {
+  const { repo } = await source(); const workspace = root(); mkdirSync(workspace);
+  const client = new PmClient({ cwd: workspace, pmRoot: workspace, noExtensions: true }); await client.init("commands", { defaults: true, author: "fixture" });
+  type Capabilities = NonNullable<NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]>;
+  const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "utf8")) as { capabilities: Capabilities };
+  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  for (const options of [{ depth: "1" }, { filter: "blob:none" }, { depth: "1", filter: "blob:none" }]) {
+    const destination = root();
+    const result = await harness.runCommand({ command: "vcs clone", args: [repo.root, destination], options, pmRoot: workspace });
+    assert.equal(result.errorMessage, undefined, String(result.errorMessage));
+    const cloned = Repository.open(destination); assert.equal(readFileSync(join(destination, "asset"), "utf8"), "three");
+    assert.equal(cloned.log("HEAD").length, options.depth === undefined ? 3 : 1);
+    const fetched = await harness.runCommand({ command: "vcs fetch", args: ["origin"], options: { depth: "2" }, pmRoot: destination });
+    assert.equal(fetched.errorMessage, undefined, String(fetched.errorMessage));
+  }
+});
+
+test("GC retains arrived ancestors behind stale shallow metadata after an interrupted fetch", async () => {
+  const { repo, commits } = await source(); const path = root();
+  await cloneFrom(repo.root, path, new Date(), "origin", repo.root, undefined, { depth: 1 });
+  const clone = Repository.open(path);
+  // Actual immutable arrivals can precede the durable omission-policy refresh.
+  clone.objects.accept(repo.objects.inventory().map(entry => ({ id: entry.id, ...entry.object })), false);
+  assert.ok(clone.objects.partialState()!.shallow.includes(commits[2]));
+  const garbage = clone.objects.write("blob", Buffer.from("unrelated garbage"));
+  assert.deepEqual(collectGarbage(clone, true).candidates, [garbage]);
+  assert.ok(clone.objects.has(commits[0])); assert.ok(clone.objects.has(commits[1]));
+  await fetchFrom(clone, "origin", new Date()); assert.equal(clone.log("HEAD").length, 3);
 });
