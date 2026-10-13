@@ -6,9 +6,7 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-13T12:06:46.293Z"
-updated_at: "2026-10-13T19:51:15.247Z"
-assignee: pi-agent
-claim_principal: pi-agent
+updated_at: "2026-10-13T22:14:25.539Z"
 author: codex-agent
 acceptance_criteria: "Depth-limited clones retain unchanged commit identities and can deepen; blob:none transfers metadata and hydrates requested content on demand; corrupt arrivals and missing unpromised objects refuse; clone, push, GC and reclone work across processes."
 parent: pm-vcs-b7cb

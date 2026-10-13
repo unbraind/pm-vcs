@@ -6,9 +6,7 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-13T12:06:42.555Z"
-updated_at: "2026-10-13T19:51:09.509Z"
-assignee: pi-agent
-claim_principal: pi-agent
+updated_at: "2026-10-13T22:14:24.677Z"
 author: codex-agent
 acceptance_criteria: Dry run changes no payloads; --apply only deletes unreachable objects; oplog undo and active leases always retain their payloads; real processes race GC against push without losing objects; interrupted sweep can safely retry.
 parent: pm-vcs-b7cb
