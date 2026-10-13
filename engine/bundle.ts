@@ -367,7 +367,7 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
       targets.push(series.base, ...series.patches.map(/** Standalone series cannot launder denied structural commits. */ (patch) => patch.commit));
     }
   }
-  const metadata = requireClosure(store, targets, lines, combined, lines.filter(/** Standalone tree arrivals must also retain structural closure. */ (line) => line.type === "tree").map(/** Validate trees even when no advertised ref reaches them. */ (line) => line.id), partial ? { shallow: header.shallow ?? [], promised: header.promised ?? [] } : undefined);
+  const metadata = requireClosure(store, targets, lines, combined, lines.filter(/** Standalone tree arrivals must also retain structural closure. */ (line) => line.type === "tree").map(/** Validate trees even when no advertised ref reaches them. */ (line) => line.id), partial ? { shallow: header.shallow ?? [], promised: header.promised ?? [] } : null);
   // Registry validation proves canonical metadata, not physical audit durability.
   // Verify held audits before omitting their rewrite or extending the registry.
   for (const denial of local) store.readTyped(denial.id, "tombstone");

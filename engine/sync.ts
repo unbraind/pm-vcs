@@ -159,7 +159,7 @@ export async function fetchFrom(
     if (localRef === null) continue;
     const before = repository.refs.read(localRef);
     if (before === entry.target && !partial) continue;
-    if (before !== null && entry.name.startsWith(TAG_PREFIX)) {
+    if (before !== null && before !== entry.target && entry.name.startsWith(TAG_PREFIX)) {
       conflictingTags.push(entry.name.slice(TAG_PREFIX.length));
       continue;
     }

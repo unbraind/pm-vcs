@@ -16,13 +16,13 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
 import { collectGarbage } from "../engine/gc.ts";
-import { exportPartialBundle, importBundleObjects, parseBundle } from "../engine/bundle.ts";
+import { exportPartialBundle, importBundleObjects, parseBundle, serializeBundle } from "../engine/bundle.ts";
 import { historyOptions, readPartialState } from "../engine/partial.ts";
 import { ObjectStore as BuiltObjectStore } from "../dist/engine/objects.js";
 import { readCommit, decodeManifest, type Signature } from "../engine/model.ts";
 import { readFragmentRange, writeFragmented } from "../engine/fragments.ts";
 import { decodeFetchRequest, encodeFetchRequest } from "../engine/http-protocol.ts";
-import { grantRemoteLeases, leasedPushTo } from "./helpers/publication-consumers.ts";
+import { acquirePublicationLeases, grantRemoteLeases, leasedPushTo } from "./helpers/publication-consumers.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const directories: ReturnType<typeof makeTempDir>[] = [];
@@ -202,4 +202,35 @@ test("GC retains arrived ancestors behind stale shallow metadata after an interr
   assert.deepEqual(collectGarbage(clone, true).candidates, [garbage]);
   assert.ok(clone.objects.has(commits[0])); assert.ok(clone.objects.has(commits[1]));
   await fetchFrom(clone, "origin", new Date()); assert.equal(clone.log("HEAD").length, 3);
+});
+
+test("unchanged tags deepen their isolated history without reporting a tag conflict", async () => {
+  const { repo, commits } = await source();
+  repo.refs.compareAndSwap("refs/tags/archive", null, commits[1]);
+  repo.refs.compareAndSwap("refs/heads/main", commits[2], null);
+  const destination = root(); mkdirSync(destination);
+  const clone = Repository.init(destination); clone.remotes.add("origin", repo.root);
+  await fetchFrom(clone, "origin", new Date(), undefined, { depth: 1 });
+  assert.ok(!clone.objects.has(commits[0]));
+  const report = await fetchFrom(clone, "origin", new Date(), undefined, { depth: 2 });
+  assert.deepEqual(report.conflictingTags, []);
+  assert.ok(clone.objects.has(commits[0]));
+  assert.equal(clone.objects.partialState()!.shallow.length, 0);
+  assert.equal(clone.refs.read("refs/tags/archive"), commits[1]);
+});
+
+test("ordinary imports and receiver publication require complete closure in a shallow repository", async () => {
+  const { repo, commits } = await source(); const destination = root();
+  await cloneFrom(repo.root, destination, new Date(), "origin", repo.root, undefined, { depth: 1 });
+  const clone = Repository.open(destination); const tip = commits[2];
+  const archive = serializeBundle(clone.objects, { refs: { "refs/heads/main": tip }, prerequisites: [], objects: [] });
+  assert.throws(() => importBundleObjects(clone.objects, archive), /History closure is invalid/);
+  const receiver = new FileTransport(clone.root, clone.root);
+  await assert.rejects(receiver.publish([{ ref: "refs/heads/main", expected: tip, next: tip }], false, new Date()), /History closure is invalid/);
+  assert.equal(clone.refs.resolveHead(), tip);
+  await fetchFrom(clone, "origin", new Date());
+  assert.doesNotThrow(() => importBundleObjects(clone.objects, archive));
+  const updates = [{ ref: "refs/heads/main", expected: tip, next: tip }];
+  const proofs = await acquirePublicationLeases(receiver, updates);
+  await receiver.publish(updates, false, new Date(), proofs);
 });

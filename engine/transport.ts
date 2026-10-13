@@ -484,7 +484,7 @@ export class FileTransport implements Transport {
     this.acceptedThisConnection.length = 0;
     return repository.objects.withWriteLock(/** Held objects cannot be erased between the shared integrity walk and atomic ref publication. */ () => {
       for (const update of updates) assertPushableRef(update);
-      const metadata = requireClosure(repository.objects, [...new Set(updates.map(/** Share verified structure across all publication roots, without retaining leaf bytes. */ (update) => update.next))]);
+      const metadata = requireClosure(repository.objects, [...new Set(updates.map(/** Share verified structure across all publication roots, without retaining leaf bytes. */ (update) => update.next))], [], undefined, [], null);
       for (const update of updates) {
         const current = repository.refs.read(update.ref);
         if (current === update.next) continue;
