@@ -1,15 +1,13 @@
 /** Real shallow and blob-filtered repositories with verified range-demand hydration. */
 import { fork } from "node:child_process";
 import { once } from "node:events";
-import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { HttpTransport } from "../engine/http-transport.ts";
 import { fetchPromisedBlob } from "../engine/partial-fetch-worker.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
-import { packageRoot } from "./helpers/tmp.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
@@ -22,7 +20,7 @@ import { readCommit, decodeManifest, type Signature } from "../engine/model.ts";
 import { readFragmentRange, writeFragmented } from "../engine/fragments.ts";
 import { decodeFetchRequest, encodeFetchRequest } from "../engine/http-protocol.ts";
 import { grantRemoteLeases, leasedPushTo } from "./helpers/publication-consumers.ts";
-import { makeTempDir } from "./helpers/tmp.ts";
+import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const directories: ReturnType<typeof makeTempDir>[] = [];
 const author: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };

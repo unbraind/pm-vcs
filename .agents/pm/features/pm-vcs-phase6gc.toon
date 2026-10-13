@@ -6,17 +6,18 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-13T12:06:42.555Z"
-updated_at: "2026-10-13T12:49:21.164Z"
+updated_at: "2026-10-13T13:00:52.088Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: Dry run changes no payloads; --apply only deletes unreachable objects; oplog undo and active leases always retain their payloads; real processes race GC against push without losing objects; interrupted sweep can safely retry.
 parent: pm-vcs-b7cb
-comments[4]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-10-13T12:06:58.106Z",codex-agent,"Audit: closed scale children implement fragments, range reads, sparse shared instances and typed authorized obliteration. Reachability already exists in bundle traversal and closure validation. No GC command or shallow/partial transfer exists. GC must also retain staged/conflict payloads and disconnected upload receipts, and refuse corrupt root metadata before deletion."
   "2026-10-13T12:22:34.561Z",codex-agent,"Implemented locked mark-and-sweep with strict root preflight, all ref namespaces, both oplog transition endpoints, detached HEAD, current and retired shared-instance indexes, pending merges, series and manifest descendants. Active receiver file leases conservatively retain all objects, including unattributed arrivals. Durable upload pins are recorded before writes; GC retires pins only after proving ref ownership. Dry run leaves objects untouched."
   "2026-10-13T12:35:43.744Z",codex-agent,"Behavioural revert proof: removing only collectGarbage operation-log root collection makes the oplog-only displaced-history regression fail with three reachable-history addresses selected for deletion. Restoring the function restores the safety invariant. Active leases deliberately retain unattributed arrivals conservatively; abandoned receipt expiry is tracked separately."
   "2026-10-13T12:49:21.164Z",codex-agent,"Verification now includes real concurrent GC and full push in separate processes, GC between resumable upload and publication, SIGKILL during sweep with explicit dead-lock recovery, oplog-only undo, sparse/retired indexes, pending merge roots, active/released/expired leases and typed erasure audits. Revert proof is recorded. Final unchanged-threshold release gates are pending."
+  "2026-10-13T13:00:52.088Z",codex-agent,"Current focused verification: node --test test/gc.test.ts test/partial-history.test.ts passes 26/26 with zero failures, skips, cancellations or todo. Tracker-linked GC execution passes 19/19. Test-only lint findings from the first committed head were corrected; lint now passes. Self-host is regenerated with each tracker/source commit. Full npm/Bun release gates remain pending."
 files[5]{path,scope}:
   engine/gc.ts,project
   engine/objects.ts,project

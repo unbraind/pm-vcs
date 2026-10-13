@@ -188,7 +188,7 @@ test("expired lease does not retain unreachable payloads", async () => {
   const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("garbage"));
   const leases = new PublicationLeases(repo.objects, repo.controlDirectory);
   leases.change({ action: "acquire", fileId: "c".repeat(32), refs: ["refs/heads/main"], ttlMs: 1 });
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await new Promise(resolve => { setTimeout(resolve, 5); });
   const result = collectGarbage(repo, true); assert.equal(result.activeLeases, 0); assert.deepEqual(result.candidates, [garbage]);
 });
 
