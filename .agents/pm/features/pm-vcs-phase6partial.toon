@@ -6,13 +6,15 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-13T12:06:46.293Z"
-updated_at: "2026-10-13T18:20:27.953Z"
+updated_at: "2026-10-13T19:51:15.247Z"
+assignee: pi-agent
+claim_principal: pi-agent
 author: codex-agent
 acceptance_criteria: "Depth-limited clones retain unchanged commit identities and can deepen; blob:none transfers metadata and hydrates requested content on demand; corrupt arrivals and missing unpromised objects refuse; clone, push, GC and reclone work across processes."
 parent: pm-vcs-b7cb
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-phase6gc,blocked_by,"2026-10-13T12:06:46.293Z",codex-agent,"cli:create:dep",detected
-comments[14]{created_at,author,text}:
+comments[16]{created_at,author,text}:
   "2026-10-13T12:22:54.219Z",codex-agent,"Implemented explicit shallow boundaries and blob-only promises, optional file/HTTP transfer bounds, depth-aware log and ancestry, metadata-only blob:none export, and hash/type-verified demand hydration. Fragment manifests remain present and range reads hydrate requested leaves. Partial bundles require opt-in fetch and cannot bypass ordinary import/push closure validation."
   "2026-10-13T12:36:14.030Z",codex-agent,"Behavioural revert proof: removing only the depth cutoff from exportPartialBundle makes depth-one clone retain omitted ancestors and fail its object-presence assertions. The original implementation is restored. HTTP acceptance now exercises a separately running server and isolated synchronous demand client."
   "2026-10-13T12:36:56.605Z",codex-agent,"Additional revert proof: removing only ObjectStore.read demand hydration makes blob:none clone fail on its promised checkout payload. Restored the reader. HTTP bounded fetch and historical blob hydration pass against an independent served repository, including unavailable-promisor and wrong-kind refusals."
@@ -27,11 +29,14 @@ comments[14]{created_at,author,text}:
   "2026-10-13T16:31:08.360Z",pi-agent,"Continuation re-verification: removing only the depth cutoff from exportPartialBundle fails the isolated depth-one regression (omitted ancestors are retained); restoring it passes all 12 linked tests again through the repo-pinned pm."
   "2026-10-13T16:31:09.813Z",pi-agent,"Bun release gate completed at the implementation head: 1501/1501 tests pass with zero fail, skip, cancellation or todo and unchanged full-scope 100 percent coverage; accept:self-host, changelog check and publish attestation all succeed. Together with the earlier npm gate receipt, both required release gates have complete passing results at unchanged thresholds."
   "2026-10-13T18:20:27.953Z",claude-hub,"CodeRabbit PR #105 (engine/merge.ts:63, Major perf): reachable() and Repository.log() called partialState() per commit, re-parsing partial.json (incl. the promised list) on every step: O(commits x promises). Both walks now read it once into a Set. Regression 'history walks read the partial-clone state once per walk, not once per commit' counts partialState() reads on a real depth-2 clone (1 per walk); restoring the per-commit reads fails it ('log re-read partial.json per commit')."
-files[14]{path,scope}:
+  "2026-10-13T19:17:15.535Z",pi-agent,"CodeRabbit round 2 plan (three Major findings on partial history): (1) a blob:none export from a repository that is itself a filtered clone files its own promised-but-missing blobs as objects, so serialization hydrates them through the first promisor and transfers payloads the filter should omit. Fix: keep such ids in the outgoing promised list using the source's existing promise metadata. (2) the file-path demand read assumes the promisor's objects live under its own control directory, which is wrong when the remote names a linked instance whose objects live in the hub. Fix: open the remote repository and read through its resolved shared object store. (3) a full fetch that completes the history still writes empty partial metadata, pinning the repository to whole-history transfers on every later fetch and retaining already-hydrated promises. Fix: recheck omissions after import against actual presence and remove the partial state file when nothing is omitted. Regression tests include a multi-process filtered-clone chain; each finding gets a behavioural revert proof."
+  "2026-10-13T19:50:47.147Z",pi-agent,"Round 2 fixes implemented and proven. (1) Partial-source export: exportPartialBundle now keeps ids that are missing locally but already promised by the source in the outgoing promised list (reusing the source's own promise metadata) instead of filing them as objects for serialization to hydrate and transfer. Multi-process regression test 'a filtered clone of a filtered clone preserves the source's promises across processes' clones a blob-filtered clone over a real HTTP server process and proves the secondary clone holds no historical blob bytes, records the promise, and can demand-read through the chain (worker process to server process to the first promisor). Revert proof: reverting only the export condition makes it fail exactly on the secondary clone holding the filtered-out payload. (2) Instance promisor binding: the file-path demand read resolves the promisor's object-store binding (instance link to its hub's shared store) through a new low-level instance-link module; the store can no longer import the repository layer because the instance wrapper subclasses the store at module-evaluation time, so the link resolution moved to a module below the object store, re-exported for its previous importers. Regression test 'a linked instance promisor hydrates through the hub's shared store' clones filtered from a linked instance and demand-reads a historical blob. Revert proof: reverting only the hydrate store binding makes checkout fail with object_not_found at the promised blob. (3) Completion clears partial mode: after import the fetch rechecks both omission kinds against actual presence, drops already-hydrated promises, and removes the partial state file when nothing is omitted, so unchanged later fetches transfer nothing and report up to date. Two regression tests cover depth and filter completion; revert proof: reverting only the completion branch makes both fail on the retained empty partial state. Full suite green (1508/1508)."
+files[15]{path,scope}:
   engine/bundle.ts,project
   engine/closure.ts,project
   engine/http-protocol.ts,project
   engine/http-transport.ts,project
+  engine/instance-link.ts,project
   engine/merge.ts,project
   engine/objects.ts,project
   engine/partial-fetch-worker.ts,project

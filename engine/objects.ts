@@ -37,6 +37,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { resolveObjectsControl } from "./instance-link.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
 import { encodeTombstone, assertArrivalsAllowed, readDenials, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { writePrivateJson } from "./composition.ts";
@@ -589,7 +590,11 @@ export class ObjectStore {
       object = parseFramedObject(child.stdout);
     } else {
       const source = remote.url.startsWith("file:") ? fileURLToPath(remote.url) : resolve(dirname(dirname(this.root)), remote.url);
-      object = new ObjectStore(join(source, ".pmvcs", "objects")).read(id);
+      // A promisor that names a linked instance keeps its objects in the hub's
+      // shared store, not in the instance's private control directory: the
+      // same link binding every other reader of the remote resolves decides
+      // which objects directory serves the demand read.
+      object = new ObjectStore(join(resolveObjectsControl(source), "objects")).read(id);
     }
     if (object.type !== "blob" || hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("bad_partial_history", "Promised payload has the wrong type or content address.");
     this.accept([{ id, ...object }], false);

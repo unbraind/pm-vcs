@@ -1,8 +1,9 @@
 /** Conservative collection under the same interprocess transaction as writers. */
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { decodeCommit, decodeManifest, decodeSeries, decodeTree } from "./model.ts";
 import { ObjectStoreError, isObjectId, readControlJson, type ObjectId } from "./objects.ts";
+import { requireInstances } from "./instances.ts";
 import { PublicationLeases } from "./publication-leases.ts";
 import { Repository } from "./repo.ts";
 
@@ -24,10 +25,17 @@ function addresses(value: unknown): ObjectId[] {
   return value;
 }
 
+/** Strict root-path stat: true absence is only proven by ENOENT, never by a broken link. */
+function requireEntry(path: string, refusal: string, kind: "file" | "directory"): boolean {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat === undefined) return false;
+  if (kind === "file" ? !stat.isFile() : !stat.isDirectory()) throw new ObjectStoreError("unsafe_gc_roots", refusal);
+  return true;
+}
+
 /** Inspect all ref namespaces without the display API's tolerant omission of broken refs. */
 function refRoots(path: string): ObjectId[] {
-  if (!existsSync(path)) return [];
-  if (!lstatSync(path).isDirectory()) throw new ObjectStoreError("unsafe_gc_roots", "Collection cannot follow a ref directory link.");
+  if (!requireEntry(path, "Collection cannot follow a ref directory link.", "directory")) return [];
   const result: ObjectId[] = [];
   for (const entry of readdirSync(path, { withFileTypes: true })) {
     if (entry.name.endsWith(".lock") || entry.name.endsWith(".tmp")) continue;
@@ -44,8 +52,7 @@ function refRoots(path: string): ObjectId[] {
 /** Keep both sides of every recorded movement, including detached HEAD history; torn logs refuse. */
 function logRoots(control: string): ObjectId[] {
   const path = join(control, "oplog.jsonl");
-  if (!existsSync(path)) return [];
-  if (!lstatSync(path).isFile()) throw new ObjectStoreError("unsafe_gc_roots", "Collection requires a real operation log.");
+  if (!requireEntry(path, "Collection requires a real operation log.", "file")) return [];
   const text = readFileSync(path, "utf8");
   const result: ObjectId[] = [];
   try {
@@ -70,7 +77,7 @@ function storageInstances(repository: Repository): Repository[] {
   if (!Array.isArray(retired) || retired.some(/** Registry paths must remain relative. */ (path) => typeof path !== "string" || path === "" || path === "." || isAbsolute(path) || path.includes("\\") || relative(hub.root, resolve(hub.root, path)).split(sep).join("/") !== path)) {
     throw new ObjectStoreError("unsafe_gc_roots", "Collection requires valid retired instance roots.");
   }
-  const paths = new Set([hub.root, ...hub.listInstances().map(/** Do not omit broken instances. */ (entry) => entry.path), ...retired.map(/** Resolve the durable retired scope from the hub. */ (path: string) => resolve(hub.root, path))]);
+  const paths = new Set([hub.root, ...requireInstances(hub.controlDirectory).map(/** A registry hidden by deletion would omit live instance roots. */ (entry) => resolve(hub.root, ...entry.path.split("/"))), ...retired.map(/** Resolve the durable retired scope from the hub. */ (path: string) => resolve(hub.root, path))]);
   return [...paths].map(/** Verify binding before trusting another instance's roots. */ (path) => {
     const instance = Repository.open(path);
     const shared = instance.instanceLink?.controlDirectory ?? instance.controlDirectory;
@@ -101,8 +108,7 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
     let activeLeases = 0;
     const leases = new PublicationLeases(store, shared);
     const directory = join(shared, "leases");
-    if (existsSync(directory)) {
-      if (!lstatSync(directory).isDirectory()) throw new ObjectStoreError("unsafe_gc_roots", "Collection requires a real lease directory.");
+    if (requireEntry(directory, "Collection requires a real lease directory.", "directory")) {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
         if (!entry.isFile() || !/^[0-9a-f]{32}\.jsonl$/.test(entry.name)) throw new ObjectStoreError("unsafe_gc_roots", "Collection lease inventory is invalid.");
         const lease = leases.inspect(entry.name.slice(0, 32));

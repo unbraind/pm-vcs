@@ -190,7 +190,15 @@ export async function fetchFrom(
     const { added, header } = importBundleObjects(repository.objects, bundle, wanted.map((item) => item.target), partial);
     if (partial) {
       const shallow = [...new Set([...(previous?.shallow ?? []), ...(header.shallow ?? [])])].filter(/** Remove a boundary only when every parent has actually arrived. */ (id) => readCommit(repository.objects, id).parents.some(/** Presence establishes a safely deepen-able boundary. */ (parent) => !repository.objects.has(parent)));
-      writePrivateJson(join(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, "partial.json"), { remote: outstanding.length > 0 ? previous!.remote : remoteName, shallow, promised: [...new Set([...outstanding, ...(header.promised ?? [])])] });
+      const promised = [...new Set([...outstanding, ...(header.promised ?? [])])].filter(/** A payload that arrived in this or an earlier import is no longer omitted. */ (id) => !repository.objects.has(id));
+      const partialPath = join(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, "partial.json");
+      if (shallow.length === 0 && promised.length === 0) {
+        // Complete history ends partial mode: a retained empty file would pin
+        // every later unchanged fetch to whole-history transfer without haves.
+        rmSync(partialPath, { force: true });
+      } else {
+        writePrivateJson(partialPath, { remote: outstanding.length > 0 ? previous!.remote : remoteName, shallow, promised });
+      }
     }
 
     repository.refs.transaction(wanted.map((item) => ({

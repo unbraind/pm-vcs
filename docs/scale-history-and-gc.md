@@ -14,7 +14,11 @@ An active receiver FileId lease conservatively retains the entire store because
 unpublished arrivals need not yet have a tree attributing their FileId. Released
 or expired leases stop that additional retention. Corrupt metadata, unavailable
 instances, corrupt objects and interrupted erasure refuse collection before the
-first deletion. Unknown physical storage layouts also refuse.
+first deletion. Unknown physical storage layouts also refuse. Collection also
+fails closed when a root path is a broken symbolic link, or when the hub's
+instance registry is missing rather than merely empty: both read as an absent
+root set otherwise, and an absent root set is how staged history gets deleted.
+Repositories initialized by this build always carry the registry.
 
 An upload records durable pins before accepting immutable objects. An interrupted
 or disconnected upload can therefore resume after collection. Applied GC retires
@@ -37,7 +41,13 @@ pm vcs fetch origin
 Depth counts generations from each advertised tip, with the shortest distance
 through merge parents. Commit IDs, trees, parent links and FileIds remain unchanged.
 Clone-local `partial.json` records exactly the commits whose parents were omitted;
-log and ancestry stop at those explicit boundaries. Fetching greater depth also
+log and ancestry stop at those explicit boundaries. A fetch that leaves nothing
+omitted removes `partial.json` entirely, returning the repository to complete-history
+mode so later unchanged fetches again negotiate from local tips instead of
+retransferring the full bundle. A filtered export from a repository that is itself
+a filtered clone passes its own promises on rather than fetching from its promisor
+mid-export, and a promisor that names a linked instance serves demand reads from
+the hub's shared store. Fetching greater depth also
 works when the remote tip has not moved. An ordinary fetch restores complete
 advertised history. Operation-log history keeps its older boundaries until their
 parents have actually arrived. GC also retains physically present ancestors behind

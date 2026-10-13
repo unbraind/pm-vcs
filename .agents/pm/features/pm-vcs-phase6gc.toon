@@ -6,11 +6,13 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-13T12:06:42.555Z"
-updated_at: "2026-10-13T16:31:33.202Z"
+updated_at: "2026-10-13T19:51:09.509Z"
+assignee: pi-agent
+claim_principal: pi-agent
 author: codex-agent
 acceptance_criteria: Dry run changes no payloads; --apply only deletes unreachable objects; oplog undo and active leases always retain their payloads; real processes race GC against push without losing objects; interrupted sweep can safely retry.
 parent: pm-vcs-b7cb
-comments[12]{created_at,author,text}:
+comments[14]{created_at,author,text}:
   "2026-10-13T12:06:58.106Z",codex-agent,"Audit: closed scale children implement fragments, range reads, sparse shared instances and typed authorized obliteration. Reachability already exists in bundle traversal and closure validation. No GC command or shallow/partial transfer exists. GC must also retain staged/conflict payloads and disconnected upload receipts, and refuse corrupt root metadata before deletion."
   "2026-10-13T12:22:34.561Z",codex-agent,"Implemented locked mark-and-sweep with strict root preflight, all ref namespaces, both oplog transition endpoints, detached HEAD, current and retired shared-instance indexes, pending merges, series and manifest descendants. Active receiver file leases conservatively retain all objects, including unattributed arrivals. Durable upload pins are recorded before writes; GC retires pins only after proving ref ownership. Dry run leaves objects untouched."
   "2026-10-13T12:35:43.744Z",codex-agent,"Behavioural revert proof: removing only collectGarbage operation-log root collection makes the oplog-only displaced-history regression fail with three reachable-history addresses selected for deletion. Restoring the function restores the safety invariant. Active leases deliberately retain unattributed arrivals conservatively; abandoned receipt expiry is tracked separately."
@@ -23,9 +25,14 @@ comments[12]{created_at,author,text}:
   "2026-10-13T15:47:31.094Z",codex-agent,"Implementation head 43dc17f passes the complete npm run release:check with isolated HOME and Git identity. All 1501 tests pass with zero failure, skip, cancellation or todo; all 61 production files measure 100 percent statements, branches, functions and lines. Native TOON, stat cache, self-host equality, audit, pack, changelog and release-policy gates pass. CI Node 22/26 and both Windows launchers also pass. Greptile is unavailable after trial expiry; CodeRabbit requires manual review, so neither supplies approval. Upload abandonment remains the existing separate follow-up."
   "2026-10-13T16:30:53.125Z",pi-agent,"Continuation re-verification: discarding only the operation-log root collection from collectGarbage (validation retained) fails exactly the displaced-history regression with three reachable-history addresses selected for deletion; restoring it passes all 19 linked tests again through the repo-pinned pm."
   "2026-10-13T16:30:54.366Z",pi-agent,"Bun release gate completed at the implementation head: 1501/1501 tests pass with zero fail, skip, cancellation or todo and unchanged 100 percent statements, branches, functions and lines; the full chain through self-host acceptance, changelog check and publish attestation succeeds. The npm gate receipt was recorded earlier; both gates now have complete results."
-files[5]{path,scope}:
+  "2026-10-13T19:17:15.434Z",pi-agent,"CodeRabbit round 2 plan (two Major findings on collection): (1) root-path existence checks that use a link-following stat treat a dangling symlink as absence, so a broken oplog.jsonl, ref directory or lease directory silently loses its roots before a sweep. Fix: stat the three root paths without following links, refuse any non-ENOENT/broken entry with the existing unsafe_gc_roots errors, and keep true absence as absence. (2) the shared instance registry is read tolerantly, so a registry deleted after linking hides a live instance and an apply sweep can delete staged payloads reachable only through that instance's private index. Fix: initialization writes the canonical empty registry, and collection requires the registry to be present (fail closed) instead of treating absence as an empty registry. Both get real-repository regression tests plus behavioural revert proofs."
+  "2026-10-13T19:50:47.190Z",pi-agent,"Round 2 fixes implemented and proven. (1) Root-link strictness: collection now stats the oplog, ref and lease root paths without following links (true absence is ENOENT only, anything else refuses with the existing unsafe_gc_roots errors) in a requireEntry helper. Regression test 'dangling links at collection roots fail closed' covers all three roots and proves a real sweep still runs after the broken links are removed. Behavioural revert proof: reverting only the three requireEntry call sites to the link-following existence checks makes that test fail with 'Missing expected exception' — the dangling oplog is treated as an absent log and the sweep proceeds. (2) Registry fail-closed: repository initialization now writes the canonical empty instance registry, and collection requires the registry to be present instead of reading absence as empty. Regression test 'a hidden instance registry fails closed before any sweep can delete staged work' stages real work through a linked instance's private index and proves collection refuses (dry run and apply) once the registry is hidden, from both the hub and the instance, while the staged payload survives. Behavioural revert proof: reverting only the collection registry read to the tolerant empty-on-absent form makes that test fail with 'Missing expected exception' and would sweep the staged payload. Data-loss findings fail closed in both dry-run and apply. Full suite green."
+files[8]{path,scope}:
   engine/gc.ts,project
+  engine/instance-link.ts,project
+  engine/instances.ts,project
   engine/objects.ts,project
+  engine/repo.ts,project
   engine/transport.ts,project
   test/gc.test.ts,project
   test/helpers/gc-worker.ts,project

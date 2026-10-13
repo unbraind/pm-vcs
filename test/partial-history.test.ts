@@ -52,7 +52,7 @@ test("depth one keeps original tip identity and GC preserves shallow boundaries;
   const instancePath = root(); clone.linkInstance("reader", instancePath, { include: ["asset"] });
   await fetchFrom(Repository.open(instancePath), "origin", new Date(), undefined, { depth: 2 });
   assert.equal(clone.log("HEAD").length, 2); assert.ok(!clone.objects.has(commits[0]));
-  await fetchFrom(clone, "origin", new Date()); assert.equal(clone.log("HEAD").length, 3); assert.equal(clone.objects.partialState()!.shallow.length, 0);
+  await fetchFrom(clone, "origin", new Date()); assert.equal(clone.log("HEAD").length, 3); assert.equal(clone.objects.partialState(), null);
   assert.equal(readCommit(clone.objects, commits[2]).parents[0], commits[1]);
 });
 
@@ -81,8 +81,16 @@ test("blob:none omits historical payloads, checkout hydrates only its demand, an
   clone.remotes.add("alternate", repo.root);
   await assert.rejects(fetchFrom(clone, "alternate", new Date(), undefined, { filter: "blob:none" }), /promisor/);
   await fetchFrom(clone, "origin", new Date());
+  assert.equal(clone.objects.partialState(), null);
+  await fetchFrom(clone, "alternate", new Date(), undefined, { filter: "blob:none" });
+  // A filtered fetch that finds every payload present records no promisor at all;
+  // a genuinely missing one attributes to the remote that just served it.
+  assert.equal(clone.objects.partialState(), null);
+  const other = repo.objects.inventory().find(entry => entry.object.type === "blob" && entry.object.payload.toString() === "two")!.id;
+  rmSync(join(clone.controlDirectory, "objects", other.slice(0, 2), other.slice(2)));
   await fetchFrom(clone, "alternate", new Date(), undefined, { filter: "blob:none" });
   assert.equal(clone.objects.partialState()!.remote, "alternate");
+  assert.equal(clone.objects.read(other).payload.toString(), "two");
   const second = root(); await cloneFrom(clone.root, second, new Date()); assert.equal(readFileSync(join(second, "asset"), "utf8"), "three");
 });
 
@@ -227,8 +235,77 @@ test("unchanged tags deepen their isolated history without reporting a tag confl
   const report = await fetchFrom(clone, "origin", new Date(), undefined, { depth: 2 });
   assert.deepEqual(report.conflictingTags, []);
   assert.ok(clone.objects.has(commits[0]));
-  assert.equal(clone.objects.partialState()!.shallow.length, 0);
+  assert.equal(clone.objects.partialState(), null);
   assert.equal(clone.refs.read("refs/tags/archive"), commits[1]);
+});
+
+test("a completing fetch clears partial mode and later unchanged fetches transfer nothing", async () => {
+  const { repo, commits } = await source(); const path = root();
+  await cloneFrom(repo.root, path, new Date(), "origin", repo.root, undefined, { depth: 1 });
+  const clone = Repository.open(path);
+  assert.notEqual(clone.objects.partialState(), null);
+  await fetchFrom(clone, "origin", new Date());
+  assert.equal(clone.objects.partialState(), null);
+  assert.equal(clone.log("HEAD").length, 3);
+  assert.ok(clone.objects.has(commits[0]));
+  const repeat = await fetchFrom(clone, "origin", new Date());
+  assert.equal(repeat.upToDate, true);
+  assert.deepEqual(repeat.updated, []);
+  assert.deepEqual(repeat.added, []);
+});
+
+test("hydrated promises leave the omission list and a completing fetch drops it", async () => {
+  const { repo } = await source(); const path = root();
+  await cloneFrom(repo.root, path, new Date(), "origin", repo.root, undefined, { filter: "blob:none" });
+  const clone = Repository.open(path);
+  const blob = (text: string) => repo.objects.inventory().find(entry => entry.object.type === "blob" && entry.object.payload.toString() === text)!.id;
+  const historical = blob("one"); const other = blob("two");
+  clone.objects.read(historical);
+  await fetchFrom(clone, "origin", new Date(), undefined, { filter: "blob:none" });
+  const state = clone.objects.partialState()!;
+  assert.ok(!state.promised.includes(historical));
+  assert.ok(state.promised.includes(other));
+  await fetchFrom(clone, "origin", new Date());
+  assert.equal(clone.objects.partialState(), null);
+  assert.ok(clone.objects.has(historical));
+});
+
+test("a linked instance promisor hydrates through the hub's shared store", async () => {
+  const { repo } = await source();
+  const instancePath = root();
+  repo.linkInstance("reader", instancePath);
+  const clonePath = root();
+  await cloneFrom(instancePath, clonePath, new Date(), "origin", instancePath, undefined, { filter: "blob:none" });
+  const clone = Repository.open(clonePath);
+  const historical = repo.objects.inventory().find(entry => entry.object.type === "blob" && entry.object.payload.toString() === "one")!.id;
+  assert.ok(!clone.objects.has(historical));
+  assert.equal(clone.objects.read(historical).payload.toString(), "one");
+});
+
+test("a filtered clone of a filtered clone preserves the source's promises across processes", async () => {
+  const { repo } = await source();
+  const firstPath = root();
+  await cloneFrom(repo.root, firstPath, new Date(), "origin", repo.root, undefined, { filter: "blob:none" });
+  const first = Repository.open(firstPath);
+  const historical = repo.objects.inventory().find(entry => entry.object.type === "blob" && entry.object.payload.toString() === "two")!.id;
+  assert.ok(!first.objects.has(historical));
+  assert.ok(first.objects.partialState()!.promised.includes(historical));
+  const direct = parseBundle(exportPartialBundle(first.objects, first.refs, ["refs/heads/main"], { filter: "blob:none" }));
+  assert.ok(direct.header.promised!.includes(historical));
+  assert.ok(direct.lines.every(line => line.type !== "blob"));
+  const child = fork(join(packageRoot, "test/helpers/partial-server.ts"), [dirname(firstPath)], { execArgv: [], env: { ...process.env, ...discardChildCoverage() }, stdio: ["ignore", "ignore", "inherit", "ipc"], timeout: 180_000 });
+  const closed = once(child, "close");
+  try {
+    const [{ port }] = await once(child, "message");
+    const url = `http://127.0.0.1:${port}/repo`;
+    const secondPath = root();
+    await cloneFrom(url, secondPath, new Date(), "origin", firstPath, undefined, { filter: "blob:none" });
+    const second = Repository.open(secondPath);
+    assert.ok(!second.objects.has(historical));
+    assert.ok(second.objects.partialState()!.promised.includes(historical));
+    assert.equal(readFileSync(join(secondPath, "asset"), "utf8"), "three");
+    assert.equal(second.objects.read(historical).payload.toString(), "two");
+  } finally { child.kill(); await closed; }
 });
 
 test("ordinary imports and receiver publication require complete closure in a shallow repository", async () => {

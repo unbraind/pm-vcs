@@ -14,7 +14,7 @@ const author = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1
 
 test("production coverage contains no ignore directives", /** Check every production file without narrowing the configured inventory. */ () => {
   const sources = globSync(["*.ts", "engine/**/*.ts", "scripts/**/*.ts"], { cwd: packageRoot });
-  assert.equal(sources.length, 61, "the measured production inventory must be updated explicitly when source files change");
+  assert.equal(sources.length, 62, "the measured production inventory must be updated explicitly when source files change");
   for (const source of sources) {
     const ignored = /(?:(?:c8|istanbul|v8)\s+ignore\b|node:coverage\s+(?:ignore|disable)\b)/.test(readFileSync(join(packageRoot, source), "utf8"));
     assert.equal(ignored, false, `${source} must not suppress production coverage`);

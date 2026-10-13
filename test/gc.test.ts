@@ -184,6 +184,41 @@ test("symlinked root directories or logs and corrupt lease audits refuse collect
   mkdirSync(leases); writeFileSync(join(leases, `${"b".repeat(32)}.jsonl`), "bad"); assert.throws(() => collectGarbage(repo));
 });
 
+test("dangling links at collection roots fail closed", async () => {
+  const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("garbage"));
+  const control = repo.controlDirectory;
+  const log = join(control, "oplog.jsonl");
+  symlinkSync(join(control, "absent-target"), log, "file");
+  assert.throws(() => collectGarbage(repo, true), /real operation log/); assert.ok(repo.objects.has(garbage));
+  rmSync(log);
+  const leases = join(control, "leases");
+  symlinkSync(join(control, "absent-target"), leases, "dir");
+  assert.throws(() => collectGarbage(repo, true), /real lease directory/); assert.ok(repo.objects.has(garbage));
+  rmSync(leases);
+  const refs = join(control, "refs"); rmSync(refs, { recursive: true }); symlinkSync(join(control, "absent-target"), refs, "dir");
+  assert.throws(() => collectGarbage(repo, true), /ref directory link/); assert.ok(repo.objects.has(garbage));
+  rmSync(refs);
+  mkdirSync(join(control, "refs", "heads"), { recursive: true });
+  assert.deepEqual(collectGarbage(repo, true).candidates, [garbage]);
+});
+
+test("a hidden instance registry fails closed before any sweep can delete staged work", async () => {
+  const hub = await fresh(); commit(hub, "base");
+  const destination = makeTempDir(); directories.push(destination); const root = join(destination.root, "instance");
+  hub.linkInstance("writer", root);
+  const instance = Repository.open(root);
+  writeFileSync(join(root, "staged"), "instance-staged-payload");
+  instance.stage([]);
+  const staged = instance.readIndex().map((entry) => entry.id);
+  assert.ok(staged.length > 0);
+  assert.ok(!collectGarbage(hub).candidates.includes(staged[0]!));
+  rmSync(join(hub.controlDirectory, "instances.json"));
+  assert.throws(() => collectGarbage(hub), /shared instance registry/);
+  assert.throws(() => collectGarbage(hub, true), /shared instance registry/);
+  assert.throws(() => collectGarbage(instance, true), /shared instance registry/);
+  assert.ok(hub.objects.has(staged[0]!));
+});
+
 test("expired lease does not retain unreachable payloads", async () => {
   const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("garbage"));
   const leases = new PublicationLeases(repo.objects, repo.controlDirectory);

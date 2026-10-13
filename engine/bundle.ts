@@ -219,10 +219,15 @@ export function exportPartialBundle(store: ObjectStore, refs: RefStore, names: r
   }
   const shallow = [...distances.keys()].filter(/** A boundary is explicit only when at least one parent lies outside the selected history. */ (id) => readCommit(store, id).parents.some(/** Preserve shared ancestry already included by another tip. */ (parent) => !distances.has(parent)));
   const all = closure(store, [...distances.keys()]);
+  const promisedBySource = new Set(store.partialState()?.promised ?? []);
   const promised: ObjectId[] = [];
   const objects: ObjectId[] = [];
   for (const id of all) {
-    if (options.filter === "blob:none" && store.readIfType(id, "blob") !== undefined) promised.push(id);
+    // A source that is itself a filtered clone promises ids it does not hold:
+    // exporting them as objects would hydrate them through the source's own
+    // promisor and transfer payloads the filter omits, while a truly absent,
+    // unpromised id still refuses below rather than exporting a hole.
+    if (options.filter === "blob:none" && (store.readIfType(id, "blob") !== undefined || promisedBySource.has(id))) promised.push(id);
     else objects.push(id);
   }
   return serializeBundle(store, { refs: selected, prerequisites: [], objects: objects.sort(compareByteOrder), shallow: shallow.sort(compareByteOrder), promised: promised.sort(compareByteOrder) });
