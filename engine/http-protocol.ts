@@ -1,3 +1,4 @@
+import { historyOptions, type HistoryOptions } from "./partial.ts";
 import { PublicationLeaseError, type LeaseProof } from "./publication-leases.ts";
 // The wire vocabulary shared by the served repository and the HTTP client.
 //
@@ -367,8 +368,8 @@ export function decodeWireObject(payload: Buffer): Record<string, unknown> | nul
  * @param haves - Object ids the caller offers as already held.
  * @returns The request body.
  */
-export function encodeFetchRequest(refs: readonly string[], haves: readonly ObjectId[]): string {
-  return `${JSON.stringify({ refs, haves })}\n`;
+export function encodeFetchRequest(refs: readonly string[], haves: readonly ObjectId[], options?: HistoryOptions): string {
+  return `${JSON.stringify({ refs, haves, ...(options === undefined ? {} : { options: historyOptions(options) }) })}\n`;
 }
 
 /**
@@ -377,10 +378,14 @@ export function encodeFetchRequest(refs: readonly string[], haves: readonly Obje
  * @param body - The received body.
  * @returns The refs and haves, or null when the body does not hold both.
  */
-export function decodeFetchRequest(body: Record<string, unknown>): { refs: readonly string[]; haves: readonly ObjectId[] } | null {
+export function decodeFetchRequest(body: Record<string, unknown>): { refs: readonly string[]; haves: readonly ObjectId[]; options?: HistoryOptions } | null {
   const refs = wireStrings(body, "refs");
   const haves = wireStrings(body, "haves");
   if (refs === null || haves === null || haves.some((id) => !isObjectId(id))) return null;
+  if (body.options !== undefined) {
+    if (body.options === null || typeof body.options !== "object" || Array.isArray(body.options)) return null;
+    return { refs, haves, options: historyOptions(body.options as HistoryOptions) };
+  }
   return { refs, haves };
 }
 

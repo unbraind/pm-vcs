@@ -11,6 +11,7 @@
 // under a name that does not describe it — after which every identity check in
 // the system is reasoning about a lie.
 
+import { historyOptions, omissionIds, type HistoryOptions } from "./partial.ts";
 import { readFileSync } from "node:fs";
 
 import { compareByteOrder, decodeCommit, decodeSeries, decodeTree, decodeManifest, readCommit, readTree } from "./model.ts";
@@ -33,6 +34,9 @@ export const BUNDLE_FORMAT = "pmvcs-bundle-1";
 
 /** Canonical inventory of refs, prerequisites, and object payloads serialized into one transport-neutral archive. */
 export interface BundleContents {
+  /** Explicit cut commits and blob-only promises; accepted only by opt-in fetch. */
+  readonly shallow?: readonly ObjectId[];
+  readonly promised?: readonly ObjectId[];
   /** Optional clone identity, absent in deterministic standalone object archives. */
   readonly identity?: string;
   /** Typed intentional absence; importing this never grants authority to erase held bytes. */
@@ -194,6 +198,36 @@ export function exportBundle(
   return serializeBundle(store, header);
 }
 
+/** Export bounded commits plus complete trees/manifests, omitting only verified blob payloads. */
+export function exportPartialBundle(store: ObjectStore, refs: RefStore, names: readonly string[], options: HistoryOptions): Buffer {
+  historyOptions(options);
+  const selected: Record<string, ObjectId> = {};
+  const requested = names.length > 0 ? names : [...refs.list(BRANCH_PREFIX), ...refs.list(TAG_PREFIX)].map(/** Empty selection retains the transport convention of every branch and tag. */ (entry) => entry.name);
+  for (const name of requested) {
+    const target = refs.read(name);
+    if (target === null) throw new ObjectStoreError("unknown_ref", "Partial fetch ref is absent.");
+    selected[name] = target;
+  }
+  const distances = new Map<ObjectId, number>();
+  const queue = Object.values(selected).map(/** Depth starts at one for each advertised tip. */ (id) => ({ id, depth: 1 }));
+  for (let offset = 0; offset < queue.length; offset++) {
+    const { id, depth } = queue[offset];
+    if (distances.has(id)) continue;
+    distances.set(id, depth);
+    const commit = readCommit(store, id);
+    if (options.depth === undefined || depth < options.depth) for (const parent of commit.parents) queue.push({ id: parent, depth: depth + 1 });
+  }
+  const shallow = [...distances.keys()].filter(/** A boundary is explicit only when at least one parent lies outside the selected history. */ (id) => readCommit(store, id).parents.some(/** Preserve shared ancestry already included by another tip. */ (parent) => !distances.has(parent)));
+  const all = closure(store, [...distances.keys()]);
+  const promised: ObjectId[] = [];
+  const objects: ObjectId[] = [];
+  for (const id of all) {
+    if (options.filter === "blob:none" && store.readIfType(id, "blob") !== undefined) promised.push(id);
+    else objects.push(id);
+  }
+  return serializeBundle(store, { refs: selected, prerequisites: [], objects: objects.sort(compareByteOrder), shallow: shallow.sort(compareByteOrder), promised: promised.sort(compareByteOrder) });
+}
+
 /**
  * Parses a bundle without storing anything.
  *
@@ -222,6 +256,8 @@ export function parseBundle(bytes: Buffer): { header: BundleContents; lines: Bun
   if (header === null || typeof header !== "object" || Array.isArray(header)) {
     throw new ObjectStoreError("bad_bundle", "Bundle header is not a JSON object.");
   }
+  if (header.shallow !== undefined) omissionIds(header.shallow);
+  if (header.promised !== undefined) omissionIds(header.promised);
   if (header.refs === null || typeof header.refs !== "object" || Array.isArray(header.refs)) {
     throw new ObjectStoreError("bad_bundle", "Bundle header does not describe any refs.");
   }
@@ -289,13 +325,14 @@ export function parseBundle(bytes: Buffer): { header: BundleContents; lines: Bun
  * @throws ObjectStoreError When a prerequisite commit is absent, or the bundle is
  *   malformed.
  */
-export function importBundleObjects(store: ObjectStore, bytes: Buffer, targets: readonly ObjectId[] = []): ObjectImportReport {
+export function importBundleObjects(store: ObjectStore, bytes: Buffer, targets: readonly ObjectId[] = [], partial = false): ObjectImportReport {
   const parsed = parseBundle(bytes);
-  return store.withWriteLock(/** Preflight whole-bundle denial and arrival before the first byte publication. */ () => importPreflighted(store, parsed.header, parsed.lines, targets));
+  return store.withWriteLock(/** Preflight whole-bundle denial and arrival before the first byte publication. */ () => importPreflighted(store, parsed.header, parsed.lines, targets, partial));
 }
 
 /** Import a complete parsed archive while holding its publication lock and preserving local erasure authority. */
-function importPreflighted(store: ObjectStore, header: BundleContents, lines: readonly BundleLine[], publicationTargets: readonly ObjectId[]): ObjectImportReport {
+function importPreflighted(store: ObjectStore, header: BundleContents, lines: readonly BundleLine[], publicationTargets: readonly ObjectId[], partial: boolean): ObjectImportReport {
+  if (!partial && ((header.shallow?.length ?? 0) + (header.promised?.length ?? 0) > 0)) throw new ObjectStoreError("partial_bundle_requires_fetch", "Partial history requires an explicitly bounded fetch.");
   const local = store.denials();
   const received = header.denials ?? [];
   for (const denial of received) {
@@ -330,7 +367,7 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
       targets.push(series.base, ...series.patches.map(/** Standalone series cannot launder denied structural commits. */ (patch) => patch.commit));
     }
   }
-  const metadata = requireClosure(store, targets, lines, combined, lines.filter(/** Standalone tree arrivals must also retain structural closure. */ (line) => line.type === "tree").map(/** Validate trees even when no advertised ref reaches them. */ (line) => line.id));
+  const metadata = requireClosure(store, targets, lines, combined, lines.filter(/** Standalone tree arrivals must also retain structural closure. */ (line) => line.type === "tree").map(/** Validate trees even when no advertised ref reaches them. */ (line) => line.id), partial ? { shallow: header.shallow ?? [], promised: header.promised ?? [] } : undefined);
   // Registry validation proves canonical metadata, not physical audit durability.
   // Verify held audits before omitting their rewrite or extending the registry.
   for (const denial of local) store.readTyped(denial.id, "tombstone");

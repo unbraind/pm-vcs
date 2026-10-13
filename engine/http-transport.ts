@@ -1,3 +1,4 @@
+import { type HistoryOptions } from "./partial.ts";
 import { parseFileLease, type FileLease, type LeaseProof, type LeaseRequest } from "./publication-leases.ts";
 // The HTTP client transport: a remote repository on the other end of a socket.
 //
@@ -251,8 +252,8 @@ export class HttpTransport implements Transport {
    * @param haves - Commits the caller offers as already held.
    * @returns A bundle carrying the objects the caller is missing.
    */
-  async fetch(refNames: readonly string[], haves: readonly ObjectId[]): Promise<Buffer> {
-    const answer = await this.roundTrip(FETCH_ENDPOINT, encodeFetchRequest(refNames, haves));
+  async fetch(refNames: readonly string[], haves: readonly ObjectId[], options?: HistoryOptions): Promise<Buffer> {
+    const answer = await this.roundTrip(FETCH_ENDPOINT, encodeFetchRequest(refNames, haves, options));
     assertWireSuccess(answer.status, answer.payload, this.url);
     parseBundle(answer.payload);
     return answer.payload;

@@ -1,0 +1,15 @@
+id: pm-vcs-uploadretention
+title: Define explicit expiry and abandonment for durable upload retention receipts
+description: "GC conservatively keeps disconnected upload pins until durable refs, oplog or index roots own their objects. Define receiver-authorized receipt expiry and abandoned-session cleanup without weakening active lease or resumption guarantees."
+type: Chore
+status: open
+priority: 3
+tags: []
+created_at: "2026-10-13T12:35:07.615Z"
+updated_at: "2026-10-13T12:35:07.615Z"
+author: codex-agent
+acceptance_criteria: Expired or explicitly abandoned upload receipts become collectible; live uploads and active FileId leases remain protected across process restarts.
+parent: pm-vcs-b7cb
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-phase6gc,blocked_by,"2026-10-13T12:35:07.615Z",codex-agent,"cli:create:dep",detected
+body: ""

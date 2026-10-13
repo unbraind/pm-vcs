@@ -59,7 +59,8 @@ export function reachable(store: ObjectStore, start: ObjectId): Set<ObjectId> {
     const id = pending.pop() as ObjectId;
     if (seen.has(id)) continue;
     seen.add(id);
-    pending.push(...readCommit(store, id).parents);
+    const commit = readCommit(store, id);
+    if (store.partialState()?.shallow.includes(id) !== true) pending.push(...commit.parents);
   }
   return seen;
 }

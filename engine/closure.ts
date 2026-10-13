@@ -1,3 +1,4 @@
+import { type PartialState } from "./partial.ts";
 import { assertManifestChild, assertManifestRoot } from "./manifest-pages.ts";
 /** Role-aware history validation: only attributed payload leaves can be intentionally absent. */
 import { decodeLink } from "./composition.ts";
@@ -46,7 +47,7 @@ type VerifiedObject =
   | { readonly type: Exclude<ObjectType, "commit" | "tree" | "manifest">; readonly length: number };
 
 /** Validate commit roots against held objects plus an unpublished arrival, without mutating storage. */
-export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), audits = false, trees: readonly ObjectId[] = [], metadata: ClosureMetadata = { commits: new Map(), trees: new Map() }): ClosureReport {
+export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), audits = false, trees: readonly ObjectId[] = [], metadata: ClosureMetadata = { commits: new Map(), trees: new Map() }, partial: Pick<PartialState, "shallow" | "promised"> | null = store.partialState()): ClosureReport {
   const result: ClosureReport = { verified: 0, obliterated: [], missing: [], corrupt: [] };
   const denied = new Map(denials.flatMap(/** Index addresses once while retaining each leaf's original attribution. */ (entry) => entry.tombstone.objects.map(/** Preserve the first denial when identical payloads have multiple terminal owners. */ (id) => [id, entry] as const)).reverse());
   const carried = new Map(arrivals.map(/** Resolve incoming objects before publication. */ (object) => [object.id, object]));
@@ -70,6 +71,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
       else result.corrupt.push(`${id}: invalid_erasure_role`);
       continue;
     }
+    if ((role === "payload" || role === "fragment") && partial?.promised.includes(id) === true && !carried.has(id) && !store.has(id)) continue;
     try {
       let object = held.get(id);
       if (object instanceof ObjectStoreError) throw object;
@@ -94,7 +96,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
       if (object.type === "commit") {
         const commit = object.structure;
         metadata.commits.set(id, commit);
-        pending.push({ id: commit.tree, role: "tree" }, ...commit.parents.map(/** Parent references always require real commits. */ (parent) => ({ id: parent, role: "commit" as const })));
+        pending.push({ id: commit.tree, role: "tree" }, ...(partial?.shallow.includes(id) === true ? [] : commit.parents).map(/** Parent references always require real commits. */ (parent) => ({ id: parent, role: "commit" as const })));
       } else if (object.type === "tree") {
         metadata.trees.set(id, object.structure);
         for (const entry of object.structure) pending.push(entry.mode === "40000" ? { id: entry.id, role: "tree" } : { id: entry.id, role: "payload", fileId: entry.fileId, root: entry.id });
@@ -122,9 +124,9 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
 }
 
 /** Refuse publication of an incomplete or incorrectly typed commit closure before any mutation. */
-export function requireClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), trees: readonly ObjectId[] = []): ClosureMetadata {
+export function requireClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), trees: readonly ObjectId[] = [], partial: Pick<PartialState, "shallow" | "promised"> | null = store.partialState()): ClosureMetadata {
   const metadata: ClosureMetadata = { commits: new Map(), trees: new Map() };
-  const report = inspectClosure(store, targets, arrivals, denials, false, trees, metadata);
+  const report = inspectClosure(store, targets, arrivals, denials, false, trees, metadata, partial);
   if (report.missing.length + report.corrupt.length > 0) throw new ObjectStoreError("incomplete_bundle", `History closure is invalid: ${[...report.missing, ...report.corrupt].join(", ")}.`);
   return metadata;
 }

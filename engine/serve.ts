@@ -881,7 +881,7 @@ async function dispatchServedRequest(
     if (fetchRequest.refs.some((ref) => !ref.startsWith(BRANCH_PREFIX) && !ref.startsWith(TAG_PREFIX))) {
       throw new ObjectStoreError("bad_request", "A fetch may name only branch and tag refs.");
     }
-    const bundle = await served.transport().fetch(fetchRequest.refs, fetchRequest.haves);
+    const bundle = await served.transport().fetch(fetchRequest.refs, fetchRequest.haves, fetchRequest.options);
     return { status: 200, body: bundle, contentType: BUNDLE_CONTENT_TYPE };
   }
   // The path splitter admits only known endpoints; the remaining two move refs.

@@ -1883,7 +1883,7 @@ export class Repository {
     while (cursor !== undefined && entries.length < limit) {
       const commit = readCommit(this.objects, cursor);
       entries.push({ id: cursor, commit, changeId: effectiveChangeId(cursor, commit) });
-      cursor = commit.parents[0];
+      cursor = this.objects.partialState()?.shallow.includes(cursor) === true ? undefined : commit.parents[0];
     }
     return entries;
   }

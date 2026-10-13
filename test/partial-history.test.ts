@@ -1,0 +1,152 @@
+/** Real shallow and blob-filtered repositories with verified range-demand hydration. */
+import { fork } from "node:child_process";
+import { once } from "node:events";
+import { dirname } from "node:path";
+import { pathToFileURL } from "node:url";
+import { HttpTransport } from "../engine/http-transport.ts";
+import { fetchPromisedBlob } from "../engine/partial-fetch-worker.ts";
+import { discardChildCoverage } from "./helpers/sandbox.ts";
+import { packageRoot } from "./helpers/tmp.ts";
+import assert from "node:assert/strict";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, test } from "node:test";
+import { PmClient } from "@unbrained/pm-cli/sdk";
+import { Repository } from "../engine/repo.ts";
+import { cloneFrom, fetchFrom } from "../engine/sync.ts";
+import { collectGarbage } from "../engine/gc.ts";
+import { exportPartialBundle, importBundleObjects, parseBundle } from "../engine/bundle.ts";
+import { historyOptions, readPartialState } from "../engine/partial.ts";
+import { ObjectStore as BuiltObjectStore } from "../dist/engine/objects.js";
+import { readCommit, decodeManifest, type Signature } from "../engine/model.ts";
+import { readFragmentRange, writeFragmented } from "../engine/fragments.ts";
+import { decodeFetchRequest, encodeFetchRequest } from "../engine/http-protocol.ts";
+import { grantRemoteLeases, leasedPushTo } from "./helpers/publication-consumers.ts";
+import { makeTempDir } from "./helpers/tmp.ts";
+
+const directories: ReturnType<typeof makeTempDir>[] = [];
+const author: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
+afterEach(() => { for (const directory of directories.splice(0)) directory.cleanup(); });
+/** Allocate isolated destinations without changing tracker or source paths. */
+function root() { const directory = makeTempDir(); directories.push(directory); return join(directory.root, "repo"); }
+/** Build real PM-owned history with unique payloads in each generation. */
+async function source() {
+  const path = root(); mkdirSync(path);
+  const sdk = new PmClient({ cwd: path, pmRoot: join(path, ".agents/pm"), noExtensions: true }); await sdk.init("partial", { defaults: true, author: "fixture" });
+  const repo = Repository.init(path); const commits: string[] = [];
+  for (const text of ["one", "two", "three"]) {
+    writeFileSync(join(path, "asset"), text); repo.stage(["asset"]); commits.push(repo.commit({ message: text, author }, new Date()));
+  }
+  return { repo, commits };
+}
+
+test("depth one keeps original tip identity and GC preserves shallow boundaries; depth two then full fetch deepen", async () => {
+  const { repo, commits } = await source(); const path = root();
+  await cloneFrom(repo.root, path, new Date(), "origin", repo.root, undefined, { depth: 1 });
+  const clone = Repository.open(path); assert.equal(clone.refs.resolveHead(), commits[2]);
+  assert.equal(clone.objects.has(commits[0]), false); assert.equal(clone.objects.has(commits[1]), false);
+  assert.equal(clone.log("HEAD").length, 1); assert.equal(clone.verify().missing.length, 0);
+  assert.equal(collectGarbage(clone, true).removed, 0);
+  await fetchFrom(clone, "origin", new Date(), undefined, { depth: 2 });
+  assert.equal(clone.log("HEAD").length, 2); assert.ok(!clone.objects.has(commits[0]));
+  await fetchFrom(clone, "origin", new Date()); assert.equal(clone.log("HEAD").length, 3); assert.equal(clone.objects.partialState()!.shallow.length, 0);
+  assert.equal(readCommit(clone.objects, commits[2]).parents[0], commits[1]);
+});
+
+test("blob:none omits historical payloads, checkout hydrates only its demand, and reads verify/cache missing historical blobs", async () => {
+  const { repo, commits } = await source(); const bundle = parseBundle(exportPartialBundle(repo.objects, repo.refs, ["refs/heads/main"], { filter: "blob:none" }));
+  assert.ok(bundle.header.promised!.length > 0); assert.ok(bundle.lines.every(line => line.type !== "blob"));
+  const path = root(); await cloneFrom(repo.root, path, new Date(), "origin", repo.root, undefined, { filter: "blob:none" });
+  const clone = Repository.open(path); assert.equal(readFileSync(join(path, "asset"), "utf8"), "three");
+  const historical = repo.objects.inventory().find(entry => entry.object.type === "blob" && entry.object.payload.toString() === "one")!.id;
+  assert.ok(!clone.objects.has(historical)); const inventory = clone.objects.inventory().length;
+  collectGarbage(clone); assert.equal(clone.objects.inventory().length, inventory, "dry run fetched promised data");
+  assert.equal(clone.objects.read(historical).payload.toString(), "one"); assert.ok(clone.objects.has(historical));
+  assert.equal(clone.log("HEAD").length, commits.length);
+  const absent = "f".repeat(64); assert.throws(() => clone.objects.read(absent), /No object/);
+  clone.remotes.add("alternate", repo.root);
+  await assert.rejects(fetchFrom(clone, "alternate", new Date(), undefined, { filter: "blob:none" }), /promisor/);
+  await fetchFrom(clone, "origin", new Date());
+  await fetchFrom(clone, "alternate", new Date(), undefined, { filter: "blob:none" });
+  assert.equal(clone.objects.partialState()!.remote, "alternate");
+  const second = root(); await cloneFrom(clone.root, second, new Date()); assert.equal(readFileSync(join(second, "asset"), "utf8"), "three");
+});
+
+test("shallow clone can commit and push to its full source, collect and reclone without losing bytes", async () => {
+  const { repo } = await source(); const path = root(); await cloneFrom(repo.root, path, new Date(), "origin", repo.root, undefined, { depth: 1, filter: "blob:none" });
+  const clone = Repository.open(path); writeFileSync(join(path, "asset"), "pushed"); clone.stage(["asset"]); clone.commit({ message: "pushed", author }, new Date());
+  // The full receiver already holds all omitted ancestors; publication still verifies complete closure.
+  await grantRemoteLeases(clone); await leasedPushTo(clone, "origin", [], false, new Date());
+  collectGarbage(repo, true); const second = root(); await cloneFrom(repo.root, second, new Date());
+  assert.equal(readFileSync(join(second, "asset"), "utf8"), "pushed");
+});
+
+test("fragment manifests remain available and range reads fetch exactly the blobs in the selected range", async () => {
+  const { repo } = await source();
+  writeFileSync(join(repo.root, "large"), Buffer.alloc(3 * 1024 * 1024, 97)); repo.stage(["large"]); const previous = repo.commit({ message: "large", author }, new Date());
+  const native = repo.readIndex().find(entry => entry.path === "large")!;
+  const fragmented = writeFragmented(repo.objects, Buffer.concat([Buffer.alloc(1024 * 1024, 97), Buffer.alloc(1024 * 1024, 99), Buffer.alloc(1024 * 1024, 100)]), 1024 * 1024, native.fileId);
+  const manifestId = fragmented.manifestId;
+  repo.writeIndex(repo.readIndex().map(entry => entry.path === "large" ? { ...entry, id: manifestId } : entry));
+  repo.commit({ message: "fragmented", author }, new Date());
+  writeFileSync(join(repo.root, "large"), Buffer.alloc(3 * 1024 * 1024, 98)); repo.stage(["large"]); repo.commit({ message: "large edit", author }, new Date());
+  const path = root(); await cloneFrom(repo.root, path, new Date(), "origin", repo.root, undefined, { filter: "blob:none" });
+  const clone = Repository.open(path); assert.ok(clone.objects.has(previous));
+  const manifest = decodeManifest(clone.objects.read(manifestId).payload); assert.ok(manifest.fragments.length > 0);
+  const fragment = manifest.fragments[0].id; assert.ok(!clone.objects.has(fragment));
+  assert.deepEqual(readFragmentRange(clone.objects, manifestId, 0, 4), Buffer.from("aaaa")); assert.ok(clone.objects.has(fragment));
+});
+
+test("invalid bounds, omission lists, partial imports and malformed wire options fail closed", async () => {
+  for (const options of [{ depth: 0 }, { depth: NaN }, { depth: 1.5 }, { filter: "bad" }]) assert.throws(() => historyOptions(options as { depth?: number; filter?: "blob:none" }));
+  assert.equal(decodeFetchRequest({ refs: [], haves: [], options: null }), null);
+  assert.deepEqual(decodeFetchRequest(JSON.parse(encodeFetchRequest([], [], { depth: 2 }))), { refs: [], haves: [], options: { depth: 2 } });
+  const { repo } = await source(); const bundle = exportPartialBundle(repo.objects, repo.refs, ["refs/heads/main"], { depth: 1 });
+  assert.throws(() => importBundleObjects(repo.objects, bundle), /explicitly bounded/);
+  assert.throws(() => exportPartialBundle(repo.objects, repo.refs, ["refs/heads/absent"], { depth: 1 }));
+  repo.createBranch("alias", "HEAD", new Date());
+  assert.equal(Object.keys(parseBundle(exportPartialBundle(repo.objects, repo.refs, [], { depth: 2 })).header.refs).length, 2);
+  for (const value of ['null', '[]', '{"remote":"origin","shallow":["bad"],"promised":[]}']) {
+    writeFileSync(join(repo.controlDirectory, "partial.json"), value); assert.throws(() => readPartialState(repo.controlDirectory));
+  }
+  rmSync(join(repo.controlDirectory, "partial.json"));
+});
+
+test("HTTP bounded transfer and isolated demand reads verify only the requested historical payload", async () => {
+  const { repo } = await source();
+  const child = fork(join(packageRoot, "test/helpers/partial-server.ts"), [dirname(repo.root)], { execArgv: [], env: { ...process.env, ...discardChildCoverage() }, stdio: ["ignore", "ignore", "inherit", "ipc"], timeout: 180_000 });
+  const closed = once(child, "close");
+  try {
+    const [{ port }] = await once(child, "message");
+    const url = `http://127.0.0.1:${port}/repo`;
+    const wire = new HttpTransport(url);
+    const bounded = parseBundle(await wire.fetch(["refs/heads/main"], [], { depth: 1, filter: "blob:none" }));
+    assert.equal(bounded.header.shallow!.length, 1);
+    const path = root(); await cloneFrom(url, path, new Date(), "origin", repo.root, undefined, { depth: 2, filter: "blob:none" });
+    const clone = Repository.open(path);
+    assert.equal(readFileSync(join(path, "asset"), "utf8"), "three");
+    const historical = repo.objects.inventory().find(entry => entry.object.type === "blob" && entry.object.payload.toString() === "two")!.id;
+    assert.ok(!clone.objects.has(historical));
+    assert.equal(clone.objects.read(historical).payload.toString(), "two");
+    assert.ok((await fetchPromisedBlob(url, null, historical)).length > 0);
+    rmSync(join(clone.controlDirectory, "objects", historical.slice(0, 2), historical.slice(2)));
+    assert.equal(new BuiltObjectStore(join(clone.controlDirectory, "objects")).read(historical).payload.toString(), "two");
+    await assert.rejects(fetchPromisedBlob(url, null, repo.refs.resolveHead()!), /requested blob/);
+    child.send({ close: true }); await closed;
+    const omitted = repo.objects.inventory().find(entry => entry.object.type === "blob" && entry.object.payload.toString() === "one")!.id;
+    const state = clone.objects.partialState()!;
+    writeFileSync(join(clone.controlDirectory, "partial.json"), JSON.stringify({ ...state, promised: [...state.promised, omitted] }));
+    assert.throws(() => clone.objects.read(omitted), /promisor/);
+  } finally { child.kill(); await closed; }
+});
+
+test("file URL promisor rejects wrong-kind or corrupt promised data and preserves held corruption", async () => {
+  const { repo } = await source(); const path = root(); await cloneFrom(pathToFileURL(repo.root).href, path, new Date(), "origin", repo.root, undefined, { filter: "blob:none" });
+  const clone = Repository.open(path); const state = clone.objects.partialState()!;
+  const commit = repo.refs.resolveHead()!;
+  // A forged promise cannot turn a commit into a blob or overwrite an existing object.
+  const alien = repo.objects.write("tree", Buffer.alloc(0));
+  writeFileSync(join(clone.controlDirectory, "partial.json"), JSON.stringify({ ...state, promised: [...state.promised, alien] }));
+  assert.throws(() => clone.objects.read(alien), /wrong type/);
+  assert.ok(clone.objects.has(commit));
+});

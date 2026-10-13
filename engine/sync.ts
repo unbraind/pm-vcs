@@ -1,3 +1,7 @@
+import { join } from "node:path";
+import { readCommit } from "./model.ts";
+import { historyOptions, type HistoryOptions } from "./partial.ts";
+import { writePrivateJson } from "./composition.ts";
 import { remoteLeaseProofs } from "./lease-workflows.ts";
 import type { LeaseProof } from "./publication-leases.ts";
 // Fetch, push and clone.
@@ -134,13 +138,19 @@ export async function fetchFrom(
   remoteName: string,
   now: Date,
   transport?: Transport,
+  options?: HistoryOptions,
 ): Promise<FetchReport> {
+  if (options !== undefined) historyOptions(options);
+  const existingPromises = repository.objects.partialState();
+  if (options?.filter !== undefined && existingPromises !== null && existingPromises.remote !== remoteName && existingPromises.promised.some(/** A source change is safe once every previous promise has been fulfilled. */ (id) => !repository.objects.has(id))) throw new ObjectStoreError("promisor_conflict", "Fetch complete history from the current promisor before changing blob-filtered sources.");
   const remote = repository.remotes.require(remoteName);
   const wire = transport ?? openTransport(remote.url, repository.root, /^https?:/i.test(remote.url) ? repository.remotes.token(remoteName) : null);
   // The handshake runs before anything else: an incompatible peer must be
   // refused while nothing has moved, not after a bundle has been transferred.
   const advertisement = await wire.advertise();
   assertCompatiblePeer(advertisement);
+  const partial = options !== undefined || repository.objects.partialState() !== null;
+  if (options !== undefined && !advertisement.capabilities.includes("partial-history")) throw new ObjectStoreError("incompatible_peer", "The peer does not support bounded history.");
 
   const wanted: { remoteRef: string; localRef: string; target: ObjectId; before: ObjectId | null }[] = [];
   const conflictingTags: string[] = [];
@@ -148,7 +158,7 @@ export async function fetchFrom(
     const localRef = localNameFor(remoteName, entry.name);
     if (localRef === null) continue;
     const before = repository.refs.read(localRef);
-    if (before === entry.target) continue;
+    if (before === entry.target && !partial) continue;
     if (before !== null && entry.name.startsWith(TAG_PREFIX)) {
       conflictingTags.push(entry.name.slice(TAG_PREFIX.length));
       continue;
@@ -173,9 +183,15 @@ export async function fetchFrom(
     });
   }
 
-  const bundle = await wire.fetch(wanted.map((item) => item.remoteRef), localTips(repository));
+  const bundle = await wire.fetch(wanted.map((item) => item.remoteRef), partial ? [] : localTips(repository), options);
   return repository.objects.withWriteLock(/** Validate all advertised roots and publish their tracking refs within one erasure lease. */ () => {
-    const { added } = importBundleObjects(repository.objects, bundle, wanted.map((item) => item.target));
+    const previous = repository.objects.partialState();
+    const outstanding = previous?.promised.filter(/** Preserve the source of any payload not yet held. */ (id) => !repository.objects.has(id)) ?? [];
+    const { added, header } = importBundleObjects(repository.objects, bundle, wanted.map((item) => item.target), partial);
+    if (partial) {
+      const shallow = [...new Set([...(previous?.shallow ?? []), ...(header.shallow ?? [])])].filter(/** Remove a boundary only when every parent has actually arrived. */ (id) => readCommit(repository.objects, id).parents.some(/** Presence establishes a safely deepen-able boundary. */ (parent) => !repository.objects.has(parent)));
+      writePrivateJson(join(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, "partial.json"), { remote: outstanding.length > 0 ? previous!.remote : remoteName, shallow, promised: [...new Set([...outstanding, ...(header.promised ?? [])])] });
+    }
 
     repository.refs.transaction(wanted.map((item) => ({
       name: item.localRef,
@@ -351,7 +367,9 @@ export async function cloneFrom(
   remoteName = "origin",
   base: string = process.cwd(),
   transport?: Transport,
+  options?: HistoryOptions,
 ): Promise<CloneReport> {
+  if (options !== undefined) historyOptions(options);
   const location = resolveRemoteLocation(url, base);
   const wire = transport ?? openTransport(url, base, environmentToken(remoteName, null) ?? undefined);
   // Refusing an incompatible source here means before the destination
@@ -372,7 +390,7 @@ export async function cloneFrom(
   try {
     if (advertisement.repositoryId !== undefined) repository.objects.adoptIdentity(advertisement.repositoryId);
     repository.remotes.add(remoteName, location);
-    fetched = await fetchFrom(repository, remoteName, now, wire);
+    fetched = await fetchFrom(repository, remoteName, now, wire, options);
   } catch (error) {
     rmSync(preexisting ? repository.controlDirectory : root, { recursive: true, force: true });
     throw error;
