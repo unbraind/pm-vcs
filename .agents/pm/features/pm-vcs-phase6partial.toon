@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-13T12:06:46.293Z"
-updated_at: "2026-10-13T16:31:34.289Z"
+updated_at: "2026-10-13T18:20:27.953Z"
 author: codex-agent
 acceptance_criteria: "Depth-limited clones retain unchanged commit identities and can deepen; blob:none transfers metadata and hydrates requested content on demand; corrupt arrivals and missing unpromised objects refuse; clone, push, GC and reclone work across processes."
 parent: pm-vcs-b7cb
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-phase6gc,blocked_by,"2026-10-13T12:06:46.293Z",codex-agent,"cli:create:dep",detected
-comments[13]{created_at,author,text}:
+comments[14]{created_at,author,text}:
   "2026-10-13T12:22:54.219Z",codex-agent,"Implemented explicit shallow boundaries and blob-only promises, optional file/HTTP transfer bounds, depth-aware log and ancestry, metadata-only blob:none export, and hash/type-verified demand hydration. Fragment manifests remain present and range reads hydrate requested leaves. Partial bundles require opt-in fetch and cannot bypass ordinary import/push closure validation."
   "2026-10-13T12:36:14.030Z",codex-agent,"Behavioural revert proof: removing only the depth cutoff from exportPartialBundle makes depth-one clone retain omitted ancestors and fail its object-presence assertions. The original implementation is restored. HTTP acceptance now exercises a separately running server and isolated synchronous demand client."
   "2026-10-13T12:36:56.605Z",codex-agent,"Additional revert proof: removing only ObjectStore.read demand hydration makes blob:none clone fail on its promised checkout payload. Restored the reader. HTTP bounded fetch and historical blob hydration pass against an independent served repository, including unavailable-promisor and wrong-kind refusals."
@@ -26,6 +26,7 @@ comments[13]{created_at,author,text}:
   "2026-10-13T15:47:32.559Z",codex-agent,"Complete isolated-identity npm release gate passes at 43dc17f: 1501/1501 tests, zero fail/skip/cancel/todo, unchanged full-scope 100/100/100/100 coverage and all acceptance/package/policy checks. CI passes on Node 22/26. The isolated Bun release run has passed all partial-history regressions and remains in progress; final receipts will follow its complete result. Linked PM test result tracking is disabled, so execution receipts are recorded in these comments."
   "2026-10-13T16:31:08.360Z",pi-agent,"Continuation re-verification: removing only the depth cutoff from exportPartialBundle fails the isolated depth-one regression (omitted ancestors are retained); restoring it passes all 12 linked tests again through the repo-pinned pm."
   "2026-10-13T16:31:09.813Z",pi-agent,"Bun release gate completed at the implementation head: 1501/1501 tests pass with zero fail, skip, cancellation or todo and unchanged full-scope 100 percent coverage; accept:self-host, changelog check and publish attestation all succeed. Together with the earlier npm gate receipt, both required release gates have complete passing results at unchanged thresholds."
+  "2026-10-13T18:20:27.953Z",claude-hub,"CodeRabbit PR #105 (engine/merge.ts:63, Major perf): reachable() and Repository.log() called partialState() per commit, re-parsing partial.json (incl. the promised list) on every step: O(commits x promises). Both walks now read it once into a Set. Regression 'history walks read the partial-clone state once per walk, not once per commit' counts partialState() reads on a real depth-2 clone (1 per walk); restoring the per-commit reads fails it ('log re-read partial.json per commit')."
 files[14]{path,scope}:
   engine/bundle.ts,project
   engine/closure.ts,project

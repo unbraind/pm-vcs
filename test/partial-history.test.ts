@@ -16,6 +16,7 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
 import { collectGarbage } from "../engine/gc.ts";
+import { reachable } from "../engine/merge.ts";
 import { exportPartialBundle, importBundleObjects, parseBundle, serializeBundle } from "../engine/bundle.ts";
 import { historyOptions, readPartialState } from "../engine/partial.ts";
 import { ObjectStore as BuiltObjectStore } from "../dist/engine/objects.js";
@@ -53,6 +54,17 @@ test("depth one keeps original tip identity and GC preserves shallow boundaries;
   assert.equal(clone.log("HEAD").length, 2); assert.ok(!clone.objects.has(commits[0]));
   await fetchFrom(clone, "origin", new Date()); assert.equal(clone.log("HEAD").length, 3); assert.equal(clone.objects.partialState()!.shallow.length, 0);
   assert.equal(readCommit(clone.objects, commits[2]).parents[0], commits[1]);
+});
+
+test("history walks read the partial-clone state once per walk, not once per commit", async () => {
+  const { repo, commits } = await source(); const path = root();
+  await cloneFrom(repo.root, path, new Date(), "origin", repo.root, undefined, { depth: 2 });
+  const clone = Repository.open(path); const store = clone.objects;
+  const read = store.partialState.bind(store); let calls = 0;
+  store.partialState = () => { calls += 1; return read(); };
+  assert.equal(clone.log("HEAD").length, 2); assert.equal(calls, 1, "log re-read partial.json per commit");
+  calls = 0; assert.deepEqual([...reachable(store, commits[2])].sort(), [commits[1], commits[2]].sort());
+  assert.equal(calls, 1, "reachable re-read partial.json per commit");
 });
 
 test("blob:none omits historical payloads, checkout hydrates only its demand, and reads verify/cache missing historical blobs", async () => {

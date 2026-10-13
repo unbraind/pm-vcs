@@ -1880,10 +1880,12 @@ export class Repository {
   log(revision: string, limit = 50): LogEntry[] {
     const entries: LogEntry[] = [];
     let cursor: ObjectId | undefined = this.resolve(revision);
+    // Read the partial-clone state once per walk: each read parses partial.json.
+    const shallow = new Set(this.objects.partialState()?.shallow ?? []);
     while (cursor !== undefined && entries.length < limit) {
       const commit = readCommit(this.objects, cursor);
       entries.push({ id: cursor, commit, changeId: effectiveChangeId(cursor, commit) });
-      cursor = this.objects.partialState()?.shallow.includes(cursor) === true ? undefined : commit.parents[0];
+      cursor = shallow.has(cursor) ? undefined : commit.parents[0];
     }
     return entries;
   }

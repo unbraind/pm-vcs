@@ -55,12 +55,14 @@ export const DEFAULT_CONFLICT_LABELS: ConflictLabels = { ours: "ours", base: "ba
 export function reachable(store: ObjectStore, start: ObjectId): Set<ObjectId> {
   const seen = new Set<ObjectId>();
   const pending = [start];
+  // Read the partial-clone state once per walk: each read parses partial.json.
+  const shallow = new Set(store.partialState()?.shallow ?? []);
   while (pending.length > 0) {
     const id = pending.pop() as ObjectId;
     if (seen.has(id)) continue;
     seen.add(id);
     const commit = readCommit(store, id);
-    if (store.partialState()?.shallow.includes(id) !== true) pending.push(...commit.parents);
+    if (!shallow.has(id)) pending.push(...commit.parents);
   }
   return seen;
 }
