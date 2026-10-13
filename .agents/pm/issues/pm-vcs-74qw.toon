@@ -2,14 +2,17 @@ id: pm-vcs-74qw
 title: Make sparse view widening and narrowing descriptor-safe against ancestor replacement
 description: "Separate from PR 96 materializeTree/restore review scope. Repository.setView retains path-based rmSync/mkdirSync/writeFileSync/chmodSync after its preflight. A disposable fixture stages branch/leaf.txt, narrows to visible/**, then swaps branch for an outside-directory symlink at widening mkdirSync: setView(null) overwrites the outside sentinel. Apply the shared pinned-directory mutation boundary to widening/narrowing with deterministic race tests and preserve sparse preflight/view/index behavior."
 type: Issue
-status: in_progress
+status: closed
 priority: 0
 tags: []
 created_at: "2026-10-07T22:47:10.756Z"
-updated_at: "2026-10-12T11:42:12.789Z"
+updated_at: "2026-10-12T13:11:27.286Z"
+closed_at: "2026-10-12T13:11:27.191Z"
+completed_at: "2026-10-12T13:11:27.191Z"
 author: codex-sol
-expected_result: Concurrent ancestor substitution refuses without changing outside or nested control state.
-actual_result: Synthetic widening reproduction overwrote an independent outside sentinel.
+resolution: "setView widening and narrowing mutate the working tree only through the shared WorktreeMutation boundary: adopted for setView's writes, removals and pruning in #97 (3380621), and completed in #104, which runs pruning before the view and sparse index are published so a typed worktree_path_changed refusal leaves the previous view and index recorded. #104 adds 40 deterministic setView race tests on real repositories."
+expected_result: "Widening and narrowing refuse a concurrently replaced ancestor without writing or deleting outside the working tree, with deterministic race tests, and sparse preflight, view and index behaviour preserved."
+actual_result: "On main at dc6af8a the 40 setView race cases (mkdir, exclusive write, unlink and prune steps; outside-directory and nested-control replacements; pinned and portable strategies) assert the typed refusal, byte-identical outside and control sentinels with unchanged modes, and an unchanged recorded view. Reverting only the prune reorder fails 16 of them. npm and bun release:check passed 1470/1470 each at 100% all-source coverage. Merged with every required check green at its head and no unresolved review thread."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-nz10,related,"2026-10-07T22:47:10.756Z",codex-sol,"cli:create:dep",detected
 comments[8]{created_at,author,text}:
@@ -31,4 +34,5 @@ tests[4]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   "bun run release:check",project,codex-sol,"2026-10-12T11:42:08.500Z",local_mutation,fix/sparse-view-descriptor-safety
 docs[1]{path,scope}:
   docs/working-tree-mutations.md,project
+close_reason: "Delivered by https://github.com/unbraind/pm-vcs/pull/104 (merged as dc6af8a), on top of the shared boundary adoption in #97."
 body: ""

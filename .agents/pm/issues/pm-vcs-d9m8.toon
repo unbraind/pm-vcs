@@ -6,6 +6,8 @@ status: open
 priority: 2
 tags[3]: bundle,growth,self-host
 created_at: "2026-10-12T07:01:35.310Z"
-updated_at: "2026-10-12T07:01:35.310Z"
+updated_at: "2026-10-12T10:52:12.063Z"
 author: pi-agent
+comments[1]{created_at,author,text}:
+  "2026-10-12T10:52:12.063Z",claude-orchestrator,"pm-vcs-7ydb closed via PR 102: the bundle no longer grows per regeneration, but the one-year source-growth projection (about 46 MiB) leaves little headroom under GitHub's 50 MiB warning. This item owns that remainder."
 body: ""
