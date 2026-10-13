@@ -6,13 +6,11 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-13T12:06:42.555Z"
-updated_at: "2026-10-13T15:13:26.753Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-13T16:31:33.202Z"
 author: codex-agent
 acceptance_criteria: Dry run changes no payloads; --apply only deletes unreachable objects; oplog undo and active leases always retain their payloads; real processes race GC against push without losing objects; interrupted sweep can safely retry.
 parent: pm-vcs-b7cb
-comments[9]{created_at,author,text}:
+comments[12]{created_at,author,text}:
   "2026-10-13T12:06:58.106Z",codex-agent,"Audit: closed scale children implement fragments, range reads, sparse shared instances and typed authorized obliteration. Reachability already exists in bundle traversal and closure validation. No GC command or shallow/partial transfer exists. GC must also retain staged/conflict payloads and disconnected upload receipts, and refuse corrupt root metadata before deletion."
   "2026-10-13T12:22:34.561Z",codex-agent,"Implemented locked mark-and-sweep with strict root preflight, all ref namespaces, both oplog transition endpoints, detached HEAD, current and retired shared-instance indexes, pending merges, series and manifest descendants. Active receiver file leases conservatively retain all objects, including unattributed arrivals. Durable upload pins are recorded before writes; GC retires pins only after proving ref ownership. Dry run leaves objects untouched."
   "2026-10-13T12:35:43.744Z",codex-agent,"Behavioural revert proof: removing only collectGarbage operation-log root collection makes the oplog-only displaced-history regression fail with three reachable-history addresses selected for deletion. Restoring the function restores the safety invariant. Active leases deliberately retain unattributed arrivals conservatively; abandoned receipt expiry is tracked separately."
@@ -22,6 +20,9 @@ comments[9]{created_at,author,text}:
   "2026-10-13T15:06:55.061Z",codex-agent,"Continuation review: verify the existing implementation and exact-head gates with the repo-pinned pm. Existing uncommitted paths are generated evidence artifacts; review committed source, repeat behavioral revert proofs, and regenerate self-host after final tracker receipts. No agents will be launched."
   "2026-10-13T15:12:10.635Z",codex-agent,"Continuation behavioral revert proofs repeated: removing only oplog root collection fails the displaced-history test; omitting held parents behind stale shallow metadata fails ancestor retention. Each mutation produces exactly one regression failure and is restored. No source artifacts or local paths will be published."
   "2026-10-13T15:13:26.753Z",codex-agent,"Restored implementation verification: repo-pinned pm test pm-vcs-phase6gc --run --progress passes all 19 linked tests, including real-process GC/push, upload/publication interruption and killed sweep recovery. Full strict tracker health passes after CI-equivalent extension installation; only pre-existing advisory warnings remain."
+  "2026-10-13T15:47:31.094Z",codex-agent,"Implementation head 43dc17f passes the complete npm run release:check with isolated HOME and Git identity. All 1501 tests pass with zero failure, skip, cancellation or todo; all 61 production files measure 100 percent statements, branches, functions and lines. Native TOON, stat cache, self-host equality, audit, pack, changelog and release-policy gates pass. CI Node 22/26 and both Windows launchers also pass. Greptile is unavailable after trial expiry; CodeRabbit requires manual review, so neither supplies approval. Upload abandonment remains the existing separate follow-up."
+  "2026-10-13T16:30:53.125Z",pi-agent,"Continuation re-verification: discarding only the operation-log root collection from collectGarbage (validation retained) fails exactly the displaced-history regression with three reachable-history addresses selected for deletion; restoring it passes all 19 linked tests again through the repo-pinned pm."
+  "2026-10-13T16:30:54.366Z",pi-agent,"Bun release gate completed at the implementation head: 1501/1501 tests pass with zero fail, skip, cancellation or todo and unchanged 100 percent statements, branches, functions and lines; the full chain through self-host acceptance, changelog check and publish attestation succeeds. The npm gate receipt was recorded earlier; both gates now have complete results."
 files[5]{path,scope}:
   engine/gc.ts,project
   engine/objects.ts,project
