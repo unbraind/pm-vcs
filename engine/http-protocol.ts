@@ -12,6 +12,7 @@ import { PublicationLeaseError, type LeaseProof } from "./publication-leases.ts"
 // the two from drifting into dialects that agree only by accident.
 
 import { isIP } from "node:net";
+import { FORGE_READ_ENDPOINT, FORGE_WRITE_ENDPOINT } from "./forge.ts";
 
 import { redactUserinfo } from "./credentials.ts";
 import { isObjectId, type ObjectId, type ObjectType, OBJECT_TYPES, ObjectStoreError } from "./objects.ts";
@@ -41,6 +42,8 @@ export const LEASE_ENDPOINT = "leases";
 
 /** Endpoint suffixes an HTTP request path may end with, longest first so nested ones match. */
 const ENDPOINT_SUFFIXES = [
+  FORGE_READ_ENDPOINT,
+  FORGE_WRITE_ENDPOINT,
   LEASE_ENDPOINT,
   UPLOAD_ENDPOINT,
   OBJECT_FETCH_ENDPOINT,
@@ -62,7 +65,7 @@ const ENDPOINT_SUFFIXES = [
  * @returns True when only a write grant may perform it.
  */
 export function isWriteEndpoint(endpoint: string): boolean {
-  return endpoint === LEASE_ENDPOINT || endpoint === PUSH_ENDPOINT || endpoint === UPLOAD_ENDPOINT || endpoint === PUBLISH_ENDPOINT;
+  return endpoint === FORGE_WRITE_ENDPOINT || endpoint === LEASE_ENDPOINT || endpoint === PUSH_ENDPOINT || endpoint === UPLOAD_ENDPOINT || endpoint === PUBLISH_ENDPOINT;
 }
 
 /**

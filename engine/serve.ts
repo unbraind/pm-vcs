@@ -22,6 +22,8 @@ import { parseBundle } from "./bundle.ts";
 import { ObjectStoreError } from "./objects.ts";
 import { BRANCH_PREFIX, TAG_PREFIX } from "./refs.ts";
 import { FileTransport } from "./transport.ts";
+import { FORGE_READ_ENDPOINT, FORGE_WRITE_ENDPOINT, parseForgeRequest } from "./forge.ts";
+import { encodeRecord } from "./model.ts";
 import { isServableRepositoryDirectory, ServedRepositoryDirectories } from "./served-repositories.ts";
 import {
   ADVERTISE_ENDPOINT,
@@ -876,6 +878,14 @@ async function dispatchServedRequest(
   }
   const request = decodeWireObject(body);
   if (request === null) throw new ObjectStoreError("bad_request", `The ${endpoint} request body is not a JSON object.`);
+  if (endpoint === FORGE_READ_ENDPOINT || endpoint === FORGE_WRITE_ENDPOINT) {
+    const forge = parseForgeRequest(request);
+    // A writer cannot smuggle publication through a read-granted endpoint.
+    if ((forge.action === "publish") !== (endpoint === FORGE_WRITE_ENDPOINT)) throw new ObjectStoreError("bad_request", "Forge operation does not match its endpoint grant.");
+    if (forge.bundle !== undefined && parseBundle(Buffer.from(forge.bundle, "base64")).lines.length > limits.maxUploadObjects) throw limitExceeded(`A series publication may carry at most ${limits.maxUploadObjects} objects.`);
+    const result = await served.transport().forge(forge, principal);
+    return { status: 200, body: encodeRecord(result), contentType: JSON_CONTENT_TYPE };
+  }
   if (endpoint === LEASE_ENDPOINT) {
     const lease = await served.transport().lease(parseLeaseRequest(request), principal);
     return { status: 200, body: Buffer.from(JSON.stringify({ lease }) + "\n"), contentType: JSON_CONTENT_TYPE };

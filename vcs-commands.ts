@@ -19,6 +19,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { registerCompositionCommands } from "./composition-commands.ts";
+import { registerForgeCommands } from "./forge-commands.ts";
 import { VcsError } from "./git.ts";
 import {
   type ImportReport,
@@ -376,6 +377,7 @@ function remoteListing(repository: Repository, head: ObjectId | null): RemoteBra
  */
 export function registerVcsCommands(api: ExtensionApi): void {
   registerCompositionCommands(api);
+  registerForgeCommands(api);
   api.registerCommand({
     name: "vcs init",
     description:

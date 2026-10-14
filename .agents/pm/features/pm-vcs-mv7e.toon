@@ -1,0 +1,28 @@
+id: pm-vcs-mv7e
+title: Prove served forge tenant isolation and receiver lease refusals
+description: "Real server process and temp repositories exercise object/ref/series/review read write copy list update denials, absence equivalence, timing class and all typed publication lease reasons."
+type: Feature
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-10-14T19:47:15.721Z"
+updated_at: "2026-10-14T20:35:51.918Z"
+assignee: codex-agent
+claim_principal: codex-agent
+author: codex-agent
+acceptance_criteria: "Real server process denies read/write/copy/list/update across tenants for objects, refs, series and reviews with equal absent-response envelopes and timing class; read-grant smuggling is rejected; both series and ref publication reject all four required typed lease reasons without moving roots."
+parent: pm-vcs-5h6j
+comments[3]{created_at,author,text}:
+  "2026-10-14T20:01:22.286Z",codex-agent,"Real separate server process exercises all resource and operation classes against existing and absent tenants, exact denial envelopes, timing class and read-grant write smuggling. Ref and series publication both reject all four required typed lease reasons without moving roots. Focused process tests passing; full gates and behavioural revert proofs next."
+  "2026-10-14T20:05:24.429Z",codex-agent,"Behavioral revert proof: restored only engine/http-protocol.ts isWriteEndpoint to its origin/main implementation, rebuilt dist, and ran node --test --test-name-pattern='denies every cross-tenant' test/served-forge.test.ts. Exit 1: Missing expected rejection (forbidden); a read-granted caller could publish a review. Restored current function and rebuilt."
+  "2026-10-14T20:09:11.383Z",codex-agent,"Repository-pinned pm test pm-vcs-mv7e --run --progress passed 3/3; exit 0, zero failures/skips/cancellations/todos. The existing project disables persistent test-result tracking; this comment retains the verified receipt without changing policy."
+files[3]{path,scope}:
+  engine/http-protocol.ts,project
+  engine/serve.ts,project
+  test/served-forge.test.ts,project
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-name-pattern='real served process denies|real served forge and ref|forge envelopes' test/served-forge.test.ts,project,codex-agent,"2026-10-14T20:05:18.709Z",local_mutation,feat/served-patch-series-and-review
+  node --test --test-name-pattern='forge publication obeys' test/served-forge.test.ts,project,codex-agent,"2026-10-14T20:15:45.071Z",local_mutation,feat/served-patch-series-and-review
+docs[1]{path,scope}:
+  docs/served-forge.md,project
+body: ""

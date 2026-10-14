@@ -142,6 +142,12 @@ pm vcs diff main feature
 | `pm vcs push [remote]` | Send branches (`--branch`) with explicit live FileId leases. Refuses a non-fast-forward unless `--force`. |
 | `pm vcs lease <acquire\|renew\|release\|break\|inspect> <FileId> [remote]` | Manage receiver-owned fenced publication leases (`--refs`, `--ttl-ms`, `--fence`). |
 | `pm vcs serve` | Serve one repository or a directory of repositories over HTTP. `--listen`, `--root` and `--auth` configure the address, root and bearer grants. |
+| `pm vcs series create <base> <tip> --description <text>` | Produce a canonical native patch series. |
+| `pm vcs series push <name> <id> [remote] --branch <ref>` | Propose a named series with explicit FileId leases; `--expected <id>` revises it and resets review to pending. |
+| `pm vcs series list [remote]` / `pm vcs series fetch <name> [remote]` | Discover or import served proposals without moving a working branch. |
+| `pm vcs series apply <id>` / `pm vcs series rederive <id>` | Apply fetched patches or compare rederived canonical series bytes. |
+| `pm vcs review list [remote]` / `pm vcs review fetch <name> [remote]` | Discover or import native review records and their recorded outcomes. |
+| `pm vcs review update <name> [remote] --base <revision> --fields <json>` | Merge changed fields concurrently; record deterministic same-field resolution. |
 | `pm vcs verify` | Re-read every reachable object and check it against its id. |
 | `pm vcs trace <path-or-file-id>` | Trace one logical file across edits, moves, copies and deletion. |
 | `pm vcs files <item-id>` | Resolve a PM item's linked arbitrary files to stable identities and changes. |
@@ -409,6 +415,13 @@ files partially changed; its replacement index is not published. See
 slash for a directory, a pattern without `/` matching by basename at any depth, and `!` to
 re-include. Staging an ignored path *by name* is refused rather than skipped — staging
 nothing while reporting success is how a commit ends up missing a file.
+
+The native forge serves patch series and review records through the same repository
+grants as refs and objects. Agents can propose → review → land with
+[the served forge workflow](docs/served-forge.md). Review updates merge per field,
+and genuine same-field disagreements record both values and their deterministic
+resolution. Series publication checks receiver-owned FileId leases under the
+declared landing branch scope.
 
 Served pushes re-hash every arriving object and verify the complete reachable closure before
 publishing refs. The same fast-forward and compare-and-swap rules apply to file and HTTP
