@@ -285,11 +285,12 @@ export function decodeIndex(contents: string): IndexEntry[] {
             || encodedFileId === null || encodedCopiedFrom === encodedFileId))))) {
         throw new ObjectStoreError("corrupt_index", `Index line "${line}" has an invalid mode, object id, or path.`);
       }
+      const entry: IndexEntry = { mode, id, path,
+        ...(typeof encodedFileId === "string" ? { fileId: encodedFileId } : {}),
+        ...(typeof encodedCopiedFrom === "string" ? { copiedFrom: encodedCopiedFrom } : {}),
+        ...(encodedSparse === true ? { sparse: true } : {}) };
       if (encodedStat === null) {
-        entries.push({ mode, id, path,
-          ...(typeof encodedFileId === "string" ? { fileId: encodedFileId } : {}),
-          ...(typeof encodedCopiedFrom === "string" ? { copiedFrom: encodedCopiedFrom } : {}),
-          ...(encodedSparse === true ? { sparse: true } : {}) });
+        entries.push(entry);
         continue;
       }
       const statPatterns = [/^\d+$/, /^-?\d+$/, /^-?\d+$/, /^\d+$/, /^\d+$/, /^\d+$/] as const;
@@ -299,12 +300,7 @@ export function decodeIndex(contents: string): IndexEntry[] {
         throw new ObjectStoreError("corrupt_index", `Index line "${line}" has invalid cached file metadata.`);
       }
       entries.push({
-        mode,
-        id,
-        path,
-        ...(typeof encodedFileId === "string" ? { fileId: encodedFileId } : {}),
-        ...(typeof encodedCopiedFrom === "string" ? { copiedFrom: encodedCopiedFrom } : {}),
-        ...(encodedSparse === true ? { sparse: true } : {}),
+        ...entry,
         stat: {
           size: BigInt(encodedStat[0]),
           mtimeNs: BigInt(encodedStat[1]),

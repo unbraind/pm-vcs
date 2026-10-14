@@ -958,17 +958,18 @@ test("main --check still fails when a non-excluded source file changes after an 
 });
 
 test("isMainInvocation returns true when argv[1] resolves to the module URL", () => {
-  const url = pathToFileURL(join("/tmp", "self-host.ts")).href;
-  assert.equal(isMainInvocation(["node", "/tmp/self-host.ts"], url), true);
+  const script = join(import.meta.dirname, "../scripts/self-host.ts");
+  const url = pathToFileURL(script).href;
+  assert.equal(isMainInvocation(["node", script], url), true);
 });
 
 test("isMainInvocation returns false when argv[1] is a different script", () => {
-  const url = pathToFileURL(join("/tmp", "self-host.ts")).href;
-  assert.equal(isMainInvocation(["node", "/tmp/other.ts"], url), false);
+  const url = pathToFileURL(join(import.meta.dirname, "../scripts/self-host.ts")).href;
+  assert.equal(isMainInvocation(["node", import.meta.filename], url), false);
 });
 
 test("isMainInvocation returns false when argv[1] is undefined", () => {
-  assert.equal(isMainInvocation(["node"], "file:///tmp/self-host.ts"), false);
+  assert.equal(isMainInvocation(["node"], import.meta.url), false);
 });
 
 test("readCommittedFile throws when git cannot be launched", () => {

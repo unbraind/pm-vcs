@@ -22,11 +22,12 @@
  * ```
  */
 
-import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { analyzeDocstringCoverage } from "pm-ops/docstrings";
+import { isMainInvocation } from "./main-invocation.ts";
+
+export { isMainInvocation };
 
 /** Outcome of one gate run, held as plain strings so a test can inspect it. */
 interface GateResult {
@@ -110,52 +111,4 @@ export function main(args: readonly string[]): void {
   process.exitCode = result.exitCode;
 }
 
-/**
- * Whether this module is the process entry point rather than a test import.
- *
- * Both sides are canonicalised through `realpathSync` before comparison. A
- * launcher reaching this file through a symlink (an npm bin shim, a linked
- * workspace) would otherwise compare unequal and skip the gate silently.
- *
- * Resolving only `argv[1]` would be enough under Node's defaults, where the
- * ESM loader realpaths a module before recording `import.meta.url`. It is not
- * enough under `--preserve-symlinks`/`--preserve-symlinks-main`, which leave
- * `moduleUrl` holding the symlink while `realpathSync(entry)` resolves it.
- * The two would then compare unequal on a direct invocation and the gate would
- * exit 0 without scanning — the exact silent skip this function exists to
- * prevent, reintroduced by a runtime flag. Canonicalising both sides adds a
- * second `realpathSync` and removes the dependence on how Node was launched.
- *
- * An unresolvable `argv[1]` **propagates** rather than returning false. The two
- * outcomes are not equally safe: returning false means `npm run docstring`
- * exits 0 having scanned nothing, which is a required release check reporting
- * success without doing its job — the one failure this gate exists to prevent.
- * Letting `realpathSync` throw turns that into a loud non-zero exit. The case
- * requires `argv[1]` to stop resolving after Node has already loaded this file,
- * so in practice it means the environment is broken, and a broken environment
- * must not silently satisfy a gate.
- *
- * A genuinely different entry path still returns false, which is how a test
- * importing this module declines to run the gate.
- *
- * @param argv - The process argv to inspect.
- * @param moduleUrl - The `import.meta.url` of the module that might be main.
- * @returns True when `argv[1]` and `moduleUrl` canonicalise to the same path,
- *          false when they canonicalise to different ones.
- * @throws Whatever `realpathSync` throws when either path cannot be resolved.
- */
-export function isMainInvocation(argv: readonly string[], moduleUrl: string): boolean {
-  const entry = argv[1];
-  if (entry === undefined) return false;
-  return realpathSync(entry) === realpathSync(fileURLToPath(moduleUrl));
-}
-
-// Run only when invoked directly, not when imported by the test suite. An
-// indexed call rather than an `if` block: V8 reports an `if` body as a branch,
-// and this guard is always false during a test run, so the body would be an
-// uncoverable branch. The placeholder takes the same argument as `main` so
-// element 0 - the one a test-run import invokes - is a covered function call
-// rather than an unused expression.
-[(_args: readonly string[]): void => {}, main][Number(isMainInvocation(process.argv, import.meta.url))](
-  process.argv.slice(2),
-);
+if (isMainInvocation(process.argv, import.meta.url)) main(process.argv.slice(2));

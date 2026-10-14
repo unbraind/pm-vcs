@@ -27,7 +27,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainInvocation } from "./main-invocation.ts";
+
+export { isMainInvocation };
 
 import {
   exportBundle,
@@ -849,26 +851,4 @@ export function main(root: string, args: readonly string[]): void {
   }
 }
 
-/**
- * Whether the script is being invoked directly rather than imported by a
- * test. Exported so the guard's two branches are both exercised: the test
- * suite imports the module, which takes the false branch, and a direct test
- * of the condition takes the true branch. The check is path resolution and
- * URL comparison, not a trivial constant.
- *
- * @param argv - The process argv slice to inspect.
- * @param moduleUrl - The `import.meta.url` of the module that might be main.
- * @returns True when `argv[1]` resolves to this module's own URL.
- */
-export function isMainInvocation(argv: readonly string[], moduleUrl: string): boolean {
-  return argv[1] !== undefined && pathToFileURL(resolve(argv[1])).href === moduleUrl;
-}
-
-// Run only when invoked directly, not when imported by the test suite.
-// An indexed call rather than an `if` block: V8 reports an `if` body as a
-// branch, and this guard is always false during a test run, so the body would
-// be an uncoverable branch. The indexed call has no conditional block. The
-// placeholder accepts the same arguments as `main` so element 0 (the one a
-// test-run import invokes) is a covered function call, not an unused expression;
-// the real defaults live here at the call site, not inside `main`.
-[(_root: string, _args: readonly string[]): void => {}, main][Number(isMainInvocation(process.argv, import.meta.url))](resolve(import.meta.dirname, ".."), process.argv);
+if (isMainInvocation(process.argv, import.meta.url)) main(resolve(import.meta.dirname, ".."), process.argv);

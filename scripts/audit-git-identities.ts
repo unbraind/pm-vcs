@@ -15,7 +15,9 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainInvocation } from "./main-invocation.ts";
+
+export { isMainInvocation };
 
 const defaultRepoRoot = resolve(import.meta.dirname, "..");
 const gitTimeoutMs = 120_000;
@@ -301,15 +303,6 @@ export async function main(root: string, allowlistPath: string): Promise<void> {
   }
 }
 
-/** Returns whether the current process directly invoked this module. */
-export function isMainInvocation(argv: readonly string[], moduleUrl: string): boolean {
-  return argv[1] !== undefined && pathToFileURL(resolve(argv[1])).href === moduleUrl;
+if (isMainInvocation(process.argv, import.meta.url)) {
+  await main(defaultRepoRoot, resolve(defaultRepoRoot, ".github/approved-git-identities.txt"));
 }
-
-await [
-  async (_root: string, _allowlistPath: string): Promise<void> => {},
-  main,
-][Number(isMainInvocation(process.argv, import.meta.url))]!(
-  defaultRepoRoot,
-  resolve(defaultRepoRoot, ".github/approved-git-identities.txt"),
-);

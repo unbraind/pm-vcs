@@ -359,10 +359,10 @@ test("stream transport reports a real broken stdin pipe", async () => {
 });
 
 test("main invocation detection resolves matching, different, and absent scripts", () => {
-  const script = resolve("/tmp/audit-git-identities.ts");
+  const script = resolve(import.meta.dirname, "../scripts/audit-git-identities.ts");
   const url = pathToFileURL(script).href;
   assert.equal(isMainInvocation(["node", script], url), true);
-  assert.equal(isMainInvocation(["node", "/tmp/other.ts"], url), false);
+  assert.equal(isMainInvocation(["node", import.meta.filename], url), false);
   assert.equal(isMainInvocation(["node"], url), false);
 });
 

@@ -17,7 +17,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { isMainInvocation } from "./pm-environment.ts";
+import { isMainInvocation } from "./main-invocation.ts";
 
 import { ObjectStore } from "../engine/objects.ts";
 import { type CdcParams } from "../engine/model.ts";
@@ -161,6 +161,18 @@ function fmt(n: number): string {
   return n.toFixed(2);
 }
 
+/** Measure and format front, middle and end edits with the same fragment writer. */
+function formattedReuse(
+  store: ObjectStore,
+  corpus: Buffer,
+  editSize: number,
+  writeFn: Parameters<typeof measureReuse>[4],
+): string {
+  const [front, mid, end] = [0, Math.floor(corpus.length / 2), corpus.length]
+    .map((position) => measureReuse(store, corpus, position, editSize, writeFn).reuseFraction * 100);
+  return `${fmt(front).padStart(10)}% | ${fmt(mid).padStart(8)}% | ${fmt(end).padStart(8)}%`;
+}
+
 /**
  * Runs the benchmark: measures reuse, chunk size, and throughput for CDC and
  * fixed-size chunking across candidate parameters on a deterministic corpus.
@@ -201,13 +213,11 @@ export function main(): void {
       let maxChunk = 0;
       for (const f of result.manifest.fragments) if (f.length > maxChunk) maxChunk = f.length;
 
-      const front = measureReuse(store, corpus, 0, editSize, (s, c) => writeCdcFragmented(s, c, params));
-      const mid = measureReuse(store, corpus, Math.floor(corpusSize / 2), editSize, (s, c) => writeCdcFragmented(s, c, params));
-      const end = measureReuse(store, corpus, corpusSize, editSize, (s, c) => writeCdcFragmented(s, c, params));
+      const reuse = formattedReuse(store, corpus, editSize, (s, c) => writeCdcFragmented(s, c, params));
 
       console.log(
         `${name.padEnd(38)} | ${fmt(avgChunk).padStart(7)} | ${String(result.manifest.fragments.length).padStart(5)} | ` +
-        `${fmt(front.reuseFraction * 100).padStart(10)}% | ${fmt(mid.reuseFraction * 100).padStart(8)}% | ${fmt(end.reuseFraction * 100).padStart(8)}% | ${maxChunk}`,
+        `${reuse} | ${maxChunk}`,
       );
       rmSync(dir, { recursive: true, force: true });
     }
@@ -221,13 +231,11 @@ export function main(): void {
       const store = new ObjectStore(join(dir, "objects"));
       const result = writeFragmented(store, corpus, size);
 
-      const front = measureReuse(store, corpus, 0, editSize, (s, c) => writeFragmented(s, c, size));
-      const mid = measureReuse(store, corpus, Math.floor(corpusSize / 2), editSize, (s, c) => writeFragmented(s, c, size));
-      const end = measureReuse(store, corpus, corpusSize, editSize, (s, c) => writeFragmented(s, c, size));
+      const reuse = formattedReuse(store, corpus, editSize, (s, c) => writeFragmented(s, c, size));
 
       console.log(
         `${String(size).padStart(12)} | ${String(result.manifest.fragments.length).padStart(5)} | ` +
-        `${fmt(front.reuseFraction * 100).padStart(10)}% | ${fmt(mid.reuseFraction * 100).padStart(8)}% | ${fmt(end.reuseFraction * 100).padStart(8)}%`,
+        reuse,
       );
       rmSync(dir, { recursive: true, force: true });
     }

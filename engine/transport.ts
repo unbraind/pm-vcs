@@ -176,7 +176,7 @@ export interface Transport {
    * @throws ObjectStoreError When a move is not a fast-forward and `force` is
    *   false, or when another writer changed a ref between observation and write.
    */
-  push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date, proofs?: readonly LeaseProof[]): Promise<PushReceipt>;
+  push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date, proofs?: LeaseProofs): Promise<PushReceipt>;
 
   /**
    * Asks the receiver which of the offered objects it still lacks.
@@ -222,7 +222,7 @@ export interface Transport {
    *   observation and this publication; with the {@link Transport.push} refusal
    *   codes for non-fast-forward moves and unpushable refs.
    */
-  publish(updates: readonly PushUpdate[], force: boolean, now: Date, proofs?: readonly LeaseProof[]): Promise<PushReceipt>;
+  publish(updates: readonly PushUpdate[], force: boolean, now: Date, proofs?: LeaseProofs): Promise<PushReceipt>;
 }
 
 /**
@@ -275,6 +275,15 @@ function assertPushableRef(update: PushUpdate): void {
   assertRefName(update.ref);
 }
 
+/** Validate all requested names before deriving the unique roots of publication. */
+function publicationRoots(updates: readonly PushUpdate[]): ObjectId[] {
+  for (const update of updates) assertPushableRef(update);
+  return [...new Set(updates.map((update) => update.next))];
+}
+
+/** Immutable fencing evidence supplied to a receiver's publication operation. */
+type LeaseProofs = readonly LeaseProof[];
+
 /**
  * A remote repository on the same filesystem.
  */
@@ -292,6 +301,11 @@ export class FileTransport implements Transport {
   private readonly acceptedThisConnection: ObjectId[] = [];
   /** Proofs explicitly acquired by this connection; never implicitly acquired during publication. */
   private readonly proofs = new Map<string, LeaseProof>();
+
+  /** Snapshot only the proofs explicitly acquired by this transport connection. */
+  private leaseProofs(): LeaseProofs {
+    return [...this.proofs.values()];
+  }
 
   /**
    * @param url - The location as configured, for error messages.
@@ -368,11 +382,11 @@ export class FileTransport implements Transport {
   }
 
   /** Verify incoming closure and fast-forward policy before atomically publishing requested receiver refs. */
-  async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date, proofs: readonly LeaseProof[] = [...this.proofs.values()], principal: ReceiverPrincipal = filesystemPrincipal()): Promise<PushReceipt> {
+  async push(bundle: Buffer, updates: readonly PushUpdate[], force: boolean, now: Date, proofs: LeaseProofs = this.leaseProofs(), principal: ReceiverPrincipal = filesystemPrincipal()): Promise<PushReceipt> {
     const repository = this.open();
     return repository.objects.withWriteLock(/** Import validation, policy, refs and receipt share one synchronous publication lease. */ () => {
-      for (const update of updates) assertPushableRef(update);
-      const { added, metadata } = importBundleObjects(repository.objects, bundle, [...new Set(updates.map(/** Include every requested target, even when absent from advertised refs. */ (update) => update.next))]);
+      const roots = publicationRoots(updates);
+      const { added, metadata } = importBundleObjects(repository.objects, bundle, roots);
       for (const update of updates) {
         const current = repository.refs.read(update.ref);
         if (current === null || current === update.next) continue;
@@ -407,7 +421,7 @@ export class FileTransport implements Transport {
   }
 
   /** Apply a complete ref batch with authoritative lease validation under both store and ref locks. */
-  private moveRefs(repository: Repository, updates: readonly PushUpdate[], proofs: readonly LeaseProof[], principal: ReceiverPrincipal, metadata: ClosureMetadata): void {
+  private moveRefs(repository: Repository, updates: readonly PushUpdate[], proofs: LeaseProofs, principal: ReceiverPrincipal, metadata: ClosureMetadata): void {
     const leases = new PublicationLeases(repository.objects, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, principal);
     repository.refs.transaction(updates.map(/** Preserve the sender observation as the receiver CAS expectation. */ (update) => ({ name: update.ref, expected: update.expected, next: update.next })),
       /** Check expiry at the publication linearization point, using only the receiver clock. */ () => leases.assertPublication(updates, proofs, metadata));
@@ -474,7 +488,7 @@ export class FileTransport implements Transport {
   }
 
   /** Verify the uploaded closure, then publish every ref move as one compare-and-swap transaction. */
-  async publish(updates: readonly PushUpdate[], force: boolean, now: Date, proofs: readonly LeaseProof[] = [...this.proofs.values()], principal: ReceiverPrincipal = filesystemPrincipal()): Promise<PushReceipt> {
+  async publish(updates: readonly PushUpdate[], force: boolean, now: Date, proofs: LeaseProofs = this.leaseProofs(), principal: ReceiverPrincipal = filesystemPrincipal()): Promise<PushReceipt> {
     const repository = this.open();
     // Claimed at entry and cleared on every attempt, refused ones included:
     // an accumulator that survives a refusal would report this attempt's
@@ -483,8 +497,8 @@ export class FileTransport implements Transport {
     const added = [...this.acceptedThisConnection];
     this.acceptedThisConnection.length = 0;
     return repository.objects.withWriteLock(/** Held objects cannot be erased between the shared integrity walk and atomic ref publication. */ () => {
-      for (const update of updates) assertPushableRef(update);
-      const metadata = requireClosure(repository.objects, [...new Set(updates.map(/** Share verified structure across all publication roots, without retaining leaf bytes. */ (update) => update.next))], [], undefined, [], null);
+      const roots = publicationRoots(updates);
+      const metadata = requireClosure(repository.objects, roots, [], undefined, [], null);
       for (const update of updates) {
         const current = repository.refs.read(update.ref);
         if (current === update.next) continue;

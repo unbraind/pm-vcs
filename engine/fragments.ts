@@ -53,6 +53,13 @@ function assertFragmentSize(fragmentSize: number, code: string): void {
   }
 }
 
+/** Yield fixed-size views without allocating or changing the caller's buffer. */
+function* fixedChunks(content: Buffer, fragmentSize: number): IterableIterator<Buffer> {
+  for (let offset = 0; offset < content.length; offset += fragmentSize) {
+    yield content.subarray(offset, Math.min(offset + fragmentSize, content.length));
+  }
+}
+
 /**
  * Reads content from an open file descriptor in fixed-size chunks and writes each
  * chunk as a content-addressed blob.
@@ -150,8 +157,7 @@ export function writeFragmented(
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
   return store.withWriteLock(/** Publish all fixed fragments and their manifest under one reentrant lease. */ () => {
     const writer = new ManifestWriter(store, fileId);
-    for (let offset = 0; offset < content.length; offset += fragmentSize) {
-      const chunk = content.subarray(offset, Math.min(offset + fragmentSize, content.length));
+    for (const chunk of fixedChunks(content, fragmentSize)) {
       writer.add({ id: store.write("blob", chunk, fileId), length: chunk.length });
     }
     return writer.finish();
@@ -400,8 +406,7 @@ export function fragmentedContentId(
 ): ObjectId {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
   const writer = new ManifestWriter();
-  for (let offset = 0; offset < content.length; offset += fragmentSize) {
-    const chunk = content.subarray(offset, Math.min(offset + fragmentSize, content.length));
+  for (const chunk of fixedChunks(content, fragmentSize)) {
     writer.add({ id: hashObject("blob", chunk), length: chunk.length });
   }
   return writer.finish().manifestId;

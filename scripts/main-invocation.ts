@@ -1,8 +1,7 @@
 /**
  * Shared entry-point guard for the executable scripts in this package.
  *
- * All three shipped scripts (the coverage gate, the docstring gate and the
- * merge-driver preparer) must behave identically when imported by their suites
+ * Every guarded script must behave identically when imported by its suite
  * versus executed as `main`, so the comparison lives in exactly one measured
  * module and can never drift between copies.
  */

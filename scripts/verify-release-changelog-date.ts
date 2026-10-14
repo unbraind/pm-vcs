@@ -19,7 +19,9 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainInvocation } from "./main-invocation.ts";
+
+export { isMainInvocation };
 
 /** Every spelling that tells the generator which version it is rendering.
  *
@@ -361,22 +363,6 @@ export function report(result: VerifierResult): void {
   for (const note of result.notes) process.stdout.write(`${note}\n`);
   for (const failure of result.failures) process.stderr.write(`FAIL: ${failure}\n`);
   process.exitCode = result.failures.length === 0 ? 0 : 1;
-}
-
-/**
- * Whether this module is the process entry point.
- *
- * Kept as a named function rather than an inline comparison so the suite can
- * execute both answers; a guard nothing exercises is how an entry point stops
- * running and nobody notices.
- *
- * @param argv - The process argv to judge.
- * @param moduleUrl - The module's own `import.meta.url`.
- * @returns True when argv names this module as the script being run.
- */
-export function isMainInvocation(argv: string[], moduleUrl: string): boolean {
-  const script = argv[1];
-  return script !== undefined && moduleUrl === pathToFileURL(resolve(script)).href;
 }
 
 /**
