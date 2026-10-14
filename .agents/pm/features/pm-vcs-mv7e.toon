@@ -6,16 +6,15 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-14T19:47:15.721Z"
-updated_at: "2026-10-14T20:35:51.918Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-14T21:33:17.811Z"
 author: codex-agent
 acceptance_criteria: "Real server process denies read/write/copy/list/update across tenants for objects, refs, series and reviews with equal absent-response envelopes and timing class; read-grant smuggling is rejected; both series and ref publication reject all four required typed lease reasons without moving roots."
 parent: pm-vcs-5h6j
-comments[3]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-10-14T20:01:22.286Z",codex-agent,"Real separate server process exercises all resource and operation classes against existing and absent tenants, exact denial envelopes, timing class and read-grant write smuggling. Ref and series publication both reject all four required typed lease reasons without moving roots. Focused process tests passing; full gates and behavioural revert proofs next."
   "2026-10-14T20:05:24.429Z",codex-agent,"Behavioral revert proof: restored only engine/http-protocol.ts isWriteEndpoint to its origin/main implementation, rebuilt dist, and ran node --test --test-name-pattern='denies every cross-tenant' test/served-forge.test.ts. Exit 1: Missing expected rejection (forbidden); a read-granted caller could publish a review. Restored current function and rebuilt."
   "2026-10-14T20:09:11.383Z",codex-agent,"Repository-pinned pm test pm-vcs-mv7e --run --progress passed 3/3; exit 0, zero failures/skips/cancellations/todos. The existing project disables persistent test-result tracking; this comment retains the verified receipt without changing policy."
+  "2026-10-14T21:33:13.603Z",codex-agent,"Implementation commit 97375e18844a188bb98c5110cec65194cb25b03b verified. npm run release:check with a fresh HOME, GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1: exit 0, 1523/1523 tests. bun run release:check: exit 0, 1523/1523 tests. Both: zero failed/skipped/cancelled/todo; per-file 100% statements/branches/functions/lines over all 65 production files; zero lint warnings, 0% duplicates, 354 documented declarations; native TOON, stat-cache strace, committed self-host equality, production audit, Git identities, pack dry run, full changelog check, release date and publish attestation all pass. Ten served-forge scenarios pass, with real server-process tenant/lease evidence and applied-HEAD byte-identical rederivation. Authorization and field-merge behavioral rollbacks failed as expected, then current code was restored and rebuilt. No dependency pins changed and no Phase 6 implementation was added."
 files[3]{path,scope}:
   engine/http-protocol.ts,project
   engine/serve.ts,project

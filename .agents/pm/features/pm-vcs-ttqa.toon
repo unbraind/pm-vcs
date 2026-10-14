@@ -6,17 +6,16 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-14T19:47:14.135Z"
-updated_at: "2026-10-14T20:35:49.896Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-14T21:33:15.347Z"
 author: codex-agent
 acceptance_criteria: Named series list/fetch/create/CAS-update work over file and HTTP transports; an independent served clone applies on the original base and rederives from applied HEAD byte-identically; complete binary fragment closure and earlier proposal roots survive transfer and collection.
 parent: pm-vcs-5h6j
-comments[4]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-10-14T20:01:19.053Z",codex-agent,"Implemented native series catalog refs, explicit branch lease validation, file/HTTP forge capability and installed pm vcs create/push/list/fetch/apply/rederive workflow. Series export reuses complete bundle closure, including binary fragment descendants. Earlier proposals have immutable native archive roots."
   "2026-10-14T20:09:07.204Z",codex-agent,"Repository-pinned pm test pm-vcs-ttqa --run --progress passed 4/4; exit 0, zero failures/skips/cancellations/todos. The existing project disables persistent test-result tracking; this comment retains the verified receipt without changing policy."
   "2026-10-14T20:21:49.528Z",codex-agent,"Full-suite discovery requires updating the explicit production inventory from 63 to 65 because engine/forge.ts and forge-commands.ts are new measured source files. Coverage still requires 100% statements, branches, functions and lines per file; no ignores or threshold reductions. FileTransport forge publication now reuses the shared lease authority when its receiver is a linked instance; the real linked-instance regression passes."
   "2026-10-14T20:31:28.690Z",codex-agent,"Strengthened the served command acceptance: applying on the original series base now uses native fast-forward, preserving commit IDs, and the independent clone explicitly rederives from its applied HEAD to the same series ID. Applying on another HEAD keeps native cherry-pick behavior and its refusal/attribution rules. This proves applied-range identity, beyond rederiving only the transferred original objects."
+  "2026-10-14T21:33:11.372Z",codex-agent,"Implementation commit 97375e18844a188bb98c5110cec65194cb25b03b verified. npm run release:check with a fresh HOME, GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1: exit 0, 1523/1523 tests. bun run release:check: exit 0, 1523/1523 tests. Both: zero failed/skipped/cancelled/todo; per-file 100% statements/branches/functions/lines over all 65 production files; zero lint warnings, 0% duplicates, 354 documented declarations; native TOON, stat-cache strace, committed self-host equality, production audit, Git identities, pack dry run, full changelog check, release date and publish attestation all pass. Ten served-forge scenarios pass, with real server-process tenant/lease evidence and applied-HEAD byte-identical rederivation. Authorization and field-merge behavioral rollbacks failed as expected, then current code was restored and rebuilt. No dependency pins changed and no Phase 6 implementation was added."
 files[8]{path,scope}:
   engine/bundle.ts,project
   engine/forge.ts,project

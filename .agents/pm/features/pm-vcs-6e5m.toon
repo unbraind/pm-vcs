@@ -6,16 +6,15 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-14T19:47:14.900Z"
-updated_at: "2026-10-14T20:35:51.005Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-14T21:33:16.579Z"
 author: codex-agent
 acceptance_criteria: "Concurrent reviewers changing different fields both publish without conflict; same-field disagreement resolves deterministically and records both values, rule, chosen value and receiver principal; prior-version bases cannot approve a revised proposal."
 parent: pm-vcs-5h6j
-comments[3]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-10-14T20:01:20.827Z",codex-agent,"Review updates merge changed fields against a validated ancestor revision. Disjoint fields converge; same-field scalar disagreements choose canonical minimum and persist both values, rule and authenticated principal in a native outcome record. Proposal revision resets review to pending; stale prior-version updates fail closed."
   "2026-10-14T20:05:27.194Z",codex-agent,"Behavioral revert proof: changed only the mergeServedReview merge call from field mediation against current+proposed to mergeRecords(base, base, proposed, REVIEW_MERGE_POLICY), reproducing whole-record overwrite. Rebuilt dist and ran node --test --test-name-pattern='concurrent reviewers' test/served-forge.test.ts. Exit 1: reviewer was lost and approved status reverted to pending. Restored field merge and rebuilt. The new function has no origin/main implementation; this is a targeted behavioral rollback rather than an unrelated failure."
   "2026-10-14T20:09:09.506Z",codex-agent,"Repository-pinned pm test pm-vcs-6e5m --run --progress passed 1/1; exit 0, zero failures/skips/cancellations/todos. The existing project disables persistent test-result tracking; this comment retains the verified receipt without changing policy."
+  "2026-10-14T21:33:12.282Z",codex-agent,"Implementation commit 97375e18844a188bb98c5110cec65194cb25b03b verified. npm run release:check with a fresh HOME, GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1: exit 0, 1523/1523 tests. bun run release:check: exit 0, 1523/1523 tests. Both: zero failed/skipped/cancelled/todo; per-file 100% statements/branches/functions/lines over all 65 production files; zero lint warnings, 0% duplicates, 354 documented declarations; native TOON, stat-cache strace, committed self-host equality, production audit, Git identities, pack dry run, full changelog check, release date and publish attestation all pass. Ten served-forge scenarios pass, with real server-process tenant/lease evidence and applied-HEAD byte-identical rederivation. Authorization and field-merge behavioral rollbacks failed as expected, then current code was restored and rebuilt. No dependency pins changed and no Phase 6 implementation was added."
 files[3]{path,scope}:
   engine/forge.ts,project
   engine/review.ts,project
