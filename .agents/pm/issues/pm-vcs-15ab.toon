@@ -1,0 +1,19 @@
+id: pm-vcs-15ab
+title: "The packed-consumer acceptance test hardcodes the pinned SDK version, so every pm-cli dependency update fails CI"
+description: "test/composition-consumer.test.ts asserted the installed @unbrained/pm-cli version and the consumer's reported sdk field against the literal 2026.10.10. Dependabot's pm toolchain update (pull request 107, 2026.10.10 to 2026.10.11) therefore failed test (22) and test (26) with actual 2026.10.11 versus expected 2026.10.10, and every later pm-cli bump would fail the same way, although nothing was wrong with the bump. The test's intent is that the consumer runs exactly the SDK this repository pins, so it now reads the exact devDependency pin from package.json, refuses a range, and asserts the installed SDK and the reported sdk against that pin."
+type: Issue
+status: closed
+priority: 1
+tags[3]: ci,dependencies,tests
+created_at: "2026-10-14T19:48:29.732Z"
+updated_at: "2026-10-14T19:48:36.883Z"
+closed_at: "2026-10-14T19:48:36.858Z"
+completed_at: "2026-10-14T19:48:36.858Z"
+author: claude-hub
+acceptance_criteria: The consumer acceptance test passes at the current pin and with the pin moved to a newer pm-cli release without editing the test; a non-exact pin is refused
+files[1]{path,scope,note}:
+  test/composition-consumer.test.ts,project,reads the exact SDK pin instead of a literal
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref},note}:
+  node --test test/composition-consumer.test.ts,project,claude-hub,"2026-10-14T19:48:32.004Z",local_mutation,fix/consumer-test-follows-sdk-pin,passes at the 2026.10.10 pin and with the pin moved to 2026.10.14
+close_reason: "Fixed in test/composition-consumer.test.ts: the consumer now asserts the exact @unbrained/pm-cli devDependency pin read from package.json and refuses a range. Verified: the test passes at the 2026.10.10 pin, and passes again with the pin moved to 2026.10.14 and that release installed (reported sdk 2026.10.14), with no edit to the test."
+body: ""
