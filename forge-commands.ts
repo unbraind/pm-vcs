@@ -3,11 +3,11 @@ import type { CommandHandlerContext, ExtensionApi } from "@unbrained/pm-cli/sdk/
 import { openRepository, optionalString, requiredArgument, signatureFor } from "./vcs-commands.ts";
 import { importBundleObjects } from "./engine/bundle.ts";
 import { decodeRecord, readSeries, type RecordDocument } from "./engine/model.ts";
-import { ObjectStoreError } from "./engine/objects.ts";
+import { isObjectId, ObjectStoreError } from "./engine/objects.ts";
 import { createSeries, exportSeriesBundle, rederiveSeries } from "./engine/series.ts";
 import { remoteLeaseProofs } from "./engine/lease-workflows.ts";
 import { openTransport } from "./engine/transport.ts";
-import type { ForgeRequest } from "./engine/forge.ts";
+import { readForgeReview, type ForgeRequest } from "./engine/forge.ts";
 import type { Repository } from "./engine/repo.ts";
 import { isAncestor } from "./engine/merge.ts";
 
@@ -103,7 +103,11 @@ export function registerForgeCommands(api: ExtensionApi): void {
           importBundleObjects(repository.objects, Buffer.from(result.bundle as string, "base64"));
           const ref = `refs/forge-${kind}/${request.name!}`;
           const before = repository.refs.read(ref);
-          const after = (kind === "series" ? result.id : result.revision) as string;
+          const after = kind === "series" ? result.id : result.revision;
+          if (typeof after !== "string" || !isObjectId(after)) throw new ObjectStoreError("invalid_object_id", "The fetched forge root is not a valid object id.");
+          if (!repository.objects.has(after)) throw new ObjectStoreError("object_not_found", "The fetched forge root is absent from the local object store.");
+          if (kind === "series") readSeries(repository.objects, after);
+          else readForgeReview(repository, after);
           repository.refs.compareAndSwap(ref, before, after);
           repository.operations.append("forge-fetch", "Fetched verified native forge objects.", [{ ref, before, after }], new Date());
         });

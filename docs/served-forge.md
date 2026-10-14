@@ -24,9 +24,17 @@ Acquire a live lease for **every stable FileId in the proposed history**, includ
 the base and intermediate patches, under the branch you intend to publish to.
 `series push` carries the explicitly saved proofs; it never acquires a lease
 implicitly. Receiver-clock expiration, foreign ownership, missing proofs and
-out-of-scope branches return the same typed reasons as ordinary ref publication:
-`lease_expired`, `lease_wrong_principal`, `lease_missing`, `lease_out_of_scope`.
-A stale generation also returns `lease_fenced`.
+out-of-scope branches return HTTP 400, as does a stale generation. These refusals
+use separate wire `error.code` and `error.reason` fields, exactly as ordinary ref
+publication does:
+
+| `error.code` | `error.reason` |
+| --- | --- |
+| `lease_expired` | `expired` |
+| `lease_wrong_principal` | `wrong_principal` |
+| `lease_missing` | `missing` |
+| `lease_out_of_scope` | `out_of_scope` |
+| `lease_fenced` | `fenced` |
 
 To revise a proposal, create its new series and push with
 `--expected <observed-series-id>`. A changed catalog returns `publication_race`.
@@ -43,7 +51,12 @@ pm vcs review update proposal origin --base <review-revision> --fields '{"commen
 pm vcs review update proposal origin --base <review-revision> --fields '{"status":"approved","verdict":"pass"}'
 ```
 
-Fetch verifies and imports native bundle objects, retaining them with local
+Fetch verifies and imports native bundle objects, then validates the returned
+root's object id, local presence and native kind before moving a catalog ref.
+Series roots must decode as series; review revisions must decode as commits
+containing native `review.json` and `outcome.json` records. Invalid roots raise
+a typed object-store error and leave the catalog ref and operation log unchanged.
+Successful fetches retain objects with local
 catalog refs and operation-log transitions. It moves no working branch. The
 review fetch receipt contains its record, revision and recorded outcome.
 Send only changed fields in `--fields`; `--base` must be a revision from that
@@ -111,6 +124,9 @@ temporary repositories. Its named scenarios cover:
 - `real served forge and ref publication reject missing expired foreign and out-of-branch leases with typed reasons`;
 - `native forge CAS updates reset review state and reject foreign or stale review bases`;
 - `series bundles include fragment closure and rederive identical binary proposal bytes in a fresh served store`.
+- `forge fetch validates remote roots before catalog CAS`, with refusal cases
+  for non-string, malformed, absent and wrong-kind roots for both catalog kinds,
+  plus commits missing required review records.
 
 The tenant regression checks all five operation classes for all four resource
 kinds against existing and absent tenants, exact denial bytes and median local

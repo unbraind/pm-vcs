@@ -69,7 +69,7 @@ function catalogRef(kind: ForgeRequest["kind"], name: string): string {
 }
 
 /** Read a native review's document and recorded resolution from its history commit. */
-function reviewState(repository: Repository, revision: string): { document: RecordDocument; outcome: RecordDocument } {
+export function readForgeReview(repository: Repository, revision: string): { document: RecordDocument; outcome: RecordDocument } {
   const entries = readTree(repository.objects, readCommit(repository.objects, revision).tree);
   /** Refuse malformed review commits instead of interpreting arbitrary record trees. */
   const record = (name: string): RecordDocument => {
@@ -141,8 +141,8 @@ function publishReview(repository: Repository, request: ForgeRequest, principal:
   if (request.expected === null || !isAncestor(repository.objects, request.expected!, current)) {
     throw new ObjectStoreError("invalid_review_base", "Review updates require a revision from this review's history.");
   }
-  const state = reviewState(repository, current);
-  const base = reviewState(repository, request.expected!).document;
+  const state = readForgeReview(repository, current);
+  const base = readForgeReview(repository, request.expected!).document;
   if (base.series !== state.document.series) throw new ObjectStoreError("stale_review_series", "The proposal changed; fetch its current review before updating.");
   const merged = mergeServedReview(base, state.document, { ...base, ...request.fields! });
   const outcome = { ...merged.outcome, principal: principal.principal, base: request.expected!, previous: current };
@@ -160,7 +160,7 @@ export function serveForge(repository: Repository, input: ForgeRequest, principa
     if (request.action === "publish") return request.kind === "series" ? publishSeries(repository, request, principal) : publishReview(repository, request, principal);
     const id = repository.refs.read(catalogRef(request.kind, request.name!));
     if (id === null) throw new ObjectStoreError(`missing_${request.kind}`, `The ${request.kind} is not available.`);
-    if (request.kind === "review") return { revision: id, ...reviewState(repository, id), bundle: exportBundle(repository.objects, repository.refs, [catalogRef("review", request.name!)]).toString("base64") };
+    if (request.kind === "review") return { revision: id, ...readForgeReview(repository, id), bundle: exportBundle(repository.objects, repository.refs, [catalogRef("review", request.name!)]).toString("base64") };
     return { id, bundle: exportSeriesBundle(repository.objects, id).toString("base64") };
   });
 }

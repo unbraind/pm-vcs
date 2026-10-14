@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createServer } from "node:http";
 import { test } from "node:test";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
@@ -16,6 +17,7 @@ import { decodeRecord, encodeRecord, readCommit, readSeries, readTree, writeComm
 import { mergeServedReview, parseForgeRequest, serveForge } from "../engine/forge.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { PublicationLeaseError, type FileLease } from "../engine/publication-leases.ts";
+import { ObjectStoreError } from "../engine/objects.ts";
 import { DEFAULT_SERVE_LIMITS, DENIED_BODY } from "../engine/http-protocol.ts";
 import { startRepositoryServer, TokenGrants } from "../engine/serve.ts";
 import { writeFragmented } from "../engine/fragments.ts";
@@ -386,6 +388,62 @@ test("extension forge command defaults explicit remotes and refusal paths use re
     const absentFields = await harness.runCommand({ command: "vcs review update", args: ["commands"], pmRoot: source.sender.root });
     assert.match(absentFields.errorMessage!, /--fields/);
   } finally { source.directory.cleanup(); }
+});
+
+test("forge fetch validates remote roots before catalog CAS", async t => {
+  const source = fixture(); const server = await serverProcess(source.directory.root);
+  const sandbox = createSandbox({ mergeInstall: false, commitFence: false });
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  let answer: RecordDocument = {};
+  const responder = createServer((request, response) => {
+    request.resume(); response.setHeader("content-type", "application/json"); response.end(JSON.stringify(answer));
+  });
+  try {
+    await propose(server.wire, source);
+    await new Promise<void>(resolve => { responder.listen(0, "127.0.0.1", resolve); });
+    const address = responder.address(); assert.ok(address !== null && typeof address !== "string");
+    const repository = Repository.init(sandbox.root);
+    repository.remotes.add("origin", `http://127.0.0.1:${address.port}/tenant-a`);
+    for (const kind of ["series", "review"] as const) {
+      const valid = await server.wire.forge({ action: "fetch", kind, name: "proposal" });
+      importBundleObjects(repository.objects, Buffer.from(valid.bundle as string, "base64"));
+      const field = kind === "series" ? "id" : "revision";
+      const ref = `refs/forge-${kind}/proposal`;
+      const before = valid[field] as string;
+      const command = `vcs ${kind} fetch`;
+      const handler = harness.activation.commands.handlers.find(entry => entry.command === command)!;
+      /** Call the real registered handler directly so the SDK dispatcher cannot flatten the typed error. */
+      const run = async (name: string) => handler.run({ command, args: [name], options: {}, global: {}, pm_root: sandbox.pmRoot, source_workspace_root: sandbox.root });
+      const cases = [
+        { name: "non-string id", id: 17, code: "invalid_object_id" },
+        { name: "syntactically invalid id", id: "invalid", code: "invalid_object_id" },
+        { name: "valid id absent from bundle", id: "f".repeat(64), code: "object_not_found" },
+        { name: "object of wrong kind", id: kind === "series" ? source.tip : source.id, code: "object_type_mismatch" },
+        ...(kind === "review" ? [{ name: "commit missing review records", id: source.tip, code: "invalid_review" }] : []),
+      ];
+      for (const [index, scenario] of cases.entries()) await t.test(`${kind} fetch refuses ${scenario.name} and preserves the ref`, async () => {
+        const name = `proposal-${index}`;
+        const ref = `refs/forge-${kind}/${name}`;
+        repository.refs.compareAndSwap(ref, null, before);
+        const operations = repository.operations.read();
+        assert.equal(repository.objects.has("f".repeat(64)), false);
+        answer = { ...valid, [field]: scenario.id };
+        await assert.rejects(() => run(name), (error: unknown) => {
+          assert.ok(error instanceof ObjectStoreError); assert.equal(error.code, scenario.code); return true;
+        });
+        assert.equal(repository.refs.read(ref), before);
+        assert.deepEqual(repository.operations.read(), operations);
+      });
+      answer = valid;
+      repository.refs.compareAndSwap(ref, null, before);
+      await run("proposal");
+      assert.equal(repository.refs.read(ref), before);
+    }
+  } finally {
+    responder.closeAllConnections();
+    await new Promise<void>(resolve => { responder.close(() => resolve()); });
+    await server.close(); sandbox.cleanup(); source.directory.cleanup();
+  }
 });
 
 test("forge publication obeys receiver object bounds and refuses read operations on its write endpoint", async () => {

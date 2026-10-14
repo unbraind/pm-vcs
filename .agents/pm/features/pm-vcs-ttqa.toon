@@ -6,17 +6,21 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-14T19:47:14.135Z"
-updated_at: "2026-10-14T21:33:15.347Z"
+updated_at: "2026-10-14T22:05:16.315Z"
 author: codex-agent
 acceptance_criteria: Named series list/fetch/create/CAS-update work over file and HTTP transports; an independent served clone applies on the original base and rederives from applied HEAD byte-identically; complete binary fragment closure and earlier proposal roots survive transfer and collection.
 parent: pm-vcs-5h6j
-comments[5]{created_at,author,text}:
+comments[9]{created_at,author,text}:
   "2026-10-14T20:01:19.053Z",codex-agent,"Implemented native series catalog refs, explicit branch lease validation, file/HTTP forge capability and installed pm vcs create/push/list/fetch/apply/rederive workflow. Series export reuses complete bundle closure, including binary fragment descendants. Earlier proposals have immutable native archive roots."
   "2026-10-14T20:09:07.204Z",codex-agent,"Repository-pinned pm test pm-vcs-ttqa --run --progress passed 4/4; exit 0, zero failures/skips/cancellations/todos. The existing project disables persistent test-result tracking; this comment retains the verified receipt without changing policy."
   "2026-10-14T20:21:49.528Z",codex-agent,"Full-suite discovery requires updating the explicit production inventory from 63 to 65 because engine/forge.ts and forge-commands.ts are new measured source files. Coverage still requires 100% statements, branches, functions and lines per file; no ignores or threshold reductions. FileTransport forge publication now reuses the shared lease authority when its receiver is a linked instance; the real linked-instance regression passes."
   "2026-10-14T20:31:28.690Z",codex-agent,"Strengthened the served command acceptance: applying on the original series base now uses native fast-forward, preserving commit IDs, and the independent clone explicitly rederives from its applied HEAD to the same series ID. Applying on another HEAD keeps native cherry-pick behavior and its refusal/attribution rules. This proves applied-range identity, beyond rederiving only the transferred original objects."
   "2026-10-14T21:33:11.372Z",codex-agent,"Implementation commit 97375e18844a188bb98c5110cec65194cb25b03b verified. npm run release:check with a fresh HOME, GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1: exit 0, 1523/1523 tests. bun run release:check: exit 0, 1523/1523 tests. Both: zero failed/skipped/cancelled/todo; per-file 100% statements/branches/functions/lines over all 65 production files; zero lint warnings, 0% duplicates, 354 documented declarations; native TOON, stat-cache strace, committed self-host equality, production audit, Git identities, pack dry run, full changelog check, release date and publish attestation all pass. Ten served-forge scenarios pass, with real server-process tenant/lease evidence and applied-HEAD byte-identical rederivation. Authorization and field-merge behavioral rollbacks failed as expected, then current code was restored and rebuilt. No dependency pins changed and no Phase 6 implementation was added."
-files[8]{path,scope}:
+  "2026-10-14T21:58:55.824Z",codex-agent,"Review round 1: verified that forge fetch trusts remote catalog ids before ref CAS. Plan: validate string syntax, local presence and native catalog kind under the existing writer lock, test hostile HTTP responses and prove the absent-object regression fails with only the guard reverted. Verify and document lease wire code/reason fields. Keep all existing release thresholds."
+  "2026-10-14T22:03:52.010Z",codex-agent,"Behavioural revert proof: removed only the fetch-root validation in forge-commands.ts (and now-unused imports), rebuilt with npm run build, then ran node --test --test-name-pattern=\"forge fetch validates remote roots\" test/served-forge.test.ts. Exit 1: 0 pass, 10 fail. Both independent subtests, series fetch refuses valid id absent from bundle and preserves the ref and review fetch refuses valid id absent from bundle and preserves the ref, failed with Missing expected rejection: the absent remote roots were accepted. Restored the guard and rebuilt. Fixed targeted regression: 10/10 pass (9 refusal cases plus parent), zero failures/skips/cancellations. Each refusal uses its own catalog ref to prevent cascading failures."
+  "2026-10-14T22:03:54.105Z",codex-agent,"Both review findings are valid and addressed: fetched roots must be strings, valid object ids, locally present and decoded as series or native review-history commits with review.json/outcome.json records before CAS. Existing server-side series publication already decodes readSeries before transactional ref writes; review publication uses locally generated commit ids; no additional remote receipt-to-ref path exists in the forge changes. LeaseRefusal and encodeErrorBody confirm HTTP 400 with error.code lease_expired/lease_wrong_principal/lease_missing/lease_out_of_scope/lease_fenced and separate error.reason expired/wrong_principal/missing/out_of_scope/fenced; documented exact pairs. Full served-forge suite passed 20/20 before independent-case isolation; targeted final regression passed 10/10. Existing dev-only audit advisories remain tracked by pm-vcs-qfku; production audit reports zero vulnerabilities. Full unchanged-threshold npm and Bun release checks will run after the source and self-host bundle commit."
+  "2026-10-14T22:05:14.785Z",codex-agent,"Final linked-test verification: repository-pinned pm test pm-vcs-ttqa --run --only-last --progress ran node --test test/served-forge.test.ts and passed 20/20, zero failures/skips/cancellations/todos, exit 0. Final refusal cases cover both catalog kinds for non-string, malformed, absent and wrong-kind roots, plus missing review records, preserving each independent ref and operation log. The project disables persisted run results, so this comment retains the verified receipt. Handoff retains in_progress status for orchestrator verification; claim is released before changelog and self-host generation. Required full npm (isolated identity) and Bun gates plus explicit committed-HEAD self-host/changelog checks follow the implementation commit."
+files[9]{path,scope}:
   engine/bundle.ts,project
   engine/forge.ts,project
   engine/http-transport.ts,project
@@ -24,9 +28,24 @@ files[8]{path,scope}:
   engine/transport.ts,project
   forge-commands.ts,project
   test/raw-coverage.test.ts,project
+  test/served-forge.test.ts,project
   vcs-commands.ts,project
-tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
-  node --test --test-name-pattern='installed pm vcs|native forge CAS|series bundles|extension forge' test/served-forge.test.ts,project,codex-agent,"2026-10-14T20:04:57.622Z",local_mutation,feat/served-patch-series-and-review
+tests[2]:
+  - command: node --test --test-name-pattern='installed pm vcs|native forge CAS|series bundles|extension forge' test/served-forge.test.ts
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-14T20:04:57.622Z"
+      source_kind: local_mutation
+      source_ref: feat/served-patch-series-and-review
+  - command: node --test test/served-forge.test.ts
+    scope: project
+    timeout_seconds: 240
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-14T22:03:55.922Z"
+      source_kind: local_mutation
+      source_ref: feat/served-patch-series-and-review
 docs[1]{path,scope}:
   docs/served-forge.md,project
 body: ""
