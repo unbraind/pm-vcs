@@ -2,11 +2,13 @@ id: pm-vcs-op2c
 title: Make every production TypeScript script part of exact coverage and add lint and duplication gates
 description: "The current exact coverage gate reports 100/100/100 for its configured source set but omits accept-native-toon.ts and accept-stat-cache.ts; the package also has no explicit ESLint or jscpd release gate. Add behavior-driven instrumentation for every production script, a meaningful statement/branch/function/line contract where the runner supports it, parser-aware lint for the mandatory TypeScript rules, and a fail-closed duplicate-code gate without artificial tests or exclusions."
 type: Issue
-status: in_progress
+status: closed
 priority: 0
 tags[7]: coverage,docstrings,duplication,lint,quality,release-blocker,typescript
 created_at: "2026-08-07T13:01:18.790Z"
-updated_at: "2026-10-14T09:21:35.298Z"
+updated_at: "2026-10-14T15:24:45.990Z"
+closed_at: "2026-10-14T15:24:45.959Z"
+completed_at: "2026-10-14T15:24:45.959Z"
 author: codex
 estimated_minutes: 480
 acceptance_criteria: "Every source and production script is instrumented by the repository coverage command; every supported coverage dimension is exactly 100%; ESLint enforces no explicit any, no inline or dynamic imports, erasable syntax, and repository conventions; jscpd or an equivalently strict duplicate-code detector runs fail-closed; release:check and prepublishOnly include all gates; tests are behavioral and do not use coverage ignores, artificial execution, or broad exclusions"
@@ -24,6 +26,9 @@ release: Unreleased
 severity: critical
 environment: pm-vcs 2026.7.30 on Node 22 and TypeScript 7
 repro_steps: "Inspect package.json coverageGate.sources and scripts; accept-native-toon.ts and accept-stat-cache.ts are absent, and no lint or duplicate-code script is defined"
+resolution: Implemented and merged in #106 (6e1e3d2).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #106 as 6e1e3d2; checks successful at head 255eda8: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 component: quality/release
 customer_impact: A release could currently satisfy configured coverage while regressions in operational acceptance scripts or duplicated/forbidden code remain undetected
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
@@ -259,4 +264,5 @@ docs[4]:
   - path: scripts/main-invocation.ts
     scope: project
     note: Canonical invocation and fail-closed path resolution contract
+close_reason: "Delivered by #106 \"Hold every production script to exact coverage, lint and duplication gates\" (merged as 6e1e3d2). Checks successful at the PR head 255eda8: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""

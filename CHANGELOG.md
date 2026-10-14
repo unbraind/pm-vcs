@@ -4,6 +4,8 @@
 
 ### Added
 
+- Clone and fetch shallow or blob-filtered history with demand hydration ([pm-vcs-phase6partial](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6partial.toon))
+- Collect unreachable objects without losing oplog, lease or sparse-instance history ([pm-vcs-phase6gc](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6gc.toon))
 - Design committed repository links local layers and typed obliteration ([pm-vcs-8xis](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-8xis.toon))
 - Bound manifest metadata so a fragmented file's memory grows logarithmically, not linearly, with its length ([pm-vcs-8qyx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-8qyx.toon))
 - Publication refuses without a valid stable-FileId lock lease ([pm-vcs-hre2](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-hre2.toon))
@@ -46,6 +48,7 @@
 
 ### Fixed
 
+- Make every production TypeScript script part of exact coverage and add lint and duplication gates ([pm-vcs-op2c](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-op2c.toon))
 - Make sparse view widening and narrowing descriptor-safe against ancestor replacement ([pm-vcs-74qw](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-74qw.toon))
 - selfhost.bundle crossed GitHub's 50 MiB per-file warning and keeps growing with history toward the 100 MiB per-file limit ([pm-vcs-7ydb](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-7ydb.toon))
 - Exclude nested pm-vcs control directories from staging and materialization ([pm-vcs-nz10](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-nz10.toon))
