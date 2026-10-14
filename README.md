@@ -647,6 +647,8 @@ The c8 coverage gate instruments every production TypeScript file at the root an
 functions and lines for each file, including self-hosting, bundle handling and the gates
 themselves. A never-loaded module fails instead of disappearing from the report. The command
 selects `package.json` explicitly so an ambient c8 configuration cannot narrow the inventory.
+Collection uses the project's own `coverage/tmp` directory: a nested c8 process must not
+inherit and clear its parent's raw records. A real marker-file regression checks that boundary.
 
 ESLint uses the strict policy published by the pinned `pm-ops` package across production
 code and tests. It rejects explicit `any`, dynamic and inline type imports, non-erasable

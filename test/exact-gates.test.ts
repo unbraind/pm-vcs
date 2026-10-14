@@ -8,8 +8,8 @@ import test from "node:test";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 /** Run a repository-owned JavaScript or TypeScript tool in a disposable project. */
-function tool(root: string, entry: string, args: readonly string[]): SpawnSyncReturns<string> {
-  const env = { ...process.env };
+function tool(root: string, entry: string, args: readonly string[], environment: NodeJS.ProcessEnv = process.env): SpawnSyncReturns<string> {
+  const env = { ...environment };
   // A nested real test runner must start independently of the parent runner.
   delete env.NODE_TEST_CONTEXT;
   return spawnSync(process.execPath, [join(packageRoot, entry), ...args], {
@@ -53,7 +53,12 @@ test("computed fixture answers", () => {
   assert.deepEqual([answer0, answer1, answer2, answer3], [42, 42, 42, 42]);
 });
 `);
-    passed(tool(fixture.root, "node_modules/c8/bin/c8.js", args));
+    // A nested c8 process must retain earlier data in an inherited parent
+    // collection directory, even though c8 cleans its own directory on startup.
+    const parentCoverage = join(fixture.root, "parent-coverage");
+    source(fixture.root, "parent-coverage/marker.txt", "Earlier parent data must survive.\n");
+    passed(tool(fixture.root, "node_modules/c8/bin/c8.js", args, { ...process.env, NODE_V8_COVERAGE: parentCoverage }));
+    assert.equal(readFileSync(join(parentCoverage, "marker.txt"), "utf8"), "Earlier parent data must survive.\n");
     const lcov = readFileSync(join(fixture.root, "coverage/lcov.info"), "utf8");
     for (const path of paths) assert.ok(lcov.replaceAll("\\", "/").includes(path), path);
 
