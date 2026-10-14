@@ -1,7 +1,7 @@
 /** Real-process forge acceptance, authorization, field convergence and receiver lease fences. */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { test } from "node:test";
@@ -16,6 +16,7 @@ import { createSeries, exportSeriesBundle } from "../engine/series.ts";
 import { decodeRecord, encodeRecord, readCommit, readSeries, readTree, writeCommit, writeSeries, writeTree, type RecordDocument } from "../engine/model.ts";
 import { mergeServedReview, parseForgeRequest, serveForge } from "../engine/forge.ts";
 import { collectGarbage } from "../engine/gc.ts";
+import { isAncestor } from "../engine/merge.ts";
 import { PublicationLeaseError, type FileLease } from "../engine/publication-leases.ts";
 import { ObjectStoreError } from "../engine/objects.ts";
 import { DEFAULT_SERVE_LIMITS, DENIED_BODY } from "../engine/http-protocol.ts";
@@ -192,11 +193,18 @@ test("real served forge and ref publication reject missing expired foreign and o
     const bundle = exportSeriesBundle(source.sender.objects, source.id);
     const request = { action: "publish" as const, kind: "series" as const, name: "proposal", expected: null, series: source.id, branch: "refs/heads/main", bundle: bundle.toString("base64"), proofs: [] as FileLease[] };
     const updates = [{ ref: "refs/heads/main", expected: null, next: source.tip }];
+    /** Count stored objects: once the bundle closure is imported, a refused publication must add none. */
+    const storedObjects = () => readdirSync(join(source.receiver.controlDirectory, "objects"), { recursive: true, withFileTypes: true }).filter(entry => entry.isFile()).length;
+    let closureImported = false;
     /** Both kinds of publication must retain the same typed receiver reason and leave all roots unchanged. */
     const refuse = async (reason: string, proofs: FileLease[]) => {
       const predicate = (error: unknown) => { assert.ok(error instanceof PublicationLeaseError); assert.equal(error.reason, reason); assert.equal(error.fileId, source.fileId); return true; };
+      const before = storedObjects();
       await assert.rejects(server.wire.forge({ ...request, proofs }), predicate);
       await assert.rejects(server.wire.push(bundle, updates, true, new Date(0), proofs), predicate);
+      // The lease check precedes the review write, so no orphaned review record, tree or commit remains.
+      if (closureImported) assert.equal(storedObjects(), before, `a ${reason} refusal stored objects`);
+      closureImported = true;
       assert.equal(source.receiver.refs.read("refs/forge-series/proposal"), null);
       assert.equal(source.receiver.refs.read("refs/heads/main"), null);
     };
@@ -477,4 +485,27 @@ test("file forge publication from a linked instance uses the shared receiver lea
     const review = await wire.forge({ action: "fetch", kind: "review", name: "linked" });
     assert.equal((review.document as RecordDocument).series, source.id);
   } finally { source.directory.cleanup(); }
+});
+
+test("series apply never fast-forwards through an undeclared merge parent", async () => {
+  const directory = makeTempDir();
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  try {
+    const repository = Repository.init(join(directory.root, "merge-series"));
+    const store = repository.objects;
+    const base = commit(repository, "base");
+    const declaredTree = commit(repository, "declared"), sideTree = commit(repository, "side"), tipTree = commit(repository, "tip");
+    // base <- declared <- merge -> side -> base: the series declares only `declared` and `merge`.
+    const declared = writeCommit(store, { ...readCommit(store, declaredTree), parents: [base] });
+    const side = writeCommit(store, { ...readCommit(store, sideTree), parents: [base] });
+    const merge = writeCommit(store, { ...readCommit(store, tipTree), parents: [declared, side] });
+    repository.reset(base, "hard", new Date());
+    const series = writeSeries(store, { base, patches: [{ commit: declared }, { commit: merge }], description: "merge proposal", author });
+    const applied = await harness.runCommand({ command: "vcs series apply", args: [series], pmRoot: repository.root });
+    assert.equal(applied.errorMessage, undefined, applied.errorMessage ?? "series apply refused");
+    const head = (applied.result as RecordDocument).commit as string;
+    assert.notEqual(head, merge);
+    assert.equal(isAncestor(store, side, head), false, "the undeclared merge parent entered the applied history");
+    assert.equal(readTree(store, readCommit(store, head).tree).length > 0, true);
+  } finally { directory.cleanup(); }
 });

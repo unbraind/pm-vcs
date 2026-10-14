@@ -121,6 +121,9 @@ function publishSeries(repository: Repository, request: ForgeRequest, principal:
   const oldTip = oldSeries === null ? null : oldSeries.patches.at(-1)!.commit;
   const metadata = requireClosure(store, [...roots, ...(oldTip === null ? [] : [oldTip])], [], undefined, [], null);
   const leases = new PublicationLeases(store, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, principal);
+  const leaseUpdates = roots.map(next => ({ ref: request.branch!, expected: oldTip, next }));
+  // Refuse before writing review objects; the check inside the ref transaction below stays authoritative.
+  leases.assertPublication(leaseUpdates, request.proofs!, metadata);
   const oldReview = repository.refs.read(reviewRef);
   const review = writeReview(repository, createReviewRecord(request.series!, "pending"), { action: "propose", principal: principal.principal, series: request.series! }, oldReview, principal);
   // Review history refers to earlier proposal identities; immutable archive refs retain their complete closure.
@@ -128,7 +131,7 @@ function publishSeries(repository: Repository, request: ForgeRequest, principal:
   const updates = [{ name: ref, expected: previous, next: request.series! }, { name: reviewRef, expected: oldReview, next: review },
     { name: archive, expected: repository.refs.read(archive), next: request.series! }];
   repository.refs.transaction(updates,
-    /** Check every patch root, including side histories, at the catalog publication point. */ () => leases.assertPublication(roots.map(next => ({ ref: request.branch!, expected: oldTip, next })), request.proofs!, metadata));
+    /** Check every patch root, including side histories, at the catalog publication point. */ () => leases.assertPublication(leaseUpdates, request.proofs!, metadata));
   repository.operations.append("forge-series", "Published native proposal and pending review.", updates.map(update => ({ ref: update.name, before: update.expected, after: update.next })), new Date());
   return { id: request.series!, revision: review };
 }

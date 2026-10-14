@@ -9,7 +9,7 @@ import { remoteLeaseProofs } from "./engine/lease-workflows.ts";
 import { openTransport } from "./engine/transport.ts";
 import { readForgeReview, type ForgeRequest } from "./engine/forge.ts";
 import type { Repository } from "./engine/repo.ts";
-import { isAncestor } from "./engine/merge.ts";
+import { isAncestor, reachable } from "./engine/merge.ts";
 
 /** Resolve a configured remote and keep its credential separate from printable command results. */
 function remote(repository: Repository, name: string) {
@@ -56,8 +56,11 @@ export function registerForgeCommands(api: ExtensionApi): void {
         const now = new Date();
         const author = signatureFor(context, now);
         const tip = series.patches.at(-1)!.commit;
-        // Landing on the original base preserves the exact commits and permits rederivation from the applied HEAD.
-        if (repository.refs.resolveHead() === series.base && isAncestor(repository.objects, series.base, tip)) {
+        // Landing on the original base preserves the exact commits and permits rederivation from the applied HEAD,
+        // but only when base..tip holds exactly the declared patches: a merge patch's other parent must never
+        // enter the applied history undeclared.
+        if (repository.refs.resolveHead() === series.base && isAncestor(repository.objects, series.base, tip)
+          && rangeIsExactlyDeclared(repository, series.base, tip, series.patches.map(patch => patch.commit))) {
           repository.merge(tip, { message: "Apply native series\n", author }, now);
           return { ok: true, commit: repository.refs.resolveHead()! };
         }
@@ -127,4 +130,20 @@ export function registerForgeCommands(api: ExtensionApi): void {
       return { ok: true, ...await remote(repository, context.args[1]?.trim() || "origin").forge({ action: "publish", kind: "review", name: proposalName(context), expected: flag(context, "base"), fields }) };
     },
   });
+}
+
+/**
+ * Whether the commits reachable from `tip` but not from `base` are exactly the declared patch commits.
+ *
+ * @param repository - Repository holding the commits.
+ * @param base - The series base (exclusive).
+ * @param tip - The last declared patch (inclusive).
+ * @param declared - Every declared patch commit.
+ * @returns True when a fast-forward to `tip` adds no undeclared commit.
+ */
+function rangeIsExactlyDeclared(repository: Repository, base: string, tip: string, declared: readonly string[]): boolean {
+  const excluded = reachable(repository.objects, base);
+  const range = [...reachable(repository.objects, tip)].filter(id => !excluded.has(id));
+  const expected = new Set(declared);
+  return range.length === expected.size && range.every(id => expected.has(id));
 }
