@@ -48,6 +48,7 @@
 
 ### Fixed
 
+- The packed-consumer acceptance test hardcodes the pinned SDK version, so every pm-cli dependency update fails CI ([pm-vcs-15ab](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-15ab.toon))
 - Make every production TypeScript script part of exact coverage and add lint and duplication gates ([pm-vcs-op2c](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-op2c.toon))
 - Make sparse view widening and narrowing descriptor-safe against ancestor replacement ([pm-vcs-74qw](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-74qw.toon))
 - selfhost.bundle crossed GitHub's 50 MiB per-file warning and keeps growing with history toward the 100 MiB per-file limit ([pm-vcs-7ydb](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-7ydb.toon))

@@ -9,6 +9,10 @@ import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 
+/** The exact SDK version this repository pins. Dependency updates move the pin, so the consumers assert the pin rather than a literal that every bump would break. */
+const pinnedSdk: string = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).devDependencies["@unbrained/pm-cli"];
+assert.match(pinnedSdk, /^\d+\.\d+\.\d+(?:-\d+)?$/, `the @unbrained/pm-cli devDependency must be an exact version, got ${pinnedSdk}`);
+
 /** Identical consumer program exercises the built CLI harness and engine through package-owned imports. */
 const consumer = `
 import assert from "node:assert/strict";
@@ -31,7 +35,7 @@ import { FileTransport } from "pm-vcs/dist/engine/transport.js";
 import { hashObject } from "pm-vcs/dist/engine/objects.js";
 import { exportBundle, importBundleObjects, serializeBundle } from "pm-vcs/dist/engine/bundle.js";
 const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
-assert.equal(installedSdk.version, "2026.10.10");
+assert.equal(installedSdk.version, ${JSON.stringify(pinnedSdk)});
 const cliExecutable = process.argv[4];
 if (process.argv[2] === "node-project-cli") {
   const version = spawnSync(process.execPath, [cliExecutable, "--version"], { encoding: "utf8" });
@@ -329,7 +333,7 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-project-cli"]]) {
       // The installed CLI scenario runs multiple real CLI and package-install processes serially.
       const result = spawnSync(runtime, [script, scenario, archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 900_000 });
-      assert.equal(result.status, 0, `${scenario}: ${result.signal ?? result.error ?? "nonzero exit"}; ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: "2026.10.10", linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true });
+      assert.equal(result.status, 0, `${scenario}: ${result.signal ?? result.error ?? "nonzero exit"}; ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: pinnedSdk, linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true });
       console.log(`consumer scenario ${scenario}: ${result.stdout}`);
     }
   } finally { temporary.cleanup(); }
