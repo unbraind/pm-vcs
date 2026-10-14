@@ -642,10 +642,25 @@ npm run coverage     # all production TypeScript at 100/100/100/100
 npm run release:check
 ```
 
-The c8 coverage gate instruments every production TypeScript file with `--all` and requires
-100% statements, branches, functions, and lines. A never-loaded module therefore fails instead
-of disappearing from the report. ESLint rejects unsafe or non-erasable TypeScript syntax, the
-docstring gate covers production declarations, and jscpd permits no production clone.
+The c8 coverage gate instruments every production TypeScript file at the root and under
+`src/`, `engine/` and `scripts/` with `--all`. It requires exactly 100% statements, branches,
+functions and lines for each file, including self-hosting, bundle handling and the gates
+themselves. A never-loaded module fails instead of disappearing from the report. The command
+selects `package.json` explicitly so an ambient c8 configuration cannot narrow the inventory.
+
+ESLint uses the strict policy published by the pinned `pm-ops` package across production
+code and tests. It rejects explicit `any`, dynamic and inline type imports, non-erasable
+syntax and repository convention violations. The docstring gate uses `pm-ops/docstrings`.
+The duplication launcher uses `pm-ops/duplication` with the pinned jscpd 5 binary, a zero
+threshold, a 50-token floor and a one-line floor. It enumerates all production sources,
+reconciles the detector's scan count at a one-token floor, and rejects empty or incomplete
+scans. Detector subprocesses run outside consumer configuration. The optional `fast-glob`
+peer required by this pinned fleet analyzer is installed explicitly.
+
+`test/exact-gates.test.ts` runs real processes against disposable projects to prove omitted
+sources, untested branches, forbidden syntax, short clones and hostile configuration fail
+closed. It also invokes the operational scripts directly. `release:check` includes lint,
+duplication, docstrings and coverage; `prepublishOnly` requires that complete release gate.
 
 Tests run against real repositories and real filesystems. There are no mocks and no
 hand-built `api` doubles: this is filesystem and merge code, and a fake of either would only

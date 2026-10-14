@@ -645,8 +645,7 @@ async function routeServedRequest(
     if (mutating && !context.unauthenticatedWrites) return { response: { status: FORBIDDEN_STATUS, body: READONLY_BODY, contentType: JSON_CONTENT_TYPE }, addressed: null };
     const served = openServedRepository(context, addressed.repository);
     if (served === null) return { response: denial(), addressed };
-    const body = await readBoundedBody(request, mutating ? context.limits.maxBodyBytes : Math.min(context.limits.maxBodyBytes, context.limits.maxReadBodyBytes));
-    return { response: await dispatchServedRequest(served, addressed.endpoint, body, context, { principal: "http:open", breakLeases: false }), addressed };
+    return { response: await dispatchBoundedRequest(request, served, addressed.endpoint, context, { principal: "http:open", breakLeases: false }), addressed };
   }
   const token = bearerToken(request.headers.authorization) ?? "";
   const grants = context.grants;
@@ -666,8 +665,21 @@ async function routeServedRequest(
   if (mutating && access !== "write") {
     return { response: { status: FORBIDDEN_STATUS, body: FORBIDDEN_BODY, contentType: JSON_CONTENT_TYPE }, addressed };
   }
-  const body = await readBoundedBody(request, mutating ? context.limits.maxBodyBytes : Math.min(context.limits.maxBodyBytes, context.limits.maxReadBodyBytes));
-  return { response: await dispatchServedRequest(served, addressed.endpoint, body, context, grants.principal(token, addressed.repository)), addressed };
+  return { response: await dispatchBoundedRequest(request, served, addressed.endpoint, context, grants.principal(token, addressed.repository)), addressed };
+}
+
+/** Read an authorized request under its endpoint bound before dispatching it. */
+async function dispatchBoundedRequest(
+  request: IncomingMessage,
+  served: ServedRepository,
+  endpoint: string,
+  context: ServeContext,
+  principal: ReceiverPrincipal,
+): Promise<ServedResponse> {
+  const limit = isWriteEndpoint(endpoint) ? context.limits.maxBodyBytes
+    : Math.min(context.limits.maxBodyBytes, context.limits.maxReadBodyBytes);
+  const body = await readBoundedBody(request, limit);
+  return dispatchServedRequest(served, endpoint, body, context, principal);
 }
 
 /**

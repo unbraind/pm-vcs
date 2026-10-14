@@ -1,0 +1,12 @@
+id: pm-vcs-qfku
+title: Remove vulnerable optional glob dependencies from the fleet duplication gate
+description: "The pinned pm-ops 2026.10.6 duplication module imports its optional fast-glob 3.3.3 peer. Enabling the canonical gate installs braces 3.0.3 via micromatch; npm audit reports GHSA-vfj7-8cjw-p6xm with four high-severity development dependency entries (braces, micromatch, fast-glob, pm-ops). Production audit remains separate. pm-ops PR #163 proposes built-in fs.glob and jscpd 5 only; consume an approved published replacement in a dependency refresh, then regenerate the self-host bundle and rerun all release gates. Do not downgrade pm-ops or rewrite histories."
+type: Issue
+status: open
+priority: 2
+tags[3]: dependencies,duplication,security
+created_at: "2026-10-14T07:01:22.274Z"
+updated_at: "2026-10-14T07:01:22.274Z"
+author: codex-agent
+release: Unreleased
+body: ""

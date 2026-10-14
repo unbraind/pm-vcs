@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm run duplicates",
     "lint": "eslint --config scripts/eslint.config.ts --max-warnings=0 .",
-    "duplicates": "jscpd --config .jscpd.json",
+    "duplicates": "node scripts/duplication-gate.ts",
     "audit:prod": "node --input-type=module -e \"import { spawnSync } from 'node:child_process'; import { devNull } from 'node:os'; const env = { ...process.env, npm_config_userconfig: devNull, NPM_CONFIG_USERCONFIG: devNull }; for (const key of Object.keys(env)) if (key.toLowerCase() === 'npm_config_allow_scripts') delete env[key]; const win = process.platform === 'win32'; const r = spawnSync(win ? 'npm.cmd' : 'npm', ['audit', '--omit=dev', '--ignore-scripts'], { stdio: 'inherit', env, shell: win }); process.exit(r.status ?? 1);\"",
     "audit:identities": "node scripts/audit-git-identities.ts",
     "docstring": "node scripts/docstring-gate.ts",
@@ -43,7 +43,7 @@
     "prepare": "node scripts/prepare-merge-driver.ts",
     "merge:install": "pm merge install",
     "benchmark:cdc": "node scripts/cdc-benchmark.ts",
-    "coverage": "npm run build && npm run build:test && c8 --all --100 --reporter=text --reporter=lcov --include='*.ts' --include='engine/**/*.ts' --include='scripts/**/*.ts' --exclude='test/**' node --expose-gc --test --test-concurrency=1 test/*.test.ts",
+    "coverage": "npm run build && npm run build:test && c8 --config=package.json --all --100 --per-file --reporter=text --reporter=lcov --reporter=json --reporter=json-summary --include='*.ts' --include='src/**/*.ts' --include='engine/**/*.ts' --include='scripts/**/*.ts' --exclude='test/**' node --expose-gc --test --test-concurrency=1 test/*.test.ts",
     "verify:release-changelog-date": "node scripts/verify-release-changelog-date.ts",
     "verify:release-publish-attestation": "node scripts/verify-release-publish-attestation.ts"
   },
@@ -82,6 +82,7 @@
     "@unbrained/pm-cli": "2026.10.10",
     "c8": "12.0.0",
     "eslint": "10.12.0",
+    "fast-glob": "3.3.3",
     "jiti": "2.7.0",
     "jscpd": "5.4.0",
     "pm-changelog": "2026.10.5",
@@ -124,5 +125,9 @@
     "examples": [
       "README.md"
     ]
+  },
+  "duplicationGate": {
+    "threshold": 0,
+    "minTokens": 50
   }
 }
