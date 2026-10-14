@@ -152,19 +152,20 @@ test("stat-cache acceptance validates trace semantics, platform skip and real Li
 });
 
 test("shared launcher detection invokes only a directly executed script and preserves its status", () => {
-  const script = join(tmpdir(), "pm-vcs-launcher.ts");
+  const script = import.meta.filename;
   const url = pathToFileURL(script).href;
   const before = process.exitCode;
   try {
     assert.equal(isMainInvocation([process.execPath, script], url), true);
     assert.equal(isMainInvocation([process.execPath], url), false);
-    setExitCodeWhenMain([process.execPath, join(tmpdir(), "elsewhere.ts")], url, () => 8, []);
+    const other = resolve(import.meta.dirname, "../scripts/pm-environment.ts");
+    setExitCodeWhenMain([process.execPath, other], url, () => 8, []);
     assert.equal(process.exitCode, before);
     setExitCodeWhenMain([process.execPath, script], url, (status: number) => status, [7]);
     assert.equal(process.exitCode, 7);
     let invoked = false;
     const action = (): void => { invoked = true; };
-    invokeWhenMain([process.execPath, join(tmpdir(), "elsewhere.ts")], url, action, []);
+    invokeWhenMain([process.execPath, other], url, action, []);
     assert.equal(invoked, false);
     invokeWhenMain([process.execPath, script], url, action, []);
     assert.equal(invoked, true);

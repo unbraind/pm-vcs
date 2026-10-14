@@ -43,7 +43,7 @@ test("the benchmark test runs from a checkout path containing spaces", () => {
     const alias = join(fixture.root, "checkout with spaces");
     mkdirSync(join(alias, "test/helpers"), { recursive: true });
     mkdirSync(join(alias, "scripts"));
-    for (const path of ["package.json", "test/cdc-benchmark.test.ts", "test/helpers/tmp.ts", "scripts/cdc-benchmark.ts", "scripts/pm-environment.ts"]) {
+    for (const path of ["package.json", "test/cdc-benchmark.test.ts", "test/helpers/tmp.ts", "scripts/cdc-benchmark.ts", "scripts/pm-environment.ts", "scripts/main-invocation.ts"]) {
       cpSync(join(packageRoot, path), join(alias, path));
     }
     symlinkSync(join(packageRoot, "engine"), join(alias, "engine"), "dir");

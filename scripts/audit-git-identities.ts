@@ -15,7 +15,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { isMainInvocation } from "./pm-environment.ts";
+import { isMainInvocation } from "./main-invocation.ts";
 
 export { isMainInvocation };
 

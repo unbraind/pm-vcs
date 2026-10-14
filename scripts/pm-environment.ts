@@ -2,7 +2,9 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainInvocation } from "./main-invocation.ts";
+
+export { isMainInvocation };
 
 /** PM context variables that must not leak into disposable acceptance projects. */
 const pmContextKeys = [
@@ -108,11 +110,6 @@ export function installPackedExtension(
   } finally {
     rmSync(archiveRoot, { recursive: true, force: true });
   }
-}
-
-/** Returns whether Node directly invoked the supplied module URL. */
-export function isMainInvocation(argv: readonly string[], moduleUrl: string): boolean {
-  return argv[1] !== undefined && pathToFileURL(argv[1]).href === moduleUrl;
 }
 
 /** Runs a process-status action only for a module's direct invocation. */

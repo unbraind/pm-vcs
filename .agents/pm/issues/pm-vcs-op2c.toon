@@ -6,7 +6,7 @@ status: in_progress
 priority: 0
 tags[7]: coverage,docstrings,duplication,lint,quality,release-blocker,typescript
 created_at: "2026-08-07T13:01:18.790Z"
-updated_at: "2026-10-14T07:40:13.313Z"
+updated_at: "2026-10-14T09:21:35.298Z"
 author: codex
 estimated_minutes: 480
 acceptance_criteria: "Every source and production script is instrumented by the repository coverage command; every supported coverage dimension is exactly 100%; ESLint enforces no explicit any, no inline or dynamic imports, erasable syntax, and repository conventions; jscpd or an equivalently strict duplicate-code detector runs fail-closed; release:check and prepublishOnly include all gates; tests are behavioral and do not use coverage ignores, artificial execution, or broad exclusions"
@@ -28,7 +28,7 @@ component: quality/release
 customer_impact: A release could currently satisfy configured coverage while regressions in operational acceptance scripts or duplicated/forbidden code remain undetected
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-o3jj,discovered_from,"2026-08-07T13:01:47.549Z",codex,pm-audit,asserted
-comments[16]{created_at,author,text}:
+comments[19]{created_at,author,text}:
   "2026-10-10T10:08:37.713Z",codex-raw-coverage-repair,"Root verified frozen branch 70f42579086c59c695b151e65cda6459bbfa8e6f: 1240 passing tests, 53 production files at four-dimension C8 100%, LCOV 20707 lines/661 functions/5307 branches, SDK 2026.10.10 Node/Bun/CLI acceptance, 391 frozen fingerprints. Merged raw V8 still has two inherited zero-hit intervals: engine/repo.ts offsets 71425-71504 (createInstance cleanup failure, coverage ignore) and engine/serve.ts offsets 33366-33394 (request-body error wrapper). These invalidate a strict no-ignore/all-raw-positive claim. Reopening this existing owner under the no-artificial-execution/no-exclusion acceptance contract; preserve leases and original-error precedence. Related feature pm-vcs-8xis and PR https://github.com/unbraind/pm-vcs/pull/97; root owns public review and checks."
   "2026-10-10T10:13:41.043Z",codex-raw-coverage-repair,"Inventory verified: the unchanged coverage command measures 53 root/engine/scripts TypeScript files; the only suppression was the createInstance cleanup c8 block. A real regular-file destination deterministically produces mkdir ENOTDIR followed by cleanup scandir ENOTDIR: the original syscall/path wins, the file survives, rollback stops at the first cleanup fault and the created branch remains recoverable. The shared-store lease releases and another instance links successfully; no cooperative race is claimed. Real socket EOF before Content-Length makes the request-body promise reject, settles the existing outcome hook and permits a subsequent advertisement. Both behavior tests pass on original source; the no-ignore policy assertion fails on original source. Negative source controls independently fail the mkdir-precedence and abort-settlement assertions; both fixed files restored byte-exact. Removed the sole suppression and replaced the one-use HTTP error wrapper with the real Node-typed rejection callback. SDK 2026.10.10/floor 2026.8.1 and coverage scope/thresholds remain unchanged."
   "2026-10-10T10:18:26.175Z","harness:codex","Orchestrator interruption preserves focused real-file/socket fixtures and source bytes. GitHub native workflows did not start because SDK pin/lock changes conflict with current main. Integrate main dependency updates, retain SDK2026.10.10 and independent8.1floor, regenerate lock and full self-host snapshot, then rerun unchanged all-source/raw/native/consumer gates. Prior70f4257 remains historical scopedC8 evidence with two raw gaps. No closure, force recovery, source gate approval or publication."
@@ -45,6 +45,9 @@ comments[16]{created_at,author,text}:
   "2026-10-14T07:23:50.502Z",codex-agent,"Freeze receipt: linked real-process controls pass 4/4 with zero failures/skips/cancellations/todos. Source and test compilation, canonical strict lint, zero duplicated lines across 63 files, and 350 documented declarations pass. Both exact isolated-identity release commands are linked. Preserve the failed context preflight receipt; tracker context completed successfully. Release the claim without closing, regenerate CHANGELOG.md after these writes, stage explicit source/test/tracker paths, regenerate and stage selfhost.bundle, then commit as SteveBot. Run npm and Bun release:check against that immutable head; publish their exact counts and per-script four-dimension coverage in the PR. No gate result is claimed for the final head before those commands finish."
   "2026-10-14T07:38:28.460Z",codex-agent,"Candidate 60f9729 passed all 1512 tests with zero failures/skips/cancellations/todos, but failed coverage: statements/lines 96.86%, branches 95.58%, functions 97.96%. Do not treat that candidate as accepted. Raw records begin after the new nested fixture: c8 defaults tempDirectory to inherited NODE_V8_COVERAGE, and its normal cleanup deleted earlier parent records. Pin the repository coverage command to its project-local coverage/tmp directory; nested disposable projects then own separate collection paths. Add a real marker-file preservation assertion under an inherited parent coverage directory, rerun focused controls and the source-removal proof, regenerate changelog and bundle, refreeze, and rerun both complete isolated release gates. No source exclusions or threshold changes."
   "2026-10-14T07:40:12.479Z",codex-agent,"Collection isolation repair passes linked behavioural controls 4/4 with zero skips/failures. A real marker in an inherited parent coverage directory survives the fixed command; removing only --temp-directory=coverage/tmp causes c8 to delete that marker and makes the coverage control fail. Fixed bytes restored exactly. Source/test compilation, strict lint and zero-duplication checks still pass. Failed candidate receipts remain preserved; no artificial counters, coverage ignores, exclusions or weakened thresholds were introduced. Release unclosed, regenerate changelog and self-host bundle, commit the repair, then rerun both full release commands on that exact immutable head."
+  "2026-10-14T09:16:19.560Z",codex-agent,"Addressing PR #106 CodeRabbit round 1 Major finding: canonicalize every script entry guard through the shared main-invocation helper. Add a real symlink gate regression, prove it fails with the legacy comparison restored, and rerun unchanged exact coverage plus isolated npm and Bun release gates."
+  "2026-10-14T09:19:34.261Z",codex-agent,"Guard audit found the additional raw comparison in verify-release-changelog-date.ts, plus pm-environment wrappers used by the acceptance scripts and benchmark. All guarded scripts now delegate to scripts/main-invocation.ts. Behavioural revert proof: node --test --test-name-pattern=\"^the identity gate runs through a symlinked checkout\" test/exact-gates.test.ts passed 1/1; restoring only the legacy pathToFileURL argv comparison in audit-git-identities.ts made it fail 0/1 because the gate returned status 0 with empty stdout. Restored the shared guard afterward. The regression uses a real symlink to a disposable checkout, real Git commits with synthetic identities, success-output assertions, seeded violation rejection, and both default Node and preserve-symlinks flags."
+  "2026-10-14T09:21:31.203Z",codex-agent,"Linked pm test run completed: node --test test/exact-gates.test.ts passed 5/5 and the focused symlink regression passed 1/1; zero failures/skips/cancellations/todos. npm run build, build:test, lint, duplicates and docstring passed: 63 production sources, zero clone pairs, 0/22153 duplicated lines, and 349 documented declarations. Pinned pm reports test-result tracking disabled, so recording these results here without changing tracker policy. Freeze after releasing the claim unclosed, regenerate changelog, stage explicit source/test/tracker paths, regenerate selfhost.bundle, and commit as SteveBot. Run accept:self-host and both already-linked isolated release commands on the immutable head, then changelog:check. Final exact-head gate receipts and coverage counts will be published in PR https://github.com/unbraind/pm-vcs/pull/106; no final release result is claimed before execution."
 notes[4]{created_at,author,text}:
   "2026-08-08T00:41:47.815Z","harness:codex","The package remains intentionally unpublished: audit:identities still rejects exactly one known non-public historical address,independently of these clean code-quality gates."
   "2026-08-08T00:42:45.025Z","harness:codex",The default pm health --strict-exit reproduced the known unbraind/pm-cli#928 silent provider-refresh hang and was stopped after four minutes; CI now uses the documented --check-only mode and the read-only strict health gate completes promptly.
@@ -52,7 +55,7 @@ notes[4]{created_at,author,text}:
   "2026-08-08T01:00:28.691Z","harness:codex","Accepted all three remaining CodeRabbit findings on the first review head: parser failure is tracked independently of the thrown value; equal-content reconciliation no longer leaks copiedFrom across the selected FileId; and the real strace success path runs only on a Linux host with strace available. Added reversed-provenance behavior coverage."
 learnings[1]{created_at,author,text}:
   "2026-08-08T00:41:47.815Z","harness:codex",An explicit source allowlist can report perfect coverage while omitting operational scripts. c8 --all makes absence measurable; behavior-driven failure fixtures also exposed unreachable defensive branches that were better simplified.
-files[23]:
+files[34]:
   - path: .github/workflows/ci.yml
     scope: project
     note: Mandatory quality and deterministic tracker-health gates
@@ -82,39 +85,72 @@ files[23]:
   - path: engine/worktree.ts
     scope: project
     note: Shared index entry construction
+  - path: scripts/accept-native-toon.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
+  - path: scripts/accept-stat-cache.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
   - path: scripts/audit-git-identities.ts
     scope: project
-    note: Real direct CLI guard and shared invocation detection
+    note: Round 1 canonical entry guards and real symlink regression
   - path: scripts/cdc-benchmark.ts
     scope: project
-    note: Shared three-position reuse measurement and formatting
+    note: Round 1 canonical entry guards and real symlink regression
+  - path: scripts/docstring-gate.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
   - path: scripts/duplication-gate.ts
     scope: project
-    note: Canonical fail-closed jscpd 5 scan with complete production inventory
+    note: Round 1 canonical entry guards and real symlink regression
   - path: scripts/eslint.config.ts
     scope: project
-    note: Parser-aware mandatory TypeScript policy
+    note: Round 1 canonical entry guards and real symlink regression
+  - path: scripts/main-invocation.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
+  - path: scripts/pm-environment.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
+  - path: scripts/prepare-merge-driver.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
   - path: scripts/self-host.ts
     scope: project
-    note: Real direct CLI guard without indexed placeholder
+    note: Round 1 canonical entry guards and real symlink regression
+  - path: scripts/verify-release-changelog-date.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
+  - path: scripts/verify-release-publish-attestation.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
   - path: selfhost.bundle
     scope: project
+  - path: test/audit-git-identities.test.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
   - path: test/c8-gaps.test.ts
     scope: project
     note: Behavior-driven branches exposed by all-source instrumentation
+  - path: test/cdc-benchmark.test.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
   - path: test/composition-consumer.test.ts
     scope: project
   - path: test/exact-gates.test.ts
     scope: project
-    note: Four real-process coverage lint duplication and operational controls
+    note: Round 1 canonical entry guards and real symlink regression
   - path: test/publication-validation.test.ts
     scope: project
   - path: test/quality-scripts.test.ts
     scope: project
-    note: Behavioral operational-script and quality-policy coverage
+    note: Round 1 canonical entry guards and real symlink regression
   - path: test/raw-coverage.test.ts
     scope: project
-tests[12]:
+  - path: test/self-host.test.ts
+    scope: project
+    note: Round 1 canonical entry guards and real symlink regression
+tests[13]:
   - command: npm run check
     path: package.json
     scope: project
@@ -203,7 +239,15 @@ tests[12]:
       created_at: "2026-10-14T07:23:49.776Z"
       source_kind: local_mutation
       source_ref: chore/exact-gates-for-scripts
-docs[3]:
+  - command: "node --test --test-name-pattern=\"^the identity gate runs through a symlinked checkout\" test/exact-gates.test.ts"
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-14T09:20:13.866Z"
+      source_kind: local_mutation
+      source_ref: chore/exact-gates-for-scripts
+docs[4]:
   - path: ARCHITECTURE.md
     scope: project
     note: Real cleanup and socket-abort contracts plus separate native raw range validation
@@ -212,4 +256,7 @@ docs[3]:
   - path: README.md
     scope: project
     note: Exact per-file coverage and canonical fleet gate contract
+  - path: scripts/main-invocation.ts
+    scope: project
+    note: Canonical invocation and fail-closed path resolution contract
 body: ""

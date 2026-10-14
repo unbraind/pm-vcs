@@ -17,7 +17,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { isMainInvocation } from "./pm-environment.ts";
+import { isMainInvocation } from "./main-invocation.ts";
 
 import { ObjectStore } from "../engine/objects.ts";
 import { type CdcParams } from "../engine/model.ts";

@@ -27,7 +27,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
-import { isMainInvocation } from "./pm-environment.ts";
+import { isMainInvocation } from "./main-invocation.ts";
 
 export { isMainInvocation };
 

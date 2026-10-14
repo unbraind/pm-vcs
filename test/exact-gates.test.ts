@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import type { SpawnSyncReturns } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { devNull } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -185,6 +186,45 @@ test("operational entry points enforce real audits through direct CLI processes"
     assert.equal(docstrings.status, 1);
     assert.match(docstrings.stderr, /docstring-gate:.*violation/);
     assert.match(docstrings.stderr, /undocumented/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("the identity gate runs through a symlinked checkout and rejects a seeded violation", () => {
+  const fixture = makeTempDir();
+  try {
+    const checkout = join(fixture.root, "checkout");
+    source(checkout, "package.json", JSON.stringify({ type: "module" }));
+    source(checkout, ".github/approved-git-identities.txt", "public@example.test\n");
+    mkdirSync(join(checkout, "scripts"));
+    for (const script of ["audit-git-identities.ts", "main-invocation.ts"]) {
+      copyFileSync(join(packageRoot, "scripts", script), join(checkout, "scripts", script));
+    }
+    // The actual gate reads a real Git object database in a disposable copy.
+    // No launcher or guard is replaced by a test fixture.
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" };
+    delete env.NODE_TEST_CONTEXT;
+    /** Run a real Git fixture command with global and system configuration disabled. */
+    const git = (args: readonly string[]): void => {
+      passed(spawnSync("git", args, { cwd: checkout, encoding: "utf8", env }));
+    };
+    git(["init", "-q"]);
+    git(["-c", "user.name=Public", "-c", "user.email=public@example.test", "commit", "--allow-empty", "-qm", "public fixture"]);
+    const alias = join(fixture.root, "symlinked checkout with spaces");
+    symlinkSync(checkout, alias, "dir");
+    const entry = join(alias, "scripts/audit-git-identities.ts");
+    for (const flags of [[], ["--preserve-symlinks", "--preserve-symlinks-main"]]) {
+      const result = spawnSync(process.execPath, [...flags, entry], { cwd: alias, encoding: "utf8", timeout: 60_000, env });
+      passed(result);
+      assert.match(result.stdout, /git identity audit approved 1 unique address/);
+    }
+    git(["-c", "user.name=Public", "-c", "user.email=unapproved@example.test", "commit", "--allow-empty", "-qm", "unapproved fixture"]);
+    for (const flags of [[], ["--preserve-symlinks", "--preserve-symlinks-main"]]) {
+      const result = spawnSync(process.execPath, [...flags, entry], { cwd: alias, encoding: "utf8", timeout: 60_000, env });
+      assert.equal(result.status, 1, `${result.error}\n${result.stdout}\n${result.stderr}`);
+      assert.match(result.stderr, /git identity audit rejected 1 non-public address/);
+    }
   } finally {
     fixture.cleanup();
   }
