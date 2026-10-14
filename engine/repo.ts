@@ -58,7 +58,6 @@ import { BRANCH_PREFIX, type HeadState, RefStore, TAG_PREFIX, assertRefName } fr
 import { OperationLog, type Operation, type RefTransition } from "./oplog.ts";
 import { REMOTE_PREFIX, RemoteStore } from "./remotes.ts";
 import {
-  INSTANCE_LINK_FILE,
   type InstanceEntry,
   type ScanCorrection,
   type ScanReport,
@@ -68,7 +67,7 @@ import {
   parseView,
   assertInstanceName,
   isDirectoryOccupied,
-  parseInstanceLink,
+  initializeInstanceRegistry,
   readHints,
   readInstances,
   readView,
@@ -134,8 +133,10 @@ import {
   planSquash,
 } from "./rewrite.ts";
 
-/** Name of the control directory inside a repository root. */
-export const CONTROL_DIRECTORY = ".pmvcs";
+import { CONTROL_DIRECTORY, INSTANCE_LINK_FILE, resolveInstanceLink } from "./instance-link.ts";
+
+/** Name of the control directory inside a repository root, defined below the object store. */
+export { CONTROL_DIRECTORY } from "./instance-link.ts";
 
 /** Repository format this build writes and can read. */
 export const REPOSITORY_FORMAT = "pmvcs-1";
@@ -333,7 +334,7 @@ export class Repository {
   constructor(root: string, config?: RepositoryConfig, pmRoot?: string) {
     this.root = root;
     this.controlDirectory = join(root, CONTROL_DIRECTORY);
-    this.instanceLink = Repository.resolveInstanceLink(this.controlDirectory, root);
+    this.instanceLink = resolveInstanceLink(this.controlDirectory, root);
     const shared = this.instanceLink?.controlDirectory ?? this.controlDirectory;
     this.objects = this.instanceLink === null
       ? new ObjectStore(join(shared, "objects"))
@@ -343,59 +344,6 @@ export class Repository {
     this.remotes = new RemoteStore(join(shared, "remotes.json"));
     this.config = config ?? readConfig(join(shared, "config.json"));
     this.pmRoot = pmRoot;
-  }
-
-  /**
-   * Resolves an instance link file to the hub it names.
-   *
-   * The hub path is stored relative to the instance root and resolved against
-   * it, so moving the hub and its instances together leaves every link valid.
-   * The hub's format marker is required to exist: an instance pointing at a
-   * directory that is not a repository would otherwise fail later, at the first
-   * object or ref read, with errors that say nothing about the actual breakage.
-   *
-   * @param controlDirectory - The working tree's control directory.
-   * @param root - The working tree root the link is resolved against.
-   * @returns The hub's root and control directory, or null when there is no link.
-   * @throws ObjectStoreError When the link is malformed or its hub is absent.
-   */
-  private static resolveInstanceLink(
-    controlDirectory: string,
-    root: string,
-  ): { readonly hubRoot: string; readonly controlDirectory: string } | null {
-    let contents: string;
-    try {
-      contents = readFileSync(join(controlDirectory, INSTANCE_LINK_FILE), "utf8");
-    } catch (error) {
-      // ENOENT is the ordinary no-link case. ENOTDIR means the control
-      // directory itself is not a directory, which `Repository.open` reports
-      // as its own typed failure — rethrowing the raw errno here would
-      // preempt that message with a syscall error.
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-      return null;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(contents);
-    } catch {
-      throw new ObjectStoreError(
-        "broken_instance_link",
-        `The instance link at ${join(controlDirectory, INSTANCE_LINK_FILE)} is not valid JSON. `
-        + "Restore it from the hub's registry, or unlink and re-link this working tree.",
-      );
-    }
-    const hubRelative = parseInstanceLink(parsed).split("/").join(sep);
-    const hubRoot = resolve(root, hubRelative);
-    const hubControl = join(hubRoot, CONTROL_DIRECTORY);
-    if (!existsSync(join(hubControl, "format"))) {
-      throw new ObjectStoreError(
-        "broken_instance_link",
-        `This instance links to ${hubRoot}, which does not hold a pm-vcs repository. `
-        + "Move the hub back, repair the link file, or unlink and re-link this working tree.",
-      );
-    }
-    return { hubRoot, controlDirectory: hubControl };
   }
 
   /**
@@ -444,6 +392,7 @@ export class Repository {
     writeFileSync(formatPath, `${REPOSITORY_FORMAT}\n`);
     writeFileSync(join(repository.controlDirectory, "index"), "");
     writeConfig(join(repository.controlDirectory, "config.json"), config);
+    initializeInstanceRegistry(repository.controlDirectory);
     repository.refs.setHeadToRef(`${BRANCH_PREFIX}${branch}`);
     return repository;
   }
@@ -1187,7 +1136,7 @@ export class Repository {
   /** Check the physical shared-store binding before opening or touching another instance's index or worktree. */
   private instanceIsBound(path: string): boolean {
     try {
-      const link = Repository.resolveInstanceLink(join(path, CONTROL_DIRECTORY), path);
+      const link = resolveInstanceLink(join(path, CONTROL_DIRECTORY), path);
       return link !== null && realpathSync(link.controlDirectory) === realpathSync(this.sharedControlDirectory);
     } catch (error) {
       if (error instanceof ObjectStoreError && error.code === "broken_instance_link") return false;
@@ -1880,10 +1829,12 @@ export class Repository {
   log(revision: string, limit = 50): LogEntry[] {
     const entries: LogEntry[] = [];
     let cursor: ObjectId | undefined = this.resolve(revision);
+    // Read the partial-clone state once per walk: each read parses partial.json.
+    const shallow = new Set(this.objects.partialState()?.shallow ?? []);
     while (cursor !== undefined && entries.length < limit) {
       const commit = readCommit(this.objects, cursor);
       entries.push({ id: cursor, commit, changeId: effectiveChangeId(cursor, commit) });
-      cursor = commit.parents[0];
+      cursor = shallow.has(cursor) ? undefined : commit.parents[0];
     }
     return entries;
   }

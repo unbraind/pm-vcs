@@ -179,6 +179,7 @@ pins or recursively follow nested descriptors.
 | `pm vcs layer local destination.bin source.bin` | Snapshot one file privately; engine `addLayer` accepts multiple exact paths. `--executable` records private mode. |
 | `pm vcs layer --list` | Show names and excluded paths without printing private bytes. |
 | `pm vcs layer local --remove` | Restore the current underlying index; edited or missing overlays require `--discard-edits`. |
+| `pm vcs gc [--apply]` | Report unreachable objects by default; apply retains refs, oplog, leases, uploads and sparse instances. |
 | `pm vcs obliterate <FileId-or-indexed-path> --erase-token-file erase.token --reason incident` | Erase every historical payload and fragment of the stable identity, with a durable typed audit. Authorized retry resumes pending cleanup. |
 | `pm vcs recover-lock` | Recover a confirmed dead writer or aged empty legacy lock without erase authority. Pending erasure remains denied until authorized cleanup. |
 
@@ -603,6 +604,9 @@ storing it, and fails whole — naming the missing ids — when a bundle depends
 receiver does not have.
 
 ---
+
+Depth-limited and blob-filtered clone/fetch, demand hydration, and conservative GC are documented in
+[scale history and collection](docs/scale-history-and-gc.md).
 
 ## Roadmap
 

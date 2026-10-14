@@ -1,3 +1,4 @@
+import { historyOptions, type HistoryOptions } from "./partial.ts";
 import { PublicationLeases, filesystemPrincipal, type FileLease, type LeaseRequest, type LeaseProof, type ReceiverPrincipal } from "./publication-leases.ts";
 // The boundary between "what distribution means" and "how the bytes travel".
 //
@@ -16,7 +17,7 @@ import { redactRemoteUrl } from "./credentials.ts";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve } from "node:path";
 
-import { serializeBundle, exportBundle, importBundleObjects } from "./bundle.ts";
+import { serializeBundle, exportPartialBundle, exportBundle, importBundleObjects } from "./bundle.ts";
 import { requireClosure, type ClosureMetadata } from "./closure.ts";
 import { isAncestor } from "./merge.ts";
 import { type ObjectId, type ObjectType, ObjectStoreError, hashObject } from "./objects.ts";
@@ -60,7 +61,7 @@ export interface Advertisement {
 }
 
 /** Capabilities this build's transports speak. */
-export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival", "object-fetch", "publication-leases"] as const;
+export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival", "object-fetch", "publication-leases", "partial-history"] as const;
 
 /** Capabilities a peer must offer before this build will transfer anything. */
 export const REQUIRED_TRANSPORT_CAPABILITIES: readonly string[] = ["fetch", "push", "resumable-upload", "verified-arrival"];
@@ -162,7 +163,7 @@ export interface Transport {
    *   is the whole of the negotiation.
    * @returns A bundle carrying the objects the caller is missing.
    */
-  fetch(refNames: readonly string[], haves: readonly ObjectId[]): Promise<Buffer>;
+  fetch(refNames: readonly string[], haves: readonly ObjectId[], options?: HistoryOptions): Promise<Buffer>;
 
   /**
    * Sends history and asks the remote to move refs onto it.
@@ -354,8 +355,9 @@ export class FileTransport implements Transport {
   }
 
   /** Export requested reachable history while honoring only caller tips the receiver actually possesses. */
-  async fetch(refNames: readonly string[], haves: readonly ObjectId[]): Promise<Buffer> {
+  async fetch(refNames: readonly string[], haves: readonly ObjectId[], options?: HistoryOptions): Promise<Buffer> {
     const repository = this.open();
+    if (options !== undefined) return repository.objects.withWriteLock(/** Snapshot bounds and serialize their exact closure without a concurrent sweep. */ () => exportPartialBundle(repository.objects, repository.refs, refNames, historyOptions(options)));
     // The offer is filtered rather than trusted. A caller's tips include commits
     // this repository has never seen — its own local work, and the tips of other
     // remotes it fetched from — and using one as an exclusion boundary would walk
@@ -463,6 +465,7 @@ export class FileTransport implements Transport {
       // complete held closure before refs move, including corrupt held duplicates.
       const delivered = [...new Set(objects.map(object => object.id))]
         .filter(id => !repository.objects.has(id));
+      repository.objects.pinUploads(objects.map(/** Pin even duplicate deliveries until refs own their complete closure. */ (object) => object.id));
       repository.objects.accept(objects, false);
       // Native I/O can leave partial immutable objects behind. A failed batch
       // contributes no accepted IDs; retry counts only its remaining new arrivals.
@@ -481,7 +484,7 @@ export class FileTransport implements Transport {
     this.acceptedThisConnection.length = 0;
     return repository.objects.withWriteLock(/** Held objects cannot be erased between the shared integrity walk and atomic ref publication. */ () => {
       for (const update of updates) assertPushableRef(update);
-      const metadata = requireClosure(repository.objects, [...new Set(updates.map(/** Share verified structure across all publication roots, without retaining leaf bytes. */ (update) => update.next))]);
+      const metadata = requireClosure(repository.objects, [...new Set(updates.map(/** Share verified structure across all publication roots, without retaining leaf bytes. */ (update) => update.next))], [], undefined, [], null);
       for (const update of updates) {
         const current = repository.refs.read(update.ref);
         if (current === update.next) continue;

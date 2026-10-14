@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { readPartialState, type PartialState } from "./partial.ts";
+import { RemoteStore } from "./remotes.ts";
 import { objectPayloadChunks, objectPayloadLines } from "./object-stream.ts";
 // Content-addressed object store.
 //
@@ -32,7 +36,8 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
+import { resolveObjectsControl } from "./instance-link.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
 import { encodeTombstone, assertArrivalsAllowed, readDenials, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { writePrivateJson } from "./composition.ts";
@@ -345,6 +350,7 @@ export class ObjectStore {
    */
   read(id: ObjectId): StoredObject {
     this.assertId(id);
+    this.hydrate(id);
     const denial = this.denial(id);
     if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
     let compressed: Buffer;
@@ -455,6 +461,7 @@ export class ObjectStore {
     this.assertId(id);
     const denial = this.denial(id);
     if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
+    this.hydrate(id);
     yield* objectPayloadLines(objectPayloadChunks(this.pathFor(id), id, type));
   }
 
@@ -562,6 +569,60 @@ export class ObjectStore {
       writePrivateJson(join(dirname(this.root), "denials.json"), denials);
       this.denialCache = undefined;
       for (const denial of denials) this.writeRaw("tombstone", encodeTombstone(denial.tombstone));
+    });
+  }
+
+  /** Read the shared clone's local omission policy without fetching any objects. */
+  partialState(): PartialState | null { return readPartialState(dirname(this.root)); }
+
+  /** Hydrate only a promised missing blob, verifying type and address before cache publication. */
+  hydrate(id: ObjectId): void {
+    if (this.has(id) || this.denial(id) !== undefined) return;
+    const state = this.partialState();
+    if (state === null || !state.promised.includes(id)) return;
+    const remotes = new RemoteStore(join(dirname(this.root), "remotes.json"));
+    const remote = remotes.require(state.remote);
+    let object: StoredObject;
+    if (/^https?:/i.test(remote.url)) {
+      const worker = new URL(`./partial-fetch-worker${extname(fileURLToPath(import.meta.url))}`, import.meta.url);
+      const child = spawnSync(process.execPath, [fileURLToPath(worker)], { input: JSON.stringify({ url: remote.url, token: remotes.token(state.remote), id }), maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
+      if (child.status !== 0) throw new ObjectStoreError("promisor_unavailable", "The promisor could not supply the requested blob.");
+      object = parseFramedObject(child.stdout);
+    } else {
+      const source = remote.url.startsWith("file:") ? fileURLToPath(remote.url) : resolve(dirname(dirname(this.root)), remote.url);
+      // A promisor that names a linked instance keeps its objects in the hub's
+      // shared store, not in the instance's private control directory: the
+      // same link binding every other reader of the remote resolves decides
+      // which objects directory serves the demand read.
+      object = new ObjectStore(join(resolveObjectsControl(source), "objects")).read(id);
+    }
+    if (object.type !== "blob" || hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("bad_partial_history", "Promised payload has the wrong type or content address.");
+    this.accept([{ id, ...object }], false);
+  }
+
+  /** Read durable upload pins; disconnected or interrupted sessions cannot lose their accepted objects. */
+  uploadRoots(): ObjectId[] {
+    const value = readControlJson(join(dirname(this.root), "upload-roots.json"), "unsafe_gc_roots", "upload roots", []);
+    if (!Array.isArray(value) || value.some(/** Validate every persisted pin before trusting the inventory. */ (id) => typeof id !== "string" || !isObjectId(id))) {
+      throw new ObjectStoreError("unsafe_gc_roots", "Upload roots are corrupt.");
+    }
+    return value;
+  }
+
+  /** Release upload pins only after a fresh complete root walk proves durable ownership. */
+  releaseUploadRoots(reachable: ReadonlySet<ObjectId>): void {
+    this.withWriteLock(/** Keep receipt retirement inside the collection transaction. */ () => {
+      const before = this.uploadRoots();
+      const remaining = before.filter(/** Unpublished uploads remain roots even after disconnection. */ (id) => !reachable.has(id) && this.denial(id) === undefined);
+      if (remaining.length !== before.length) writePrivateJson(join(dirname(this.root), "upload-roots.json"), remaining);
+    });
+  }
+
+  /** Persist pins before arrival writes, so a crash or a GC between upload and publication retains every delivery. */
+  pinUploads(ids: readonly ObjectId[]): void {
+    this.withWriteLock(/** Pin metadata and object acceptance share the outer publication transaction. */ () => {
+      for (const id of ids) this.assertId(id);
+      writePrivateJson(join(dirname(this.root), "upload-roots.json"), [...new Set([...this.uploadRoots(), ...ids])].sort());
     });
   }
 

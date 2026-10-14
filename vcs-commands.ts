@@ -1,3 +1,5 @@
+import { historyOptions, type HistoryOptions } from "./engine/partial.ts";
+import { collectGarbage, type GcReport } from "./engine/gc.ts";
 import { changeRemoteLease } from "./engine/lease-workflows.ts";
 import type { LeaseRequest } from "./engine/publication-leases.ts";
 // The `pm vcs` command surface over the engine.
@@ -54,6 +56,20 @@ import type {
   ExtensionApi,
 } from "@unbrained/pm-cli/sdk/authoring";
 import { PmClient, type GetResult, type ItemMetadata, type LinkedFile } from "@unbrained/pm-cli/sdk";
+
+/** Parse clone/fetch transfer bounds while preserving the legacy complete-history default. */
+function transferOptions(context: CommandHandlerContext): HistoryOptions | undefined {
+  const depth = context.options?.depth;
+  const filter = context.options?.filter;
+  if (depth === undefined && filter === undefined) return undefined;
+  return historyOptions({ ...(depth === undefined ? {} : { depth: Number(depth) }), ...(filter === undefined ? {} : { filter: filter as "blob:none" }) });
+}
+
+/** Bounds accepted by both clone and fetch. */
+const HISTORY_FLAGS = [
+  { long: "--depth", value_name: "N", description: "Keep at most N generations from each advertised tip", value_type: "string" as const },
+  { long: "--filter", value_name: "blob:none", description: "Transfer metadata and hydrate blob payloads on demand", value_type: "string" as const },
+];
 
 /** Envelope every command returns, carrying an explicit verdict. */
 interface VcsEnvelope {
@@ -863,12 +879,13 @@ export function registerVcsCommands(api: ExtensionApi): void {
     description:
       "Bring a remote's branches onto tracking refs under refs/remotes/, transferring only the objects this repository is missing. No local branch is touched, so a fetch can never discard work that has not been pushed.",
     arguments: [{ name: "remote", description: "Remote to fetch from (default origin)", required: false }],
+    flags: HISTORY_FLAGS,
     async run(context: CommandHandlerContext): Promise<VcsEnvelope & { fetch: FetchReport }> {
       const repository = openRepository(context);
       const remote = context.args[0]?.trim();
       return {
         ok: true,
-        fetch: await fetchFrom(repository, remote === undefined || remote === "" ? "origin" : remote, new Date()),
+        fetch: await fetchFrom(repository, remote === undefined || remote === "" ? "origin" : remote, new Date(), undefined, transferOptions(context)),
       };
     },
   });
@@ -929,7 +946,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       { name: "url", description: "Where to clone from: a filesystem path, file: URL or HTTP(S) URL", required: true },
       { name: "directory", description: "Where to put the clone (default a directory named after the source)", required: false },
     ],
-    flags: [{ long: "--remote", value_name: "name", description: "Name to register the source under (default origin)", value_type: "string" }],
+    flags: [...HISTORY_FLAGS, { long: "--remote", value_name: "name", description: "Name to register the source under (default origin)", value_type: "string" }],
     async run(context: CommandHandlerContext): Promise<VcsEnvelope & { clone: CloneReport }> {
       const url = requiredArgument(context, 0, "url", "Pass the path, file: URL or http: URL of the repository to clone.");
       const requested = context.args[1]?.trim();
@@ -943,7 +960,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         : resolve(workingRoot, requested);
       return {
         ok: true,
-        clone: await cloneFrom(url, destination, new Date(), optionalString(context.options, "remote") ?? "origin", workingRoot),
+        clone: await cloneFrom(url, destination, new Date(), optionalString(context.options, "remote") ?? "origin", workingRoot, undefined, transferOptions(context)),
       };
     },
   });
@@ -1160,6 +1177,15 @@ export function registerVcsCommands(api: ExtensionApi): void {
         },
         diff: parent === undefined ? "" : repository.diff(parent, id),
       };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs gc",
+    description: "Report unreachable objects; --apply collects them under the shared writer lock. Refs, the entire operation log, staged sparse instances, uploads and active publication leases retain objects.",
+    flags: [{ long: "--apply", description: "Delete the unreachable objects after a fresh locked plan", value_type: "boolean" }],
+    run(context: CommandHandlerContext): VcsEnvelope & { gc: GcReport } {
+      return { ok: true, gc: collectGarbage(openRepository(context), context.options?.apply === true) };
     },
   });
 

@@ -24,9 +24,7 @@ import { randomBytes } from "node:crypto";
 import { matchesGlob } from "./config.ts";
 import { compareByteOrder } from "./model.ts";
 import { ObjectStore, ObjectStoreError, type ObjectId, type StoredObject, type ObjectType, assertRegistryName, readControlJson } from "./objects.ts";
-
-/** File inside an instance's control directory naming the hub it belongs to. */
-export const INSTANCE_LINK_FILE = "link.json";
+export { INSTANCE_LINK_FILE, parseInstanceLink } from "./instance-link.ts";
 
 /** File inside the hub's control directory listing every linked instance. */
 export const INSTANCE_REGISTRY_FILE = "instances.json";
@@ -171,25 +169,6 @@ export function writeView(controlDirectory: string, view: ViewSpec): void {
  */
 export function viewIncludes(view: ViewSpec, path: string): boolean {
   return view.include.length === 0 || view.include.some((pattern) => matchesGlob(path, pattern));
-}
-
-/**
- * Validates a parsed instance-link file.
- *
- * @param raw - Parsed JSON from the link file.
- * @returns The hub location exactly as recorded, POSIX-style and relative to
- *   the instance root.
- * @throws ObjectStoreError When the file does not name a hub location.
- */
-export function parseInstanceLink(raw: unknown): string {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new ObjectStoreError("broken_instance_link", "Instance link is not a JSON object.");
-  }
-  const hub = (raw as Record<string, unknown>).hub;
-  if (typeof hub !== "string" || hub.length === 0) {
-    throw new ObjectStoreError("broken_instance_link", 'Instance link does not name a hub under a "hub" key.');
-  }
-  return hub;
 }
 
 /**
@@ -345,6 +324,25 @@ function parseInstanceEntry(raw: unknown): InstanceEntry {
 export function readInstances(controlDirectory: string): readonly InstanceEntry[] {
   const parsed = readControlJson(join(controlDirectory, INSTANCE_REGISTRY_FILE), "bad_instances", "instance registry");
   if (parsed === null) return [];
+  return parseRegistry(parsed);
+}
+
+/** Collection precondition: a registry hidden by deletion must not read as empty. */
+export function requireInstances(controlDirectory: string): readonly InstanceEntry[] {
+  const parsed = readControlJson(join(controlDirectory, INSTANCE_REGISTRY_FILE), "unsafe_gc_roots", "instance registry");
+  if (parsed === null) {
+    throw new ObjectStoreError("unsafe_gc_roots", "Collection requires the shared instance registry. Restore it from a backup, or recreate it with the registered instance paths, before collecting garbage.");
+  }
+  return parseRegistry(parsed);
+}
+
+/** Create the empty instance registry every new repository starts with. */
+export function initializeInstanceRegistry(controlDirectory: string): void {
+  writeControlFile(join(controlDirectory, INSTANCE_REGISTRY_FILE), `${JSON.stringify({ instances: [] }, null, 2)}\n`);
+}
+
+/** Validate an already-parsed registry document into entries. */
+function parseRegistry(parsed: unknown): readonly InstanceEntry[] {
   if (typeof parsed !== "object" || Array.isArray(parsed)
     || !Array.isArray((parsed as Record<string, unknown>).instances)) {
     throw new ObjectStoreError("bad_instances", "Instance registry must be an object holding an \"instances\" array.");

@@ -23,6 +23,7 @@ import {
   parseView,
   readHints,
   readInstances,
+  requireInstances,
   SharedObjectStore,
   readView,
   registerInstance,
@@ -593,6 +594,11 @@ test("view and hint files are validated, never degraded", () => {
 test("an instance registry that exists but is broken fails loudly", () => {
   const control = join(freshDir(), CONTROL_DIRECTORY);
   mkdirSync(control, { recursive: true });
+  assert.deepEqual(readInstances(control), []);
+  assert.throws(() => requireInstances(control), (error: unknown) => {
+    assert.ok(error instanceof ObjectStoreError);
+    return error.code === "unsafe_gc_roots" && /shared instance registry/.test(error.message);
+  });
   writeFileSync(join(control, INSTANCE_REGISTRY_FILE), "{ not json");
   assert.throws(() => readInstances(control), (error: unknown) => {
     assert.ok(error instanceof ObjectStoreError);
