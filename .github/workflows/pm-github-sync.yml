@@ -13,6 +13,6 @@ permissions:
   actions: write
 jobs:
   gated-sync:
-    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@aca77d29d3022d15e776b728e04392f5ec9af478 # pm-github 2026.10.14
+    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@3015930b351a3d9c1c03ee4a26f8404025287df7 # pm-github 2026.10.15
     with:
-      pm-github-version: "2026.10.14"
+      pm-github-version: "2026.10.15"
