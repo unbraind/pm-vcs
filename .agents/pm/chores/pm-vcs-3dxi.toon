@@ -4,9 +4,9 @@ description: "Adopt the pinned reusable issue-sync caller and preserve the exist
 type: Chore
 status: in_progress
 priority: 2
-tags: []
+tags[1]: changed
 created_at: "2026-10-15T07:41:09.216Z"
-updated_at: "2026-10-15T09:49:03.520Z"
+updated_at: "2026-10-15T12:26:55.056Z"
 author: codex-agent
 comments[7]{created_at,author,text}:
   "2026-10-15T07:42:22.476Z",codex-agent,"Baseline npm ls braces fast-glob micromatch shows fast-glob 3.3.3 -> micromatch 4.0.8 -> braces 3.0.3, also the optional peer of pm-ops 2026.10.6. Production-only tree is empty. The production duplication launcher and raw coverage inventory already use node:fs globSync; fast-glob has no direct code import. Refresh pm-ops to latest published 2026.10.14 and remove the direct peer. CI already has workflow_dispatch; use the prescribed pm-github 2026.10.14 fallback pending release and repin. No sync execution or repository settings changes."
