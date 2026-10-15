@@ -89,6 +89,8 @@ export function isRecordPath(path: string, config: RepositoryConfig): boolean {
 /**
  * Parses configuration, rejecting anything it does not understand.
  *
+ * Omitted fields use defaults; explicit null values are invalid field shapes.
+ *
  * Unknown strategies are refused rather than ignored. Silently falling back to
  * `scalar` for a field someone declared as a `set` would turn every concurrent
  * edit of that field into a conflict, and the config file would still read as
@@ -104,16 +106,16 @@ export function parseConfig(raw: unknown): RepositoryConfig {
     throw new ObjectStoreError("bad_config", "Repository config is not a JSON object.");
   }
   const source = raw as Record<string, unknown>;
-  const recordPaths = source.recordPaths ?? [];
+  const recordPaths = source.recordPaths === undefined ? [] : source.recordPaths;
   if (!Array.isArray(recordPaths) || recordPaths.some((entry) => typeof entry !== "string")) {
     throw new ObjectStoreError("bad_config", "Repository config recordPaths must be an array of strings.");
   }
-  const policySource = source.recordPolicy ?? {};
+  const policySource = source.recordPolicy === undefined ? {} : source.recordPolicy;
   if (policySource === null || typeof policySource !== "object" || Array.isArray(policySource)) {
     throw new ObjectStoreError("bad_config", "Repository config recordPolicy must be an object.");
   }
   const policyRecord = policySource as Record<string, unknown>;
-  const fieldsSource = policyRecord.fields ?? {};
+  const fieldsSource = policyRecord.fields === undefined ? {} : policyRecord.fields;
   if (fieldsSource === null || typeof fieldsSource !== "object" || Array.isArray(fieldsSource)) {
     throw new ObjectStoreError("bad_config", "Repository config recordPolicy.fields must be an object.");
   }

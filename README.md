@@ -571,7 +571,8 @@ Clone adopts the same record configuration as a file clone. Only an absent
 `.pmvcs/config.json` uses default record settings for older repositories.
 Unreadable files (including permission failures and directories), invalid JSON
 and schema-invalid configuration refuse with typed `bad_config` errors naming
-the path; HTTP advertisement refuses rather than advertising empty settings. Ref advertisement, bundle fetch,
+the path. Only omitted fields use field defaults; explicit null paths, policy or
+field maps are invalid; HTTP advertisement refuses rather than advertising empty settings. Ref advertisement, bundle fetch,
 verified object upload and publication use the existing transport capabilities. The optional
 `object-fetch` capability adds `Transport.fetchObjects(ids)`, returning a verified bundle of
 individually named objects, including standalone patch series. Review records travel with

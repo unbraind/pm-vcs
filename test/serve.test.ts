@@ -1004,10 +1004,13 @@ test("config failures refuse FileTransport and HTTP while absent legacy config u
   const http = new HttpTransport(`http://127.0.0.1:${server.port}`);
   const bad = (error: unknown): boolean =>
     error instanceof ObjectStoreError && error.code === "bad_config" && error.message.includes(path);
-  for (const shape of ["directory", "denied", "json", "schema"]) {
+  for (const shape of ["directory", "denied", "json", "schema", "null-paths", "null-policy", "null-fields"]) {
     rmSync(path, { recursive: true, force: true });
     if (shape === "directory") mkdirSync(path);
-    else writeFileSync(path, shape === "json" ? "{invalid" : shape === "schema" ? '{"recordPaths":42}' : "{}");
+    else writeFileSync(path, shape === "json" ? "{invalid" : JSON.stringify(
+      shape === "schema" ? { recordPaths: 42 } : shape === "null-paths" ? { recordPaths: null }
+        : shape === "null-policy" ? { recordPolicy: null } : shape === "null-fields" ? { recordPolicy: { fields: null } } : {},
+    ));
     if (shape === "denied") chmodSync(path, 0);
     try {
       assert.throws(() => readConfig(path), bad, shape);
