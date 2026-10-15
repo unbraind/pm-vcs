@@ -1114,7 +1114,7 @@ test("explicit endpoints keep parent object fetch and nested history reachable f
       });
       assert.equal(legacy.status, allowedNested || allowedParent ? 200 : DENIED_STATUS);
     }
-    for (const path of ["/tenant/.pmvcs/unknown", "/tenant/.pmvcs/.pmvcs/fetch", "/../.pmvcs/fetch",
+    for (const path of ["//.pmvcs/advertise", "/tenant/.pmvcs/unknown", "/tenant/.pmvcs/.pmvcs/fetch", "/../.pmvcs/fetch",
       "http://example.invalid/tenant/.pmvcs/fetch", "/tenant/.pmvcs/shadow/.pmvcs/advertise"]) {
       assert.equal((await rawRequest(server, path)).status, DENIED_STATUS);
     }

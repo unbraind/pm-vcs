@@ -184,7 +184,8 @@ export function splitServedPath(path: string): { repository: string; endpoint: s
 /**
  * Every way a served request path can name a repository and an endpoint.
  *
- * A path can end with more than one endpoint suffix: `/tenant/objects/fetch`
+ * Explicit paths use a reserved control segment and yield exactly one target.
+ * Legacy paths can end with more than one endpoint suffix: `/tenant/objects/fetch`
  * ends with `/fetch` (repository `tenant/objects`) and with `/objects/fetch`
  * (repository `tenant`). Suffix-first matching would always pick the shorter
  * repository and leave a repository whose last segment is `objects` — or any
@@ -203,7 +204,7 @@ export function splitServedPathCandidates(path: string): { repository: string; e
   if (boundary !== -1) {
     const repository = path.slice(1, boundary);
     const endpoint = path.slice(boundary + control.length);
-    return path.startsWith("/") && (repository === "" || isServedRepositoryName(repository))
+    return (boundary === 0 || (path.startsWith("/") && isServedRepositoryName(repository)))
       && ENDPOINT_SUFFIXES.some((suffix) => suffix === endpoint) ? [{ repository, endpoint }] : [];
   }
   const candidates: { repository: string; endpoint: string }[] = [];

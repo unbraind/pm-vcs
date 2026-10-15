@@ -129,7 +129,7 @@ function activate(): ReturnType<typeof createExtensionTestHarness> {
   return createExtensionTestHarness(extension, { capabilities: manifestCapabilities() });
 }
 
-test("a served repository advertises itself exactly as a file remote does", async () => {
+test("a served repository advertises file metadata and its explicit HTTP endpoints", async () => {
   const served = await serveSeededRepo();
   const http = new HttpTransport(served.url);
   const advertisement = await http.advertise();

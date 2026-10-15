@@ -6,7 +6,7 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-06T11:15:21.827Z"
-updated_at: "2026-10-15T19:35:15.603Z"
+updated_at: "2026-10-15T19:39:10.767Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-sol
@@ -16,10 +16,11 @@ parent: pm-vcs-ttc0
 repro_steps: "Serve repositories tenant and tenant/objects (a) without --auth, or (b) with one token granted read on both. Request POST /tenant/objects/fetch: it resolves to repository tenant/objects, endpoint fetch. HttpTransport.fetchObjects for the parent uses the same path, so the parent's object fetch is shadowed."
 expected_result: "Both repositories and every supported endpoint can be addressed unambiguously, including with a grant that reaches both repositories and without authentication."
 actual_result: "Without --auth, or for a token scoped to both repositories, the nested repository shadows the parent's objects/fetch endpoint at their shared URL path. Parent-only tokens are not affected since 7341b0d."
-comments[3]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-10-15T19:28:42.717Z",codex-agent,"Plan: reserve a non-catalogable control segment for explicit repository endpoints, retain legacy suffix routing for existing clients, and negotiate new paths via advertisement so new clients can still use older servers. Preserve scope-before-catalogue resolution for legacy requests; prove both parent and nested fetches with open, parent-only, nested-only and combined grants."
   "2026-10-15T19:32:46.577Z",codex-agent,"Design: /<repository>/.pmvcs/<endpoint>, with optional HTTP explicit-endpoints negotiation and legacy aliases retaining scope-first deepest-catalogued resolution. Existing non-catalogable .pmvcs segment fences the namespace. Behavioral revert proof: reverting only splitServedPathCandidates to origin/main makes the new matrix fail (0 pass, 1 fail): explicit parent object fetch returns 404 instead of 200. Fixed matrix covers open, parent-only, nested-only, both and invalid grants; legacy nested history and parent-only access survive; reserved-name registration is refused."
   "2026-10-15T19:35:15.601Z",codex-agent,Linked pm test execution passed 1/1. Added a real older-peer direct object-fetch negotiation case and kept the existing legacy peer fixture honest by removing the new capability it does not implement. Project test-result tracking is disabled; results are recorded here.
+  "2026-10-15T19:39:10.767Z",codex-agent,Final review tightened explicit-path framing so a double-leading-slash root spelling cannot alias the canonical root endpoint. The matrix now denies that spelling as well as invalid repository and endpoint names. The legacy compatibility and authorization selection remain unchanged.
 files[5]{path,scope}:
   engine/http-protocol.ts,project
   engine/http-transport.ts,project
