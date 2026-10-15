@@ -669,8 +669,8 @@ syntax and repository convention violations. The docstring gate uses `pm-ops/doc
 The duplication launcher uses `pm-ops/duplication` with the pinned jscpd 5 binary, a zero
 threshold, a 50-token floor and a one-line floor. It enumerates all production sources,
 reconciles the detector's scan count at a one-token floor, and rejects empty or incomplete
-scans. Detector subprocesses run outside consumer configuration. The optional `fast-glob`
-peer required by this pinned fleet analyzer is installed explicitly.
+scans. Detector subprocesses run outside consumer configuration. The pinned fleet analyzer
+uses built-in `node:fs` globbing and does not require the `fast-glob` peer.
 
 `test/exact-gates.test.ts` runs real processes against disposable projects to prove omitted
 sources, untested branches, forbidden syntax, short clones and hostile configuration fail
