@@ -6,19 +6,23 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-15T07:41:09.216Z"
-updated_at: "2026-10-15T07:49:51.061Z"
+updated_at: "2026-10-15T08:45:36.516Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
-comments[3]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-10-15T07:42:22.476Z",codex-agent,"Baseline npm ls braces fast-glob micromatch shows fast-glob 3.3.3 -> micromatch 4.0.8 -> braces 3.0.3, also the optional peer of pm-ops 2026.10.6. Production-only tree is empty. The production duplication launcher and raw coverage inventory already use node:fs globSync; fast-glob has no direct code import. Refresh pm-ops to latest published 2026.10.14 and remove the direct peer. CI already has workflow_dispatch; use the prescribed pm-github 2026.10.14 fallback pending release and repin. No sync execution or repository settings changes."
   "2026-10-15T07:49:21.519Z",codex-agent,"Related work: pm-vcs-qfku tracks the removed vulnerable dependency chain; pm-vcs-1bcq records the reproduced Node 22 GC measurement race and one-flag deterministic test fix with flag-only revert and held-corpus negative controls. The fallback reusable workflow predates caller-changelog regeneration and CI dispatch from pm-github PR 122; the later 2026.10.15 repin remains an operational dependency."
   "2026-10-15T07:49:51.061Z",codex-agent,"PM-linked validation passes: npm run typecheck; npm run duplicates (65 sources, 0 clone pairs); retained-corpus focused test 1/1. The one-flag measurement fix has a flag-removal failing revert and a genuinely retained corpus failing control. Preparing the committed self-host snapshot before full isolated npm and Bun release gates. Both workflow/dependency changes preserve runtime code and quality thresholds."
-files[4]{path,scope,note}:
+  "2026-10-15T08:43:47.843Z",codex-agent,The first isolated npm attempt caught the pre-existing copied prepare launcher no longer matching the newly published pm-ops 2026.10.14 template; stopped that failed attempt and preserved its output. Refreshed only from the installed published template. Its new artifact guard skips package resolution and merge-driver configuration during npm pack/publish. Added two real-checkout regressions covering both commands with pinned and stale pm-ops. The complete focused launcher suite passes 10/10. Revert proof and final committed-head full gates follow; the npm/Bun thresholds remain unchanged.
+  "2026-10-15T08:45:36.516Z",codex-agent,"Launcher behavioural revert proof: retain both new regression tests and restore ONLY scripts/prepare-merge-driver.ts from the pre-upgrade source. Both npm pack and npm publish scenarios fail (0/2) on a stale package export before the intended skip. Restoring the exact published pm-ops 2026.10.14 template passes the full launcher suite 10/10 with zero skips. The real Git-config invariants and dependency-resolution assertions remain intact. No unmerged template was copied."
+files[6]{path,scope,note}:
   .github/workflows/pm-github-sync.yml,project,Pinned gated workflow caller
   package-lock.json,project,Braces-free locked graph
   package.json,project,Remove unused fast-glob and refresh pm-ops
+  scripts/prepare-merge-driver.ts,project,Published pm-ops 2026.10.14 canonical launcher
   selfhost.bundle,project,Regenerate after pm and changelog writes
+  test/prepare-merge-driver.test.ts,project,Real pack and publish Git-config preservation regressions
 tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   npm run typecheck,project,codex-agent,"2026-10-15T07:48:51.703Z",local_mutation,chore/gated-issue-sync-and-braces-free-gates
 docs[2]{path,scope,note}:
