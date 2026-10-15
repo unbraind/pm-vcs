@@ -4,6 +4,9 @@
 
 ### Added
 
+- Merge concurrent served review records per field with recorded outcomes ([pm-vcs-6e5m](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-6e5m.toon))
+- Prove served forge tenant isolation and receiver lease refusals ([pm-vcs-mv7e](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-mv7e.toon))
+- Serve native patch series with an agent command workflow ([pm-vcs-ttqa](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ttqa.toon))
 - Clone and fetch shallow or blob-filtered history with demand hydration ([pm-vcs-phase6partial](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6partial.toon))
 - Collect unreachable objects without losing oplog, lease or sparse-instance history ([pm-vcs-phase6gc](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6gc.toon))
 - Design committed repository links local layers and typed obliteration ([pm-vcs-8xis](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-8xis.toon))

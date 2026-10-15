@@ -2,11 +2,13 @@ id: pm-vcs-ttqa
 title: Serve native patch series with an agent command workflow
 description: "List, fetch, publish and CAS-update native series through file and HTTP transports; propose, apply and rederive via pm vcs commands."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-14T19:47:14.135Z"
-updated_at: "2026-10-14T23:29:08.960Z"
+updated_at: "2026-10-15T03:51:59.499Z"
+closed_at: "2026-10-15T03:51:59.479Z"
+completed_at: "2026-10-15T00:08:17.000Z"
 author: codex-agent
 acceptance_criteria: Named series list/fetch/create/CAS-update work over file and HTTP transports; an independent served clone applies on the original base and rederives from applied HEAD byte-identically; complete binary fragment closure and earlier proposal roots survive transfer and collection.
 parent: pm-vcs-5h6j
@@ -50,4 +52,5 @@ tests[2]:
       source_ref: feat/served-patch-series-and-review
 docs[1]{path,scope}:
   docs/served-forge.md,project
+close_reason: "{\"pr\":111,\"url\":\"https://github.com/unbraind/pm-vcs/pull/111\",\"merge_commit_sha\":\"be3ff286de7444bc5525ec92dd640b8f4bd03b18\",\"head_sha\":\"712e551fb880cb0f4db9b86ca7406f32603e5555\",\"merged_at\":\"2026-10-15T00:08:17Z\",\"checks\":[\"CodeQL\",\"CodeRabbit\",\"codeql\",\"test (22)\",\"test (26)\",\"windows-acceptance-launcher (22)\",\"windows-acceptance-launcher (26)\"]}"
 body: ""
