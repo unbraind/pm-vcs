@@ -25,6 +25,8 @@ import { assertRefName, BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./refs.
 import type { RepositoryConfig } from "./config.ts";
 import { REPOSITORY_FORMAT, Repository } from "./repo.ts";
 import { HttpTransport } from "./http-transport.ts";
+import { serveForge, type ForgeRequest } from "./forge.ts";
+import type { RecordDocument } from "./model.ts";
 
 /** What a remote repository says about itself when first contacted. */
 export interface Advertisement {
@@ -61,7 +63,7 @@ export interface Advertisement {
 }
 
 /** Capabilities this build's transports speak. */
-export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival", "object-fetch", "publication-leases", "partial-history"] as const;
+export const TRANSPORT_CAPABILITIES = ["fetch", "push", "resumable-upload", "verified-arrival", "object-fetch", "publication-leases", "partial-history", "forge"] as const;
 
 /** Capabilities a peer must offer before this build will transfer anything. */
 export const REQUIRED_TRANSPORT_CAPABILITIES: readonly string[] = ["fetch", "push", "resumable-upload", "verified-arrival"];
@@ -135,6 +137,8 @@ export interface TransferObject {
  * different product, not a different transport.
  */
 export interface Transport {
+  /** Optional native forge operations for peers advertising the forge capability. */
+  forge?(request: ForgeRequest): Promise<RecordDocument>;
   /** Explicit receiver-authenticated lease operation. */
   lease?(request: LeaseRequest): Promise<FileLease | null>;
   /** Fetch individually named verified objects, including standalone series; optional for older peers. */
@@ -334,6 +338,11 @@ export class FileTransport implements Transport {
       }
       throw error;
     }
+  }
+
+  /** Run native catalog and per-field review operations as the receiver principal. */
+  async forge(request: ForgeRequest, principal: ReceiverPrincipal = filesystemPrincipal()): Promise<RecordDocument> {
+    return serveForge(this.open(), request, principal);
   }
 
   /** Perform an explicit lease operation as the receiver principal and retain acquired fencing proofs. */

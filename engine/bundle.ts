@@ -78,7 +78,7 @@ interface BundleLine {
  * @param commits - Commits to close over.
  * @returns Every reachable object id, commits included.
  */
-function closure(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId> {
+export function collectCommitObjects(store: ObjectStore, commits: readonly ObjectId[]): Set<ObjectId> {
   const objects = new Set<ObjectId>();
   /** Include all bounded manifest descendants and blobs in an export closure. */
   const walkPayload = (id: ObjectId): void => {
@@ -189,7 +189,7 @@ export function exportBundle(
     }
   }
 
-  const objects = [...closure(store, [...commits])].sort(compareByteOrder);
+  const objects = [...collectCommitObjects(store, [...commits])].sort(compareByteOrder);
   const header: BundleContents = {
     refs: selected,
     prerequisites: [...since].sort(compareByteOrder),
@@ -218,7 +218,7 @@ export function exportPartialBundle(store: ObjectStore, refs: RefStore, names: r
     if (options.depth === undefined || depth < options.depth) for (const parent of commit.parents) queue.push({ id: parent, depth: depth + 1 });
   }
   const shallow = [...distances.keys()].filter(/** A boundary is explicit only when at least one parent lies outside the selected history. */ (id) => readCommit(store, id).parents.some(/** Preserve shared ancestry already included by another tip. */ (parent) => !distances.has(parent)));
-  const all = closure(store, [...distances.keys()]);
+  const all = collectCommitObjects(store, [...distances.keys()]);
   const promisedBySource = new Set(store.partialState()?.promised ?? []);
   const promised: ObjectId[] = [];
   const objects: ObjectId[] = [];

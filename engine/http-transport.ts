@@ -12,6 +12,8 @@ import { redactRemoteUrl, redactUserinfo, splitRemoteCredentials } from "./crede
 import { parseBundle } from "./bundle.ts";
 
 import { randomBytes } from "node:crypto";
+import { FORGE_READ_ENDPOINT, FORGE_WRITE_ENDPOINT, type ForgeRequest } from "./forge.ts";
+import { decodeRecord, type RecordDocument } from "./model.ts";
 
 import { parseConfig, type RepositoryConfig } from "./config.ts";
 
@@ -138,6 +140,14 @@ export class HttpTransport implements Transport {
     if (lease === null) throw new ObjectStoreError("unreachable_remote", "The peer answered with an invalid lease.");
     this.proofs.set(lease.fileId, lease);
     return lease;
+  }
+
+  /** Exchange native forge records through the endpoint matching the required grant. */
+  async forge(request: ForgeRequest): Promise<RecordDocument> {
+    const endpoint = request.action === "publish" ? FORGE_WRITE_ENDPOINT : FORGE_READ_ENDPOINT;
+    const answer = await this.roundTrip(endpoint, JSON.stringify(request));
+    assertWireSuccess(answer.status, answer.payload, this.url);
+    return decodeRecord(answer.payload);
   }
 
   /**

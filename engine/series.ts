@@ -9,10 +9,10 @@
 // it as a bundle, apply it to a branch, and re-derive it — all natively, never by
 // shelling out to git.
 
-import { compareByteOrder, decodeTree, readCommit, readSeries, type PatchSeries, type SeriesPatch, type Signature, writeSeries } from "./model.ts";
+import { compareByteOrder, readCommit, readSeries, type PatchSeries, type SeriesPatch, type Signature, writeSeries } from "./model.ts";
 import { type ObjectStore, type ObjectId, ObjectStoreError } from "./objects.ts";
 import { reachable, isAncestor } from "./merge.ts";
-import { BUNDLE_FORMAT, type BundleContents, serializeBundle } from "./bundle.ts";
+import { collectCommitObjects, type BundleContents, serializeBundle } from "./bundle.ts";
 import { type RefStore, BRANCH_PREFIX } from "./refs.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 import { type RewriteContext, planCherryPick } from "./rewrite.ts";
@@ -69,38 +69,6 @@ function collectRange(store: ObjectStore, from: ObjectId, to: ObjectId): ObjectI
       ? leftCount - rightCount
       : compareByteOrder(left, right);
   });
-}
-
-/**
- * Collects every object a commit reaches: its tree, subtrees, and every leaf.
- *
- * @param store - Object store holding the commit.
- * @param commitId - The commit to walk from.
- * @param into - The set to add object ids to.
- */
-function collectObjectClosure(store: ObjectStore, commitId: ObjectId, into: Set<ObjectId>): void {
-  if (into.has(commitId)) return;
-  into.add(commitId);
-  const commit = readCommit(store, commitId);
-  collectTree(store, commit.tree, into);
-  for (const parent of commit.parents) collectObjectClosure(store, parent, into);
-}
-
-/**
- * Walks a tree and adds it and every descendant to a set.
- *
- * @param store - Object store holding the trees.
- * @param treeId - The tree to walk.
- * @param into - The set to add object ids to.
- */
-function collectTree(store: ObjectStore, treeId: ObjectId, into: Set<ObjectId>): void {
-  if (into.has(treeId)) return;
-  into.add(treeId);
-  const payload = store.readTyped(treeId, "tree");
-  for (const entry of decodeTree(payload)) {
-    if (entry.mode === "40000") collectTree(store, entry.id, into);
-    else into.add(entry.id);
-  }
 }
 
 /**
@@ -192,10 +160,12 @@ export function exportSeriesBundle(store: ObjectStore, seriesId: ObjectId): Buff
   const tip = series.patches[series.patches.length - 1]!.commit;
   // Collect the full closure: every commit reachable from each patch, plus all
   // trees and leaves. The series object itself is included explicitly.
-  const objects = new Set<ObjectId>([seriesId]);
+  const commits = new Set<ObjectId>();
   for (const patch of series.patches) {
-    collectObjectClosure(store, patch.commit, objects);
+    for (const id of reachable(store, patch.commit)) commits.add(id);
   }
+  const objects = collectCommitObjects(store, [...commits]);
+  objects.add(seriesId);
   const sortedObjects = [...objects].sort(compareByteOrder);
   const header: BundleContents = {
     refs: { [`${BRANCH_PREFIX}series/${seriesId.slice(0, 12)}`]: tip },

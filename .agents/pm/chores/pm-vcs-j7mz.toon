@@ -1,0 +1,17 @@
+id: pm-vcs-j7mz
+title: Define explicit retirement of native forge proposal and review history roots
+description: "Phase 5 roots every proposed series in refs/forge-archive and preserves review revisions and catalog transitions in native commit/oplog history. This correctly prevents GC from losing reviewable changes after lease release, but retained proposal/history growth has no explicit retirement policy. Define an authorized and auditable lifecycle without weakening ref/oplog reachability or treating ordinary GC as obliteration. Distinct from abandoned upload receipts in pm-vcs-uploadretention."
+type: Chore
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-14T20:11:29.024Z"
+updated_at: "2026-10-14T20:11:55.651Z"
+author: codex-agent
+acceptance_criteria: "Specify which archive refs, review history and oplog transitions may be retired, who may authorize it, and what remains readable; prove GC never drops still-referenced proposals or review outcomes; preserve typed authorized obliteration as a separate operation."
+parent: pm-vcs-b7cb
+files[1]{path,scope}:
+  engine/forge.ts,project
+docs[1]{path,scope}:
+  docs/served-forge.md,project
+body: ""
