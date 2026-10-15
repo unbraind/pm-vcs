@@ -6,9 +6,7 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-05T09:04:49.913Z"
-updated_at: "2026-10-15T19:35:13.203Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-15T21:35:51.597Z"
 author: codex-sol
 parent: pm-vcs-5h6j
 repro_steps: "Run a native Bun server with response.sendDate=false; send the same denied POST twice more than one second apart; compare raw response headers. engine/serve.ts follows this pattern, and the new directory-replacement socket fixture reproduced differing Date values."
@@ -16,12 +14,15 @@ expected_result: The requested suppression of automatic Date headers is honored 
 actual_result: Node omits Date; native Bun 1.3.5 emits a changing Date header.
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-ttc0,related,"2026-10-05T09:04:49.913Z",codex-sol,"cli:create:dep",detected
-comments[3]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-10-15T19:28:41.305Z",codex-agent,"Bun 1.3.5 raw-socket probes confirm sendDate=false and removeHeader(date) still emit a changing automatic Date. An empty explicit date suppresses generation but is not a valid HTTP date. Evaluating a single fixed valid sentinel Date plus no-store policy for portable, bounded denial headers."
   "2026-10-15T19:32:42.965Z",codex-agent,"Design: a single fixed valid sentinel Date (Unix epoch) plus Cache-Control: no-store on fixed denials under both runtimes. Header state is constant and independent of wall time, process lifetime and repository. Behavioral revert proof: reverting only handleServedRequest to origin/main makes the two native-runtime socket cases fail (0 pass, 2 fail): Node loses the documented sentinel and Bun wire bytes change across 1.15 seconds. Fixed socket cases both pass. No catalogue routing change is part of this fix."
   "2026-10-15T19:35:13.203Z",codex-agent,Linked pm test execution passed 2/2 with native Node and Bun worker processes and raw TCP response equality. Project test-result tracking is disabled; results are recorded in this comment.
-files[3]{path,scope}:
+  "2026-10-15T21:04:41.967Z",codex-agent,Complete npm release check at e03471b passed 1541/1541 with zero fail/cancel/skip/todo and per-file 100% coverage across all 65 source files. Both native Node and native Bun cross-second raw-socket denial regressions passed inside the full run. The full Bun-invoked command is being repeated after a separate existing erasure-setup failure.
+  "2026-10-15T21:35:24.411Z",codex-agent,"Delivery gates at e03471b: both complete npm and Bun release checks exited 0, each 1541/1541 with 0 fail/cancel/skip/todo and per-file 100% coverage across all 65 source files. Native Node and Bun raw TCP denial responses match across 1.15 seconds with the documented sentinel Date/no-store policy. Revert proof remains recorded above. Earlier unrelated erasure refusal is tracked in pm-vcs-simi; no test or threshold was relaxed. Release claim, keep in_progress."
+files[4]{path,scope}:
   engine/serve.ts,project
+  selfhost.bundle,project
   test/helpers/denial-worker.ts,project
   test/serve.test.ts,project
 tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:

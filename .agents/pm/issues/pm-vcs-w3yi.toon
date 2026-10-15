@@ -6,9 +6,7 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-06T11:15:21.827Z"
-updated_at: "2026-10-15T19:39:10.767Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-15T21:35:53.876Z"
 author: codex-sol
 estimated_minutes: 120
 acceptance_criteria: "An explicit wire address or compatible negotiation makes parent fetchObjects and nested repository fetch reachable together; regression tests cover no-auth, parent-only, nested-only and multi-repository grants; unauthorized requests retain the fixed denial shape."
@@ -16,15 +14,18 @@ parent: pm-vcs-ttc0
 repro_steps: "Serve repositories tenant and tenant/objects (a) without --auth, or (b) with one token granted read on both. Request POST /tenant/objects/fetch: it resolves to repository tenant/objects, endpoint fetch. HttpTransport.fetchObjects for the parent uses the same path, so the parent's object fetch is shadowed."
 expected_result: "Both repositories and every supported endpoint can be addressed unambiguously, including with a grant that reaches both repositories and without authentication."
 actual_result: "Without --auth, or for a token scoped to both repositories, the nested repository shadows the parent's objects/fetch endpoint at their shared URL path. Parent-only tokens are not affected since 7341b0d."
-comments[4]{created_at,author,text}:
+comments[6]{created_at,author,text}:
   "2026-10-15T19:28:42.717Z",codex-agent,"Plan: reserve a non-catalogable control segment for explicit repository endpoints, retain legacy suffix routing for existing clients, and negotiate new paths via advertisement so new clients can still use older servers. Preserve scope-before-catalogue resolution for legacy requests; prove both parent and nested fetches with open, parent-only, nested-only and combined grants."
   "2026-10-15T19:32:46.577Z",codex-agent,"Design: /<repository>/.pmvcs/<endpoint>, with optional HTTP explicit-endpoints negotiation and legacy aliases retaining scope-first deepest-catalogued resolution. Existing non-catalogable .pmvcs segment fences the namespace. Behavioral revert proof: reverting only splitServedPathCandidates to origin/main makes the new matrix fail (0 pass, 1 fail): explicit parent object fetch returns 404 instead of 200. Fixed matrix covers open, parent-only, nested-only, both and invalid grants; legacy nested history and parent-only access survive; reserved-name registration is refused."
   "2026-10-15T19:35:15.601Z",codex-agent,Linked pm test execution passed 1/1. Added a real older-peer direct object-fetch negotiation case and kept the existing legacy peer fixture honest by removing the new capability it does not implement. Project test-result tracking is disabled; results are recorded here.
   "2026-10-15T19:39:10.767Z",codex-agent,Final review tightened explicit-path framing so a double-leading-slash root spelling cannot alias the canonical root endpoint. The matrix now denies that spelling as well as invalid repository and endpoint names. The legacy compatibility and authorization selection remain unchanged.
-files[5]{path,scope}:
+  "2026-10-15T21:04:45.621Z",codex-agent,"Complete npm release check at e03471b passed 1541/1541 with zero fail/cancel/skip/todo and all-source per-file 100% coverage. Parent/nested endpoint and grant regressions, older-peer compatibility, packed Node/Bun clients and served-forge authorization checks passed. A full Bun-invoked retry is running after an unrelated existing erasure-setup refusal."
+  "2026-10-15T21:35:28.292Z",codex-agent,"Delivery gates at e03471b: both complete npm and Bun release checks exited 0, each 1541/1541 with 0 fail/cancel/skip/todo and per-file 100% coverage across all 65 source files. Explicit parent/nested endpoints, all grant combinations, reserved-name refusal, legacy aliases and older-peer negotiation pass. Earlier unrelated erasure refusal is tracked in pm-vcs-simi. Final receipt changes only tracker evidence and self-host artifact. Release claim, keep in_progress."
+files[6]{path,scope}:
   engine/http-protocol.ts,project
   engine/http-transport.ts,project
   engine/serve.ts,project
+  selfhost.bundle,project
   test/serve.test.ts,project
   test/served-sync.test.ts,project
 tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:

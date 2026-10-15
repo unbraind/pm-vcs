@@ -6,19 +6,20 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-05T07:00:24.104Z"
-updated_at: "2026-10-15T20:20:21.589Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-15T21:35:48.372Z"
 author: codex-sol
-comments[5]{created_at,author,text}:
+comments[7]{created_at,author,text}:
   "2026-10-15T19:28:39.394Z",codex-agent,"Plan: only ENOENT yields DEFAULT_CONFIG; wrap unreadable, JSON and schema failures in bad_config with the config path. Exercise real filesystem failures through FileTransport and HTTP, including legacy absent config."
   "2026-10-15T19:32:39.063Z",codex-agent,"Behavioral revert proof: replacing only readConfig with origin/main makes node --test --test-name-pattern=\"config failures refuse\" test/serve.test.ts fail (0 pass, 1 fail): directory config yields no exception. Fixed implementation passes and checks real directory, EACCES, malformed JSON, schema-invalid and ENOTDIR failures with bad_config and path; FileTransport and HTTP refuse; missing config works with a fresh server catalogue."
   "2026-10-15T19:35:10.945Z",codex-agent,"Linked pm test execution passed 1/1. Project test-result tracking is disabled, so the runner returned evidence_recording.recorded=false; recording the verified result here without changing project policy."
   "2026-10-15T20:02:33.122Z",codex-agent,"First full npm gate: 1540 passed, 1 failed, 0 skipped; every source file retained 100% statements/branches/functions/lines. The sole failure was an existing invalid-remote-root test expecting generic unreachable_remote for ENOTDIR. Updated that assertion to the requested typed bad_config with its config path; production behavior is unchanged from the fail-closed fix."
   "2026-10-15T20:20:21.589Z",codex-agent,"Expanded schema validation to reject explicit null recordPaths, recordPolicy and fields instead of silently using defaults; omitted fields still default. Config/FileTransport/HTTP parity and surrounding sync/catalogue tests pass 76/76. Additional behavioral revert proof: restoring only parseConfig from origin/main makes its malformed-shape regression fail with a missing expected exception; restoring the fix passes. Typecheck, lint and zero-duplication checks pass."
-files[6]{path,scope}:
+  "2026-10-15T21:04:35.522Z",codex-agent,"Complete npm release check at e03471b passed: 1541/1541 tests, 0 fail/cancel/skip/todo; all 65 source files retain 100% statements, branches, functions and lines. All subsequent acceptance, audit, pack, changelog and release-policy checks passed. The Bun-invoked run had one unrelated pre-existing erasure-setup refusal; an unchanged full retry is running."
+  "2026-10-15T21:35:20.873Z",codex-agent,"Delivery gates at e03471b: npm run release:check and the unchanged full bun run release:check retry both exited 0, each with 1541/1541 tests and 0 fail/cancel/skip/todo. All 65 source files have 100% statements, branches, functions and lines (22526 statements/lines, 759 functions, 6563 branches). Thresholds and dependency pins are unchanged. Earlier unrelated erasure refusal is tracked in pm-vcs-simi. Final receipt changes only tracker evidence and the self-host bundle; release claim, keep in_progress."
+files[7]{path,scope}:
   engine/config.ts,project
   engine/served-repositories.ts,project
+  selfhost.bundle,project
   test/config.test.ts,project
   test/serve.test.ts,project
   test/served-repositories.test.ts,project
