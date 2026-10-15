@@ -27,6 +27,7 @@ import { encodeRecord } from "./model.ts";
 import { isServableRepositoryDirectory, ServedRepositoryDirectories } from "./served-repositories.ts";
 import {
   ADVERTISE_ENDPOINT,
+  EXPLICIT_ENDPOINT_CAPABILITY,
   LEASE_ENDPOINT,
   BAD_REQUEST_STATUS,
   BODY_TOO_LARGE_STATUS,
@@ -597,6 +598,12 @@ async function handleServedRequest(
     }
   }
   response.sendDate = false;
+  if (routed.response.status === DENIED_STATUS) {
+    // Bun 1.3.5 inserts Date even with sendDate=false. A single valid sentinel
+    // bounds denial metadata independently of time, runtime and repository.
+    response.setHeader("date", "Thu, 01 Jan 1970 00:00:00 GMT");
+    response.setHeader("cache-control", "no-store");
+  }
   response.setHeader("connection", "close");
   response.statusCode = routed.response.status;
   response.setHeader("content-type", routed.response.contentType);
@@ -836,7 +843,7 @@ async function dispatchServedRequest(
   const limits = context.limits;
   if (endpoint === ADVERTISE_ENDPOINT) {
     const advertisement = await served.transport().advertise();
-    return { status: 200, body: Buffer.from(`${JSON.stringify(advertisement)}\n`, "utf8"), contentType: JSON_CONTENT_TYPE };
+    return { status: 200, body: Buffer.from(`${JSON.stringify({ ...advertisement, capabilities: [...advertisement.capabilities, EXPLICIT_ENDPOINT_CAPABILITY] })}\n`, "utf8"), contentType: JSON_CONTENT_TYPE };
   }
   if (endpoint === MISSING_ENDPOINT || endpoint === OBJECT_FETCH_ENDPOINT) {
     const request = decodeWireObject(body);

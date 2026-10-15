@@ -156,8 +156,9 @@ export function readConfig(path: string): RepositoryConfig {
   let contents: string;
   try {
     contents = readFileSync(path, "utf8");
-  } catch {
-    return DEFAULT_CONFIG;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_CONFIG;
+    throw new ObjectStoreError("bad_config", `Repository config at ${path} cannot be read.`);
   }
   let parsed: unknown;
   try {
@@ -165,7 +166,11 @@ export function readConfig(path: string): RepositoryConfig {
   } catch {
     throw new ObjectStoreError("bad_config", `Repository config at ${path} is not valid JSON.`);
   }
-  return parseConfig(parsed);
+  try {
+    return parseConfig(parsed);
+  } catch (error) {
+    throw new ObjectStoreError("bad_config", `Repository config at ${path} is invalid: ${(error as Error).message}`);
+  }
 }
 
 /**

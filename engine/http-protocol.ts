@@ -17,6 +17,12 @@ import { FORGE_READ_ENDPOINT, FORGE_WRITE_ENDPOINT } from "./forge.ts";
 import { redactUserinfo } from "./credentials.ts";
 import { isObjectId, type ObjectId, type ObjectType, OBJECT_TYPES, ObjectStoreError } from "./objects.ts";
 
+/** Reserved endpoint segment, excluded from catalogue names at every depth. */
+export const ENDPOINT_CONTROL_SEGMENT = ".pmvcs";
+
+/** Optional HTTP capability selecting the explicit endpoint namespace. */
+export const EXPLICIT_ENDPOINT_CAPABILITY = "explicit-endpoints";
+
 /** One repository's advertisement endpoint, answering refs, HEAD, configuration and capabilities. */
 export const ADVERTISE_ENDPOINT = "advertise";
 
@@ -192,6 +198,14 @@ export function splitServedPath(path: string): { repository: string; endpoint: s
  *   names no endpoint under any repository name this root accepts.
  */
 export function splitServedPathCandidates(path: string): { repository: string; endpoint: string }[] {
+  const control = `/${ENDPOINT_CONTROL_SEGMENT}/`;
+  const boundary = path.indexOf(control);
+  if (boundary !== -1) {
+    const repository = path.slice(1, boundary);
+    const endpoint = path.slice(boundary + control.length);
+    return path.startsWith("/") && (repository === "" || isServedRepositoryName(repository))
+      && ENDPOINT_SUFFIXES.some((suffix) => suffix === endpoint) ? [{ repository, endpoint }] : [];
+  }
   const candidates: { repository: string; endpoint: string }[] = [];
   for (const suffix of ENDPOINT_SUFFIXES) {
     const separator = `/${suffix}`;

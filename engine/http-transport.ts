@@ -21,6 +21,8 @@ import { type ObjectId, isObjectId, ObjectStoreError } from "./objects.ts";
 import type { Advertisement, PushReceipt, PushUpdate, TransferObject, Transport } from "./transport.ts";
 import {
   ADVERTISE_ENDPOINT,
+  ENDPOINT_CONTROL_SEGMENT,
+  EXPLICIT_ENDPOINT_CAPABILITY,
   LEASE_ENDPOINT,
   assertWireSuccess,
   decodePushReceipt,
@@ -71,6 +73,9 @@ export class HttpTransport implements Transport {
 
   /** The origin the requests go to, `scheme://host:port`. */
   private readonly origin: string;
+
+  /** Negotiated HTTP endpoint namespace; null until advertisement is read. */
+  private explicitEndpoints: boolean | null = null;
 
   /** The repository path every endpoint hangs off, no trailing slash. */
   private readonly base: string;
@@ -163,7 +168,7 @@ export class HttpTransport implements Transport {
     let response: Response;
     let payload: Buffer;
     try {
-      response = await fetch(`${this.origin}${this.base}/${endpoint}`, {
+      response = await fetch(`${this.origin}${this.base}/${this.explicitEndpoints === true ? `${ENDPOINT_CONTROL_SEGMENT}/` : ""}${endpoint}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -242,6 +247,7 @@ export class HttpTransport implements Transport {
         `${this.url} advertised a repository configuration this build cannot use. Check the remote's repository configuration.`,
       );
     }
+    this.explicitEndpoints = capabilities.includes(EXPLICIT_ENDPOINT_CAPABILITY);
     return {
       ...(repositoryId === undefined ? {} : { repositoryId: repositoryId as string }),
       refs: refs.map((entry) => {
@@ -271,6 +277,7 @@ export class HttpTransport implements Transport {
 
   /** Fetch standalone objects and verify every claimed id before returning bytes. */
   async fetchObjects(ids: readonly ObjectId[]): Promise<Buffer> {
+    if (this.explicitEndpoints === null) await this.advertise();
     const answer = await this.roundTrip(OBJECT_FETCH_ENDPOINT, encodeMissingRequest(ids));
     assertWireSuccess(answer.status, answer.payload, this.url);
     parseBundle(answer.payload);

@@ -2,14 +2,25 @@ id: pm-vcs-00mb
 title: Fail closed when repository configuration exists but cannot be read
 description: "Discovered during served-repository adversarial testing: engine/config.ts readConfig catches every readFileSync error and returns DEFAULT_CONFIG. A repository whose .pmvcs/config.json has been replaced by a directory therefore advertises an empty record configuration rather than refusing. Distinguish absence from unreadable or invalid filesystem shape, preserve older repositories without a config file, and add FileTransport and HTTP parity tests. This is a pre-existing configuration-reader behavior; the HTTP feature records it as a separate follow-up."
 type: Issue
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-05T07:00:24.104Z"
-updated_at: "2026-10-05T07:00:49.125Z"
+updated_at: "2026-10-15T19:35:10.945Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-sol
-files[1]{path,scope}:
+comments[3]{created_at,author,text}:
+  "2026-10-15T19:28:39.394Z",codex-agent,"Plan: only ENOENT yields DEFAULT_CONFIG; wrap unreadable, JSON and schema failures in bad_config with the config path. Exercise real filesystem failures through FileTransport and HTTP, including legacy absent config."
+  "2026-10-15T19:32:39.063Z",codex-agent,"Behavioral revert proof: replacing only readConfig with origin/main makes node --test --test-name-pattern=\"config failures refuse\" test/serve.test.ts fail (0 pass, 1 fail): directory config yields no exception. Fixed implementation passes and checks real directory, EACCES, malformed JSON, schema-invalid and ENOTDIR failures with bad_config and path; FileTransport and HTTP refuse; missing config works with a fresh server catalogue."
+  "2026-10-15T19:35:10.945Z",codex-agent,"Linked pm test execution passed 1/1. Project test-result tracking is disabled, so the runner returned evidence_recording.recorded=false; recording the verified result here without changing project policy."
+files[4]{path,scope}:
   engine/config.ts,project
+  engine/served-repositories.ts,project
+  test/serve.test.ts,project
+  test/served-repositories.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-name-pattern='config failures refuse' test/serve.test.ts,project,codex-agent,"2026-10-15T19:33:21.130Z",local_mutation,fix/served-config-date-fetch-paths
 docs[1]{path,scope}:
   README.md,project
 body: ""

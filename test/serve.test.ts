@@ -8,10 +8,13 @@
 // server, and what they can and cannot tell apart.
 
 import assert from "node:assert/strict";
-import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
+import { chmodSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connect } from "node:net";
-import { exportBundle } from "../engine/bundle.ts";
+import { exportBundle, parseBundle } from "../engine/bundle.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
 import type { LeaseProof } from "../engine/publication-leases.ts";
 import { afterEach, test } from "node:test";
@@ -37,7 +40,9 @@ import {
 } from "../engine/http-protocol.ts";
 import { Repository } from "../engine/repo.ts";
 import { ServedRepositoryDirectories } from "../engine/served-repositories.ts";
-import { makeTempDir } from "./helpers/tmp.ts";
+import { DEFAULT_CONFIG, readConfig } from "../engine/config.ts";
+import { FileTransport } from "../engine/transport.ts";
+import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const handles: Array<{ root: string; cleanup(): void }> = [];
 const servers: ServeHandle[] = [];
@@ -987,4 +992,131 @@ test("a bind to a named host answers only its own name in Host", () => {
   }
   assert.equal(isAcceptableHost("serve.internal.example", { host: bound.host, port: 80 }), true);
   assert.equal(isAcceptableHost("serve.internal.example", { host: "127.0.0.1", port: 43210 }), false);
+});
+
+
+test("config failures refuse FileTransport and HTTP while absent legacy config uses defaults", async () => {
+  const repository = freshRepo();
+  const path = join(repository.controlDirectory, "config.json");
+  const file = new FileTransport("file:fixture", repository.root);
+  const server = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 });
+  servers.push(server);
+  const http = new HttpTransport(`http://127.0.0.1:${server.port}`);
+  const bad = (error: unknown): boolean =>
+    error instanceof ObjectStoreError && error.code === "bad_config" && error.message.includes(path);
+  for (const shape of ["directory", "denied", "json", "schema"]) {
+    rmSync(path, { recursive: true, force: true });
+    if (shape === "directory") mkdirSync(path);
+    else writeFileSync(path, shape === "json" ? "{invalid" : shape === "schema" ? '{"recordPaths":42}' : "{}");
+    if (shape === "denied") chmodSync(path, 0);
+    try {
+      assert.throws(() => readConfig(path), bad, shape);
+      await assert.rejects(file.advertise(), bad, shape);
+      await assert.rejects(http.advertise(), bad, shape);
+    } finally {
+      if (shape === "denied") chmodSync(path, 0o600);
+    }
+  }
+  rmSync(path);
+  assert.deepEqual(readConfig(path), DEFAULT_CONFIG);
+  assert.deepEqual((await file.advertise()).config, DEFAULT_CONFIG);
+  assert.deepEqual((await http.advertise()).config.recordPaths, []);
+  // Exercise a fresh discovery, not only a cached repository holder.
+  const legacyServer = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 });
+  servers.push(legacyServer);
+  assert.equal((await rawRequest(legacyServer, "/advertise")).status, 200);
+  writeFileSync(path, "{}");
+  assert.throws(() => readConfig(join(path, "child")), bad);
+});
+
+for (const runtime of ["node", "bun"]) {
+  test(`denial wire bytes stay identical across seconds under native ${runtime}`, { timeout: 30_000 }, async () => {
+    const root = tempRoot();
+    const worker = spawn(runtime, [join(packageRoot, "test/helpers/denial-worker.ts"), root],
+      { stdio: ["ignore", "pipe", "pipe"] });
+    const closed = once(worker, "close");
+    try {
+      const port = await new Promise<number>((resolvePort, reject) => {
+        let output = "";
+        worker.once("error", reject);
+        worker.once("exit", (code) => reject(new Error(`worker exited ${code}`)));
+        worker.stdout.on("data", (chunk: Buffer) => {
+          output += chunk.toString();
+          const match = /READY (\d+)/.exec(output);
+          if (match !== null) resolvePort(Number(match[1]));
+        });
+      });
+      const server = { host: "127.0.0.1", port, close: async () => {} };
+      const first = await rawRequest(server, "/missing/advertise");
+      await delay(1_150);
+      const second = await rawRequest(server, "/missing/advertise");
+      const other = await rawRequest(server, "/wrong/.pmvcs/advertise", { authorization: "Bearer invalid" });
+      assert.equal(first.status, DENIED_STATUS);
+      assert.deepEqual(second.wire, first.wire);
+      assert.deepEqual(other.wire, first.wire);
+      assert.match(first.wire.toString(), /date: Thu, 01 Jan 1970 00:00:00 GMT/i);
+      assert.match(first.wire.toString(), /cache-control: no-store/i);
+    } finally {
+      worker.kill("SIGTERM");
+      await closed;
+    }
+  });
+}
+
+test("explicit endpoints keep parent object fetch and nested history reachable for every grant matrix", async () => {
+  const root = tempRoot();
+  const parent = Repository.init(join(root, "tenant"));
+  const parentTip = commitFile(parent, "parent.txt", "parent");
+  const nested = Repository.init(join(root, "tenant/objects"));
+  const nestedTip = commitFile(nested, "nested.txt", "nested");
+  // Reserved segments are not catalogue names, even when they contain a repository.
+  Repository.init(join(root, "tenant/.pmvcs/shadow"));
+  Repository.init(join(root, "tenant/.pmvcs"));
+  const directories = new ServedRepositoryDirectories(root);
+  assert.equal(directories.lookup("tenant/.pmvcs"), undefined);
+  assert.equal(directories.lookup("tenant/.pmvcs/shadow"), undefined);
+  const grants = new TokenGrants([
+    { token: "both", repository: "tenant", access: "read" },
+    { token: "both", repository: "tenant/objects", access: "read" },
+    { token: "parent", repository: "tenant", access: "read" },
+    { token: "nested", repository: "tenant/objects", access: "read" },
+  ]);
+  for (const auth of [null, grants]) {
+    const server = await startRepositoryServer({ root, host: "127.0.0.1", port: 0, grants: auth });
+    servers.push(server);
+    const base = `http://127.0.0.1:${server.port}`;
+    for (const token of auth === null ? [undefined] : ["both", "parent", "nested", "invalid"]) {
+      const allowedParent = auth === null || token === "both" || token === "parent";
+      const allowedNested = auth === null || token === "both" || token === "nested";
+      const options = token === undefined ? {} : { token };
+      const parentWire = new HttpTransport(`${base}/tenant`, options);
+      const nestedWire = new HttpTransport(`${base}/tenant/objects`, options);
+      const request = { body: JSON.stringify({ ids: [parentTip] }),
+        ...(token === undefined ? {} : { authorization: `Bearer ${token}` }) };
+      const explicit = await rawRequest(server, "/tenant/.pmvcs/objects/fetch", request);
+      assert.equal(explicit.status, allowedParent ? 200 : DENIED_STATUS);
+      if (allowedParent) {
+        assert.ok(parseBundle(await parentWire.fetchObjects([parentTip])).lines.some((line) => line.id === parentTip));
+      } else {
+        await assert.rejects(parentWire.fetchObjects([parentTip]), { code: "denied" });
+      }
+      if (allowedNested) {
+        const advertisement = await nestedWire.advertise();
+        assert.equal(advertisement.refs[0].target, nestedTip);
+        assert.ok((await nestedWire.fetch(["refs/heads/main"], [])).length > 0);
+        assert.ok((await nestedWire.fetchObjects([nestedTip])).length > 0);
+      } else {
+        await assert.rejects(nestedWire.advertise(), { code: "denied" });
+      }
+      // Keep the legacy nested-history alias and parent-only noninterference.
+      const legacy = await rawRequest(server, "/tenant/objects/fetch", {
+        ...request, body: JSON.stringify(allowedNested ? { refs: ["refs/heads/main"], haves: [] } : { ids: [parentTip] }),
+      });
+      assert.equal(legacy.status, allowedNested || allowedParent ? 200 : DENIED_STATUS);
+    }
+    for (const path of ["/tenant/.pmvcs/unknown", "/tenant/.pmvcs/.pmvcs/fetch", "/../.pmvcs/fetch",
+      "http://example.invalid/tenant/.pmvcs/fetch", "/tenant/.pmvcs/shadow/.pmvcs/advertise"]) {
+      assert.equal((await rawRequest(server, path)).status, DENIED_STATUS);
+    }
+  }
 });
