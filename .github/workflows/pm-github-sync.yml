@@ -1,0 +1,18 @@
+# Gated GitHub issues -> pm tracker sync. The audited pipeline lives in pm-github;
+# this caller only owns the schedule. Requires Settings -> Actions -> "Allow GitHub
+# Actions to create and approve pull requests" (enabled by the orchestrator).
+name: Sync GitHub issues into pm
+on:
+  schedule:
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+  actions: write
+jobs:
+  gated-sync:
+    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@3015930b351a3d9c1c03ee4a26f8404025287df7 # pm-github 2026.10.15
+    with:
+      pm-github-version: "2026.10.15"

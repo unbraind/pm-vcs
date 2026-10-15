@@ -88,6 +88,25 @@ test("the prepare launcher is the unmodified pm-ops template", () => {
   assert.equal(readFileSync(launcher, "utf8"), canonical);
 });
 
+for (const command of ["pack", "publish"]) {
+  test(`${command} prepare preserves clone configuration before package resolution`, posixOnly, () => {
+    for (const pmOps of ["pinned", "stale"] as const) {
+      const directory = checkout(`${command}-${pmOps}`, pmOps);
+      const configPath = join(directory, ".git", "config");
+      const before = readFileSync(configPath, "utf8");
+      const result = spawnSync(process.execPath, [launcher], {
+        cwd: directory,
+        encoding: "utf8",
+        env: { ...process.env, PATH: hostPath, npm_command: command },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(configPath, "utf8"), before);
+      assert.deepEqual(registeredDrivers(directory), []);
+      assert.equal(result.stderr, `npm ${command}: skipping merge-driver install during artifact creation\n`);
+    }
+  });
+}
+
 test("a full install registers every merge driver .gitattributes declares", posixOnly, () => {
   const directory = checkout("full", "pinned");
   assert.deepEqual(registeredDrivers(directory), []);

@@ -91,7 +91,10 @@ const original=Repository.prototype.readIndex; let reads=0; let measured;
 Repository.prototype.readIndex=function(...args){const result=original.apply(this,args); if(++reads===2){globalThis.gc(); measured=process.memoryUsage();} return result;};
 const receipt=repo.obliterate("selected","erase-fixture","incident",new Date(2000));
 console.log(JSON.stringify({reads, retained:measured.arrayBuffers-baseline.arrayBuffers, external:measured.external-baseline.external, rss:measured.rss-baseline.rss, maxRSS:process.resourceUsage().maxRSS, removed:receipt.removed}));`;
-  const child = spawnSync(process.execPath, ["--expose-gc", "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: 30_000 });
+  // Explicit GC can leave backing-store reclamation on a background sweeper.
+  // Finish that sweep before sampling arrayBuffers, retaining the same boundary
+  // and budget so genuinely reachable corpus buffers still fail the assertion.
+  const child = spawnSync(process.execPath, ["--expose-gc", "--no-concurrent-array-buffer-sweeping", "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: 30_000 });
   assert.equal(child.status, 0, child.stderr);
   const measured = JSON.parse(child.stdout) as { reads: number; retained: number; external: number; rss: number; maxRSS: number; removed: string[] };
   assert.ok(measured.reads >= 2); assert.deepEqual(measured.removed, [selected.id]);
