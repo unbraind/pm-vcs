@@ -7,7 +7,7 @@
 // history would be internally inconsistent in a way no later command could
 // detect, let alone repair.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 
 import { ObjectStoreError } from "./objects.ts";
 import { FIELD_STRATEGIES, type FieldStrategy, type MergePolicy } from "./records.ts";
@@ -147,19 +147,25 @@ export function parseConfig(raw: unknown): RepositoryConfig {
 /**
  * Reads a repository's configuration.
  *
- * An absent file yields the defaults, so a repository created by an older build
- * stays readable.
+ * An absent entry yields the defaults, so a repository created by an older
+ * build stays readable. An existing entry, including a dangling symlink, must
+ * be readable as configuration.
  *
  * @param path - Config file path.
  * @returns The validated configuration.
  * @throws ObjectStoreError When the file exists but is not valid configuration.
  */
 export function readConfig(path: string): RepositoryConfig {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_CONFIG;
+    throw new ObjectStoreError("bad_config", `Repository config at ${path} cannot be read.`);
+  }
   let contents: string;
   try {
     contents = readFileSync(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_CONFIG;
+  } catch {
     throw new ObjectStoreError("bad_config", `Repository config at ${path} cannot be read.`);
   }
   let parsed: unknown;

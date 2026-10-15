@@ -8,10 +8,10 @@
 // server, and what they can and cannot tell apart.
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
-import { chmodSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connect } from "node:net";
 import { exportBundle, parseBundle } from "../engine/bundle.ts";
@@ -995,7 +995,12 @@ test("a bind to a named host answers only its own name in Host", () => {
 });
 
 
-test("config failures refuse FileTransport and HTTP while absent legacy config uses defaults", async () => {
+/**
+ * Opens both transports before a fixture replaces its repository configuration.
+ *
+ * @returns The repository, config path, transports and typed refusal predicate.
+ */
+async function configFixture() {
   const repository = freshRepo();
   const path = join(repository.controlDirectory, "config.json");
   const file = new FileTransport("file:fixture", repository.root);
@@ -1004,22 +1009,64 @@ test("config failures refuse FileTransport and HTTP while absent legacy config u
   const http = new HttpTransport(`http://127.0.0.1:${server.port}`);
   const bad = (error: unknown): boolean =>
     error instanceof ObjectStoreError && error.code === "bad_config" && error.message.includes(path);
-  for (const shape of ["directory", "denied", "json", "schema", "null-paths", "null-policy", "null-fields"]) {
+  return { repository, path, file, http, server, bad };
+}
+
+for (const shape of ["directory", "dangling-symlink", "denied", "json", "schema", "null-paths", "null-policy", "null-fields"]) {
+  test(`config failures refuse FileTransport and HTTP: ${shape}`, async (context) => {
+    const { repository, path, file, http, server, bad } = await configFixture();
     rmSync(path, { recursive: true, force: true });
     if (shape === "directory") mkdirSync(path);
+    else if (shape === "dangling-symlink") {
+      const target = join(repository.root, "vanished-config.json");
+      writeFileSync(target, "{}");
+      try {
+        symlinkSync(target, path, "file");
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EPERM" && code !== "ENOSYS" && code !== "ENOTSUP") throw error;
+        context.skip(`File symlinks are unavailable on this platform: ${code}`);
+        return;
+      } finally {
+        rmSync(target);
+      }
+    }
     else writeFileSync(path, shape === "json" ? "{invalid" : JSON.stringify(
       shape === "schema" ? { recordPaths: 42 } : shape === "null-paths" ? { recordPaths: null }
         : shape === "null-policy" ? { recordPolicy: null } : shape === "null-fields" ? { recordPolicy: { fields: null } } : {},
     ));
     if (shape === "denied") chmodSync(path, 0);
     try {
+      if (shape === "denied") {
+        let unreadable = false;
+        try { readFileSync(path); } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "EACCES" && code !== "EPERM") throw error;
+          unreadable = true;
+        }
+        if (!unreadable) {
+          context.skip("The current process can read mode-000 files; directory refusal always runs");
+          return;
+        }
+      }
       assert.throws(() => readConfig(path), bad, shape);
       await assert.rejects(file.advertise(), bad, shape);
-      await assert.rejects(http.advertise(), bad, shape);
+      if (shape === "dangling-symlink") {
+        // The HTTP catalogue refuses config aliases before opening a repository,
+        // so symlinks retain its uniform denial rather than leaking config errors.
+        await assert.rejects(http.advertise(), { code: "denied" }, shape);
+        const denied = await rawRequest(server, "/advertise");
+        assert.equal(denied.status, DENIED_STATUS);
+        assert.ok(denied.body.equals(DENIED_BODY));
+      } else await assert.rejects(http.advertise(), bad, shape);
     } finally {
       if (shape === "denied") chmodSync(path, 0o600);
     }
-  }
+  });
+}
+
+test("absent legacy config uses defaults through FileTransport and HTTP", async () => {
+  const { repository, path, file, http, bad } = await configFixture();
   rmSync(path);
   assert.deepEqual(readConfig(path), DEFAULT_CONFIG);
   assert.deepEqual((await file.advertise()).config, DEFAULT_CONFIG);
@@ -1032,8 +1079,10 @@ test("config failures refuse FileTransport and HTTP while absent legacy config u
   assert.throws(() => readConfig(join(path, "child")), bad);
 });
 
+const bunAvailable = spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
 for (const runtime of ["node", "bun"]) {
-  test(`denial wire bytes stay identical across seconds under native ${runtime}`, { timeout: 30_000 }, async () => {
+  const skip = runtime === "bun" && !bunAvailable ? "Bun is unavailable (bun --version failed)" : false;
+  test(`denial wire bytes stay identical across seconds under native ${runtime}`, { timeout: 30_000, skip }, async () => {
     const root = tempRoot();
     const worker = spawn(runtime, [join(packageRoot, "test/helpers/denial-worker.ts"), root],
       { stdio: ["ignore", "pipe", "pipe"] });
