@@ -6,21 +6,24 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-05T07:00:24.104Z"
-updated_at: "2026-10-15T19:35:10.945Z"
+updated_at: "2026-10-15T20:02:35.554Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-sol
-comments[3]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-10-15T19:28:39.394Z",codex-agent,"Plan: only ENOENT yields DEFAULT_CONFIG; wrap unreadable, JSON and schema failures in bad_config with the config path. Exercise real filesystem failures through FileTransport and HTTP, including legacy absent config."
   "2026-10-15T19:32:39.063Z",codex-agent,"Behavioral revert proof: replacing only readConfig with origin/main makes node --test --test-name-pattern=\"config failures refuse\" test/serve.test.ts fail (0 pass, 1 fail): directory config yields no exception. Fixed implementation passes and checks real directory, EACCES, malformed JSON, schema-invalid and ENOTDIR failures with bad_config and path; FileTransport and HTTP refuse; missing config works with a fresh server catalogue."
   "2026-10-15T19:35:10.945Z",codex-agent,"Linked pm test execution passed 1/1. Project test-result tracking is disabled, so the runner returned evidence_recording.recorded=false; recording the verified result here without changing project policy."
-files[4]{path,scope}:
+  "2026-10-15T20:02:33.122Z",codex-agent,"First full npm gate: 1540 passed, 1 failed, 0 skipped; every source file retained 100% statements/branches/functions/lines. The sole failure was an existing invalid-remote-root test expecting generic unreachable_remote for ENOTDIR. Updated that assertion to the requested typed bad_config with its config path; production behavior is unchanged from the fail-closed fix."
+files[5]{path,scope}:
   engine/config.ts,project
   engine/served-repositories.ts,project
   test/serve.test.ts,project
   test/served-repositories.test.ts,project
-tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  test/sync.test.ts,project
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-name-pattern='config failures refuse' test/serve.test.ts,project,codex-agent,"2026-10-15T19:33:21.130Z",local_mutation,fix/served-config-date-fetch-paths
+  node --test --test-name-pattern='invalid remote path' test/sync.test.ts,project,codex-agent,"2026-10-15T20:02:35.456Z",local_mutation,fix/served-config-date-fetch-paths
 docs[1]{path,scope}:
   README.md,project
 body: ""

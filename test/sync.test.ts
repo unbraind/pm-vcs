@@ -557,16 +557,16 @@ test("a transport pointing at a directory that holds no repository says so", asy
   });
 });
 
-test("an unreadable remote surfaces its own failure rather than an unreachable one", async () => {
-  // A file where the repository root belongs: `format` cannot be read because the
-  // path is not a directory, and the store must not rewrite every failure as a
-  // missing repository.
+test("an invalid remote path surfaces a typed config failure naming its path", async () => {
+  // A file where the repository root belongs makes config reads fail with
+  // ENOTDIR. The typed failure must name config rather than defaulting it.
   const path = join(tempRoot(), "not-a-dir");
   writeFileSync(path, "");
   const repository = freshRepo();
   repository.remotes.add("origin", path);
   await assert.rejects(fetchFrom(repository, "origin", now), (error: ObjectStoreError) => {
-    assert.equal(error.code, "unreachable_remote");
+    assert.equal(error.code, "bad_config");
+    assert.ok(error.message.includes(join(path, ".pmvcs", "config.json")));
     return true;
   });
 });
