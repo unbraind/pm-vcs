@@ -6,14 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-15T07:41:15.297Z"
-updated_at: "2026-10-15T07:49:14.857Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-15T09:47:28.842Z"
 author: codex-agent
-comments[3]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-10-15T07:42:34.585Z",codex-agent,"Initial source analysis: the child already runs node --expose-gc and calls globalThis.gc() before the baseline and again at the second readIndex boundary after the first complete walkInventory pass. Adding --expose-gc or one explicit gc call would reproduce existing behavior. eraseFile stores type/digest and decoded structural metadata rather than unrelated blob payloads; inventory() intentionally collects, while walkInventory() yields one decoded object. arrayBuffers measures allocated backing stores, so a single boundary sample does not identify reachable owners or establish a deterministic retained-object leak. GC timing remains a hypothesis to investigate with repeated Node 22 runs. The docs state allocation scope but no numeric 8 MiB contract, so no bound increase is justified."
   "2026-10-15T07:46:20.906Z",codex-agent,"Reproduced on unchanged Node 22.23.1: 10/12 passes and 2/12 failures with retained 33997332 and 33688722 bytes. The child already requests synchronous major GC, but V8 ArrayBufferSweeper::RequestSweep may still schedule backing-store reclamation on a worker. Node 22 source confirms --no-concurrent-array-buffer-sweeping instead runs DoSweep on the main thread and finalizes before returning: https://github.com/nodejs/node/blob/v22.23.1/deps/v8/src/heap/array-buffer-sweeper.cc. Testing the one-flag child-only fix; retain the exact first-inventory boundary, 32 MiB corpus, 8 MiB assertion and 30-second timeout. Node 22, 24 and 26 recognize the flag."
   "2026-10-15T07:49:14.857Z",codex-agent,"Final measurement proof: fixed synchronous-sweeper child passes 12/12 independent Node 22.23.1 runs, each retained exactly 1073169 bytes; the PM-linked Node 24 run passes 1/1 at 1179665 bytes. Behavioural revert: remove ONLY --no-concurrent-array-buffer-sweeping from the fixed test function, retaining all fixture/assertion bytes; attempt 3 fails 0/1 at 33980940 retained bytes. Restore the flag. A separate collecting-inventory negative control keeps a real strong reference to the corpus after baseline and fails 0/1 at 34677169 bytes, proving the unchanged 8 MiB assertion still catches retained payloads. Temporary probes were removed. This fixes measurement synchronization only; production erasure, corpus, boundary, budget and timeout are unchanged."
+  "2026-10-15T09:47:26.158Z",codex-agent,"The one-flag measurement fix passes in both complete Node 26.7.0 npm and Bun release gates: 1536/1536 each, zero failures/skips, unchanged all-source 100% coverage floors. Each full-run retained-memory sample reports 1179665 bytes at the original boundary, below the original 8 MiB assertion. Node 22 fixed repeat proof remains 12/12 at 1073169 bytes; removing only the new flag reproduces failure, and a genuinely held corpus still fails under the fixed measurement. Production erasure, corpus, boundary, timeout and budget remain unchanged. Release the item in progress pending orchestrator verification."
 files[1]{path,scope,note}:
   test/stream-erasure-legacy-fetch-repair.test.ts,project,Synchronize backing-store reclamation before measuring retention
 tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:

@@ -6,14 +6,13 @@ status: in_progress
 priority: 2
 tags[3]: dependencies,duplication,security
 created_at: "2026-10-14T07:01:22.274Z"
-updated_at: "2026-10-15T07:49:47.774Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-15T09:47:27.964Z"
 author: codex-agent
 release: Unreleased
-comments[2]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-10-15T07:42:28.024Z",codex-agent,"Batch 3 addresses this existing dependency issue in the same PR as rollout Chore pm-vcs-3dxi. Use the published pm-ops 2026.10.14 implementation and remove the unused direct fast-glob peer; retain the pinned CLI, coverage inventory, thresholds and append-only histories. Regenerate the committed self-host bundle before HEAD verification."
   "2026-10-15T07:49:19.022Z",codex-agent,"Dependency remediation verified: exact pm-ops 2026.10.14 and removal of the unused fast-glob peer eliminate braces, fast-glob and micromatch from both full and production-only npm ls trees. Full npm audit --ignore-scripts now reports zero vulnerabilities versus the four high development findings at baseline. No SDK pin changed. Awaiting committed-head npm/Bun gates and self-host acceptance."
+  "2026-10-15T09:47:25.240Z",codex-agent,"Verified complete rollout gates on source 90ba1c0: isolated npm and Bun release:check each pass 1536/1536, zero failures/skips, all 65 sources at unchanged per-file 100% statements/lines/branches/functions. Canonical published prepare launcher is aligned with pm-ops 2026.10.14 and its artifact guard is regression-tested. Both full and production-only npm ls braces fast-glob micromatch trees are empty; full npm audit was zero findings after the dependency change and both production audits pass. Native, installed-CLI, packed Node/Bun and self-host acceptances pass. Release this issue in progress for orchestrator verification; do not close it here."
 files[2]{path,scope,note}:
   package-lock.json,project,Remove fast-glob micromatch and braces
   package.json,project,Published pm-ops fix and unused peer removal
