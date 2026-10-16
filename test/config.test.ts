@@ -67,12 +67,15 @@ test("parseConfig rejects every malformed shape", () => {
   bad([]);
   // recordPaths not an array of strings.
   bad({ recordPaths: "x" });
+  bad({ recordPaths: null });
   bad({ recordPaths: [1] });
   // recordPolicy not an object.
   bad({ recordPolicy: "x" });
+  bad({ recordPolicy: null });
   bad({ recordPolicy: [] });
   // recordPolicy.fields not an object.
   bad({ recordPolicy: { fields: [] } });
+  bad({ recordPolicy: { fields: null } });
   // An unknown field strategy is refused rather than silently treated as scalar.
   bad({ recordPolicy: { fields: { priority: "whatever" } } });
   bad({ recordPolicy: { fields: { priority: 1 } } });

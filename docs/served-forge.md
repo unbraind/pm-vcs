@@ -101,7 +101,19 @@ enforce an approval policy.
 
 ## Wire contract and evidence
 
-All forge operations are POST JSON requests. `forge/read` accepts `list` and
+All forge operations are POST JSON requests. HTTP clients negotiate the optional
+`explicit-endpoints` advertisement capability and address
+`/<repository>/.pmvcs/forge/read` or `/<repository>/.pmvcs/forge/write`;
+omit the repository and its slash for the root. The `.pmvcs` segment is reserved
+and cannot be registered in the repository catalogue at any depth. This also
+makes parent `objects/fetch` and nested `objects` repositories independently
+reachable with open access or overlapping grants. Legacy endpoint aliases keep
+scope-first, deepest-catalogued routing for compatibility; older servers without
+the capability use those aliases. Direct forge, lease and object-transfer calls
+negotiate on first use and reuse the result for later requests. See the README
+serving contract for the ambiguous legacy case and deterministic denial-header policy.
+
+`forge/read` accepts `list` and
 `fetch` for `kind: series | review`; `forge/write` accepts `publish`, which also
 updates existing named entries. Series publication carries `name`, `series`,
 `expected`, `branch`, optional base64 `bundle`, and explicit lease `proofs`.

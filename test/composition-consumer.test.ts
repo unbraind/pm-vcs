@@ -302,7 +302,7 @@ for (const deniedSide of ["base", "ours", "theirs"]) {
 process.stdout.write(JSON.stringify({ runtime: process.argv[2], sdk: installedSdk.version, linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true }));
 `;
 
-test("built and npm-packed SDK10 Node/native Bun consumers and project-installed CLI execute composition and denied merges", /** Use a packed artifact and real peer dependency instead of SDK doubles. */ () => {
+test("built and npm-packed SDK10 Node/native Bun consumers and project-installed CLI execute composition and denied merges", /** Use a packed artifact and real peer dependency instead of SDK doubles. */ async (t) => {
   const temporary = makeTempDir();
   try {
     const npmEnvironment = { ...process.env, ...discardChildCoverage() };
@@ -330,11 +330,15 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     assert.equal(wrongVersion.status, 1); assert.match(wrongVersion.stderr, /Project-installed PM CLI version mismatch before fixture setup/);
     console.log("consumer prerequisite: mismatched CLI version, actual exit 1 before fixture setup");
     assert.equal(existsSync(join(project, "node-project-cli")), false);
+    const bunAvailable = spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
     for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-project-cli"]]) {
-      // The installed CLI scenario runs multiple real CLI and package-install processes serially.
-      const result = spawnSync(runtime, [script, scenario, archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 900_000 });
-      assert.equal(result.status, 0, `${scenario}: ${result.signal ?? result.error ?? "nonzero exit"}; ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: pinnedSdk, linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true });
-      console.log(`consumer scenario ${scenario}: ${result.stdout}`);
+      const skip = runtime === "bun" && !bunAvailable ? "Bun is unavailable (bun --version failed)" : false;
+      await t.test(scenario, { skip }, () => {
+        // The installed CLI scenario runs multiple real CLI and package-install processes serially.
+        const result = spawnSync(runtime, [script, scenario, archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 900_000 });
+        assert.equal(result.status, 0, `${scenario}: ${result.signal ?? result.error ?? "nonzero exit"}; ${result.stderr}`); assert.deepEqual(JSON.parse(result.stdout), { runtime: scenario, sdk: pinnedSdk, linked: true, layers: true, erased: true, clone: true, deniedMerge: true, publication: true });
+        console.log(`consumer scenario ${scenario}: ${result.stdout}`);
+      });
     }
   } finally { temporary.cleanup(); }
 });

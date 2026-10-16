@@ -36,9 +36,11 @@ export function isServableRepositoryDirectory(directory: string): boolean {
     const entry = lstatSync(control);
     if (entry.isSymbolicLink() || !entry.isDirectory()) return false;
     if (existsSync(join(control, "link.json"))) return false;
-    for (const name of ["format", "config.json", "HEAD", "objects", "refs"]) {
+    for (const name of ["format", "HEAD", "objects", "refs"]) {
       if (lstatSync(join(control, name)).isSymbolicLink()) return false;
     }
+    // Older repositories may omit config; aliases still never enter the catalogue.
+    if (lstatSync(join(control, "config.json"), { throwIfNoEntry: false })?.isSymbolicLink()) return false;
     return true;
   } catch {
     return false;

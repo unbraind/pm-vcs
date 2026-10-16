@@ -129,12 +129,12 @@ function activate(): ReturnType<typeof createExtensionTestHarness> {
   return createExtensionTestHarness(extension, { capabilities: manifestCapabilities() });
 }
 
-test("a served repository advertises itself exactly as a file remote does", async () => {
+test("a served repository advertises file metadata and its explicit HTTP endpoints", async () => {
   const served = await serveSeededRepo();
   const http = new HttpTransport(served.url);
   const advertisement = await http.advertise();
   assert.equal(advertisement.formatVersion, (await new FileTransport(served.url, served.repository.root).advertise()).formatVersion);
-  assert.deepEqual(advertisement.capabilities, [...TRANSPORT_CAPABILITIES]);
+  assert.deepEqual(advertisement.capabilities, [...TRANSPORT_CAPABILITIES, "explicit-endpoints"]);
   assert.deepEqual(advertisement.refs.map((entry) => entry.name), ["refs/heads/main"]);
   assert.equal(advertisement.head, "refs/heads/main");
   // The record configuration is part of the advertisement, which is what makes a
@@ -666,6 +666,11 @@ test("real responders with malformed successful envelopes fail closed", async ()
     answer = { ...advertisement, refs: [{ name: "refs/heads/main", target: "a".repeat(64) }], head: "refs/heads/main" };
     const advertised = await wire.advertise();
     assert.equal(advertised.refs.length, 1);
+    const legacyRequests: string[] = [];
+    responder.on("request", (request) => { legacyRequests.push(request.url ?? ""); });
+    answer = { missing: [] };
+    await wire.missingObjects([]);
+    assert.deepEqual(legacyRequests, ["/repo/objects/missing"]);
     // Clone stores the advertised config verbatim, so an empty one arrives
     // normalized with its defaults rather than missing recordPaths.
     assert.deepEqual(advertised.config.recordPaths, []);
@@ -767,7 +772,7 @@ test("renewed no-op fetch falls back for a real HTTP peer without object-fetch c
     let body = await upstream.text();
     if (route.endsWith("/advertise")) {
       const advertisement = JSON.parse(body) as Advertisement;
-      body = JSON.stringify({ ...advertisement, capabilities: advertisement.capabilities.filter(capability => capability !== "object-fetch") });
+      body = JSON.stringify({ ...advertisement, capabilities: advertisement.capabilities.filter(capability => capability !== "object-fetch" && capability !== "explicit-endpoints") });
     }
     response.writeHead(upstream.status, { "Content-Type": upstream.headers.get("Content-Type") ?? "application/octet-stream" }); response.end(body);
   });
@@ -791,4 +796,27 @@ test("renewed no-op fetch falls back for a real HTTP peer without object-fetch c
     assert.equal(routes.some(route => route.endsWith("/objects/fetch")), false);
     assert.deepEqual(clone.operations.read(), before); assert.equal(readFileSync(join(root, "a.txt"), "utf8"), "one");
   } finally { await new Promise<void>(resolve => { legacy.close(() => resolve()); legacy.closeAllConnections(); }); }
+});
+
+test("direct object fetch negotiates legacy HTTP peers without explicit endpoints", async () => {
+  const repository = freshRepo();
+  const tip = commitFile(repository, "legacy.txt", "legacy");
+  const file = new FileTransport("fixture", repository.root);
+  const routes: string[] = [];
+  const responder = createServer(async (request, response) => {
+    request.resume();
+    routes.push(request.url ?? "");
+    if (request.url === "/repo/advertise") response.end(JSON.stringify(await file.advertise()));
+    else response.end(await file.fetchObjects([tip]));
+  });
+  await new Promise<void>((ready) => { responder.listen(0, "127.0.0.1", ready); });
+  const address = responder.address();
+  assert.ok(address !== null && typeof address === "object");
+  try {
+    const wire = new HttpTransport(`http://127.0.0.1:${address.port}/repo`);
+    assert.ok(parseBundle(await wire.fetchObjects([tip])).lines.some((line) => line.id === tip));
+    assert.deepEqual(routes, ["/repo/advertise", "/repo/objects/fetch"]);
+  } finally {
+    await new Promise<void>((closed) => { responder.close(() => closed()); });
+  }
 });

@@ -435,6 +435,16 @@ line boundaries, ordering and separate PM hash-chain reconciliation contract.
 
 Authorization runs before repository access. Missing repositories, invalid tokens, wrong
 repository scopes and unsafe names return identical HTTP response bytes, including headers.
+Fixed denials use the single sentinel `Date: Thu, 01 Jan 1970 00:00:00 GMT`
+and `Cache-Control: no-store` under both Node and Bun. Bun 1.3.5's `node:http`
+bridge inserts a current Date despite `sendDate=false` or `removeHeader("date")`;
+an empty Date suppresses insertion but is not a valid HTTP date. The portable
+policy bounds the Date to one fixed, valid value, independent of wall time,
+process lifetime and repository. It is a denial sentinel, not an origin timestamp;
+clients must not use it as a clock and proxies must preserve these headers for
+byte stability. Denials must never be cached. Raw response tests span more than
+one second under each native runtime. HTTP parser failures before the request
+handler (for example a missing Host) retain the runtime's own response.
 A read-only token receives 403 on write endpoints only when its repository exists and is
 readable. Traversal spellings, symlink repository/control aliases and linked instances are
 refused. Operators own the served filesystem: this is a repository authorization boundary,
@@ -475,13 +485,26 @@ name, including nested names such as `tenant/project`. At startup the server enu
 repository directories into a catalogue of canonical names and real paths. Requests resolve
 only by exact catalogue lookup; request text is never joined into a filesystem path. With
 authentication enabled, requests without any candidate repository in scope are denied before
-catalogue access. A request
-path that also reads as an endpoint — `tenant/objects/fetch` is either the repository
-`tenant/objects` with endpoint `fetch` or the repository `tenant` with endpoint `objects/fetch` —
-resolves among the candidates the token is in scope for (every candidate without
-`--auth`), and the deepest catalogued one wins. A repository whose name shares a segment
-with an endpoint suffix is therefore reachable under its own name, and an out-of-scope
-nested repository never changes the answer to an in-scope parent. An
+catalogue access.
+
+The unambiguous wire layout is POST `/<repository>/.pmvcs/<endpoint>` (or
+`/.pmvcs/<endpoint>` for the root). The reserved `.pmvcs` control segment
+cannot occur in a catalogued repository name at any depth; discovery refuses
+repositories at or below such names. Thus `/tenant/.pmvcs/objects/fetch` always
+fetches the parent's objects while `/tenant/objects/.pmvcs/fetch` fetches the
+nested repository's history, with open access or any combination of grants.
+The HTTP advertisement adds the optional `explicit-endpoints` capability.
+Clients negotiate it through the legacy, unambiguous `advertise` endpoint and
+then use the explicit layout. Every direct transport operation negotiates before
+its first repository request and caches the result, including `missingObjects`
+and `uploadObjects`. Servers without that capability retain the legacy layout.
+
+Legacy `/<repository>/<endpoint>` requests remain compatibility aliases.
+Their existing scope-first, deepest-catalogued resolution is preserved: a token
+granted only `tenant` can use `/tenant/objects/fetch` without observing an
+out-of-scope nested repository. With both grants or without authentication,
+that ambiguous legacy URL still selects the nested history endpoint; clients
+needing the parent object endpoint must negotiate the explicit layout. An
 authorized lookup of an unknown name triggers at most one rescan per second. Each scan
 examines at most 10,000 directory entries and descends at most 32 levels; repositories beyond
 those bounds receive the same denial as unknown names. Use a narrower root for larger trees.
@@ -545,7 +568,12 @@ transactions and checkpoints using the SDK's runtime fence and resolved tracker 
 staging and materialization and cannot be overridden by `.pmvcsignore` negations; the next
 add removes runtime entries left in an older index. Item records and history remain tracked.
 
-Clone adopts the same record configuration as a file clone. Ref advertisement, bundle fetch,
+Clone adopts the same record configuration as a file clone. Only an absent
+`.pmvcs/config.json` uses default record settings for older repositories.
+Unreadable files (including permission failures and directories), invalid JSON
+and schema-invalid configuration refuse with typed `bad_config` errors naming
+the path. Only omitted fields use field defaults; explicit null paths, policy or
+field maps are invalid; HTTP advertisement refuses rather than advertising empty settings. Ref advertisement, bundle fetch,
 verified object upload and publication use the existing transport capabilities. The optional
 `object-fetch` capability adds `Transport.fetchObjects(ids)`, returning a verified bundle of
 individually named objects, including standalone patch series. Review records travel with

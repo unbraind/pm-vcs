@@ -8,10 +8,13 @@
 // server, and what they can and cannot tell apart.
 
 import assert from "node:assert/strict";
-import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connect } from "node:net";
-import { exportBundle } from "../engine/bundle.ts";
+import { exportBundle, parseBundle } from "../engine/bundle.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
 import type { LeaseProof } from "../engine/publication-leases.ts";
 import { afterEach, test } from "node:test";
@@ -37,7 +40,9 @@ import {
 } from "../engine/http-protocol.ts";
 import { Repository } from "../engine/repo.ts";
 import { ServedRepositoryDirectories } from "../engine/served-repositories.ts";
-import { makeTempDir } from "./helpers/tmp.ts";
+import { DEFAULT_CONFIG, readConfig } from "../engine/config.ts";
+import { FileTransport } from "../engine/transport.ts";
+import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const handles: Array<{ root: string; cleanup(): void }> = [];
 const servers: ServeHandle[] = [];
@@ -987,4 +992,183 @@ test("a bind to a named host answers only its own name in Host", () => {
   }
   assert.equal(isAcceptableHost("serve.internal.example", { host: bound.host, port: 80 }), true);
   assert.equal(isAcceptableHost("serve.internal.example", { host: "127.0.0.1", port: 43210 }), false);
+});
+
+
+/**
+ * Opens both transports before a fixture replaces its repository configuration.
+ *
+ * @returns The repository, config path, transports and typed refusal predicate.
+ */
+async function configFixture() {
+  const repository = freshRepo();
+  const path = join(repository.controlDirectory, "config.json");
+  const file = new FileTransport("file:fixture", repository.root);
+  const server = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 });
+  servers.push(server);
+  const http = new HttpTransport(`http://127.0.0.1:${server.port}`);
+  const bad = (error: unknown): boolean =>
+    error instanceof ObjectStoreError && error.code === "bad_config" && error.message.includes(path);
+  return { repository, path, file, http, server, bad };
+}
+
+for (const shape of ["directory", "dangling-symlink", "denied", "json", "schema", "null-paths", "null-policy", "null-fields"]) {
+  test(`config failures refuse FileTransport and HTTP: ${shape}`, async (context) => {
+    const { repository, path, file, http, server, bad } = await configFixture();
+    rmSync(path, { recursive: true, force: true });
+    if (shape === "directory") mkdirSync(path);
+    else if (shape === "dangling-symlink") {
+      const target = join(repository.root, "vanished-config.json");
+      writeFileSync(target, "{}");
+      try {
+        symlinkSync(target, path, "file");
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EPERM" && code !== "ENOSYS" && code !== "ENOTSUP") throw error;
+        context.skip(`File symlinks are unavailable on this platform: ${code}`);
+        return;
+      } finally {
+        rmSync(target);
+      }
+    }
+    else writeFileSync(path, shape === "json" ? "{invalid" : JSON.stringify(
+      shape === "schema" ? { recordPaths: 42 } : shape === "null-paths" ? { recordPaths: null }
+        : shape === "null-policy" ? { recordPolicy: null } : shape === "null-fields" ? { recordPolicy: { fields: null } } : {},
+    ));
+    if (shape === "denied") chmodSync(path, 0);
+    try {
+      if (shape === "denied") {
+        let unreadable = false;
+        try { readFileSync(path); } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "EACCES" && code !== "EPERM") throw error;
+          unreadable = true;
+        }
+        if (!unreadable) {
+          context.skip("The current process can read mode-000 files; directory refusal always runs");
+          return;
+        }
+      }
+      assert.throws(() => readConfig(path), bad, shape);
+      await assert.rejects(file.advertise(), bad, shape);
+      if (shape === "dangling-symlink") {
+        // The HTTP catalogue refuses config aliases before opening a repository,
+        // so symlinks retain its uniform denial rather than leaking config errors.
+        await assert.rejects(http.advertise(), { code: "denied" }, shape);
+        const denied = await rawRequest(server, "/advertise");
+        assert.equal(denied.status, DENIED_STATUS);
+        assert.ok(denied.body.equals(DENIED_BODY));
+      } else await assert.rejects(http.advertise(), bad, shape);
+    } finally {
+      if (shape === "denied") chmodSync(path, 0o600);
+    }
+  });
+}
+
+test("absent legacy config uses defaults through FileTransport and HTTP", async () => {
+  const { repository, path, file, http, bad } = await configFixture();
+  rmSync(path);
+  assert.deepEqual(readConfig(path), DEFAULT_CONFIG);
+  assert.deepEqual((await file.advertise()).config, DEFAULT_CONFIG);
+  assert.deepEqual((await http.advertise()).config.recordPaths, []);
+  // Exercise a fresh discovery, not only a cached repository holder.
+  const legacyServer = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 });
+  servers.push(legacyServer);
+  assert.equal((await rawRequest(legacyServer, "/advertise")).status, 200);
+  writeFileSync(path, "{}");
+  assert.throws(() => readConfig(join(path, "child")), bad);
+});
+
+const bunAvailable = spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
+for (const runtime of ["node", "bun"]) {
+  const skip = runtime === "bun" && !bunAvailable ? "Bun is unavailable (bun --version failed)" : false;
+  test(`denial wire bytes stay identical across seconds under native ${runtime}`, { timeout: 30_000, skip }, async () => {
+    const root = tempRoot();
+    const worker = spawn(runtime, [join(packageRoot, "test/helpers/denial-worker.ts"), root],
+      { stdio: ["ignore", "pipe", "pipe"] });
+    const closed = once(worker, "close");
+    try {
+      const port = await new Promise<number>((resolvePort, reject) => {
+        let output = "";
+        worker.once("error", reject);
+        worker.once("exit", (code) => reject(new Error(`worker exited ${code}`)));
+        worker.stdout.on("data", (chunk: Buffer) => {
+          output += chunk.toString();
+          const match = /READY (\d+)/.exec(output);
+          if (match !== null) resolvePort(Number(match[1]));
+        });
+      });
+      const server = { host: "127.0.0.1", port, close: async () => {} };
+      const first = await rawRequest(server, "/missing/advertise");
+      await delay(1_150);
+      const second = await rawRequest(server, "/missing/advertise");
+      const other = await rawRequest(server, "/wrong/.pmvcs/advertise", { authorization: "Bearer invalid" });
+      assert.equal(first.status, DENIED_STATUS);
+      assert.deepEqual(second.wire, first.wire);
+      assert.deepEqual(other.wire, first.wire);
+      assert.match(first.wire.toString(), /date: Thu, 01 Jan 1970 00:00:00 GMT/i);
+      assert.match(first.wire.toString(), /cache-control: no-store/i);
+    } finally {
+      worker.kill("SIGTERM");
+      await closed;
+    }
+  });
+}
+
+test("explicit endpoints keep parent object fetch and nested history reachable for every grant matrix", async () => {
+  const root = tempRoot();
+  const parent = Repository.init(join(root, "tenant"));
+  const parentTip = commitFile(parent, "parent.txt", "parent");
+  const nested = Repository.init(join(root, "tenant/objects"));
+  const nestedTip = commitFile(nested, "nested.txt", "nested");
+  // Reserved segments are not catalogue names, even when they contain a repository.
+  Repository.init(join(root, "tenant/.pmvcs/shadow"));
+  Repository.init(join(root, "tenant/.pmvcs"));
+  const directories = new ServedRepositoryDirectories(root);
+  assert.equal(directories.lookup("tenant/.pmvcs"), undefined);
+  assert.equal(directories.lookup("tenant/.pmvcs/shadow"), undefined);
+  const grants = new TokenGrants([
+    { token: "both", repository: "tenant", access: "read" },
+    { token: "both", repository: "tenant/objects", access: "read" },
+    { token: "parent", repository: "tenant", access: "read" },
+    { token: "nested", repository: "tenant/objects", access: "read" },
+  ]);
+  for (const auth of [null, grants]) {
+    const server = await startRepositoryServer({ root, host: "127.0.0.1", port: 0, grants: auth });
+    servers.push(server);
+    const base = `http://127.0.0.1:${server.port}`;
+    for (const token of auth === null ? [undefined] : ["both", "parent", "nested", "invalid"]) {
+      const allowedParent = auth === null || token === "both" || token === "parent";
+      const allowedNested = auth === null || token === "both" || token === "nested";
+      const options = token === undefined ? {} : { token };
+      const parentWire = new HttpTransport(`${base}/tenant`, options);
+      const nestedWire = new HttpTransport(`${base}/tenant/objects`, options);
+      const request = { body: JSON.stringify({ ids: [parentTip] }),
+        ...(token === undefined ? {} : { authorization: `Bearer ${token}` }) };
+      const explicit = await rawRequest(server, "/tenant/.pmvcs/objects/fetch", request);
+      assert.equal(explicit.status, allowedParent ? 200 : DENIED_STATUS);
+      if (allowedParent) {
+        assert.ok(parseBundle(await parentWire.fetchObjects([parentTip])).lines.some((line) => line.id === parentTip));
+      } else {
+        await assert.rejects(parentWire.fetchObjects([parentTip]), { code: "denied" });
+      }
+      if (allowedNested) {
+        const advertisement = await nestedWire.advertise();
+        assert.equal(advertisement.refs[0].target, nestedTip);
+        assert.ok((await nestedWire.fetch(["refs/heads/main"], [])).length > 0);
+        assert.ok((await nestedWire.fetchObjects([nestedTip])).length > 0);
+      } else {
+        await assert.rejects(nestedWire.advertise(), { code: "denied" });
+      }
+      // Keep the legacy nested-history alias and parent-only noninterference.
+      const legacy = await rawRequest(server, "/tenant/objects/fetch", {
+        ...request, body: JSON.stringify(allowedNested ? { refs: ["refs/heads/main"], haves: [] } : { ids: [parentTip] }),
+      });
+      assert.equal(legacy.status, allowedNested || allowedParent ? 200 : DENIED_STATUS);
+    }
+    for (const path of ["//.pmvcs/advertise", "/tenant/.pmvcs/unknown", "/tenant/.pmvcs/.pmvcs/fetch", "/../.pmvcs/fetch",
+      "http://example.invalid/tenant/.pmvcs/fetch", "/tenant/.pmvcs/shadow/.pmvcs/advertise"]) {
+      assert.equal((await rawRequest(server, path)).status, DENIED_STATUS);
+    }
+  }
 });

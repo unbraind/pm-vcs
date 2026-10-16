@@ -105,6 +105,10 @@ test("control directories, linked instances and aliased metadata remain unservab
   assert.equal(isServableRepositoryDirectory(directory), false);
   rmSync(join(owned.controlDirectory, "HEAD"));
   assert.equal(isServableRepositoryDirectory(directory), false);
+  writeFileSync(join(owned.controlDirectory, "HEAD"), "ref: refs/heads/main\n");
+  rmSync(join(owned.controlDirectory, "config.json"));
+  symlinkSync(join(outside.controlDirectory, "config.json"), join(owned.controlDirectory, "config.json"));
+  assert.equal(isServableRepositoryDirectory(directory), false);
   mkdirSync(join(directory, "ordinary"));
   assert.equal(isServableRepositoryDirectory(join(directory, "ordinary")), false);
 });

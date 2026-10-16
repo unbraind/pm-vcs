@@ -7,7 +7,7 @@
 // history would be internally inconsistent in a way no later command could
 // detect, let alone repair.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 
 import { ObjectStoreError } from "./objects.ts";
 import { FIELD_STRATEGIES, type FieldStrategy, type MergePolicy } from "./records.ts";
@@ -89,6 +89,8 @@ export function isRecordPath(path: string, config: RepositoryConfig): boolean {
 /**
  * Parses configuration, rejecting anything it does not understand.
  *
+ * Omitted fields use defaults; explicit null values are invalid field shapes.
+ *
  * Unknown strategies are refused rather than ignored. Silently falling back to
  * `scalar` for a field someone declared as a `set` would turn every concurrent
  * edit of that field into a conflict, and the config file would still read as
@@ -104,16 +106,16 @@ export function parseConfig(raw: unknown): RepositoryConfig {
     throw new ObjectStoreError("bad_config", "Repository config is not a JSON object.");
   }
   const source = raw as Record<string, unknown>;
-  const recordPaths = source.recordPaths ?? [];
+  const recordPaths = source.recordPaths === undefined ? [] : source.recordPaths;
   if (!Array.isArray(recordPaths) || recordPaths.some((entry) => typeof entry !== "string")) {
     throw new ObjectStoreError("bad_config", "Repository config recordPaths must be an array of strings.");
   }
-  const policySource = source.recordPolicy ?? {};
+  const policySource = source.recordPolicy === undefined ? {} : source.recordPolicy;
   if (policySource === null || typeof policySource !== "object" || Array.isArray(policySource)) {
     throw new ObjectStoreError("bad_config", "Repository config recordPolicy must be an object.");
   }
   const policyRecord = policySource as Record<string, unknown>;
-  const fieldsSource = policyRecord.fields ?? {};
+  const fieldsSource = policyRecord.fields === undefined ? {} : policyRecord.fields;
   if (fieldsSource === null || typeof fieldsSource !== "object" || Array.isArray(fieldsSource)) {
     throw new ObjectStoreError("bad_config", "Repository config recordPolicy.fields must be an object.");
   }
@@ -145,19 +147,26 @@ export function parseConfig(raw: unknown): RepositoryConfig {
 /**
  * Reads a repository's configuration.
  *
- * An absent file yields the defaults, so a repository created by an older build
- * stays readable.
+ * An absent entry yields the defaults, so a repository created by an older
+ * build stays readable. An existing entry, including a dangling symlink, must
+ * be readable as configuration.
  *
  * @param path - Config file path.
  * @returns The validated configuration.
  * @throws ObjectStoreError When the file exists but is not valid configuration.
  */
 export function readConfig(path: string): RepositoryConfig {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_CONFIG;
+    throw new ObjectStoreError("bad_config", `Repository config at ${path} cannot be read.`);
+  }
   let contents: string;
   try {
     contents = readFileSync(path, "utf8");
   } catch {
-    return DEFAULT_CONFIG;
+    throw new ObjectStoreError("bad_config", `Repository config at ${path} cannot be read.`);
   }
   let parsed: unknown;
   try {
@@ -165,7 +174,11 @@ export function readConfig(path: string): RepositoryConfig {
   } catch {
     throw new ObjectStoreError("bad_config", `Repository config at ${path} is not valid JSON.`);
   }
-  return parseConfig(parsed);
+  try {
+    return parseConfig(parsed);
+  } catch (error) {
+    throw new ObjectStoreError("bad_config", `Repository config at ${path} is invalid: ${(error as Error).message}`);
+  }
 }
 
 /**
