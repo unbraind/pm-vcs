@@ -1,0 +1,12 @@
+id: pm-vcs-h67d
+title: "Adopt pm-github 2026.10.16: default-branch-safe gated sync and daily gated closeout PRs"
+description: "Repin the gated sync caller to pm-github 2026.10.16 (tag 67a5e3e: npm-project-dir input, caller default branch resolved through the API for schedule payloads) and add the reusable gated closeout caller, which opens one reviewed PR per day closing items delivered by merged pull requests."
+type: Chore
+status: in_progress
+priority: 2
+tags[3]: changed,ci,pm-github
+created_at: "2026-10-16T10:42:29.344Z"
+updated_at: "2026-10-16T10:42:29.344Z"
+author: claude-orchestrator
+acceptance_criteria: pm-github-sync.yml pins 2026.10.16 at 67a5e3e; pm-github-closeout.yml calls the reusable closeout workflow at the same pin
+body: ""
