@@ -6,11 +6,9 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-05T07:00:24.104Z"
-updated_at: "2026-10-15T22:18:14.411Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-16T00:48:25.277Z"
 author: codex-sol
-comments[11]{created_at,author,text}:
+comments[13]{created_at,author,text}:
   "2026-10-15T19:28:39.394Z",codex-agent,"Plan: only ENOENT yields DEFAULT_CONFIG; wrap unreadable, JSON and schema failures in bad_config with the config path. Exercise real filesystem failures through FileTransport and HTTP, including legacy absent config."
   "2026-10-15T19:32:39.063Z",codex-agent,"Behavioral revert proof: replacing only readConfig with origin/main makes node --test --test-name-pattern=\"config failures refuse\" test/serve.test.ts fail (0 pass, 1 fail): directory config yields no exception. Fixed implementation passes and checks real directory, EACCES, malformed JSON, schema-invalid and ENOTDIR failures with bad_config and path; FileTransport and HTTP refuse; missing config works with a fresh server catalogue."
   "2026-10-15T19:35:10.945Z",codex-agent,"Linked pm test execution passed 1/1. Project test-result tracking is disabled, so the runner returned evidence_recording.recorded=false; recording the verified result here without changing project policy."
@@ -22,6 +20,8 @@ comments[11]{created_at,author,text}:
   "2026-10-15T22:16:17.814Z",codex-agent,"Behavioral revert proof 1: with tests unchanged, replaced only readConfig with its pre-review HEAD implementation. node --test --test-name-pattern='config failures refuse FileTransport and HTTP: dangling-symlink$' test/serve.test.ts failed 0/1 (Missing expected exception). Restored the fix: all 9 config/legacy cases pass, including real symlink target removal. readConfig and FileTransport report bad_config; HTTP retains its intentional catalogue alias refusal with exact fixed denial status/body."
   "2026-10-15T22:16:23.777Z",codex-agent,"Behavioral revert proof 2: with tests unchanged, replaced only readConfig with origin/main's original read-error-to-default implementation. node --test --test-name-pattern='config failures refuse FileTransport and HTTP: directory$' test/serve.test.ts failed 0/1 (Missing expected exception). Restored the fix: directory refusal and chmod refusal pass through the reader, FileTransport and HTTP. The chmod test probes the real read result and explicitly skips with a reason when mode 000 remains readable; the deterministic directory fixture always runs."
   "2026-10-15T22:18:10.398Z",codex-agent,"Linked PM verification: 3/3 commands passed (8/8 config refusal cases, 1/1 invalid remote path, 1/1 legacy absence). Project test-result tracking is disabled, so outcomes are recorded here without changing that setting. Typecheck, lint and duplication checks passed; duplication remains 0% across 65 sources. Preparing the committed self-host snapshot before full gates."
+  "2026-10-16T00:29:23.576Z",codex-agent,"Full release validation at a124253 passed under npm and Bun: 1554/1554 tests per gate, no failed/cancelled/skipped/todo tests, all 65 sources at 100% in every coverage dimension. Original readConfig-only revert baselines were 7f36d58 for the dangling-symlink refusal and 0666250 for deterministic directory refusal. The initial Node-only full run found an unrelated lease-expiry fixture issue, tracked separately as pm-vcs-forgeleaseexpiry."
+  "2026-10-16T00:48:13.068Z",codex-agent,"Review round 1 is verified: dangling symlink target removal raises bad_config in readConfig and FileTransport; HTTP keeps its fixed catalogue-alias denial. Deterministic directory refusal always runs; chmod runs only after an actual denied-read probe, otherwise it skips with an explicit reason. Both readConfig-only behavioral revert proofs failed 0/1 as expected, and the restored config/legacy matrix passed 9/9. Full npm and Bun release gates passed 1554/1554 each at a124253, all 65 sources at 100% statements/branches/functions/lines. Node-only npm test passed unchanged on retry with 1550 passed and 4 expected Bun-only skips. Final receipt changes only PM evidence and its regenerated self-host snapshot."
 files[7]{path,scope}:
   engine/config.ts,project
   engine/served-repositories.ts,project
