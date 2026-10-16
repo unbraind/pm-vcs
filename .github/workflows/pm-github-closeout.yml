@@ -1,0 +1,24 @@
+# Pin both placeholders to a reviewed release containing github closeout and this workflow.
+# Callers need no guard of their own: API default-branch resolution supports schedule
+# payloads without repository metadata; manual dispatch from another branch fails closed.
+# Configure required CI workflows to support workflow_dispatch and emit their usual checks.
+# Missing CI filenames are skipped with a notice, matching the reusable sync workflow.
+# Settings -> Actions -> General must allow Actions to create pull requests.
+name: Close pm items delivered by merged pull requests
+on:
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+jobs:
+  gated-closeout:
+    uses: unbraind/pm-github/.github/workflows/pm-github-closeout.yml@67a5e3e1514fddeeae29951da00513f06f7aa0ab # pm-github 2026.10.16
+    with:
+      pm-github-version: "2026.10.16"
+      npm-project-dir: "." # Use tools/oracle or another contained npm project when needed.
+      post-closeout-script: "changelog:full" # Missing script skips; "" disables it.
+      ci-workflows: "ci.yml" # Whitespace-separated workflow filenames; "" disables dispatch.
