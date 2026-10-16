@@ -6,7 +6,9 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-06T11:15:21.827Z"
-updated_at: "2026-10-15T21:35:53.876Z"
+updated_at: "2026-10-16T01:19:46.705Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-sol
 estimated_minutes: 120
 acceptance_criteria: "An explicit wire address or compatible negotiation makes parent fetchObjects and nested repository fetch reachable together; regression tests cover no-auth, parent-only, nested-only and multi-repository grants; unauthorized requests retain the fixed denial shape."
@@ -14,22 +16,29 @@ parent: pm-vcs-ttc0
 repro_steps: "Serve repositories tenant and tenant/objects (a) without --auth, or (b) with one token granted read on both. Request POST /tenant/objects/fetch: it resolves to repository tenant/objects, endpoint fetch. HttpTransport.fetchObjects for the parent uses the same path, so the parent's object fetch is shadowed."
 expected_result: "Both repositories and every supported endpoint can be addressed unambiguously, including with a grant that reaches both repositories and without authentication."
 actual_result: "Without --auth, or for a token scoped to both repositories, the nested repository shadows the parent's objects/fetch endpoint at their shared URL path. Parent-only tokens are not affected since 7341b0d."
-comments[6]{created_at,author,text}:
+comments[9]{created_at,author,text}:
   "2026-10-15T19:28:42.717Z",codex-agent,"Plan: reserve a non-catalogable control segment for explicit repository endpoints, retain legacy suffix routing for existing clients, and negotiate new paths via advertisement so new clients can still use older servers. Preserve scope-before-catalogue resolution for legacy requests; prove both parent and nested fetches with open, parent-only, nested-only and combined grants."
   "2026-10-15T19:32:46.577Z",codex-agent,"Design: /<repository>/.pmvcs/<endpoint>, with optional HTTP explicit-endpoints negotiation and legacy aliases retaining scope-first deepest-catalogued resolution. Existing non-catalogable .pmvcs segment fences the namespace. Behavioral revert proof: reverting only splitServedPathCandidates to origin/main makes the new matrix fail (0 pass, 1 fail): explicit parent object fetch returns 404 instead of 200. Fixed matrix covers open, parent-only, nested-only, both and invalid grants; legacy nested history and parent-only access survive; reserved-name registration is refused."
   "2026-10-15T19:35:15.601Z",codex-agent,Linked pm test execution passed 1/1. Added a real older-peer direct object-fetch negotiation case and kept the existing legacy peer fixture honest by removing the new capability it does not implement. Project test-result tracking is disabled; results are recorded here.
   "2026-10-15T19:39:10.767Z",codex-agent,Final review tightened explicit-path framing so a double-leading-slash root spelling cannot alias the canonical root endpoint. The matrix now denies that spelling as well as invalid repository and endpoint names. The legacy compatibility and authorization selection remain unchanged.
   "2026-10-15T21:04:45.621Z",codex-agent,"Complete npm release check at e03471b passed 1541/1541 with zero fail/cancel/skip/todo and all-source per-file 100% coverage. Parent/nested endpoint and grant regressions, older-peer compatibility, packed Node/Bun clients and served-forge authorization checks passed. A full Bun-invoked retry is running after an unrelated existing erasure-setup refusal."
   "2026-10-15T21:35:28.292Z",codex-agent,"Delivery gates at e03471b: both complete npm and Bun release checks exited 0, each 1541/1541 with 0 fail/cancel/skip/todo and per-file 100% coverage across all 65 source files. Explicit parent/nested endpoints, all grant combinations, reserved-name refusal, legacy aliases and older-peer negotiation pass. Earlier unrelated erasure refusal is tracked in pm-vcs-simi. Final receipt changes only tracker evidence and self-host artifact. Release claim, keep in_progress."
-files[6]{path,scope}:
+  "2026-10-16T01:15:36.760Z",codex-agent,"Round 2: verified missingObjects/uploadObjects lack first-use endpoint negotiation. The audit also found lease, forge, fetch, push and publish bypass it on a fresh transport. Centralize the existing fetchObjects guard in roundTrip, excluding advertise to avoid recursion, retaining the cached false legacy result. Add real served HTTP tests for parent/nested object isolation, explicit request paths, one-time negotiation and legacy fallback. Current suffix routing only makes objects/fetch collide with nested history; missing/upload do not currently have standalone suffix aliases, so direct data misrouting for those two methods is not established."
+  "2026-10-16T01:18:59.048Z",codex-agent,"Behavioural revert proof: node --test test/served-direct-transport.test.ts passes 6/6 with the fix (0 fail/skip/cancel/todo). Restoring only engine/http-transport.ts from head 306e62e makes the same six tests fail (0/6, exit 1): direct missingObjects/uploadObjects send legacy objects/missing and objects/upload without advertisement, rather than advertise then the explicit parent namespace; legacy cases also omit required initial negotiation. Restored the fix and the linked pm test run passes 7/7 across two commands. This proves first-use namespace negotiation, not existing parent/nested data corruption for missing/upload; those suffixes have no short alias today. Central roundTrip protection also covers fetch, push, publish, lease and both forge endpoints. Updated malformed forge/lease responders to advertise valid capabilities so their downstream refusal assertions remain exercised."
+  "2026-10-16T01:19:46.705Z",codex-agent,"Additional guard-only revert proof: remove just the new roundTrip negotiation line (leaving all other source and tests unchanged), then run node --test --test-name-pattern='all other direct.*explicit' test/served-direct-transport.test.ts. Result: 0/1, exit 1, bad_request: The fetch request does not hold a well-formed ref and have list. The first direct parent fetchObjects request uses tenant/objects/fetch and the catalogued nested repository interprets it as a history fetch. Restoring the guard passes; updated focused refusal and direct-operation tests pass 17/17, zero fail/skip/cancel/todo. Next: commit source, tracker and regenerated selfhost.bundle, then run npm and Bun release gates at unchanged thresholds, including clean git identity environment."
+files[9]{path,scope}:
   engine/http-protocol.ts,project
   engine/http-transport.ts,project
   engine/serve.ts,project
   selfhost.bundle,project
+  test/feature-edges.test.ts,project
   test/serve.test.ts,project
+  test/served-direct-transport.test.ts,project
+  test/served-forge.test.ts,project
   test/served-sync.test.ts,project
-tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-name-pattern='explicit endpoints keep' test/serve.test.ts,project,codex-agent,"2026-10-15T19:34:11.457Z",local_mutation,fix/served-config-date-fetch-paths
+  node --test test/served-direct-transport.test.ts,project,codex-agent,"2026-10-16T01:17:58.005Z",local_mutation,fix/served-config-date-fetch-paths
 docs[2]{path,scope}:
   docs/served-forge.md,project
   README.md,project

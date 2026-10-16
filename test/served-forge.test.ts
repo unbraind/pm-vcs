@@ -403,8 +403,10 @@ test("forge fetch validates remote roots before catalog CAS", async t => {
   const sandbox = createSandbox({ mergeInstall: false, commitFence: false });
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
   let answer: RecordDocument = {};
-  const responder = createServer((request, response) => {
-    request.resume(); response.setHeader("content-type", "application/json"); response.end(JSON.stringify(answer));
+  const responder = createServer(async (request, response) => {
+    request.resume(); response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(request.url?.endsWith("/advertise") === true
+      ? await new FileTransport("fixture", source.sender.root).advertise() : answer));
   });
   try {
     await propose(server.wire, source);

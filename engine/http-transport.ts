@@ -165,6 +165,9 @@ export class HttpTransport implements Transport {
    *   cannot be reached or does not answer in time.
    */
   private async roundTrip(endpoint: string, body: string): Promise<WireAnswer> {
+    // Direct transport consumers need the same namespace negotiation as sync
+    // workflows. Advertisement bootstraps it; false caches the legacy fallback.
+    if (endpoint !== ADVERTISE_ENDPOINT && this.explicitEndpoints === null) await this.advertise();
     let response: Response;
     let payload: Buffer;
     try {
@@ -277,7 +280,6 @@ export class HttpTransport implements Transport {
 
   /** Fetch standalone objects and verify every claimed id before returning bytes. */
   async fetchObjects(ids: readonly ObjectId[]): Promise<Buffer> {
-    if (this.explicitEndpoints === null) await this.advertise();
     const answer = await this.roundTrip(OBJECT_FETCH_ENDPOINT, encodeMissingRequest(ids));
     assertWireSuccess(answer.status, answer.payload, this.url);
     parseBundle(answer.payload);

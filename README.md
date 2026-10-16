@@ -495,8 +495,9 @@ fetches the parent's objects while `/tenant/objects/.pmvcs/fetch` fetches the
 nested repository's history, with open access or any combination of grants.
 The HTTP advertisement adds the optional `explicit-endpoints` capability.
 Clients negotiate it through the legacy, unambiguous `advertise` endpoint and
-then use the explicit layout; a direct `fetchObjects` call negotiates first.
-Servers without that capability retain the legacy layout.
+then use the explicit layout. Every direct transport operation negotiates before
+its first repository request and caches the result, including `missingObjects`
+and `uploadObjects`. Servers without that capability retain the legacy layout.
 
 Legacy `/<repository>/<endpoint>` requests remain compatibility aliases.
 Their existing scope-first, deepest-catalogued resolution is preserved: a token

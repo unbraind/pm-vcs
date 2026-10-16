@@ -334,7 +334,11 @@ test("receiver boundaries preserve empty traversal, malformed grants and lease r
     assert.equal(parseTokenText(JSON.stringify([{ token: "fixture", repository: "", access: "write", ...fields }])), null);
   }
   assert.deepEqual(parseTokenText(JSON.stringify([{ token: "fixture", repository: "", access: "write", principal: "receiver", breakLeases: true }]))?.[0].principal, "receiver");
-  const server = createServer((request, response) => { request.resume(); response.end(JSON.stringify({ lease: {} })); });
+  const server = createServer(async (request, response) => {
+    request.resume();
+    response.end(JSON.stringify(request.url === "/advertise"
+      ? await new FileTransport("fixture", repo.root).advertise() : { lease: {} }));
+  });
   await new Promise<void>(resolve => { server.listen(0, "127.0.0.1", resolve); });
   try {
     const address = server.address(); assert.ok(address !== null && typeof address === "object");
