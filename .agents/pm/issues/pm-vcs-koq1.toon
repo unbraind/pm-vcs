@@ -6,16 +6,18 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-16T22:29:54.396Z"
-updated_at: "2026-10-17T09:37:35.016Z"
+updated_at: "2026-10-17T10:13:50.467Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
-comments[5]{created_at,author,text}:
+comments[7]{created_at,author,text}:
   "2026-10-16T22:30:26.588Z",codex-agent,"Compared failed CI jobs 116966419723, 116965719699 and 116965854973 with green main job 116965011838. The real failure is self-host source/bundle workflow byte mismatch. The missing CLI diagnostic occurs in a passing negative test on both green and red runs. Preserve complete archive validation and original workflow bytes; allow only full-SHA version-comment changes for trusted external actions during comparison, retaining action paths, all other YAML and file modes."
   "2026-10-16T22:33:12.967Z",codex-agent,"Behavioural revert proof: restoring strict byte equality by disabling only sameWorkflowExceptActionRevisions makes both new regressions fail with assertion failures, including the direct CLI test. With the fix restored, the self-host suite passes 61/61 and the isolated direct-entry regression passes 1/1. The archive remains unchanged during verification."
   "2026-10-17T09:28:07.702Z",codex-agent,"Independently fetched failed jobs 116966419723, 116965719699 and 116965854973 and green main job 116965011838. Confirmed workflow archive mismatches are the failing assertion; the intentional missing-CLI diagnostic occurs on both red and green jobs. Replaced the partial regex-only exception with YAML-node validation so script scalar text and action inputs remain exact. Added direct yaml development dependency at the already resolved version, with no dependency version bumps. Current main already carries the pinned SDK update; installation now succeeds."
   "2026-10-17T09:29:26.027Z",codex-agent,"Behavioural revert independently repeated: restoring only compareTrees to its HEAD implementation fails both new archive and direct-process regressions (0 pass, 2 assertion failures). Restoring the fix passes both, including byte-preservation checks. Shell scalar, quoted script, action-input and malformed-YAML differences remain rejected. The regression commands import TypeScript directly, so no stale build can affect this proof."
   "2026-10-17T09:37:35.016Z",codex-agent,"Final comparison supports the existing trusted owned reusable-workflow callers and their calendar-version comments, while preserving every other byte. Focused self-host tests pass 62/62; changed comparison code has full four-metric coverage (the focused run alone omits the CLI invocation-guard branch exercised by direct-process tests). Stopped the exploratory full coverage run without claiming a pass; proceed with required npm and Bun release checks against the committed archive."
+  "2026-10-17T10:11:20.273Z",codex-agent,"PR 121 CI is green: Node 22 and 26 each pass 1563/1563 with zero skips and 100 percent lines/statements/branches/functions; CodeQL and both Windows launcher jobs pass. Applied actual PR 116, 117 and 118 patches individually to disposable committed copies of this fix: all three direct self-host audits pass and preserve the archive hash. Required full local npm and Bun commands are running separately; interrupted attempts are not pass evidence."
+  "2026-10-17T10:13:50.467Z",codex-agent,Local long-running validation was interrupted without claiming a pass. Regular PR CI is green with 1563/1563 on both Node versions. Add a temporary read-only workflow to execute exact npm and Bun release commands independently with clean CI identity. This temporary workflow and its snapshot will be removed after recording receipts; all action SHAs and all acceptance thresholds remain unchanged.
 files[6]{path,scope}:
   AGENTS.md,project
   package-lock.json,project
