@@ -229,3 +229,59 @@ test("the identity gate runs through a symlinked checkout and rejects a seeded v
     fixture.cleanup();
   }
 });
+
+
+test("the direct self-host entry point accepts committed Dependabot action bumps but rejects operational changes", () => {
+  const fixture = makeTempDir();
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" };
+  delete env.NODE_TEST_CONTEXT;
+  /** Run a real isolated Git command without relying on the caller identity. */
+  const git = (args: readonly string[]): void => {
+    passed(spawnSync("git", args, { cwd: fixture.root, encoding: "utf8", env }));
+  };
+  /** Execute the copied, unchanged production launcher against its own repository. */
+  const audit = (args: readonly string[] = []): SpawnSyncReturns<string> => spawnSync(
+    process.execPath, [join(fixture.root, "scripts/self-host.ts"), ...args],
+    { cwd: fixture.root, encoding: "utf8", timeout: 60_000, env },
+  );
+  try {
+    for (const script of ["self-host.ts", "main-invocation.ts"]) {
+      source(fixture.root, `scripts/${script}`, readFileSync(join(packageRoot, "scripts", script), "utf8"));
+    }
+    symlinkSync(join(packageRoot, "engine"), join(fixture.root, "engine"), "dir");
+    symlinkSync(join(packageRoot, "node_modules"), join(fixture.root, "node_modules"), "dir");
+    source(fixture.root, "package.json", JSON.stringify({ type: "module" }));
+    source(fixture.root, "self-host.json", JSON.stringify({ bundle: "selfhost.bundle", ref: "refs/heads/self-host", exclude: ["selfhost.bundle"] }));
+    source(fixture.root, "index.ts", "export const answer = 42;\n");
+    const actions = ["github/codeql-action/init", "actions/setup-node", "actions/upload-artifact"];
+    const workflow = "jobs:\n  test:\n    steps:\n" + actions.map((action) => `      - uses: ${action}@${"a".repeat(40)} # v7.0.0`).join("\n") + "\n";
+    source(fixture.root, ".github/workflows/ci.yml", workflow);
+    git(["init", "-q", "-b", "main"]);
+    git(["config", "user.name", "Public Fixture"]);
+    git(["config", "user.email", "public@example.test"]);
+    git(["add", "scripts", "package.json", "self-host.json", "index.ts", ".github/workflows/ci.yml"]);
+    git(["commit", "-qm", "fixture source"]);
+    passed(audit(["--write"]));
+    git(["add", "selfhost.bundle"]);
+    git(["commit", "-qm", "fixture archive"]);
+    const bundle = readFileSync(join(fixture.root, "selfhost.bundle"));
+    passed(audit());
+    for (const action of actions) {
+      source(fixture.root, ".github/workflows/ci.yml", workflow.replace(`${action}@${"a".repeat(40)} # v7.0.0`, `${action}@${"b".repeat(40)} # v7.1.0`));
+      git(["add", ".github/workflows/ci.yml"]);
+      git(["commit", "-qm", "action revision update"]);
+      passed(audit());
+      assert.deepEqual(readFileSync(join(fixture.root, "selfhost.bundle")), bundle, "verification must never regenerate the archive");
+    }
+    for (const body of [workflow + "permissions: write-all\n", workflow.replace("a".repeat(40), "main")]) {
+      source(fixture.root, ".github/workflows/ci.yml", body);
+      git(["add", ".github/workflows/ci.yml"]);
+      git(["commit", "-qm", "operational change"]);
+      const rejected = audit();
+      assert.equal(rejected.status, 1);
+      assert.match(rejected.stderr, /content differs/);
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
