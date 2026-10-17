@@ -40,6 +40,7 @@ import {
   readSourceFiles,
   runGit,
   snapshotIsUnchanged,
+  sameWorkflowExceptActionRevisions,
   verifySelfHost,
   writeSelfHostBundle,
 } from "../scripts/self-host.ts";
@@ -1236,4 +1237,55 @@ test("writeSelfHostBundle rebuilds a parentless snapshot that is missing a reach
   assert.notEqual(rebuilt, incomplete);
   const result = verifySelfHost(store, rebuilt, ref, sourceTreeId);
   assert.equal(result.ok, true, result.problems.join("\n"));
+});
+
+
+test("self-host comparison tolerates only pinned action revisions and preserves the archive bytes", () => {
+  const path = ".github/workflows/ci.yml";
+  const before = `jobs:\n  test:\n    steps:\n      - uses: actions/setup-node@${"a".repeat(40)} # v7.0.0\n        with:\n          node-version: 22\n`;
+  const after = before.replace("a".repeat(40), "b".repeat(40)).replace("v7.0.0", "v7.1.0");
+  const { bytes } = bundleFor([[path, before], ["engine/value.ts", "export const value = 1;\n"]]);
+  const { store } = own();
+  const tree = buildSourceTree(store, files([[path, after], ["engine/value.ts", "export const value = 1;\n"]]));
+  assert.equal(verifySelfHost(store, bytes, ref, tree).ok, true);
+  assert.equal(sameWorkflowExceptActionRevisions(path, Buffer.from(before), Buffer.from(after)), true);
+  assert.equal(sameWorkflowExceptActionRevisions("README.md", Buffer.from(before), Buffer.from(after)), false);
+  for (const changed of [
+    after.replace("node-version: 22", "node-version: 26"),
+    after.replace("actions/setup-node", "actions/checkout"),
+    after.replace("actions/setup-node", "unknown/setup-node"),
+    after.replace("b".repeat(40), "main"),
+    after.replace("b".repeat(40), "abcdef0"),
+    after.replace(" # v7.1.0", ""),
+    after.replace("# v7.1.0", "# not-a-version"),
+    after.replace("b".repeat(40), "<commit>").replace("v7.1.0", "<version>"),
+    after + "permissions: write-all\n",
+  ]) {
+    const changedTree = buildSourceTree(store, files([[path, changed], ["engine/value.ts", "export const value = 1;\n"]]));
+    assert.equal(verifySelfHost(store, bytes, ref, changedTree).ok, false, changed);
+  }
+  const changedSource = buildSourceTree(store, files([[path, after], ["engine/value.ts", "export const value = 2;\n"]]));
+  assert.equal(verifySelfHost(store, bytes, ref, changedSource).ok, false);
+});
+
+test("action revision exceptions never cover shell scalars, inputs or malformed YAML", () => {
+  const path = ".github/workflows/ci.yml";
+  const pin = `uses: actions/setup-node@${"a".repeat(40)} # v7.0.0`;
+  for (const body of [
+    `jobs:\n  test:\n    steps:\n      - run: |\n          ${pin}\n`,
+    `jobs:\n  test:\n    steps:\n      - run: >-\n          ${pin}\n`,
+    `jobs:\n  test:\n    steps:\n      - run: '\n          ${pin}\n          '\n`,
+    `jobs:\n  test:\n    steps:\n      - with:\n          ${pin}\n`,
+    `jobs:\n  test:\n    with:\n      ${pin}\n`,
+    `jobs:\n  test:\n    steps:\n      - uses: [actions/setup-node@${"a".repeat(40)}]\n`,
+    `${pin}\n`,
+    `jobs:\n  test:\n    ${pin}\n    uses: ./duplicate\n`,
+    `? [complex, key]\n: nested:\n    ${pin}\n`,
+  ]) {
+    assert.equal(sameWorkflowExceptActionRevisions(path, Buffer.from(body), Buffer.from(body.replace("a".repeat(40), "b".repeat(40)))), false, body);
+  }
+  const job = `jobs:\n  reusable:\n    ${pin}\n`;
+  assert.equal(sameWorkflowExceptActionRevisions(path, Buffer.from(job), Buffer.from(job.replace("a".repeat(40), "b".repeat(40)))), true);
+  const caller = job.replace("actions/setup-node", "unbraind/pm-github/.github/workflows/pm-github-sync.yml").replace("v7.0.0", "pm-github 2026.10.16");
+  assert.equal(sameWorkflowExceptActionRevisions(path, Buffer.from(caller), Buffer.from(caller.replace("a".repeat(40), "b".repeat(40)).replace("2026.10.16", "2026.10.17"))), true);
 });
