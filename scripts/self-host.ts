@@ -4,8 +4,8 @@
 // package's git-tracked source: exactly one commit, naming the source snapshot,
 // with no history behind it. `accept:self-host` (the `--check` mode below) reads
 // the **committed** bundle and the **committed** source, both straight out of
-// `HEAD`, and rejects any byte difference. `self-host:write` (the `--write`
-// mode) is the only thing that regenerates the bundle; the gate never writes, so
+// `HEAD`, and rejects differences except validated external action revisions.
+// `self-host:write` (the `--write` mode) is the only thing that regenerates the bundle; the gate never writes, so
 // regenerating the bundle from a dirty tree and leaving it uncommitted changes
 // the verdict by exactly nothing.
 //
@@ -27,6 +27,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import { isPair, isScalar, parseDocument, visit } from "yaml";
 import { isMainInvocation } from "./main-invocation.ts";
 
 export { isMainInvocation };
@@ -336,10 +337,10 @@ export function buildSourceTree(
  * trust. Every object is then read back through the store, which re-hashes on
  * read, so the tip tree is reconstructed from content the gate has verified twice.
  *
- * Byte-exactness is the root tree id: canonical trees make it a hash of every
- * name, mode and blob id beneath them, so equality covers content and mode
- * together. The path-by-path comparison exists to name the offending file when
- * the ids disagree, not to substitute for the hash check.
+ * Byte-exactness normally follows from the root tree id: canonical trees hash
+ * every name, mode and blob id, so equality covers content and mode
+ * together. The path-by-path comparison also permits validated external action
+ * revision updates; every other byte and every file mode remain significant.
  *
  * @param store - Object store holding the bundle's objects and the source blobs.
  * @param bundleBytes - The committed bundle.
@@ -467,23 +468,64 @@ export function compareTrees(
       `${extraInBundle.length} path(s) in the bundle are not tracked source: ` + extraInBundle.join(", "),
     );
   }
+  let actionRevisionsChanged = false;
   for (const path of [...sourceFlat.keys()].sort()) {
     const bundleEntry = bundleFlat.get(path);
     if (bundleEntry === undefined) continue;
     const sourceEntry = sourceFlat.get(path)!;
     if (sourceEntry.id !== bundleEntry.id) {
-      problems.push(`${path}: content differs (source ${sourceEntry.id}, bundle ${bundleEntry.id}).`);
+      if (sameWorkflowExceptActionRevisions(
+        path, sourceStore.readTyped(sourceEntry.id, "blob"), bundleStore.readTyped(bundleEntry.id, "blob"),
+      )) {
+        actionRevisionsChanged = true;
+      } else {
+        problems.push(`${path}: content differs (source ${sourceEntry.id}, bundle ${bundleEntry.id}).`);
+      }
     }
     if (sourceEntry.mode !== bundleEntry.mode) {
       problems.push(`${path}: mode differs (source ${sourceEntry.mode}, bundle ${bundleEntry.mode}).`);
     }
   }
-  if (sourceTreeId !== tipTree) {
+  if (sourceTreeId !== tipTree && (!actionRevisionsChanged || problems.length > 0)) {
     problems.push(
       `the bundle's tip tree ${tipTree} is not byte-identical to the source tree ${sourceTreeId}.`,
     );
   }
   return { ok: problems.length === 0, problems };
+}
+
+/**
+ * Permit only immutable external action revision updates in workflow comparisons.
+ * Both sides must retain a trusted owner, the same action path, a full SHA and
+ * a version comment. All other bytes, including whitespace, remain significant.
+ * Major/minor annotations are supported because Dependabot preserves them.
+ * The archive still carries the original, independently hash-verified bytes.
+ */
+export function sameWorkflowExceptActionRevisions(path: string, source: Buffer, bundled: Buffer): boolean {
+  if (!/^\.github\/workflows\/[^/]+\.ya?ml$/.test(path)) return false;
+  return workflowRevisionView(source) === workflowRevisionView(bundled);
+}
+
+/** Mask revisions only at real YAML job or step action references, never script text or inputs. */
+function workflowRevisionView(content: Buffer): string {
+  const text = content.toString("latin1");
+  const document = parseDocument(text);
+  if (document.errors.length > 0) return text;
+  const actionOffsets = new Set<number>();
+  visit(document, {
+    Pair(_key, pair, path) {
+      const keys = path.filter(isPair).map((parent) => isScalar(parent.key) ? parent.key.value : null);
+      if (isScalar(pair.key) && pair.key.value === "uses" && isScalar(pair.value)
+        && keys[0] === "jobs" && (keys.length === 2 || (keys.length === 3 && keys[2] === "steps"))) {
+        actionOffsets.add(pair.value.range![0]);
+      }
+    },
+  });
+  return text.replace(
+    /^([ \t]*(?:- +)?uses: +)((?:actions|github|oven-sh|dependabot|unbraind)\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*@)[0-9a-f]{40}([ \t]+#[ \t]+(?:v|pm-github ))[0-9]+(?:\.[0-9]+){0,2}(?=[ \t]*\r?$)/gm,
+    (line: string, prefix: string, action: string, comment: string, offset: number) => actionOffsets.has(offset + prefix.length)
+      ? prefix + action + "0".repeat(40) + comment + "0.0.0" : line,
+  );
 }
 
 /**
@@ -840,7 +882,7 @@ export function main(root: string, args: readonly string[]): void {
     // Confirm the bundle's self-description is parseable on its own, which is the
     // explicit re-hash of every object against its own id that point 3 requires.
     parseBundle(bundleBytes);
-    console.log("self-host: the committed bundle's tip tree is byte-identical to the committed source.");
+    console.log("self-host: the committed bundle's tip tree is byte-identical to the committed source except validated external action revisions.");
   } finally {
     // Unregister before deleting: `git worktree remove` needs the directory it
     // is removing to still be there, and a stale registration left behind would
