@@ -739,7 +739,12 @@ state does not participate. Multiple reachable versions of a stable change ID
 require selecting a commit or ref explicitly.
 
 Unresolved units retain all conflict alternative groups and their available
-origin changes. Absent fields and zero-line hunks still emit a row. Shallow
+origin changes. Text alternatives carry their disputed half-open range through
+each parent diff and stable identity edge; surrounding equal-line anchors and
+unchanged boundary lines identify that hunk. Equal text elsewhere in a parent
+cannot supply its origin. Repeated and multi-line alternatives retain separate
+setters after prefix insertion/deletion, renames and copies. A side without
+matching ancestry remains unavailable. Absent fields and zero-line hunks still emit a row. Shallow
 boundaries are marked explicitly and missing side ancestry is reported as
 unavailable rather than inventing an author. Fragmented files and links refuse
 with a typed unsupported-annotation error.

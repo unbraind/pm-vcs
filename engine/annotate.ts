@@ -65,6 +65,19 @@ function corresponding(before: readonly Unit[], after: readonly Unit[]): Map<str
   return matches;
 }
 
+/** Carry one disputed half-open range through a parent diff, bounded by its own surrounding equal lines. */
+function ancestralRange(before: readonly Unit[], after: readonly Unit[], range: { start: number; end: number }): { start: number; end: number } {
+  const anchors = diffLines(before.map((unit) => unit.value as string), after.map((unit) => unit.value as string))
+    .filter((edit) => edit.kind === "equal");
+  const preceding = [...anchors].reverse().find((edit) => edit.leftIndex! < range.start);
+  const following = anchors.find((edit) => edit.leftIndex! >= range.end);
+  const interior = anchors.filter((edit) => edit.leftIndex! >= range.start && edit.leftIndex! < range.end);
+  const first = interior.find((edit) => edit.leftIndex === range.start);
+  const last = interior.find((edit) => edit.leftIndex === range.end - 1);
+  return { start: first !== undefined ? first.rightIndex! : preceding === undefined ? 0 : preceding.rightIndex! + 1,
+    end: last !== undefined ? last.rightIndex! + 1 : following === undefined ? after.length : following.rightIndex! };
+}
+
 /** Query-local caches keep object reads proportional to selected ancestry, never all refs or unrelated payloads. */
 class Annotator {
   readonly store: ObjectStore;
@@ -200,12 +213,13 @@ class Annotator {
   alternative(id: ObjectId, file: Located, unit: ConflictUnit, side: "base" | "ours" | "theirs"): AnnotationOrigin[] {
     const expected = unit.kind === "field" ? decodeRecord(this.store.readTyped(unit[side], "record")).value
       : this.store.readTyped(unit[side], "blob").toString("utf8");
-    const pending = this.shallow.has(id) ? [] : this.commit(id).parents.map((parent) => ({ id: parent, file }));
+    const initialRange = unit.kind === "text" ? { start: unit.start, end: unit.end } : undefined;
+    const pending = this.shallow.has(id) ? [] : this.commit(id).parents.map((parent) => ({ id: parent, file, range: initialRange }));
     const seen = new Set<string>();
     while (pending.length > 0) {
-      const task = pending.shift() as { id: ObjectId; file: Located };
+      const task = pending.shift() as { id: ObjectId; file: Located; range: { start: number; end: number } | undefined };
       const candidate = task.id;
-      const key = `${candidate}:${task.file.entry.fileId}:${task.file.path}`;
+      const key = `${candidate}:${task.file.entry.fileId}:${task.file.path}:${task.range?.start}:${task.range?.end}`;
       if (seen.has(key)) continue; seen.add(key);
       const commit = this.commit(candidate);
       const located = this.locate(commit.tree, task.file.path, task.file.entry.fileId)
@@ -213,12 +227,14 @@ class Annotator {
       if (located !== undefined) {
         const units = this.content(located.entry);
         const value = unit.kind === "field" ? this.documents.get(located.entry.id)?.[unit.field] : undefined;
-        const index = unit.kind === "text" ? units.findIndex((_, index) => units.slice(index, index + splitLines(expected as string).length).map((unit) => unit.value).join("\n") === expected) : -1;
+        const range = task.range === undefined ? undefined : ancestralRange(this.content(task.file.entry), units, task.range);
+        const index = range !== undefined && range.end - range.start === splitLines(expected as string).length
+          && units.slice(range.start, range.end).map((unit) => unit.value).join("\n") === expected ? range.start : -1;
         if ((unit.kind === "field" && canonicalRecordValue(value ?? null) === canonicalRecordValue(expected ?? null) && (value === undefined) === (expected === undefined)) || index >= 0) {
           const rows = this.blame(candidate, located).filter((row) => unit.kind === "field" ? row.field === unit.field : row.start! > index && row.start! <= index + splitLines(expected as string).length);
           return [...new Map(rows.map(({ unit: _unit, field: _field, value: _value, start: _start, end: _end, text: _text, ...origin }) => [origin.changeId, origin])).values()];
         }
-        if (!this.shallow.has(candidate)) pending.push(...commit.parents.map((parent) => ({ id: parent, file: located })));
+        if (!this.shallow.has(candidate)) pending.push(...commit.parents.map((parent) => ({ id: parent, file: located, range })));
       }
     }
     return [];

@@ -321,3 +321,57 @@ test("multiple setters sharing PM history decode the immutable event payload onc
   const rows = annotatePath(repo.objects, tip, "text.txt", true);
   assert.equal(rows.length, 2); assert.equal(count, 1); assert.ok(rows.every((row) => row.items.includes(item.id)));
 });
+
+test("text alternative origins follow their disputed hunk instead of an unrelated identical occurrence", () => {
+  for (const repeated of [false, true]) {
+    const repo = Repository.init(temp()); const path = "text.txt";
+    const text = (value: string) => `${repeated ? "theirs" : "header"}\nseparator\n${value}\ntail\n`;
+    edit(repo, path, text("base"), { ...author, name: "initial" }); repo.createBranch("other", "HEAD", now);
+    repo.switchTo("other", now); const theirs = edit(repo, path, text("theirs"), { ...author, name: "theirs-editor" });
+    repo.switchTo("main", now); edit(repo, path, text("ours"), { ...author, name: "ours-editor" });
+    const merged = repo.merge("other", { message: "repeated text dispute", author, recordConflicts: true }, now).head;
+    const side = annotatePath(repo.objects, merged, path, true)[2].alternatives!.find((side) => side.side === "theirs")!;
+    assert.deepEqual(side.origins.map((origin) => [origin.changeId, origin.author]), [[change(repo, theirs), "theirs-editor"]]);
+  }
+});
+
+test("repeated multi-line alternatives keep separate setters through inserted and deleted prefixes", () => {
+  for (const shift of ["", "inserted\n", "delete"]) {
+    const repo = Repository.init(temp()); const path = "text.txt";
+    const document = (left: string, right: string) => `header\n${left}\nanchor-a\nanchor-b\n${right}\ntail\n`;
+    edit(repo, path, document("base-a", "base-b")); repo.createBranch("other", "HEAD", now);
+    repo.switchTo("other", now);
+    const first = edit(repo, path, document("repeated\nblock", "base-b"), { ...author, name: "first-setter" });
+    const second = edit(repo, path, document("repeated\nblock", "repeated\nblock"), { ...author, name: "second-setter" });
+    repo.switchTo("main", now); edit(repo, path, document("ours-a", "ours-b"));
+    repo.merge("other", { message: "two disputes", author, recordConflicts: true }, now);
+    const projection = document("ours-a", "ours-b");
+    const tip = shift === "" ? repo.resolve("HEAD") : edit(repo, path,
+      shift === "delete" ? projection.slice("header\n".length) : shift + projection);
+    const disputed = annotatePath(repo.objects, tip, path, true).filter((row) => row.alternatives !== undefined);
+    assert.equal(disputed.length, 2);
+    assert.deepEqual(disputed.map((row) => row.alternatives!.find((side) => side.side === "theirs")!.origins.map((origin) => [origin.changeId, origin.author])),
+      [[[change(repo, first), "first-setter"]], [[change(repo, second), "second-setter"]]]);
+    assert.deepEqual(repo.verify().corrupt, []);
+  }
+});
+
+test("unattached text alternatives stay unavailable and copied hunk ancestry keeps its own position", () => {
+  const repo = Repository.init(temp()); const path = "text.txt";
+  const first = edit(repo, path, "theirs\nseparator\nbase\ntail\n"); repo.createBranch("other", "HEAD", now);
+  repo.switchTo("other", now); const theirs = edit(repo, path, "theirs\nseparator\ntheirs\ntail\n");
+  repo.switchTo("main", now); edit(repo, path, "theirs\nseparator\nours\ntail\n");
+  const merged = repo.merge("other", { message: "dispute", author, recordConflicts: true }, now).head;
+  renameSync(join(repo.root, path), join(repo.root, "moved.txt")); repo.stage([]); repo.commit({ message: "rename disputed file", author }, now);
+  copyFileSync(join(repo.root, "moved.txt"), join(repo.root, "copy.txt")); repo.stage([]); const copied = repo.commit({ message: "copy disputed file", author }, now);
+  const side = annotatePath(repo.objects, copied, "copy.txt", true)[2].alternatives!.find((side) => side.side === "theirs")!;
+  assert.deepEqual(side.origins.map((origin) => origin.changeId), [change(repo, theirs)]);
+  const files = flattenTree(repo.objects, readCommit(repo.objects, merged).tree); const entry = files.get(path)!;
+  const unit = readConflict(repo.objects, entry.conflicts![0]);
+  const replacement = repo.objects.write("conflict", encodeConflict({ ...unit, theirs: repo.objects.write("blob", Buffer.from("separator")) }));
+  files.set(path, { ...entry, conflicts: [replacement] });
+  const proposal = writeCommit(repo.objects, { tree: buildTree(repo.objects, files), parents: [merged], author, committer: author, message: "unattached text alternative" });
+  const unavailable = annotatePath(repo.objects, proposal, path, true)[2].alternatives!.find((side) => side.side === "theirs")!;
+  assert.equal(unavailable.unavailable, true); assert.deepEqual(unavailable.origins, []);
+  assert.notEqual(change(repo, first), change(repo, theirs));
+});
