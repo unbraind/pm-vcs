@@ -1703,6 +1703,14 @@ export class Repository {
       }
       if (target !== null) return target;
     }
+    if (isObjectId(revision)) {
+      const history = new Set(this.allReachable());
+      const head = this.refs.resolveHead();
+      if (head !== null) for (const id of reachable(this.objects, head)) history.add(id);
+      const matches = [...history].filter((id) => effectiveChangeId(id, readCommit(this.objects, id)) === revision);
+      if (matches.length === 1) return matches[0];
+      if (matches.length > 1) throw new ObjectStoreError("ambiguous_change", `Change ${revision} has several reachable versions; select a commit or ref.`);
+    }
     throw new ObjectStoreError(
       "unknown_revision",
       `"${revision}" is not a known commit, branch, tag or remote-tracking branch.`,

@@ -579,7 +579,7 @@ on every commit.
 | authorized FileId-scoped permanent erasure | Epic Games Lore | **shipped for loose storage** |
 | conflicts stored in changes | `jj` conflict objects | **Phase 7: opt-in field/hunk storage and tip resolution** |
 | ancestor resolution propagation | `jj` descendant rebase | **Phase 7 child 2: planned** |
-| per-line / per-field annotation | `git blame`, with PM provenance | **Phase 7 child 3: planned** |
+| per-line / per-field annotation | `git blame`, with PM provenance | **Phase 7 child 3: shipped** |
 | test-driven stable-change bisect | `git bisect` | **Phase 7 child 5: planned** |
 | signed changes | ed25519 over stable change ids | **Phase 7 child 4: planned** |
 | submodules / large-file offloading | git submodules / LFS | **rejected for now** |
@@ -718,3 +718,36 @@ obliteration includes unit objects and alternatives, and preserves existing
 fail-closed deduplication and retained-copy safeguards. An arrival may retain an
 erased FileId's permitted historical payload and conflict roots, but cannot attach
 a new conflict root to that identity, even when its readable payload is unchanged.
+
+
+### Phase 7 annotation contract
+
+`vcs annotate <path> [--at <revision-or-change-id>]` attributes text lines and
+structured scalar leaves/list entries to their last native setter. Structured
+units use escaped JSON pointers, preserving empty and punctuation-bearing field
+names; list entries follow ordered matching, including duplicate values. Text
+output groups consecutive lines with one change by default; `--full` emits one
+row per line. The host supplies TOON and `--json` output.
+
+Attribution follows immutable stable FileIds through renames, copy ancestry and
+rewritten changes. Merge parents supply their own unchanged units. Replacement
+identities never borrow prior attribution at the same path. Each row includes
+stable change ID, author and explicit linked item IDs (plus a native PM item's
+own ID). Recorded harness/model fields come from the owning snapshot's matching
+PM history events. Missing provenance stays absent; current mutable tracker
+state does not participate. Multiple reachable versions of a stable change ID
+require selecting a commit or ref explicitly.
+
+Unresolved units retain all conflict alternative groups and their available
+origin changes. Absent fields and zero-line hunks still emit a row. Shallow
+boundaries are marked explicitly and missing side ancestry is reported as
+unavailable rather than inventing an author. Fragmented files and links refuse
+with a typed unsupported-annotation error.
+
+The demand-driven walk follows only parents of the selected revision. It reads
+requested file payloads and the tree metadata needed to locate that FileId;
+rename lookup scans metadata only. Query-local caches decode each commit, tree
+and selected file payload once, and the walk stops once all requested units have
+setters. A 2,000-change regression instruments actual object reads: exactly
+2,000 ancestry commits, at most 4,001 objects total, no unrelated file payloads
+and no unrelated ref history. There is no wall-clock performance assertion.

@@ -1,3 +1,4 @@
+import { annotatePath, type AnnotationRow } from "./engine/annotate.ts";
 import { historyOptions, type HistoryOptions } from "./engine/partial.ts";
 import { collectGarbage, type GcReport } from "./engine/gc.ts";
 import { changeRemoteLease } from "./engine/lease-workflows.ts";
@@ -51,7 +52,7 @@ import { REMOTE_PREFIX, type Remote } from "./engine/remotes.ts";
 import { type CloneReport, type FetchReport, type PushReport, cloneFrom, fetchFrom, pushTo } from "./engine/sync.ts";
 import { resolveRemoteLocation } from "./engine/transport.ts";
 import { readTokenFile, startRepositoryServer, type TokenGrants } from "./engine/serve.ts";
-import { type StatusReport, flattenTree } from "./engine/worktree.ts";
+import { normalizeRepoPath, type StatusReport, flattenTree } from "./engine/worktree.ts";
 import { type ScanReport } from "./engine/instances.ts";
 import type {
   CommandHandlerContext,
@@ -494,6 +495,21 @@ export function registerVcsCommands(api: ExtensionApi): void {
         items,
       }, now);
       return { ok: true, commit, items };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs annotate",
+    description: "Attribute text lines or structured scalar/list entries to stable native changes, following file identities across renames and copies.",
+    arguments: [{ name: "path", description: "File in the selected change", required: true }],
+    flags: [
+      { long: "--at", value_name: "change", description: "Revision to annotate (default HEAD)", value_type: "string" },
+      { long: "--full", description: "Print one text row per line instead of consecutive change groups", value_type: "boolean" },
+    ],
+    run(context: CommandHandlerContext): VcsEnvelope & { annotations: readonly AnnotationRow[] } {
+      const repository = openRepository(context);
+      const path = normalizeRepoPath(repository.root, requiredArgument(context, 0, "path", "Pass a tracked path."));
+      return { ok: true, annotations: annotatePath(repository.objects, repository.resolve(optionalString(context.options, "at") ?? "HEAD"), path, context.options?.full === true) };
     },
   });
 
