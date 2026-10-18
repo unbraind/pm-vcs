@@ -200,13 +200,16 @@ class Annotator {
   alternative(id: ObjectId, file: Located, unit: ConflictUnit, side: "base" | "ours" | "theirs"): AnnotationOrigin[] {
     const expected = unit.kind === "field" ? decodeRecord(this.store.readTyped(unit[side], "record")).value
       : this.store.readTyped(unit[side], "blob").toString("utf8");
-    const pending = this.shallow.has(id) ? [] : [...this.commit(id).parents]; const seen = new Set<ObjectId>();
+    const pending = this.shallow.has(id) ? [] : this.commit(id).parents.map((parent) => ({ id: parent, file }));
+    const seen = new Set<string>();
     while (pending.length > 0) {
-      const candidate = pending.shift() as ObjectId;
-      if (seen.has(candidate)) continue; seen.add(candidate);
+      const task = pending.shift() as { id: ObjectId; file: Located };
+      const candidate = task.id;
+      const key = `${candidate}:${task.file.entry.fileId}:${task.file.path}`;
+      if (seen.has(key)) continue; seen.add(key);
       const commit = this.commit(candidate);
-      const located = this.locate(commit.tree, file.path, file.entry.fileId)
-        ?? (file.entry.copiedFrom === undefined ? undefined : this.locate(commit.tree, file.path, file.entry.copiedFrom));
+      const located = this.locate(commit.tree, task.file.path, task.file.entry.fileId)
+        ?? (task.file.entry.copiedFrom === undefined ? undefined : this.locate(commit.tree, task.file.path, task.file.entry.copiedFrom));
       if (located !== undefined) {
         const units = this.content(located.entry);
         const value = unit.kind === "field" ? this.documents.get(located.entry.id)?.[unit.field] : undefined;
@@ -215,8 +218,8 @@ class Annotator {
           const rows = this.blame(candidate, located).filter((row) => unit.kind === "field" ? row.field === unit.field : row.start! > index && row.start! <= index + splitLines(expected as string).length);
           return [...new Map(rows.map(({ unit: _unit, field: _field, value: _value, start: _start, end: _end, text: _text, ...origin }) => [origin.changeId, origin])).values()];
         }
+        if (!this.shallow.has(candidate)) pending.push(...commit.parents.map((parent) => ({ id: parent, file: located })));
       }
-      if (!this.shallow.has(candidate)) pending.push(...commit.parents);
     }
     return [];
   }

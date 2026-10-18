@@ -7,9 +7,10 @@ import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
+import { encodeConflict, fieldSide, readConflict } from "../engine/conflicts.ts";
 import { annotatePath } from "../engine/annotate.ts";
 import { Repository } from "../engine/repo.ts";
-import { effectiveChangeId, encodeManifest, readCommit, writeCommit, type Signature } from "../engine/model.ts";
+import { effectiveChangeId, encodeManifest, encodeRecord, readCommit, writeCommit, type Signature } from "../engine/model.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { type ObjectId } from "../engine/objects.ts";
 import { cloneFrom } from "../engine/sync.ts";
@@ -147,6 +148,20 @@ test("2000-change history reads selected ancestry metadata once and never reads 
   assert.equal([...ancestors].reduce((sum, id) => sum + (reads.get(id) ?? 0), 0), 2000);
   assert.ok([...reads.values()].every((count) => count === 1));
   assert.ok(reads.size <= 4001, `metadata and one file payload only: ${reads.size}`);
+  // A late file's unavailable alternatives must not walk history before its birth.
+  repo.objects.read = original;
+  const fileId = "c".repeat(32);
+  const unit = repo.objects.write("conflict", encodeConflict({ kind: "field", field: "status",
+    base: fieldSide(repo.objects, "base", fileId), ours: fieldSide(repo.objects, "ours", fileId), theirs: fieldSide(repo.objects, "theirs", fileId) }), fileId);
+  const files = flattenTree(repo.objects, readCommit(repo.objects, tip).tree);
+  files.set("late.toon", { id: repo.objects.write("record", encodeRecord({ status: "ours" }), fileId), mode: "100644", fileId, conflicts: [unit] });
+  const birth = writeCommit(repo.objects, { tree: buildTree(repo.objects, files), parents: [tip], author, committer: author, message: "late conflicted file" });
+  reads.clear(); repo.objects.read = (id) => { reads.set(id, (reads.get(id) ?? 0) + 1); return original(id); };
+  const late = annotatePath(repo.objects, birth, "late.toon");
+  assert.ok(late[0].alternatives!.every((side) => side.unavailable === true));
+  assert.ok(reads.size <= 10, `only file birth and immediate parent metadata: ${reads.size}`);
+  for (const id of ancestors) if (id !== tip) assert.equal(reads.has(id), false);
+
 });
 
 test("shallow annotations state their boundary and unresolved alternatives remain explicitly unavailable", async () => {
@@ -276,8 +291,18 @@ test("copied disputes keep source origins while unattached alternative ancestry 
   copyFileSync(join(repo.root, "item.toon"), join(repo.root, "copy.toon")); repo.stage([]); repo.commit({ message: "copy dispute", author }, now);
   const rows = annotatePath(repo.objects, repo.resolve("HEAD"), "copy.toon");
   assert.ok(rows[0].alternatives!.every((side) => side.origins.length === 1));
+  // Distinct payloads make the immediate copy source unambiguous to Phase 6 staging.
+  edit(repo, "copy.toon", JSON.stringify({ status: "ours", independent: 1 }));
+  copyFileSync(join(repo.root, "copy.toon"), join(repo.root, "second-copy.toon")); repo.stage([]); repo.commit({ message: "copy a copy", author }, now);
+  assert.ok(annotatePath(repo.objects, repo.resolve("HEAD"), "second-copy.toon").find((row) => row.field === "status")!.alternatives!.every((side) => side.origins.length === 1));
   const files = flattenTree(repo.objects, readCommit(repo.objects, merged).tree);
   const original = files.get("item.toon")!;
+  const existing = readConflict(repo.objects, original.conflicts![0]);
+  const proposedUnit = repo.objects.write("conflict", encodeConflict({ ...existing, theirs: fieldSide(repo.objects, "proposal only", original.fileId) }), original.fileId);
+  const proposalFiles = new Map(files); proposalFiles.set("item.toon", { ...original, conflicts: [proposedUnit] });
+  const proposal = writeCommit(repo.objects, { tree: buildTree(repo.objects, proposalFiles), parents: [merged], author, committer: author, message: "proposal without side ancestry" });
+  const proposedRow = annotatePath(repo.objects, proposal, "item.toon")[0];
+  assert.equal(proposedRow.alternatives!.find((side) => side.side === "theirs")!.unavailable, true);
   files.set("unattached.toon", { ...original, fileId: "d".repeat(32) });
   const unattached = writeCommit(repo.objects, { tree: buildTree(repo.objects, files), parents: [merged], author, committer: author, message: "alternative data without origin ancestry" });
   assert.ok(annotatePath(repo.objects, unattached, "unattached.toon")[0].alternatives!.every((side) => side.unavailable === true));

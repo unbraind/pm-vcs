@@ -750,4 +750,8 @@ rename lookup scans metadata only. Query-local caches decode each commit, tree
 and selected file payload once, and the walk stops once all requested units have
 setters. A 2,000-change regression instruments actual object reads: exactly
 2,000 ancestry commits, at most 4,001 objects total, no unrelated file payloads
-and no unrelated ref history. There is no wall-clock performance assertion.
+and no unrelated ref history. A conflicted file introduced at the tip stays within
+10 reads and never opens older unrelated history, even when its side origins are
+unavailable. Alternative-origin traversal carries the located FileId and path into
+each parent, so recorded copy chains and renames retain their source provenance.
+There is no wall-clock performance assertion.
