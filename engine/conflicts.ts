@@ -199,25 +199,25 @@ export function resolvePayload(store: ObjectStore, entry: { readonly id: ObjectI
 /** Preserve competing explicit resolutions, including choosing the original readable projection. */
 export function competingResolutions(
   store: ObjectStore,
-  base: { id: ObjectId; conflicts?: readonly ObjectId[] },
+  base: { id: ObjectId; conflicts: readonly ObjectId[] },
   ours: { id: ObjectId; conflicts?: readonly ObjectId[]; fileId?: string },
   theirs: { id: ObjectId; conflicts?: readonly ObjectId[] },
   merged: { id: ObjectId; conflicts?: readonly ObjectId[] },
 ): { id: ObjectId; conflicts?: readonly ObjectId[]; fields: string[] } {
   let result = merged;
   const fields: string[] = [];
-  for (const id of base.conflicts ?? []) {
+  for (const id of base.conflicts) {
     const unit = readConflict(store, id);
     const inherited = (entry: { conflicts?: readonly ObjectId[] }): boolean => (entry.conflicts ?? []).some((candidate) => {
       const other = readConflict(store, candidate);
       return other.kind === unit.kind && other.base === unit.base && other.ours === unit.ours && other.theirs === unit.theirs
-        && (unit.kind !== "field" || (other.kind === "field" && other.field === unit.field));
+        && (unit.kind !== "field" || (other as Extract<ConflictUnit, { kind: "field" }>).field === unit.field);
     });
     if (inherited(ours) || inherited(theirs)) continue;
     const present = (result.conflicts ?? []).map((id) => readConflict(store, id));
     let dispute: ConflictUnit;
     if (unit.kind === "field") {
-      if (present.some((current) => current.kind === "field" && current.field === unit.field)) continue;
+      if (present.some((current) => (current as Extract<ConflictUnit, { kind: "field" }>).field === unit.field)) continue;
       const value = (id: ObjectId): RecordValue | undefined => {
         const record = decodeRecord(store.readTyped(id, "record"));
         return Object.hasOwn(record, unit.field) ? record[unit.field] : undefined;
@@ -231,7 +231,10 @@ export function competingResolutions(
       const mapped = (payload: ObjectId): Extract<ConflictUnit, { kind: "text" }> =>
         readConflict(store, carryConflicts(store, [id], base.id, payload, ours.fileId)![0]) as Extract<ConflictUnit, { kind: "text" }>;
       const position = mapped(result.id);
-      if (present.some((current) => current.kind === "text" && current.start <= position.end && current.end >= position.start)) continue;
+      if (present.some((current) => {
+        const range = current as Extract<ConflictUnit, { kind: "text" }>;
+        return range.start <= position.end && range.end >= position.start;
+      })) continue;
       const side = (payload: ObjectId): { id: ObjectId; ending: boolean } => {
         const text = store.readTyped(payload, "blob").toString("utf8");
         const range = mapped(payload);

@@ -366,7 +366,7 @@ export function mergeTrees(
       const carried = inherited.flatMap((id) => carryConflicts(ctx.store, [id], ourEntry.conflicts?.includes(id) === true ? ourEntry.id : theirEntry.id, resolution.id, identity.fileId)!);
       const units = [...carried, ...(resolution.conflicts ?? [])];
       if (ctx.recordConflicts === true && baseEntry?.conflicts !== undefined) {
-        const explicit = competingResolutions(ctx.store, baseEntry, ourEntry, theirEntry,
+        const explicit = competingResolutions(ctx.store, { ...baseEntry, conflicts: baseEntry.conflicts }, ourEntry, theirEntry,
           { id: resolution.id, ...(units.length > 0 ? { conflicts: units } : {}) });
         if (explicit.id !== resolution.id || JSON.stringify(explicit.conflicts) !== JSON.stringify(units.length > 0 ? units : undefined)) {
           files.set(path, { id: explicit.id, mode: ourEntry.mode, ...identity, conflicts: explicit.conflicts });

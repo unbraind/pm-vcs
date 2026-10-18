@@ -221,3 +221,60 @@ test("ancestor selectors accept stable change identities and refuse ambiguous li
   assert.throws(() => repo.resolve("f".repeat(64)), /not a known/);
   assert.throws(() => Repository.init(temp()).resolve(stable), /not a known/);
 });
+
+test("equal choices with independent edits and absent-field choices preserve precise resolution semantics", () => {
+  for (const absent of [false, true]) {
+    const { repo, path } = conflict(); repo.createBranch("resolver-b", "HEAD", now);
+    repo.resolveConflicts(path, { take: "ours" }, { message: "a choice", author }, now);
+    edit(repo, path, JSON.stringify({ independent: 1, status: "ours" }));
+    repo.switchTo("resolver-b", now);
+    repo.resolveConflicts(path, { value: absent ? null : "ours" }, { message: "b choice", author }, now);
+    if (absent) edit(repo, path, JSON.stringify({ independent: 0 }));
+    repo.switchTo("main", now);
+    repo.merge("resolver-b", { message: "resolution semantics", author, recordConflicts: true }, now);
+    assert.equal(statusAt(repo, "HEAD", path), "ours");
+    assert.equal(repo.status().conflicts?.length ?? 0, absent ? 1 : 0);
+    if (absent) {
+      repo.resolveConflicts(path, { take: "theirs" }, { message: "accept absence", author }, now);
+      assert.equal(statusAt(repo, "HEAD", path), undefined);
+    }
+    assert.deepEqual(repo.verify().corrupt, []);
+  }
+});
+
+test("equal text choices with independent prefix edits do not manufacture a conflict", () => {
+  const { repo, path } = conflict(true); repo.createBranch("resolver-b", "HEAD", now);
+  repo.resolveConflicts(path, { take: "ours" }, { message: "a choice", author }, now);
+  edit(repo, path, "prefix\nheader\nours\ntail\n");
+  repo.switchTo("resolver-b", now); repo.resolveConflicts(path, { take: "ours" }, { message: "b choice", author }, now);
+  repo.switchTo("main", now); repo.merge("resolver-b", { message: "agreement", author, recordConflicts: true }, now);
+  assert.equal(repo.status().conflicts, undefined); assert.equal(readFileSync(join(repo.root, path), "utf8"), "prefix\nheader\nours\ntail\n");
+});
+
+test("different text EOF choices and disjoint edits retain one conflict with the correct newline states", () => {
+  const repo = Repository.init(temp()); edit(repo, "text.txt", "base\n"); repo.createBranch("other", "HEAD", now);
+  repo.switchTo("other", now); edit(repo, "text.txt", "theirs\n"); repo.switchTo("main", now); edit(repo, "text.txt", "ours\n");
+  repo.merge("other", { message: "conflict", author, recordConflicts: true }, now); repo.createBranch("resolver-b", "HEAD", now);
+  repo.resolveConflicts("text.txt", { take: "ours" }, { message: "a resolves", author }, now);
+  repo.switchTo("resolver-b", now); repo.resolveConflicts("text.txt", { value: "ours" }, { message: "b resolves", author }, now);
+  repo.switchTo("main", now); repo.merge("resolver-b", { message: "newline disagreement", author, recordConflicts: true }, now);
+  assert.equal(repo.status().conflicts?.length, 1); assert.equal(readFileSync(join(repo.root, "text.txt"), "utf8"), "ours\n");
+  repo.resolveConflicts("text.txt", { take: "theirs" }, { message: "choose unterminated", author }, now);
+  assert.equal(readFileSync(join(repo.root, "text.txt"), "utf8"), "ours");
+});
+
+test("different explicit choices already recorded by content merge retain exactly one dispute per unit", () => {
+  for (const text of [false, true]) for (const partial of [false, true]) {
+    const repo = Repository.init(temp(), "main", { recordPaths: ["*.toon"], recordPolicy: {} });
+    const path = text ? "text.txt" : "item.toon";
+    const value = (side: string) => text ? `header\n${side}\nmiddle\n${side}\ntail\n` : JSON.stringify({ first: side, second: side });
+    edit(repo, path, value("base")); repo.createBranch("other", "HEAD", now);
+    repo.switchTo("other", now); edit(repo, path, value("theirs")); repo.switchTo("main", now); edit(repo, path, value("ours"));
+    repo.merge("other", { message: "two units", author, recordConflicts: true }, now); repo.createBranch("resolver-b", "HEAD", now);
+    repo.resolveConflicts(path, { value: "left" }, { message: "a choice", author }, now);
+    repo.switchTo("resolver-b", now); repo.resolveConflicts(path, { value: "right" }, { message: "b choice", author }, now);
+    if (partial) edit(repo, path, text ? "header\nleft\nmiddle\nright\ntail\n" : JSON.stringify({ first: "left", second: "right" }));
+    repo.switchTo("main", now); repo.merge("resolver-b", { message: "different choices", author, recordConflicts: true }, now);
+    assert.equal(repo.status().conflicts?.length, partial ? 1 : 2); assert.deepEqual(repo.verify().corrupt, []);
+  }
+});
