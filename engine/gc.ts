@@ -1,3 +1,4 @@
+import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Conservative collection under the same interprocess transaction as writers. */
 import { lstatSync, readdirSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -96,7 +97,7 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
       const head = instance.refs.resolveHead();
       if (head !== null) roots.add(head);
       for (const id of logRoots(instance.controlDirectory)) roots.add(id);
-      for (const entry of instance.readIndex()) roots.add(entry.id);
+      for (const entry of instance.readIndex()) { roots.add(entry.id); for (const id of entry.conflicts ?? []) roots.add(id); }
       const merge = instance.readMergeState();
       if (merge !== null) for (const id of addresses([merge.ours, merge.theirs, ...merge.bases])) roots.add(id);
     }
@@ -134,7 +135,8 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
       const object = store.read(id);
       retained.add(id);
       if (object.type === "commit") { const commit = decodeCommit(object.payload); pending.push(commit.tree, ...commit.parents.filter(/** A shallow boundary permits absent parents, never deletion of an ancestor already held. */ (parent) => partial?.shallow.includes(id) !== true || store.has(parent))); }
-      else if (object.type === "tree") pending.push(...decodeTree(object.payload).map(/** Trees own every sparse and visible entry. */ (entry) => entry.id));
+      else if (object.type === "tree") pending.push(...decodeTree(object.payload).flatMap(/** Trees own every sparse and visible payload and unresolved unit. */ (entry) => [entry.id, ...(entry.conflicts ?? [])]));
+      else if (object.type === "conflict") pending.push(...conflictReferences(decodeConflict(object.payload)));
       else if (object.type === "manifest") { const manifest = decodeManifest(object.payload); pending.push(...(manifest.pages ?? manifest.fragments).map(/** Traverse bounded manifest pages and their leaves. */ (entry) => entry.id)); }
       else if (object.type === "series") { const series = decodeSeries(object.payload); pending.push(series.base, ...series.patches.map(/** Review series keep all patch commits. */ (patch) => patch.commit)); }
     }

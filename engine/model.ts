@@ -62,6 +62,15 @@ export interface TreeEntry {
   readonly fileId?: FileId;
   /** Source identity when this file was created as a copy. */
   readonly copiedFrom?: FileId;
+  /** Content-addressed unresolved units, independent of the readable payload. */
+  readonly conflicts?: readonly ObjectId[];
+}
+
+/** Validate a nonempty, unique list of conflict object addresses. */
+export function validConflictIds(value: unknown): value is ObjectId[] {
+  return Array.isArray(value) && value.length > 0
+    && value.every((id) => typeof id === "string" && isObjectId(id))
+    && new Set(value).size === value.length;
 }
 
 /** Author or committer identity paired with an absolute instant and its original timezone offset. */
@@ -188,7 +197,7 @@ export function compareByteOrder(left: string, right: string): number {
  */
 export function encodeTree(entries: readonly TreeEntry[]): Buffer {
   const seen = new Set<string>();
-  const versioned = entries.some((entry) => entry.fileId !== undefined || entry.copiedFrom !== undefined);
+  const versioned = entries.some((entry) => entry.fileId !== undefined || entry.copiedFrom !== undefined || entry.conflicts !== undefined);
   for (const entry of entries) {
     if (entry.name.length === 0) {
       throw new ObjectStoreError("invalid_tree_entry", "A tree entry name cannot be empty.");
@@ -200,6 +209,9 @@ export function encodeTree(entries: readonly TreeEntry[]): Buffer {
       throw new ObjectStoreError("invalid_tree_entry", `Tree entry name "${entry.name}" appears more than once.`);
     }
     seen.add(entry.name);
+    if (entry.conflicts !== undefined && (!validConflictIds(entry.conflicts) || entry.mode === "40000")) {
+      throw new ObjectStoreError("invalid_tree_entry", "Invalid conflict addresses on a file entry.");
+    }
     if (entry.mode === "40000") {
       if (entry.fileId !== undefined || entry.copiedFrom !== undefined) {
         throw new ObjectStoreError("invalid_tree_entry", `Directory "${entry.name}" cannot carry a file identity.`);
@@ -215,12 +227,14 @@ export function encodeTree(entries: readonly TreeEntry[]): Buffer {
     Buffer.from(`${entry.mode} ${entry.name}\0`, "utf8"),
     Buffer.from(entry.id, "utf8"),
   ])));
-  return Buffer.from(`pm-vcs-tree 2\n${sorted.map((entry) => JSON.stringify([
+  const conflicted = entries.some((entry) => entry.conflicts !== undefined);
+  return Buffer.from(`pm-vcs-tree ${conflicted ? 3 : 2}\n${sorted.map((entry) => JSON.stringify([
     entry.mode,
     entry.id,
     entry.fileId ?? null,
     entry.copiedFrom ?? null,
     entry.name,
+    ...(conflicted ? [entry.conflicts === undefined ? null : [...entry.conflicts].sort(compareByteOrder)] : []),
   ])).join("\n")}`, "utf8");
 }
 
@@ -237,7 +251,9 @@ export function decodeTree(payload: Buffer): TreeEntry[] {
   const versioned = payload.toString("utf8");
   if (versioned.startsWith("pm-vcs-tree ")) {
     const lines = versioned.split("\n");
-    if (lines.shift() !== "pm-vcs-tree 2") {
+    const version = lines.shift();
+    const conflicted = version === "pm-vcs-tree 3";
+    if (version !== "pm-vcs-tree 2" && !conflicted) {
       throw new ObjectStoreError("unsupported_tree_version", "Tree uses an unsupported version.");
     }
     const entries: TreeEntry[] = [];
@@ -247,10 +263,13 @@ export function decodeTree(payload: Buffer): TreeEntry[] {
       try { value = JSON.parse(line); } catch {
         throw new ObjectStoreError("malformed_object", "Tree entry is not valid JSON.");
       }
-      if (!Array.isArray(value) || value.length !== 5) {
-        throw new ObjectStoreError("malformed_object", "Tree entry does not contain five fields.");
+      if (!Array.isArray(value) || value.length !== (conflicted ? 6 : 5)) {
+        throw new ObjectStoreError("malformed_object", "Tree entry has the wrong field count.");
       }
-      const [mode, id, fileId, copiedFrom, name] = value;
+      const [mode, id, fileId, copiedFrom, name, conflicts] = value;
+      if (conflicted && conflicts !== null && (!validConflictIds(conflicts) || mode === "40000")) {
+        throw new ObjectStoreError("malformed_object", "Tree contains invalid conflict addresses.");
+      }
       if (!(FILE_MODES as readonly unknown[]).includes(mode) || typeof id !== "string" || !isObjectId(id)
         || typeof name !== "string" || name.length === 0 || name.includes("/") || name.includes("\0")
         || name === "." || name === ".." || entries.some((entry) => entry.name === name)) {
@@ -268,7 +287,8 @@ export function decodeTree(payload: Buffer): TreeEntry[] {
           throw new ObjectStoreError("malformed_object", `File "${name}" has invalid identity metadata.`);
         }
         entries.push({ name, mode, id, ...(fileId === null ? {} : { fileId }),
-          ...(copiedFrom === null ? {} : { copiedFrom }) });
+          ...(copiedFrom === null ? {} : { copiedFrom }),
+          ...(conflicted && conflicts !== null ? { conflicts } : {}) });
       }
     }
     return entries;

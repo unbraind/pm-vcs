@@ -89,7 +89,8 @@ export function traceFile(
     const beforeEntry = before[0]?.[1];
     const samePaths = currentPaths.length === beforePaths.length
       && currentPaths.every((path, index) => path === beforePaths[index]);
-    const unchanged = samePaths && currentEntry?.id === beforeEntry?.id && currentEntry?.mode === beforeEntry?.mode;
+    const unchanged = samePaths && currentEntry?.id === beforeEntry?.id && currentEntry?.mode === beforeEntry?.mode
+      && JSON.stringify(currentEntry?.conflicts) === JSON.stringify(beforeEntry?.conflicts);
     if (unchanged || (currentEntry === undefined && beforeEntry === undefined)) continue;
     const kind = currentEntry === undefined ? "deleted"
       : beforeEntry === undefined ? "added"

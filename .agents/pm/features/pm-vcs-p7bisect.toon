@@ -1,0 +1,16 @@
+id: pm-vcs-p7bisect
+title: Bisect stable changes using a linked pm test command
+description: "Add pm vcs bisect driven by pm test <id> --run, persisting change-id results across history rewrites and restoring the original working state."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-18T03:01:48.622Z"
+updated_at: "2026-10-18T03:01:58.884Z"
+author: codex-agent
+estimated_minutes: 480
+acceptance_criteria: Good/bad boundaries identify the first failing stable change using the linked real pm test; rewritten commit ids reuse change results; interrupted/failed tests and conflicted candidates have explicit outcomes; TOON and JSON report the result and original state is restored.
+parent: pm-vcs-phase7
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:58.591Z",codex-agent,"cli:update:dep",detected
+body: ""

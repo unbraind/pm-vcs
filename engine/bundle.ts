@@ -11,6 +11,7 @@
 // under a name that does not describe it — after which every identity check in
 // the system is reasoning about a lie.
 
+import { decodeConflict, conflictReferences } from "./conflicts.ts";
 import { historyOptions, omissionIds, type HistoryOptions } from "./partial.ts";
 import { readFileSync } from "node:fs";
 
@@ -84,10 +85,12 @@ export function collectCommitObjects(store: ObjectStore, commits: readonly Objec
   const walkPayload = (id: ObjectId): void => {
     if (objects.has(id)) return;
     objects.add(id);
-    const manifest = store.readIfType(id, "manifest");
-    if (manifest !== undefined) {
-      const node = decodeManifest(manifest.payload);
-      for (const entry of node.pages ?? node.fragments) walkPayload(entry.id);
+    const node = store.readIfType(id, "manifest", ["conflict"]);
+    if (node?.type === "conflict") {
+      for (const side of conflictReferences(decodeConflict(node.payload))) walkPayload(side);
+    } else if (node !== undefined) {
+      const manifest = decodeManifest(node.payload);
+      for (const entry of manifest.pages ?? manifest.fragments) walkPayload(entry.id);
     }
   };
   /** Add a tree and every descendant tree or leaf object without revisiting shared subtrees. */
@@ -99,6 +102,7 @@ export function collectCommitObjects(store: ObjectStore, commits: readonly Objec
       else {
         if (store.denial(entry.id) !== undefined) continue;
         walkPayload(entry.id);
+        for (const conflict of entry.conflicts ?? []) walkPayload(conflict);
       }
     }
   };

@@ -1,3 +1,4 @@
+import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Authorized FileId-scoped erasure over the complete supported loose storage backend. */
 import { type BigIntStats, existsSync, lstatSync, readdirSync, rmSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -22,13 +23,13 @@ export interface ErasureReceipt {
   readonly removed: readonly ObjectId[];
 }
 
-/** Whole-store planning metadata excludes leaf buffers and retains only decoded ownership/fragment structure. */
+/** Whole-store planning metadata excludes leaf buffers and retains only ownership and payload references. */
 type InventoryObject =
-  | { readonly type: "manifest"; readonly digest: string; readonly fragments: ReturnType<typeof decodeManifest>["fragments"] }
+  | { readonly type: "manifest" | "conflict"; readonly digest: string; readonly references: readonly ObjectId[] }
   | { readonly type: "tree"; readonly digest: string; readonly entries: ReturnType<typeof decodeTree> }
-  | { readonly type: Exclude<ObjectType, "manifest" | "tree">; readonly digest: string };
+  | { readonly type: Exclude<ObjectType, "manifest" | "conflict" | "tree">; readonly digest: string };
 
-/** Close one payload over all manifest fragments, failing on incomplete inventory. */
+/** Close one payload over all fragments and conflict alternatives, failing on incomplete inventory. */
 function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, InventoryObject>, store: ObjectStore): Set<ObjectId> {
   const selected = new Set<ObjectId>();
   const pending = [id];
@@ -41,7 +42,7 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, Inventory
       if (store.denial(current) !== undefined) continue;
       throw new ObjectStoreError("incomplete_erasure_inventory", "History or index names payloads absent from the complete inventory.");
     }
-    if (object.type === "manifest") pending.push(...object.fragments.map(/** Include every fragment even outside current refs. */ (fragment) => fragment.id));
+    if (object.type === "manifest" || object.type === "conflict") pending.push(...object.references);
     else if (object.type !== "blob" && object.type !== "record" && object.type !== "link") {
       throw new ObjectStoreError("incomplete_erasure_inventory", "A file entry names a non-payload object.");
     }
@@ -77,6 +78,14 @@ function containsSelectedBytes(bytes: Buffer, payloads: readonly Buffer[]): bool
   return inspectRepresentations(bytes, /** A retained full payload or fragment prevents a false physical-erasure receipt. */ (candidate) => payloads.some(/** Preserve ambiguous or independently owned copies rather than deleting them. */ (payload) => candidate.includes(payload)));
 }
 
+/** Inspect a schema-validated live writer PID as raw and canonical base64 bytes, without mistaking decimal 80-prefixed PIDs for zlib streams. */
+function containsPidBytes(bytes: Buffer, payloads: readonly Buffer[]): boolean {
+  if (payloads.some((payload) => bytes.includes(payload))) return true;
+  const text = bytes.toString("utf8");
+  const decoded = Buffer.from(text, "base64");
+  return decoded.toString("base64") === text && containsSelectedBytes(decoded, payloads);
+}
+
 /** Validate proposed and actual audit representations without retaining a selected payload in generated metadata. */
 function assertAuditSafe(candidates: readonly Buffer[], payloads: readonly Buffer[]): void {
   for (const candidate of candidates) if (containsSelectedBytes(candidate, payloads)) {
@@ -105,14 +114,15 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       if (object.type === "manifest") {
         // Decode once: a legacy manifest has no pages, and decoding parses its complete fragment list.
         const manifest = decodeManifest(object.payload);
-        inventory.set(id, { type: object.type, digest, fragments: manifest.pages ?? manifest.fragments });
+        inventory.set(id, { type: object.type, digest, references: (manifest.pages ?? manifest.fragments).map((fragment) => fragment.id) });
       }
+      else if (object.type === "conflict") inventory.set(id, { type: object.type, digest, references: conflictReferences(decodeConflict(object.payload)) });
       else if (object.type === "tree") inventory.set(id, { type: object.type, digest, entries: decodeTree(object.payload) });
       else inventory.set(id, { type: object.type, digest });
     }
     const history = inspectClosure(store, [...inventory].filter(/** Every unreachable commit still requires a real structural closure. */ ([_id, object]) => object.type === "commit").map(/** Inspect all commit roots, not merely advertised refs. */ ([id]) => id), [], local.map(/** Pending payload absence is legitimate during an authorized cleanup retry. */ (denial) => ({ ...denial, pending: false })));
     if (history.missing.length + history.corrupt.length > 0) throw new ObjectStoreError("incomplete_erasure_inventory", "Complete historical structure is required before erasure.");
-    const entries: { id: string; fileId?: string }[] = [];
+    const entries: { id: string; fileId?: string; conflicts?: readonly string[] }[] = [];
     for (const object of inventory.values()) {
       if (object.type === "tree") entries.push(...object.entries.filter(/** Directory identities belong to structure, never file payload. */ (entry) => entry.mode !== "40000"));
     }
@@ -122,6 +132,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       indexes.set(instance, index);
       entries.push(...index);
     }
+    entries.push(...entries.flatMap((entry) => (entry.conflicts ?? []).map((id) => ({ id, fileId: entry.fileId }))));
     const roots = new Set(existing?.tombstone.roots ?? []);
     for (const entry of entries) if (entry.fileId === fileId) roots.add(entry.id);
     if (roots.size === 0) throw new ObjectStoreError("unknown_file", "No payload is attributable to this FileId.");
@@ -133,12 +144,12 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         if (selected.has(id)) throw new ObjectStoreError("erasure_dedup_conflict", "Another FileId or legacy file owns bytes selected for erasure.");
       }
     }
-    // Unattributed manifests can retain or reconstruct fragments. They cannot
-    // be erased under someone else's FileId or silently left recoverable.
+    // Unattributed manifests and conflicts can retain selected payloads. They
+    // cannot be erased under someone else's FileId or left recoverable.
     for (const [id, object] of inventory) {
-      if (object.type === "manifest" && !selected.has(id)
-        && object.fragments.some(/** Refuse unknown fragment owners before mutation. */ (fragment) => selected.has(fragment.id))) {
-        throw new ObjectStoreError("erasure_dedup_conflict", "An unrelated manifest shares fragments selected for erasure.");
+      if ((object.type === "manifest" || object.type === "conflict") && !selected.has(id)
+        && object.references.some(/** Refuse unknown payload owners before mutation. */ (reference) => selected.has(reference))) {
+        throw new ObjectStoreError("erasure_dedup_conflict", "An unrelated manifest or conflict references payloads selected for erasure.");
       }
     }
     const payloads: Buffer[] = [];
@@ -171,8 +182,13 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         }
       }
       for (const entry of readdirSync(instance.controlDirectory, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name !== "layers.json" && containsSelectedBytes(readFileSync(join(instance.controlDirectory, entry.name)), payloads)) {
-          throw new ObjectStoreError("unsupported_erasure_storage", "Control metadata retains selected payload bytes; clean the ambiguous copy before retrying.");
+        if (entry.isFile() && entry.name !== "layers.json") {
+          const bytes = readFileSync(join(instance.controlDirectory, entry.name));
+          // A verified live writer's decimal PID is typed control metadata, not an encoded payload.
+          // Other lock contents retain full representation inspection; raw selected bytes remain forbidden.
+          const ownedPid = entry.name === "objects.lock" && bytes.equals(Buffer.from(String(process.pid)));
+          const retained = ownedPid ? containsPidBytes(bytes, payloads) : containsSelectedBytes(bytes, payloads);
+          if (retained) throw new ObjectStoreError("unsupported_erasure_storage", "Control metadata retains selected payload bytes; clean the ambiguous copy before retrying.");
         }
       }
     }

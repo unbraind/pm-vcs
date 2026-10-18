@@ -1,3 +1,4 @@
+import { carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
 import { manifestFragments } from "./manifest-pages.ts";
 // History rewriting, and the three-way tree merge rewriting shares with `merge`.
 //
@@ -59,10 +60,14 @@ export interface MergeConflict {
   readonly reason: "content" | "record" | "mode" | "identity";
   /** For a record conflict, the fields that disagreed. */
   readonly fields?: readonly string[];
+  /** True only when this particular disagreement is fully represented by unit objects. */
+  readonly recorded?: true;
 }
 
 /** Store access plus the per-repository record policy every merge needs. */
 export interface RewriteContext {
+  /** Opt in to durable units rather than marker blobs. */
+  readonly recordConflicts?: boolean;
   /** Object store holding and receiving every object the rewrite builds. */
   readonly store: ObjectStore;
   /** Which paths hold records and how their fields merge. */
@@ -153,7 +158,7 @@ export function mergePath(
   theirId: ObjectId,
   labels?: ConflictLabels,
   fileId?: FileId,
-): { id: ObjectId; conflict?: MergeConflict } {
+): { id: ObjectId; conflicts?: readonly ObjectId[]; conflict?: MergeConflict } {
   return ctx.store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
     // Only a durable denial means intentional absence. Verify every surviving
     // frame and hash before returning a conflict; missing or damaged bytes refuse.
@@ -190,9 +195,13 @@ export function mergePath(
       );
       return {
         id: ctx.store.write("record", encodeRecord(result.document), fileId),
+        ...(ctx.recordConflicts === true && !result.clean ? { conflicts: result.conflicts.map((unit) => ctx.store.write("conflict", encodeConflict({
+          kind: "field", field: unit.field,
+          base: fieldSide(ctx.store, unit.base, fileId), ours: fieldSide(ctx.store, unit.ours, fileId), theirs: fieldSide(ctx.store, unit.theirs, fileId),
+        }), fileId)) } : {}),
         conflict: result.clean
           ? undefined
-          : { path, reason: "record", fields: result.conflicts.map((conflict) => conflict.field) },
+          : { path, reason: "record", fields: result.conflicts.map((conflict) => conflict.field), ...(ctx.recordConflicts === true ? { recorded: true as const } : {}) },
       };
     }
     const baseText = baseObject === null ? "" : baseObject.payload.toString("utf8");
@@ -212,15 +221,23 @@ export function mergePath(
       const text = baseText + (appended.length === 0 ? "" : `${separator}${appended.join("\n")}\n`);
       return { id: ctx.store.write("blob", Buffer.from(text, "utf8"), fileId) };
     }
+    const units: ObjectId[] = [];
     const result: ContentMergeResult = mergeContent(
       baseText,
       ourText,
       theirText,
       labels,
+      ctx.recordConflicts === true ? (unit, start, end, final) => {
+        const side = (lines: readonly string[]): ObjectId => ctx.store.write("blob", Buffer.from(lines.join("\n"), "utf8"), fileId);
+        units.push(ctx.store.write("conflict", encodeConflict({ kind: "text", start, end,
+          ...(final ? { endings: { base: baseText.endsWith("\n"), ours: ourText.endsWith("\n"), theirs: theirText.endsWith("\n") } } : {}),
+          base: side(unit.base), ours: side(unit.ours), theirs: side(unit.theirs) }), fileId));
+      } : undefined,
     );
     return {
+      ...(units.length > 0 ? { conflicts: units } : {}),
       id: ctx.store.write("blob", Buffer.from(result.text, "utf8"), fileId),
-      conflict: result.clean ? undefined : { path, reason: "content" },
+      conflict: result.clean ? undefined : { path, reason: "content", ...(ctx.recordConflicts === true ? { recorded: true as const } : {}) },
     };
   });
 }
@@ -258,16 +275,16 @@ export function mergeTrees(
     const base = flattenTree(ctx.store, baseTree);
     const ours = flattenTree(ctx.store, ourTree);
     const theirs = flattenTree(ctx.store, theirTree);
-    const files = new Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId }>();
+    const files = new Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId; conflicts?: readonly ObjectId[] }>();
     const merged: string[] = [];
     const conflicts: MergeConflict[] = [];
 
     /** Preserve compatible file identity and surface deterministic conflicts when both sides disagree. */
     const reconcileIdentity = (
       path: string,
-      ourEntry: { fileId?: FileId; copiedFrom?: FileId },
-      theirEntry: { fileId?: FileId; copiedFrom?: FileId },
-    ): { fileId?: FileId; copiedFrom?: FileId } => {
+      ourEntry: { fileId?: FileId; copiedFrom?: FileId; conflicts?: readonly ObjectId[] },
+      theirEntry: { fileId?: FileId; copiedFrom?: FileId; conflicts?: readonly ObjectId[] },
+    ): { fileId?: FileId; copiedFrom?: FileId; conflicts?: readonly ObjectId[] } => {
       const fileIdsDiffer = ourEntry.fileId !== undefined && theirEntry.fileId !== undefined
         && ourEntry.fileId !== theirEntry.fileId;
       const provenanceDiffers = ourEntry.copiedFrom !== undefined && theirEntry.copiedFrom !== undefined
@@ -298,11 +315,13 @@ export function mergeTrees(
       const ourChanged = (ourEntry?.id ?? null) !== (baseEntry?.id ?? null)
         || (ourEntry?.mode ?? null) !== (baseEntry?.mode ?? null)
         || ourEntry?.fileId !== baseEntry?.fileId
-        || ourEntry?.copiedFrom !== baseEntry?.copiedFrom;
+        || ourEntry?.copiedFrom !== baseEntry?.copiedFrom
+        || JSON.stringify(ourEntry?.conflicts) !== JSON.stringify(baseEntry?.conflicts);
       const theirChanged = (theirEntry?.id ?? null) !== (baseEntry?.id ?? null)
         || (theirEntry?.mode ?? null) !== (baseEntry?.mode ?? null)
         || theirEntry?.fileId !== baseEntry?.fileId
-        || theirEntry?.copiedFrom !== baseEntry?.copiedFrom;
+        || theirEntry?.copiedFrom !== baseEntry?.copiedFrom
+        || JSON.stringify(theirEntry?.conflicts) !== JSON.stringify(baseEntry?.conflicts);
 
       if (!theirChanged) {
         if (ourEntry) files.set(path, ourEntry);
@@ -312,19 +331,23 @@ export function mergeTrees(
         if (theirEntry) files.set(path, theirEntry);
         continue;
       }
-      if (ourEntry && theirEntry && ourEntry.id === theirEntry.id && ourEntry.mode === theirEntry.mode) {
-        files.set(path, {
-          id: ourEntry.id,
-          mode: ourEntry.mode,
-          ...reconcileIdentity(path, ourEntry, theirEntry),
-        });
-        continue;
-      }
       // Both sides changed it. A delete on one side against an edit on the other
       // has no content to merge, so our side is kept and the clash is reported.
       if (!ourEntry || !theirEntry) {
         conflicts.push({ path, reason: "content" });
         if (ourEntry) files.set(path, ourEntry);
+        continue;
+      }
+      const inherited = [...new Set([...(ourEntry.conflicts ?? []), ...(theirEntry.conflicts ?? [])])]
+        .filter((id) => !(baseEntry?.conflicts?.includes(id) === true
+          && (ourEntry.conflicts?.includes(id) !== true || theirEntry.conflicts?.includes(id) !== true)));
+      if (ourEntry.id === theirEntry.id && ourEntry.mode === theirEntry.mode) {
+        files.set(path, {
+          id: ourEntry.id,
+          mode: ourEntry.mode,
+          ...reconcileIdentity(path, ourEntry, theirEntry),
+          ...(inherited.length > 0 ? { conflicts: inherited } : {}),
+        });
         continue;
       }
       if (ourEntry.mode !== theirEntry.mode) {
@@ -340,8 +363,11 @@ export function mergeTrees(
         identity.fileId = baseEntry?.fileId ?? migratedFileId({ path, id: baseEntry?.id ?? ourEntry.id });
       }
       const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels, identity.fileId);
-      files.set(path, resolution.id === ourEntry.id && resolution.conflict?.reason === "content" ? ourEntry : {
+      const carried = inherited.flatMap((id) => carryConflicts(ctx.store, [id], ourEntry.conflicts?.includes(id) === true ? ourEntry.id : theirEntry.id, resolution.id, identity.fileId)!);
+      const units = [...carried, ...(resolution.conflicts ?? [])];
+      files.set(path, resolution.id === ourEntry.id && resolution.conflict?.reason === "content" && units.length === 0 ? ourEntry : {
         id: resolution.id,
+        ...(units.length > 0 ? { conflicts: [...new Set(units)] } : {}),
         mode: ourEntry.mode,
         ...identity,
       });

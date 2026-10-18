@@ -1,0 +1,25 @@
+id: pm-vcs-switch-cache
+title: Preflight status refresh mutates index before refused operations
+description: "Isolated release:check exposed cache writes before a private-layer switch refusal. Deterministic cold indexes with real files aged beyond RACY_WINDOW_NS also expose attached and detached rewrite refusals. Conflict resolution uses the same status path. Internal preflight status reads must not publish optional index cache observations; ordinary public status retains cache warming. Existing real repository refusal regressions are strengthened, including overlapping conflict resolution."
+type: Issue
+status: in_progress
+priority: 1
+tags: []
+created_at: "2026-10-18T10:20:47.215Z"
+updated_at: "2026-10-18T10:56:01.823Z"
+author: codex-agent
+acceptance_criteria: "Real switch refusal preserves raw index, HEAD, refs, operations and private working bytes with optional stat observations absent. Regression fails with only preflight ordering reverted. Both unchanged release gates pass."
+parent: pm-vcs-p7objects
+comments[2]{created_at,author,text}:
+  "2026-10-18T10:27:17.271Z",codex-agent,"Fixed the shared cause: status accepts an optional refreshCache flag (default true); all eight internal mutation-preflight callers disable cache publication. Normal public status still warms verified observations. Real cold-index regressions age filesystem entries beyond RACY_WINDOW_NS, then prove switch/reset/undo/attached-rewrite/detached-rewrite and overlapping text refusal retain raw index, refs, HEAD, operation log and private bytes. Tracker-linked command node --test --test-name-pattern=\"renewed private layer refuses|collapsed text\" test/composition.test.ts test/first-class-conflicts.test.ts passes 7/7; public cache-warming regression passes 1/1. Behavioral revert: remove only refreshCache from the cache-publication condition, leaving all callers/tests fixed. Layer suite yields 3 pass/3 fail (switch and both rewrites mutate index); collapsed-text refusal yields 0/1 pass with the same raw-index mutation. Restored protection; typecheck, lint, zero duplication and docstrings pass. Initial single-operation preflight ordering was discarded because it left rewrite and conflict-resolution refusals exposed."
+  "2026-10-18T10:55:58.739Z",codex-agent,"Acceptance on d9bdd93faf676c92b64ae6fd8d35a4544a212555: npm run release:check and bun run release:check both exit 0 under fresh HOME/global/system Git identity isolation, using full history and release tags. Each passes 1612/1612 tests, with zero failure/skip/cancel/TODO. All 66 source files retain 100% statements, branches, functions and lines at unchanged thresholds. Read-only preflight and ordinary public cache-warming regressions pass; the guard-only behavioral revert remains recorded here. Claim will be released, status remains in_progress for orchestrator verification. Final receipt-head health and exact-head CI links will be recorded in PR #122 and its checks page: https://github.com/unbraind/pm-vcs/pull/122/checks ."
+files[3]{path,scope}:
+  engine/repo.ts,project
+  test/composition.test.ts,project
+  test/first-class-conflicts.test.ts,project
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  "node --test --test-name-pattern=\"renewed private layer refuses\" test/composition.test.ts",project,600,codex-agent,"2026-10-18T10:21:50.002Z",local_mutation,feat/phase7-first-class-conflicts
+  "node --test --test-name-pattern=\"renewed private layer refuses|collapsed text\" test/composition.test.ts test/first-class-conflicts.test.ts",project,600,codex-agent,"2026-10-18T10:26:31.772Z",local_mutation,feat/phase7-first-class-conflicts
+docs[1]{path,scope}:
+  ARCHITECTURE.md,project
+body: ""

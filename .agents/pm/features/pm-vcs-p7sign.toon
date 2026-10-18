@@ -1,0 +1,16 @@
+id: pm-vcs-p7sign
+title: Sign changes with ed25519 and enforce trusted keys on publication
+description: "Sign change ids using ed25519, configure a trusted-key file and validate signatures at the publication boundary. Preserve signature validity across rewrites that retain change identity."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-18T03:01:46.220Z"
+updated_at: "2026-10-18T03:01:56.033Z"
+author: codex-agent
+estimated_minutes: 480
+acceptance_criteria: "verify --signatures checks trusted ed25519 signatures; configured serve and push refuse unsigned or untrusted changes before ref publication; malformed, revoked and tampered signatures fail closed; signing keys never enter history."
+parent: pm-vcs-phase7
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:55.791Z",codex-agent,"cli:update:dep",detected
+body: ""

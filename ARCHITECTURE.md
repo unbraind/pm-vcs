@@ -104,8 +104,8 @@ what makes the engine usable as a library and testable without the host.
 
 ## 3. The object store
 
-Eight object kinds: `blob`, `tree`, `commit`, `record`, `series`, `manifest`, `link`
-and `tombstone`. Links commit descriptors without importing target payloads. Tombstones
+Nine object kinds: `blob`, `tree`, `commit`, `record`, `series`, `manifest`, `link`,
+`tombstone` and `conflict`. Conflict units retain three addressed alternatives beside a readable tree payload. Links commit descriptors without importing target payloads. Tombstones
 retain identity and audit metadata after explicit permanent payload erasure.
 
 An object's id is `sha-256` over `<<type>> <<byte-length>>\0<<payload>>`. The framing is
@@ -548,7 +548,7 @@ on every commit.
 
 | capability | comparable to | state |
 | --- | --- | --- |
-| content-addressed loose store, eight object kinds | git objects | **shipped** |
+| content-addressed loose store, nine object kinds | git objects | **shipped** |
 | canonical tree/commit/record encoding | git objects | **shipped** |
 | refs, HEAD, compare-and-swap updates | git refs + `--force-with-lease`, always on | **shipped** |
 | index, three-way status, safe checkout | git index / `switch` | **shipped** |
@@ -569,16 +569,19 @@ on every commit.
 | remotes, clone, fetch, push | git transport | **shipped** |
 | self-hosted source, CI-gated | — | **shipped** |
 | patch series as an object | kernel lore / `git format-patch` | **shipped** |
-| review + issues as native records | Forgejo, but in-repository | **Phase 5** |
+| review + issues as native records | Forgejo, but in-repository | **shipped** |
 | served repository | Forgejo / `git daemon` | **shipped** |
-| packed storage, reachability index | git packfiles | **Phase 6** |
-| shallow / partial history | git `--depth` / partial clone | **Phase 6** |
-| garbage collection bounded by the oplog | `git gc`, but oplog-aware | **Phase 6** |
+| packed storage, reachability index | git packfiles | **shipped** |
+| shallow / partial history | git `--depth` / partial clone | **shipped** |
+| garbage collection bounded by the oplog | `git gc`, but oplog-aware | **shipped** |
 | fragmented large files, sparse/lazy shared instances | Epic Games Lore | **shipped** |
 | committed pinned links and private local layers | Epic Games Lore | **shipped** |
 | authorized FileId-scoped permanent erasure | Epic Games Lore | **shipped for loose storage** |
-| conflicts stored in commits | `jj` conflict objects | **considered, not scheduled** |
-| signed commits | git signing | **considered, not scheduled** |
+| conflicts stored in changes | `jj` conflict objects | **Phase 7: opt-in field/hunk storage and tip resolution** |
+| ancestor resolution propagation | `jj` descendant rebase | **Phase 7 child 2: planned** |
+| per-line / per-field annotation | `git blame`, with PM provenance | **Phase 7 child 3: planned** |
+| test-driven stable-change bisect | `git bisect` | **Phase 7 child 5: planned** |
+| signed changes | ed25519 over stable change ids | **Phase 7 child 4: planned** |
 | submodules / large-file offloading | git submodules / LFS | **rejected for now** |
 
 Each phase is tracked as an epic in this repository's own tracker, under
@@ -591,6 +594,7 @@ Each phase is tracked as an epic in this repository's own tracker, under
 | 4 — pm-vcs versions its own source | [`pm-vcs-390t`](.agents/pm/epics/pm-vcs-390t.toon) |
 | 5 — the forge and the patch series | [`pm-vcs-5h6j`](.agents/pm/epics/pm-vcs-5h6j.toon) |
 | 6 — scale | [`pm-vcs-b7cb`](.agents/pm/epics/pm-vcs-b7cb.toon) |
+| 7 — agents never stop on a conflict | [`pm-vcs-phase7`](.agents/pm/epics/pm-vcs-phase7.toon) |
 
 ---
 
@@ -649,3 +653,68 @@ full-manifest convenience APIs retain their materializing contracts. Closure,
 bundles, linked instances and erasure follow manifest pages. See the
 [workflow and API contracts](docs/publication-leases-and-manifests.md) for clocks,
 refusal fields, traversal guarantees and measured regression scenarios.
+
+
+### Phase 7 conflict storage contract
+
+`merge --record-conflicts` commits a field or text disagreement as data and returns
+success even while `merge.clean` is false. The ordinary default and
+`--fail-on-conflict` retain their established behavior. Explicit opt-in is the
+agent default recommended by this phase: harnesses choose this flag, rather than
+having behavior depend on an inferred author name or environment. Supplying both
+flags refuses before mutation. Structural conflicts (identity, mode, deletion,
+kind transitions and repository links) still require explicit reconciliation.
+They are outside this first slice and never silently recorded as resolved.
+
+Tree version 3 retains the ordinary readable payload address and adds a sorted
+list of `conflict` object addresses. Trees without units retain version 2 (or
+the legacy tree encoding); index version 5 carries the same addresses, and clean
+indexes retain version 4. Each canonical conflict object describes exactly one
+field or text hunk and references three separately addressed alternatives.
+A field side is a record envelope with `value`, or an empty record for absence;
+JSON null is a present value. A text side is a blob of just that hunk's lines,
+and the unit records its zero-based half-open line range in the projection.
+Final hunk metadata also retains each side's EOF newline state, including an
+empty deletion side. Content-addressed alternatives survive even across shallow parent boundaries.
+
+Both structured and text working files use the merged **ours projection**:
+independent edits from both sides survive, conflicting units keep ours, and
+markers are never stored as file content in this mode. This keeps native PM
+items readable throughout. `status.clean` means HEAD/index/disk agree, not that
+all disagreements are resolved: its flat `conflicts` table reports every unit.
+`show`, `log` and `items` report those units too, with stable change ids and
+native item ids when available. Editing and committing carries unresolved units;
+text ranges follow edits to their projection. Explicit `resolve <path>` with
+`--field` and `--take ours|theirs|base` or `--value` records a new resolving change.
+Values are JSON when parseable, otherwise plain strings. Plain strings preserve
+all whitespace, including EOF newlines; an empty `--value ""` deletes a text hunk
+or sets a field to the empty string. Omit `--field` to resolve
+all units in the path. Ordinary edits alone do not assert a resolution. Repeated unresolved contenders
+are retained as separate units. If one field has different values for the selected
+side across those disputes, `resolve --take` refuses before publication; use
+`--value` to make an explicit single-field choice. Coincident or overlapping text
+ranges likewise refuse `--take`, regardless of conflict-id order or side lengths.
+An explicit text `--value` replaces each connected disputed range once; disjoint
+ranges remain separate replacements. All ranges use the original projection's
+coordinates. The rightmost disputed region at EOF supplies its final-newline
+state, including a zero-width region adjacent to an earlier hunk ending there.
+Internal status checks used for mutation preflight do not publish index cache
+observations, so refusal preserves even an aged cold index. Public `status`
+continues to warm verified cache entries.
+
+The first slice resolves at HEAD. Selecting an ancestor and propagating its
+resolution through automatic descendant rebase is **deferred** to
+[`pm-vcs-p7resolve`](.agents/pm/features/pm-vcs-p7resolve.toon). This is not a claim
+that sibling branches automatically receive a tip resolution. The existing
+rewrite engine remains fail-on-conflict; its conflict-aware replay belongs to
+that child. Annotation, signing and bisect remain the other three planned
+features, each with tracker acceptance criteria and estimates.
+
+Publication closure, bundle export and GC follow both tree unit addresses and
+all alternatives. `verify` requires correctly typed conflict objects and sides,
+valid schemas and verified digests. Partial history may promise hunk blobs under
+`blob:none`, but cannot promise conflict metadata or scalar envelopes. FileId
+obliteration includes unit objects and alternatives, and preserves existing
+fail-closed deduplication and retained-copy safeguards. An arrival may retain an
+erased FileId's permitted historical payload and conflict roots, but cannot attach
+a new conflict root to that identity, even when its readable payload is unchanged.
