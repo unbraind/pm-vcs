@@ -694,7 +694,8 @@ side across those disputes, `resolve --take` refuses before publication; use
 ranges likewise refuse `--take`, regardless of conflict-id order or side lengths.
 An explicit text `--value` replaces each connected disputed range once; disjoint
 ranges remain separate replacements. All ranges use the original projection's
-coordinates, and a replacement reaching EOF supplies its final-newline state.
+coordinates. The rightmost disputed region at EOF supplies its final-newline
+state, including a zero-width region adjacent to an earlier hunk ending there.
 
 The first slice resolves at HEAD. Selecting an ancestor and propagating its
 resolution through automatic descendant rebase is **deferred** to

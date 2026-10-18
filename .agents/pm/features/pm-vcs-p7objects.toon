@@ -6,12 +6,14 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-18T03:01:39.215Z"
-updated_at: "2026-10-18T08:00:40.753Z"
+updated_at: "2026-10-18T08:16:45.655Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 estimated_minutes: 960
 acceptance_criteria: "Conflict units preserve base/ours/theirs and independent edits merge; conflicted snapshots remain committable and transportable; status/show/log/items report units in TOON and JSON; verify, GC, erasure and bounded history retain or safely deny the complete closure; real tracker proof and behavioural revert proofs pass unchanged npm and Bun release gates."
 parent: pm-vcs-phase7
-comments[14]{created_at,author,text}:
+comments[16]{created_at,author,text}:
   "2026-10-18T03:02:09.086Z",codex-agent,"Plan: preserve legacy merge behavior by default and under --fail-on-conflict. Add explicit --record-conflicts so automation opts in without changing existing callers. Store per-unit conflict addresses on tree/index entries beside a readable ours projection, never marker text. Ship tip resolve in this slice; ancestor resolution and automatic descendant propagation remain child pm-vcs-p7resolve. No release workflows will change."
   "2026-10-18T03:08:24.490Z",codex-agent,"Implemented canonical field/hunk conflict objects, versioned tree/index references, explicit merge recording, tip resolve, conflict reporting and lifecycle traversal. Verification is in progress against real PM trackers, two linked working trees and bounded transfers. Ancestor propagation remains deferred to pm-vcs-p7resolve. Pinned pm is 2026.10.13; current published pm is 2026.10.17; the pin is unchanged."
   "2026-10-18T03:23:35.824Z",codex-agent,"Behavioural revert proofs in an isolated source copy: reverting only the mergePath body to origin/main makes node --test --test-name-pattern=\"^field objects preserve\" test/first-class-conflicts.test.ts fail 0/1 with unsupported_recorded_conflict because unit references disappear. Reverting only collectCommitObjects makes node --test --test-name-pattern=\"^bundle, push/fetch\" test/first-class-conflicts.test.ts fail 0/1 with incomplete_bundle and two missing conflict objects. Tests import production TypeScript directly; no dist rebuild is involved. Both bodies were restored after each controlled proof."
@@ -26,6 +28,8 @@ comments[14]{created_at,author,text}:
   "2026-10-18T07:41:17.319Z",codex-agent,"Final npm run release:check passed on source commit 460b294: 1606/1606 tests, zero failures/skips/cancellations/TODOs. Fresh HOME plus GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1 isolated identity. Unchanged c8 --all --100 --per-file measured all 66 source files at 100% statements/branches/functions/lines: 22962 statements and lines, 777 functions, 6965 branches, all covered. Lint, zero duplicates, docstrings, native TOON, stat-cache, committed self-host equality, production audit, identity audit, pack dry run, changelog and release-policy validators all passed. The independent Bun rerun is still in progress. The initial Bun run matched npm: all 1605 tests passed and only the uncovered EOF fallback prevented its release gate. The added real truncation test addresses that coverage gap without runtime changes or threshold reductions."
   "2026-10-18T07:43:19.659Z",codex-agent,"Independent Bun rerun on 460b294 passed all 1606 tests, all 66 source files at 100% in every coverage dimension, and native TOON/stat-cache/self-host/production audit/identity audit/pack checks. The release command then correctly refused changelog validation because the separate checkout was shallow (E_MISSING_TAG_HISTORY). This was a validation setup error, not a package defect. Re-running the complete unchanged Bun release gate in the full-history package worktree with fresh HOME and isolated global/system Git identity; no source changes are needed."
   "2026-10-18T08:00:39.534Z",codex-agent,"Final full-history bun run release:check passed on source commit 460b2947d10b41f3df8080311f5ee40063211d91: 1606/1606 tests, zero failures/skips/cancellations/TODOs; all 66 source files at 100% statements/branches/functions/lines with unchanged --all --100 --per-file thresholds. All remaining acceptance, self-host, audit, packaging, changelog and release-policy checks passed. npm and Bun now both have complete green release commands under fresh HOME/global/system Git identity isolation. The 43 first-class-conflict cases include 12 real structural branch scenarios and the EOF truncation case. All three review threads are addressed; issues #123/#124 have real-engine coverage and independent behavioural revert receipts above. No new PM CLI/SDK defect was found; linked-test result tracking remains disabled by existing policy. Releasing the claim without closing the item. The final receipt commit changes only tracker evidence and its self-host archive; runtime/test source remains identical to 460b294. Current-head CI and reviewer replies will be linked from PR #122 and its checks page after pushing; the PR and threads remain open for orchestrator/reviewer verification."
+  "2026-10-18T08:14:17.683Z",codex-agent,"Final range review identified an additional EOF ownership edge within #124: after ordinary deletion, a nonempty inherited range can end where a later zero-width inherited range sits at EOF. The current original-line-count condition lets an earlier unit overwrite the later region newline choice. Reclaiming this item to reproduce the producer through real branch merges and protect the final region ownership before completing the round."
+  "2026-10-18T08:16:45.655Z",codex-agent,"Additional EOF producer confirmed and fixed: a first recorded final-line disagreement is followed by a second append disagreement, then an ordinary deletion leaves ranges [1,2) and [2,2). Resolving theirs previously lost the final newline; base could also inherit the earlier unit newline incorrectly. Only the rightmost selected region at EOF now owns termination. All ours/theirs/base choices pass through the real Repository. Behavioural revert: remove only index === 0 from the EOF condition; node --test --test-name-pattern=\"^a final zero-width\" test/first-class-conflicts.test.ts fails 0/1 with a missing trailing newline. Restored guard passes 1/1; the full conflict suite passes 44/44, and fresh module-scoped c8 measures engine/conflicts.ts at 100% statements/branches/functions/lines. Lint/zero-duplication/docstring checks pass. Previous head 8e65907 CI passed, but this new source fix requires both complete release gates and fresh CI; old-head CI is not treated as acceptance of the new source."
 files[19]{path,scope}:
   engine/attribution.ts,project
   engine/bundle.ts,project
@@ -46,7 +50,7 @@ files[19]{path,scope}:
   test/vcs-commands.test.ts,project
   test/worktree.test.ts,project
   vcs-commands.ts,project
-tests[4]:
+tests[5]:
   - command: node --test test/first-class-conflicts.test.ts
     scope: project
     timeout_seconds: 1800
@@ -79,6 +83,14 @@ tests[4]:
     provenance:
       author: codex-agent
       created_at: "2026-10-18T06:39:52.815Z"
+      source_kind: local_mutation
+      source_ref: feat/phase7-first-class-conflicts
+  - command: "node --test --test-name-pattern=\"^a final zero-width\" test/first-class-conflicts.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-18T08:16:42.503Z"
       source_kind: local_mutation
       source_ref: feat/phase7-first-class-conflicts
 docs[1]{path,scope}:

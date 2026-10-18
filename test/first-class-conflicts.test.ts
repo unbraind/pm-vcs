@@ -409,6 +409,27 @@ test("ordinary truncation preserves projection EOF when an inherited hunk become
   }
 });
 
+test("a final zero-width region owns EOF when an earlier inherited hunk ends at the same boundary", async () => {
+  const { repo } = await fixture(); const path = "adjacent-eof.txt";
+  commit(repo, path, "header\nbase"); repo.createBranch("other", "HEAD", now);
+  repo.switchTo("other", now); commit(repo, path, "header\ntheirs");
+  repo.switchTo("main", now); commit(repo, path, "header\nours\n"); record(repo, path);
+  repo.createBranch("append", "HEAD", now); repo.switchTo("append", now);
+  commit(repo, path, "header\nours\ntheirs-tail\n");
+  repo.switchTo("main", now); commit(repo, path, "header\nours\nours-tail\n");
+  repo.merge("append", { message: "append disagreement", author, recordConflicts: true }, now);
+  commit(repo, path, "header\nours\n"); const head = repo.resolve("HEAD");
+  const units = repo.readIndex().find((entry) => entry.path === path)!.conflicts!.map((id) => readConflict(repo.objects, id));
+  assert.deepEqual(units.map((unit) => unit.kind === "text" ? [unit.start, unit.end] : null).sort(), [[1, 2], [2, 2]]);
+  for (const [take, expected] of [["ours", "header\nours\nours-tail\n"],
+    ["theirs", "header\ntheirs\ntheirs-tail\n"], ["base", "header\nbase\n"]] as const) {
+    repo.reset(head, "hard", now);
+    repo.resolveConflicts(path, { take }, { message: "choose adjacent regions", author }, now);
+    assert.equal(readFileSync(join(repo.root, path), "utf8"), expected);
+    assert.equal(repo.status().conflicts, undefined); assert.deepEqual(repo.verify().corrupt, []);
+  }
+});
+
 test("structural delete/edit and mode disagreements refuse inherited field/text units through real branches", async (t) => {
   for (const text of [false, true]) for (const inherited of [false, true]) {
     for (const kind of ["incoming-delete", "local-delete", "mode"] as const) {

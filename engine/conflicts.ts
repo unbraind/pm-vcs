@@ -183,10 +183,11 @@ export function resolvePayload(store: ObjectStore, entry: { readonly id: ObjectI
     // All coordinates refer to the original projection. Replace each connected
     // disputed region once, from right to left, including coincident insertions.
     const lineCount = lines.length;
-    for (const { start, end, unit } of regions.reverse()) {
+    for (const [index, { start, end, unit }] of regions.reverse().entries()) {
       const value = options.take === undefined ? options.value : store.readTyped(unit[options.take], "blob").toString("utf8");
       if (typeof value !== "string") throw new ObjectStoreError("invalid_resolution", "Text hunk values must be strings.");
-      if (end === lineCount) terminated = options.take === undefined ? value.endsWith("\n") : unit.endings?.[options.take] ?? terminated;
+      // A final insertion owns EOF even when an earlier range ends at its boundary.
+      if (index === 0 && end === lineCount) terminated = options.take === undefined ? value.endsWith("\n") : unit.endings?.[options.take] ?? terminated;
       lines.splice(start, end - start, ...splitLines(value));
     }
     payload = Buffer.from(lines.join("\n") + (lines.length > 0 && terminated ? "\n" : ""), "utf8");
