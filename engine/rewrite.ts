@@ -1,4 +1,4 @@
-import { competingResolutions, carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
+import { inheritedConflict, competingResolutions, carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
 import { manifestFragments } from "./manifest-pages.ts";
 // History rewriting, and the three-way tree merge rewriting shares with `merge`.
 //
@@ -338,9 +338,17 @@ export function mergeTrees(
         if (ourEntry) files.set(path, ourEntry);
         continue;
       }
+      const removed = new Set<ObjectId>();
+      for (const id of baseEntry?.conflicts ?? []) {
+        const oursInherited = inheritedConflict(ctx.store, id, baseEntry!.id, ourEntry);
+        const theirsInherited = inheritedConflict(ctx.store, id, baseEntry!.id, theirEntry);
+        if (oursInherited === undefined || theirsInherited === undefined) {
+          if (oursInherited !== undefined) removed.add(oursInherited);
+          if (theirsInherited !== undefined) removed.add(theirsInherited);
+        }
+      }
       const inherited = [...new Set([...(ourEntry.conflicts ?? []), ...(theirEntry.conflicts ?? [])])]
-        .filter((id) => !(baseEntry?.conflicts?.includes(id) === true
-          && (ourEntry.conflicts?.includes(id) !== true || theirEntry.conflicts?.includes(id) !== true)));
+        .filter((id) => !removed.has(id));
       if (ourEntry.id === theirEntry.id && ourEntry.mode === theirEntry.mode) {
         files.set(path, {
           id: ourEntry.id,

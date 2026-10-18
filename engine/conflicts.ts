@@ -196,6 +196,22 @@ export function resolvePayload(store: ObjectStore, entry: { readonly id: ObjectI
   return { id: store.write(object.type, payload, entry.fileId), ...(remaining.length > 0 ? { conflicts: remaining } : {}) };
 }
 
+/** Identify an unresolved origin independently of the projection coordinates that ordinary edits can shift. */
+function originKey(unit: ConflictUnit): string {
+  return JSON.stringify([unit.kind, unit.base, unit.ours, unit.theirs,
+    unit.kind === "field" ? unit.field : [unit.endings?.base, unit.endings?.ours, unit.endings?.theirs]]);
+}
+
+/** Locate the exact inherited unit after mapping its original coordinates into one descendant projection. */
+export function inheritedConflict(store: ObjectStore, id: ObjectId, previous: ObjectId,
+  entry: { id: ObjectId; conflicts?: readonly ObjectId[]; fileId?: string }): ObjectId | undefined {
+  const key = originKey(readConflict(store, id));
+  const candidates = (entry.conflicts ?? []).filter((candidate) => originKey(readConflict(store, candidate)) === key);
+  if (candidates.length === 0) return undefined;
+  const mapped = carryConflicts(store, [id], previous, entry.id, entry.fileId)![0];
+  return candidates.find((candidate) => candidate === mapped);
+}
+
 /** Preserve competing explicit resolutions, including choosing the original readable projection. */
 export function competingResolutions(
   store: ObjectStore,
@@ -208,12 +224,7 @@ export function competingResolutions(
   const fields: string[] = [];
   for (const id of base.conflicts) {
     const unit = readConflict(store, id);
-    const inherited = (entry: { conflicts?: readonly ObjectId[] }): boolean => (entry.conflicts ?? []).some((candidate) => {
-      const other = readConflict(store, candidate);
-      return other.kind === unit.kind && other.base === unit.base && other.ours === unit.ours && other.theirs === unit.theirs
-        && (unit.kind !== "field" || (other as Extract<ConflictUnit, { kind: "field" }>).field === unit.field);
-    });
-    if (inherited(ours) || inherited(theirs)) continue;
+    if (inheritedConflict(store, id, base.id, ours) !== undefined || inheritedConflict(store, id, base.id, theirs) !== undefined) continue;
     const present = (result.conflicts ?? []).map((id) => readConflict(store, id));
     let dispute: ConflictUnit;
     if (unit.kind === "field") {

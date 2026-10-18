@@ -333,3 +333,13 @@ test("a descendant rename onto another parent identity refuses rather than overw
   assert.throws(() => repo.resolveConflicts(path, { take: "theirs" }, { message: "identity collision", author }, now, merged), /rewrite|conflict/i);
   assert.equal(repo.resolve("HEAD"), descendant); assert.deepEqual(repo.refs.list("refs"), refs); assert.deepEqual(repo.operations.read(), operations);
 });
+
+
+test("shifted inherited text units resolve through independent prefix edits without spurious content conflicts", () => {
+  const { repo, path, merged } = conflict(true);
+  edit(repo, path, "prefix\nheader\nours\ntail\n");
+  repo.resolveConflicts(path, { take: "theirs" }, { message: "resolve shifted hunk", author }, now, merged);
+  assert.equal(repo.status().conflicts, undefined);
+  assert.equal(readFileSync(join(repo.root, path), "utf8"), "prefix\nheader\ntheirs\ntail\n");
+  assert.deepEqual(repo.verify().corrupt, []);
+});
