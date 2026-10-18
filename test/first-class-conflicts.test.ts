@@ -4,7 +4,7 @@ import { deflateSync } from "node:zlib";
 import { inspectRepresentations } from "../engine/representations.ts";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -19,7 +19,7 @@ import { inspectClosure } from "../engine/closure.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
 import { exportBundle, importBundle } from "../engine/bundle.ts";
-import { hashObject, type ObjectId } from "../engine/objects.ts";
+import { hashObject, ObjectStore, type ObjectId, type ObjectType } from "../engine/objects.ts";
 import { traceFile } from "../engine/attribution.ts";
 import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 import { assertArrivalsAllowed } from "../engine/lifecycle.ts";
@@ -65,6 +65,14 @@ function record(repo: Repository, path: string) {
   assert.equal(repo.readMergeState(), null); assert.equal(repo.status().clean, true);
   const entry = repo.readIndex().find((entry) => entry.path === path)!;
   assert.ok(entry.conflicts?.length); return { report, entry };
+}
+
+/** Capture published state so refusal tests detect partial index, disk or operation updates. */
+function publishedState(repo: Repository, path: string) {
+  const leaf = join(repo.root, path);
+  return { head: repo.resolve("HEAD"), index: readFileSync(join(repo.controlDirectory, "index")),
+    content: existsSync(leaf) ? readFileSync(leaf) : null, mode: existsSync(leaf) ? statSync(leaf).mode : null,
+    merge: repo.readMergeState(), operations: repo.operations.read() };
 }
 
 test("real PM worktrees: two PM_AUTHOR identities keep working, a third resolves exactly one status unit", async () => {
@@ -309,13 +317,127 @@ test("ordinary text edits preserve adjacent insertions and replacement ranges wh
     ["a\nours\ninsert\nc\nours2\ne\n", "a\ntheirs\ninsert\nc\ntheirs2\ne\n"],
     ["a\nreplacement\nc\nours2\ne", "a\ntheirs\nc\ntheirs2\ne"],
     ["a\nc\nours2\ne\n", "a\ntheirs\nc\ntheirs2\ne\n"],
-    ["", "theirstheirs2"],
   ]) {
     const { repo, path } = await divergent(true); record(repo, path); commit(repo, path, edited);
     repo.resolveConflicts(path, { take: "theirs" }, { message: "resolve after edit", author }, now);
-    if (edited !== "") assert.equal(readFileSync(join(repo.root, path), "utf8"), expected);
-    else assert.equal(repo.status().conflicts, undefined);
+    assert.equal(readFileSync(join(repo.root, path), "utf8"), expected);
   }
+});
+
+test("collapsed text hunks refuse every recorded side without changing published state", async () => {
+  const { repo, path } = await divergent(true); record(repo, path); commit(repo, path, "");
+  const entry = repo.readIndex().find((entry) => entry.path === path)!;
+  assert.deepEqual(entry.conflicts!.map((id) => readConflict(repo.objects, id)).map((unit) =>
+    unit.kind === "text" ? [unit.start, unit.end] : null), [[0, 0], [0, 0]]);
+  const before = publishedState(repo, path);
+  for (const take of ["ours", "theirs", "base"] as const) {
+    assert.throws(() => repo.resolveConflicts(path, { take }, { message: "ambiguous hunks", author }, now),
+      { code: "ambiguous_resolution" });
+    assert.deepEqual(publishedState(repo, path), before);
+  }
+  repo.resolveConflicts(path, { value: "consolidated\n" }, { message: "explicit region", author }, now);
+  assert.equal(readFileSync(join(repo.root, path), "utf8"), "consolidated\n");
+  assert.equal(repo.status().conflicts, undefined); assert.deepEqual(repo.verify().corrupt, []);
+});
+
+test("three sibling text contenders preserve unequal alternatives and refuse overlapping side resolution", async () => {
+  const { repo } = await fixture(); const path = "contenders.txt";
+  commit(repo, path, "header\nbase\nmiddle\nbase2\nfooter\n");
+  repo.createBranch("other", "HEAD", now); repo.createBranch("third", "HEAD", now);
+  commit(repo, path, "header\nours\nmiddle\nours2\nfooter\n");
+  repo.switchTo("other", now); commit(repo, path, "header\none\ntwo\nmiddle\ntheirs2\nfooter\n");
+  repo.switchTo("third", now); commit(repo, path, "header\nthree\nmiddle\nbase2\nfooter\n");
+  repo.switchTo("main", now); record(repo, path);
+  repo.merge("third", { message: "third contender", author, recordConflicts: true }, now);
+  const entry = repo.readIndex().find((entry) => entry.path === path)!;
+  const units = entry.conflicts!.map((id) => readConflict(repo.objects, id));
+  assert.equal(units.length, 3);
+  assert.deepEqual(units.filter((unit) => unit.kind === "text" && unit.start === 1).map((unit) =>
+    repo.objects.readTyped(unit.theirs, "blob").toString()).sort(), ["one\ntwo", "three"]);
+  const before = publishedState(repo, path);
+  for (const take of ["ours", "theirs", "base"] as const) {
+    assert.throws(() => repo.resolveConflicts(path, { take }, { message: "choose side", author }, now),
+      { code: "ambiguous_resolution" });
+    assert.deepEqual(publishedState(repo, path), before);
+  }
+  repo.resolveConflicts(path, { value: "chosen" }, { message: "consolidate contenders", author }, now);
+  assert.equal(readFileSync(join(repo.root, path), "utf8"), "header\nchosen\nmiddle\nchosen\nfooter\n");
+  assert.equal(repo.status().conflicts, undefined);
+  for (const unit of units) for (const side of ["base", "ours", "theirs"] as const) assert.ok(repo.objects.has(unit[side]));
+  assert.deepEqual(repo.verify().missing, []); assert.deepEqual(repo.verify().corrupt, []);
+});
+
+test("explicit text values replace each overlapping region once and preserve its surrounding lines", async () => {
+  for (const ending of ["", "\n"]) {
+    const { repo } = await fixture(); const path = "partial-overlap.txt";
+    commit(repo, path, `header\nb1\nb2\nmiddle\nb3\nb4${ending}`); repo.createBranch("other", "HEAD", now);
+    repo.switchTo("other", now); commit(repo, path, `header\nt1\nt2\nmiddle\nt3\nt4${ending}`);
+    repo.switchTo("main", now); commit(repo, path, `header\no1\no2\nmiddle\no3\no4${ending}`);
+    record(repo, path); commit(repo, path, `header\no1\njoined\no4${ending}`);
+    const units = repo.readIndex().find((entry) => entry.path === path)!.conflicts!.map((id) => readConflict(repo.objects, id));
+    assert.deepEqual(units.map((unit) => unit.kind === "text" ? [unit.start, unit.end] : null).sort(), [[1, 3], [2, 4]]);
+    const before = publishedState(repo, path);
+    assert.throws(() => repo.resolveConflicts(path, { take: "theirs" }, { message: "partial overlap", author }, now),
+      { code: "ambiguous_resolution" });
+    assert.deepEqual(publishedState(repo, path), before);
+    repo.resolveConflicts(path, { value: `one\ntwo\nthree${ending}` }, { message: "replace union", author }, now);
+    assert.equal(readFileSync(join(repo.root, path), "utf8"), `header\none\ntwo\nthree${ending}`);
+    assert.equal(repo.status().conflicts, undefined); assert.deepEqual(repo.verify().corrupt, []);
+  }
+});
+
+test("disjoint text hunks keep unequal side lengths and final-newline choices", async () => {
+  const { repo } = await fixture(); const path = "disjoint.txt";
+  commit(repo, path, "header\nbase\nmiddle\nbase2\nlast\n"); repo.createBranch("other", "HEAD", now);
+  repo.switchTo("other", now); commit(repo, path, "header\none\ntwo\nmiddle\ntail");
+  repo.switchTo("main", now); commit(repo, path, "header\nours\nmiddle\nours2\nours3\n");
+  record(repo, path);
+  repo.resolveConflicts(path, { take: "theirs" }, { message: "resolve disjoint lengths", author }, now);
+  assert.equal(readFileSync(join(repo.root, path), "utf8"), "header\none\ntwo\nmiddle\ntail");
+  assert.equal(repo.status().conflicts, undefined); assert.deepEqual(repo.verify().corrupt, []);
+});
+
+test("structural delete/edit and mode disagreements refuse inherited field/text units through real branches", async (t) => {
+  for (const text of [false, true]) for (const inherited of [false, true]) {
+    for (const kind of ["incoming-delete", "local-delete", "mode"] as const) {
+      await t.test(`${text ? "text" : "field"}/${inherited ? "inherited" : "clean"}/${kind}`, async () => {
+        const { repo, path } = await divergent(text);
+        const base = readCommit(repo.objects, repo.resolve("HEAD")).parents[0];
+        if (inherited) record(repo, path);
+        repo.createBranch("structural", base, now); repo.switchTo("structural", now);
+        if (kind === "mode") chmodSync(join(repo.root, path), 0o755);
+        else rmSync(join(repo.root, path));
+        repo.stage([path]); repo.commit({ message: "structural contender", author }, now);
+        if (kind !== "local-delete") repo.switchTo("main", now);
+        const before = publishedState(repo, path);
+        assert.throws(() => repo.merge(kind === "local-delete" ? "main" : "structural",
+          { message: "refuse unsupported dispute", author, recordConflicts: true }, now),
+        { code: "unsupported_recorded_conflict" }, `${text}/${inherited}/${kind}`);
+        assert.deepEqual(publishedState(repo, path), before);
+        assert.deepEqual(repo.verify().missing, []); assert.deepEqual(repo.verify().corrupt, []);
+      });
+    }
+  }
+});
+
+test("items conflict summaries reuse each root tree already read for linked file attribution", async (t) => {
+  const { repo, client, path } = await divergent(true); record(repo, path);
+  const item = (await client.create({ type: "Task", title: "Track conflicts", author: "fixture" })).item.id;
+  await client.files(item, { add: [path], author: "fixture" });
+  repo.stage([]); repo.commit({ message: "link conflict file", author }, now);
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const trees = new Set(repo.allReachable().map((id) => readCommit(repo.objects, id).tree));
+  const reads = new Map<ObjectId, number>(); const original = ObjectStore.prototype.readTyped;
+  t.mock.method(ObjectStore.prototype, "readTyped", function (this: ObjectStore, id: ObjectId, type: ObjectType) {
+    if (type === "tree" && trees.has(id)) reads.set(id, (reads.get(id) ?? 0) + 1);
+    return original.call(this, id, type);
+  });
+  const result = await harness.runCommand({ command: "vcs items", pmRoot: join(repo.root, ".agents/pm") });
+  assert.equal(result.errorMessage, undefined);
+  assert.ok((result.result as { items: string[] }).items.includes(item));
+  assert.equal((result.result as { conflicts: unknown[] }).conflicts.length, 4);
+  assert.equal(reads.size, trees.size);
+  for (const count of reads.values()) assert.equal(count, 1, "one root-tree decode per immutable snapshot");
 });
 
 

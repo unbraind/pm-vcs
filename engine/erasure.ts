@@ -23,13 +23,13 @@ export interface ErasureReceipt {
   readonly removed: readonly ObjectId[];
 }
 
-/** Whole-store planning metadata excludes leaf buffers and retains only decoded ownership/fragment structure. */
+/** Whole-store planning metadata excludes leaf buffers and retains only ownership and payload references. */
 type InventoryObject =
-  | { readonly type: "manifest" | "conflict"; readonly digest: string; readonly fragments: ReturnType<typeof decodeManifest>["fragments"] }
+  | { readonly type: "manifest" | "conflict"; readonly digest: string; readonly references: readonly ObjectId[] }
   | { readonly type: "tree"; readonly digest: string; readonly entries: ReturnType<typeof decodeTree> }
   | { readonly type: Exclude<ObjectType, "manifest" | "conflict" | "tree">; readonly digest: string };
 
-/** Close one payload over all manifest fragments, failing on incomplete inventory. */
+/** Close one payload over all fragments and conflict alternatives, failing on incomplete inventory. */
 function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, InventoryObject>, store: ObjectStore): Set<ObjectId> {
   const selected = new Set<ObjectId>();
   const pending = [id];
@@ -42,7 +42,7 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, Inventory
       if (store.denial(current) !== undefined) continue;
       throw new ObjectStoreError("incomplete_erasure_inventory", "History or index names payloads absent from the complete inventory.");
     }
-    if (object.type === "manifest" || object.type === "conflict") pending.push(...object.fragments.map(/** Include every fragment even outside current refs. */ (fragment) => fragment.id));
+    if (object.type === "manifest" || object.type === "conflict") pending.push(...object.references);
     else if (object.type !== "blob" && object.type !== "record" && object.type !== "link") {
       throw new ObjectStoreError("incomplete_erasure_inventory", "A file entry names a non-payload object.");
     }
@@ -114,9 +114,9 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       if (object.type === "manifest") {
         // Decode once: a legacy manifest has no pages, and decoding parses its complete fragment list.
         const manifest = decodeManifest(object.payload);
-        inventory.set(id, { type: object.type, digest, fragments: manifest.pages ?? manifest.fragments });
+        inventory.set(id, { type: object.type, digest, references: (manifest.pages ?? manifest.fragments).map((fragment) => fragment.id) });
       }
-      else if (object.type === "conflict") inventory.set(id, { type: object.type, digest, fragments: conflictReferences(decodeConflict(object.payload)).map((side) => ({ id: side, length: 0 })) });
+      else if (object.type === "conflict") inventory.set(id, { type: object.type, digest, references: conflictReferences(decodeConflict(object.payload)) });
       else if (object.type === "tree") inventory.set(id, { type: object.type, digest, entries: decodeTree(object.payload) });
       else inventory.set(id, { type: object.type, digest });
     }
@@ -144,12 +144,12 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         if (selected.has(id)) throw new ObjectStoreError("erasure_dedup_conflict", "Another FileId or legacy file owns bytes selected for erasure.");
       }
     }
-    // Unattributed manifests can retain or reconstruct fragments. They cannot
-    // be erased under someone else's FileId or silently left recoverable.
+    // Unattributed manifests and conflicts can retain selected payloads. They
+    // cannot be erased under someone else's FileId or left recoverable.
     for (const [id, object] of inventory) {
       if ((object.type === "manifest" || object.type === "conflict") && !selected.has(id)
-        && object.fragments.some(/** Refuse unknown fragment owners before mutation. */ (fragment) => selected.has(fragment.id))) {
-        throw new ObjectStoreError("erasure_dedup_conflict", "An unrelated manifest shares fragments selected for erasure.");
+        && object.references.some(/** Refuse unknown payload owners before mutation. */ (reference) => selected.has(reference))) {
+        throw new ObjectStoreError("erasure_dedup_conflict", "An unrelated manifest or conflict references payloads selected for erasure.");
       }
     }
     const payloads: Buffer[] = [];

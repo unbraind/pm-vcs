@@ -81,9 +81,12 @@ export function fieldSide(store: ObjectStore, value: RecordValue | undefined, fi
 }
 
 /** Report one row per unresolved unit, omitting side payloads from routine output. */
-export function summarizeConflicts(store: ObjectStore, tree: ObjectId | null, changeId?: ObjectId): ConflictSummary[] {
+export function summarizeConflicts(store: ObjectStore, tree: ObjectId | null, changeId?: ObjectId,
+  cache: Map<ObjectId | null, ReturnType<typeof flattenTree>> = new Map()): ConflictSummary[] {
+  let flat = cache.get(tree);
+  if (flat === undefined) { flat = flattenTree(store, tree); cache.set(tree, flat); }
   const rows: ConflictSummary[] = [];
-  for (const [path, entry] of flattenTree(store, tree)) {
+  for (const [path, entry] of flat) {
     if (entry.conflicts === undefined || store.denial(entry.id) !== undefined) continue;
     const payload = store.readIfType(entry.id, "record");
     const item = payload === undefined ? undefined : decodeRecord(payload.payload).id;
@@ -163,13 +166,28 @@ export function resolvePayload(store: ObjectStore, entry: { readonly id: ObjectI
     const text = object.payload.toString("utf8");
     const lines = splitLines(text);
     let terminated = text.endsWith("\n");
-    selected.sort((a, b) => (b.unit.kind === "text" ? b.unit.start : 0) - (a.unit.kind === "text" ? a.unit.start : 0));
+    const hunks: Extract<ConflictUnit, { kind: "text" }>[] = [];
     for (const { unit } of selected) {
       if (unit.kind !== "text" || unit.end > lines.length) throw new ObjectStoreError("conflict_payload_mismatch", "Text requires in-range hunk conflicts.");
+      hunks.push(unit);
+    }
+    hunks.sort((a, b) => a.start - b.start);
+    const regions: { start: number; end: number; unit: Extract<ConflictUnit, { kind: "text" }> }[] = [];
+    for (const unit of hunks) {
+      const previous = regions.at(-1);
+      if (previous !== undefined && (unit.start === previous.start || unit.start < previous.end)) {
+        if (options.take !== undefined) throw new ObjectStoreError("ambiguous_resolution", "Recorded hunks share or overlap a line range; choose --value explicitly.");
+        previous.end = Math.max(previous.end, unit.end);
+      } else regions.push({ start: unit.start, end: unit.end, unit });
+    }
+    // All coordinates refer to the original projection. Replace each connected
+    // disputed region once, from right to left, including coincident insertions.
+    const lineCount = lines.length;
+    for (const { start, end, unit } of regions.reverse()) {
       const value = options.take === undefined ? options.value : store.readTyped(unit[options.take], "blob").toString("utf8");
       if (typeof value !== "string") throw new ObjectStoreError("invalid_resolution", "Text hunk values must be strings.");
-      if (unit.end === lines.length) terminated = options.take === undefined ? value.endsWith("\n") : unit.endings?.[options.take] ?? terminated;
-      lines.splice(unit.start, unit.end - unit.start, ...splitLines(value));
+      if (end === lineCount) terminated = options.take === undefined ? value.endsWith("\n") : unit.endings?.[options.take] ?? terminated;
+      lines.splice(start, end - start, ...splitLines(value));
     }
     payload = Buffer.from(lines.join("\n") + (lines.length > 0 && terminated ? "\n" : ""), "utf8");
   } else throw new ObjectStoreError("conflict_payload_mismatch", "Recorded conflicts require a record or text payload.");

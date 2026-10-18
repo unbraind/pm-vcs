@@ -690,7 +690,11 @@ Values are JSON when parseable, otherwise plain strings. Omit `--field` to resol
 all units in the path. Ordinary edits alone do not assert a resolution. Repeated unresolved contenders
 are retained as separate units. If one field has different values for the selected
 side across those disputes, `resolve --take` refuses before publication; use
-`--value` to make an explicit single-field choice.
+`--value` to make an explicit single-field choice. Coincident or overlapping text
+ranges likewise refuse `--take`, regardless of conflict-id order or side lengths.
+An explicit text `--value` replaces each connected disputed range once; disjoint
+ranges remain separate replacements. All ranges use the original projection's
+coordinates, and a replacement reaching EOF supplies its final-newline state.
 
 The first slice resolves at HEAD. Selecting an ancestor and propagating its
 resolution through automatic descendant rebase is **deferred** to

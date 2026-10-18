@@ -554,7 +554,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       }
       const conflicts = [...commits].flatMap((id) => {
         const commit = readCommit(repository.objects, id);
-        return summarizeConflicts(repository.objects, commit.tree, effectiveChangeId(id, commit));
+        return summarizeConflicts(repository.objects, commit.tree, effectiveChangeId(id, commit), treeCache);
       });
       for (const conflict of conflicts) if (conflict.item !== undefined) items.add(conflict.item);
       return {
