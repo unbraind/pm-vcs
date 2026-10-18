@@ -397,6 +397,18 @@ test("disjoint text hunks keep unequal side lengths and final-newline choices", 
   assert.equal(repo.status().conflicts, undefined); assert.deepEqual(repo.verify().corrupt, []);
 });
 
+test("ordinary truncation preserves projection EOF when an inherited hunk becomes final", async () => {
+  for (const ending of ["", "\n"]) {
+    const { repo, path } = await divergent(true); record(repo, path);
+    commit(repo, path, `a\nours\nc\nours2${ending}`);
+    const units = repo.readIndex().find((entry) => entry.path === path)!.conflicts!.map((id) => readConflict(repo.objects, id));
+    assert.ok(units.every((unit) => unit.kind === "text" && unit.endings === undefined));
+    repo.resolveConflicts(path, { take: "theirs" }, { message: "resolve new final hunk", author }, now);
+    assert.equal(readFileSync(join(repo.root, path), "utf8"), `a\ntheirs\nc\ntheirs2${ending}`);
+    assert.equal(repo.status().conflicts, undefined); assert.deepEqual(repo.verify().corrupt, []);
+  }
+});
+
 test("structural delete/edit and mode disagreements refuse inherited field/text units through real branches", async (t) => {
   for (const text of [false, true]) for (const inherited of [false, true]) {
     for (const kind of ["incoming-delete", "local-delete", "mode"] as const) {
