@@ -195,3 +195,58 @@ export function resolvePayload(store: ObjectStore, entry: { readonly id: ObjectI
   const remaining = entry.conflicts!.filter((id) => !selected.some((entry) => entry.id === id));
   return { id: store.write(object.type, payload, entry.fileId), ...(remaining.length > 0 ? { conflicts: remaining } : {}) };
 }
+
+/** Preserve competing explicit resolutions, including choosing the original readable projection. */
+export function competingResolutions(
+  store: ObjectStore,
+  base: { id: ObjectId; conflicts?: readonly ObjectId[] },
+  ours: { id: ObjectId; conflicts?: readonly ObjectId[]; fileId?: string },
+  theirs: { id: ObjectId; conflicts?: readonly ObjectId[] },
+  merged: { id: ObjectId; conflicts?: readonly ObjectId[] },
+): { id: ObjectId; conflicts?: readonly ObjectId[]; fields: string[] } {
+  let result = merged;
+  const fields: string[] = [];
+  for (const id of base.conflicts ?? []) {
+    const unit = readConflict(store, id);
+    const inherited = (entry: { conflicts?: readonly ObjectId[] }): boolean => (entry.conflicts ?? []).some((candidate) => {
+      const other = readConflict(store, candidate);
+      return other.kind === unit.kind && other.base === unit.base && other.ours === unit.ours && other.theirs === unit.theirs
+        && (unit.kind !== "field" || (other.kind === "field" && other.field === unit.field));
+    });
+    if (inherited(ours) || inherited(theirs)) continue;
+    const present = (result.conflicts ?? []).map((id) => readConflict(store, id));
+    let dispute: ConflictUnit;
+    if (unit.kind === "field") {
+      if (present.some((current) => current.kind === "field" && current.field === unit.field)) continue;
+      const value = (id: ObjectId): RecordValue | undefined => {
+        const record = decodeRecord(store.readTyped(id, "record"));
+        return Object.hasOwn(record, unit.field) ? record[unit.field] : undefined;
+      };
+      const ourSide = fieldSide(store, value(ours.id), ours.fileId);
+      const theirSide = fieldSide(store, value(theirs.id), ours.fileId);
+      if (ourSide === theirSide) continue;
+      dispute = { kind: "field", field: unit.field, base: fieldSide(store, value(base.id), ours.fileId), ours: ourSide, theirs: theirSide };
+      fields.push(unit.field);
+    } else {
+      const mapped = (payload: ObjectId): Extract<ConflictUnit, { kind: "text" }> =>
+        readConflict(store, carryConflicts(store, [id], base.id, payload, ours.fileId)![0]) as Extract<ConflictUnit, { kind: "text" }>;
+      const position = mapped(result.id);
+      if (present.some((current) => current.kind === "text" && current.start <= position.end && current.end >= position.start)) continue;
+      const side = (payload: ObjectId): { id: ObjectId; ending: boolean } => {
+        const text = store.readTyped(payload, "blob").toString("utf8");
+        const range = mapped(payload);
+        return { id: store.write("blob", Buffer.from(splitLines(text).slice(range.start, range.end).join("\n")), ours.fileId), ending: text.endsWith("\n") };
+      };
+      const before = side(base.id); const left = side(ours.id); const right = side(theirs.id);
+      if (left.id === right.id && left.ending === right.ending) continue;
+      const final = position.end === splitLines(store.readTyped(result.id, "blob").toString("utf8")).length;
+      dispute = { kind: "text", start: position.start, end: position.end, base: before.id, ours: left.id, theirs: right.id,
+        ...(final ? { endings: { base: before.ending, ours: left.ending, theirs: right.ending } } : {}) };
+    }
+    const conflict = store.write("conflict", encodeConflict(dispute), ours.fileId);
+    const projection = resolvePayload(store, { ...result, fileId: ours.fileId, conflicts: [conflict] }, { take: "ours" });
+    const carried = carryConflicts(store, [...(result.conflicts ?? []), conflict], result.id, projection.id, ours.fileId);
+    result = { id: projection.id, conflicts: carried };
+  }
+  return { ...result, fields };
+}

@@ -116,7 +116,7 @@ function prefixesOf(path: string): string[] {
 
 import { splitLines, unifiedDiff } from "./diff.ts";
 import { type IgnoreRules, isIgnored, isRuntimeIgnored, readIgnoreRules } from "./ignore.ts";
-import { carryConflicts, summarizeConflicts, resolvePayload, type ResolutionOptions } from "./conflicts.ts";
+import { readConflict, carryConflicts, summarizeConflicts, resolvePayload, type ResolutionOptions } from "./conflicts.ts";
 import { parseWorkingRecord, renderWorkingRecord } from "./record-format.ts";
 import {
   type HeadSnapshot,
@@ -128,6 +128,7 @@ import {
   mergeTrees,
   planCherryPick,
   planDescribe,
+  planResolution,
   planRebase,
   planRevert,
   planSplit,
@@ -2053,31 +2054,41 @@ export class Repository {
     });
   }
 
-  /** Record a tip resolution as an ordinary change; ancestor propagation is Phase 7 child 2. */
-  resolveConflicts(path: string, resolution: ResolutionOptions, options: CommitOptions, now: Date): ObjectId {
+  /** Record a resolution at HEAD or after a selected ancestor, replaying descendants in one undoable operation. */
+  resolveConflicts(path: string, resolution: ResolutionOptions, options: CommitOptions, now: Date, at?: string): ObjectId {
     return this.objects.withWriteLock(() => {
       this.assertNoMergeInProgress();
-      const target = this.resolve("HEAD");
-      const head = this.refs.readHead();
+      const target = this.resolve(at ?? "HEAD");
       const status = this.status(readWorkingFile, false);
       if (status.staged.length + status.unstaged.length > 0) throw new ObjectStoreError("dirty_worktree", "Commit staged and unstaged edits before resolving a conflict.");
       const canonical = normalizeRepoPath(this.root, path);
-      const index = this.committableIndex();
+      const index = [...flattenTree(this.objects, readCommit(this.objects, target).tree)].map(([path, entry]) => ({ path, ...entry }));
       const entry = index.find((entry) => entry.path === canonical);
-      if (entry === undefined || entry.sparse === true) throw new ObjectStoreError("unknown_conflict_path", "Resolve a tracked path visible in this working tree.");
+      if (entry === undefined || !this.committableIndex().some((entry) => entry.path === canonical && entry.sparse !== true)) {
+        throw new ObjectStoreError("unknown_conflict_path", `No visible tracked path with a conflict at ${canonical}:${resolution.field ?? "*"}.`);
+      }
+      if (!(entry.conflicts ?? []).some((id) => {
+        const unit = readConflict(this.objects, id);
+        return resolution.field === undefined || (unit.kind === "field" && unit.field === resolution.field);
+      })) throw new ObjectStoreError("no_matching_conflict", `No recorded conflict at ${canonical}:${resolution.field ?? "*"}.`);
       const resolved = resolvePayload(this.objects, entry, resolution);
       const projection = this.workingContent(canonical, this.objects.read(resolved.id));
       if (this.workingIdentifier(canonical, projection, resolved.id) !== resolved.id) {
         throw new ObjectStoreError("invalid_resolution", "Resolution cannot round-trip through this document format without changing its value.");
       }
-      const { conflicts: _old, stat: _stat, ...rest } = entry;
-      const tree = this.indexTree(index.map((current) => current.path === canonical ? { ...rest, ...resolved } : current));
-      const draft = { tree, parents: [target], author: options.author,
-        committer: options.committer ?? options.author, message: options.message };
-      const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
-      this.advanceHead(head, target, id, "resolve", `Resolved conflicts at ${canonical}.`, now);
-      this.materialize(tree);
-      return id;
+      const { conflicts: _old, ...rest } = entry;
+      const tree = buildTree(this.objects, new Map(index.map((current) => [current.path, current.path === canonical ? { ...rest, ...resolved } : current])));
+      if (at === undefined) {
+        const draft = { tree, parents: [target], author: options.author,
+          committer: options.committer ?? options.author, message: options.message };
+        const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
+        this.advanceHead(this.refs.readHead(), target, id, "resolve", `Resolved conflicts at ${canonical}.`, now);
+        this.materialize(tree);
+        return id;
+      }
+      const plan = this.planned(() => planResolution(this.rewriteContext(options.committer ?? options.author), target,
+        tree, options.author, options.message, this.refSnapshots(), this.headSnapshot()));
+      return this.applyRewrite(plan, now) as ObjectId;
     });
   }
 

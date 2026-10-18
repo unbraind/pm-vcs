@@ -1,4 +1,4 @@
-import { carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
+import { competingResolutions, carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
 import { manifestFragments } from "./manifest-pages.ts";
 // History rewriting, and the three-way tree merge rewriting shares with `merge`.
 //
@@ -365,6 +365,15 @@ export function mergeTrees(
       const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels, identity.fileId);
       const carried = inherited.flatMap((id) => carryConflicts(ctx.store, [id], ourEntry.conflicts?.includes(id) === true ? ourEntry.id : theirEntry.id, resolution.id, identity.fileId)!);
       const units = [...carried, ...(resolution.conflicts ?? [])];
+      if (ctx.recordConflicts === true && baseEntry?.conflicts !== undefined) {
+        const explicit = competingResolutions(ctx.store, baseEntry, ourEntry, theirEntry,
+          { id: resolution.id, ...(units.length > 0 ? { conflicts: units } : {}) });
+        if (explicit.id !== resolution.id || JSON.stringify(explicit.conflicts) !== JSON.stringify(units.length > 0 ? units : undefined)) {
+          files.set(path, { id: explicit.id, mode: ourEntry.mode, ...identity, conflicts: explicit.conflicts });
+          conflicts.push({ path, reason: explicit.fields.length > 0 ? "record" : "content", fields: explicit.fields, recorded: true });
+          continue;
+        }
+      }
       files.set(path, resolution.id === ourEntry.id && resolution.conflict?.reason === "content" && units.length === 0 ? ourEntry : {
         id: resolution.id,
         ...(units.length > 0 ? { conflicts: [...new Set(units)] } : {}),
@@ -482,9 +491,10 @@ function repointDescendant(
   originalId: ObjectId,
   original: Commit,
   rewrittenParents: readonly ObjectId[],
+  tree: ObjectId = original.tree,
 ): ObjectId {
   return writeCommit(store, {
-    tree: original.tree,
+    tree,
     parents: rewrittenParents,
     author: original.author,
     committer,
@@ -593,6 +603,7 @@ function replayWithDescendants(
   ctx: RewriteContext,
   edits: ReadonlyMap<ObjectId, EditBuilder>,
   refs: readonly RefSnapshot[],
+  replay?: (original: Commit, parents: readonly ObjectId[]) => ObjectId,
 ): ReadonlyMap<ObjectId, readonly ObjectId[]> {
   const store = ctx.store;
   const tips = refs.map((ref) => ref.target);
@@ -641,7 +652,7 @@ function replayWithDescendants(
     const rewrittenParents = original.parents.map((parent) => resolveRewritten(parent, map, store));
     const builder = edits.get(id);
     const replacements = builder === undefined
-      ? [repointDescendant(store, ctx.committer, id, original, rewrittenParents)]
+      ? [repointDescendant(store, ctx.committer, id, original, rewrittenParents, replay?.(original, rewrittenParents))]
       : builder(rewrittenParents);
     map.set(id, replacements);
   }
@@ -672,6 +683,32 @@ function planReplay(
 ): RewritePlan {
   const map = replayWithDescendants(ctx, edits, refs);
   return { command, summary, moves: computeMoves(refs, map, head, ctx.store) };
+}
+
+/** Insert a resolving change after an ancestor and replay descendant deltas with durable disagreements. */
+export function planResolution(
+  ctx: RewriteContext, revision: ObjectId, tree: ObjectId, author: Signature, message: string,
+  refs: readonly RefSnapshot[], head: HeadSnapshot,
+): RewritePlan {
+  const original = readCommit(ctx.store, revision);
+  const draft = { tree, parents: [revision], author, committer: ctx.committer, message };
+  const resolution = writeCommit(ctx.store, { ...draft, changeId: identityWithoutChangeLine(draft) });
+  const edits = new Map<ObjectId, EditBuilder>([[revision, () => [revision, resolution]]]);
+  const roots = head.kind === "detached" && head.target !== null
+    ? [...refs, { name: "HEAD", target: head.target }] : refs;
+  const map = replayWithDescendants(ctx, edits, roots, (commit, parents) => {
+    let replayed = commit.tree;
+    for (const [index, parent] of commit.parents.entries()) {
+      if (parent === parents[index]) continue;
+      const merged = mergeTrees({ ...ctx, recordConflicts: true }, readCommit(ctx.store, parent).tree,
+        replayed, readCommit(ctx.store, parents[index]).tree);
+      if (merged.conflicts.some((conflict) => conflict.recorded !== true)) throw new RewriteConflictError(merged.conflicts);
+      replayed = merged.tree;
+    }
+    return replayed;
+  });
+  return { command: "resolve", summary: `Resolved conflicts after ${effectiveChangeId(revision, original).slice(0, 12)}.`,
+    moves: computeMoves(refs, map, head, ctx.store) };
 }
 
 /**

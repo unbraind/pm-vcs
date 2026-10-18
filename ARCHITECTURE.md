@@ -578,7 +578,7 @@ on every commit.
 | committed pinned links and private local layers | Epic Games Lore | **shipped** |
 | authorized FileId-scoped permanent erasure | Epic Games Lore | **shipped for loose storage** |
 | conflicts stored in changes | `jj` conflict objects | **Phase 7: opt-in field/hunk storage and tip resolution** |
-| ancestor resolution propagation | `jj` descendant rebase | **Phase 7 child 2: planned** |
+| ancestor resolution propagation | `jj` descendant rebase | **Phase 7 child 2: shipped** |
 | per-line / per-field annotation | `git blame`, with PM provenance | **Phase 7 child 3: planned** |
 | test-driven stable-change bisect | `git bisect` | **Phase 7 child 5: planned** |
 | signed changes | ed25519 over stable change ids | **Phase 7 child 4: planned** |
@@ -702,13 +702,24 @@ Internal status checks used for mutation preflight do not publish index cache
 observations, so refusal preserves even an aged cold index. Public `status`
 continues to warm verified cache entries.
 
-The first slice resolves at HEAD. Selecting an ancestor and propagating its
-resolution through automatic descendant rebase is **deferred** to
-[`pm-vcs-p7resolve`](.agents/pm/features/pm-vcs-p7resolve.toon). This is not a claim
-that sibling branches automatically receive a tip resolution. The existing
-rewrite engine remains fail-on-conflict; its conflict-aware replay belongs to
-that child. Annotation, signing and bisect remain the other three planned
-features, each with tracker acceptance criteria and estimates.
+Tip resolution appends an ordinary change on the current branch. Explicit
+`resolve <path> --at <revision>` inserts the resolving change after that ancestor
+and automatically replays all descendants reachable from branches, tags or the
+current detached HEAD. Every descendant keeps its stable change and file identities;
+its original delta is merged against each rewritten parent. Inherited units clear,
+independent work survives, and a descendant's competing edit keeps its own readable
+projection with new content-addressed alternatives. Unsupported structural conflicts
+refuse before refs or working files move. The complete ref transaction has one
+`resolve` operation-log entry and one `undo` reverses it. Other linked instances
+refresh their working checkout explicitly after shared refs move.
+
+Concurrent tip resolutions remain independent until merged. Recorded merge also
+compares explicit choices when one chose the original ours projection; different
+choices become new conflict units rather than silently accepting the changed bytes.
+JSON and TOON resolve output include one `resolved` row per selected unit. A missing
+selection is a typed error naming the path and field. See
+[`pm-vcs-p7resolve`](.agents/pm/features/pm-vcs-p7resolve.toon). Annotation, signing
+and bisect remain planned.
 
 Publication closure, bundle export and GC follow both tree unit addresses and
 all alternatives. `verify` requires correctly typed conflict objects and sides,

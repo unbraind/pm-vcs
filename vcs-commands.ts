@@ -27,6 +27,7 @@ import {
   importBundle,
   readBundle,
 } from "./engine/bundle.ts";
+import { normalizeRepoPath } from "./engine/worktree.ts";
 import { summarizeConflicts, type ConflictSummary, type ResolutionOptions } from "./engine/conflicts.ts";
 import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
 import { orderCommitsNewestFirst, resolveFileId, traceFile, type FileChangeTrace } from "./engine/attribution.ts";
@@ -732,14 +733,15 @@ export function registerVcsCommands(api: ExtensionApi): void {
 
   api.registerCommand({
     name: "vcs resolve",
-    description: "Record a resolving change for selected conflict units at HEAD. Ancestor propagation follows in Phase 7 child 2.",
+    description: "Resolve selected units and automatically rebase descendants of --at, preserving their own edits as conflicts.",
     arguments: [{ name: "path", description: "Tracked conflicted path", required: true }],
     flags: [
+      { long: "--at", value_name: "change", description: "Conflicted ancestor to resolve (default HEAD)", value_type: "string" },
       { long: "--field", value_name: "name", description: "Resolve one structured field", value_type: "string" },
       { long: "--take", value_name: "side", description: "Select ours, theirs or base", value_type: "string" },
       { long: "--value", value_name: "value", description: "Replacement JSON value, or plain string", value_type: "string" },
     ],
-    run(context: CommandHandlerContext): VcsEnvelope & { commit: ObjectId } {
+    run(context: CommandHandlerContext): VcsEnvelope & { commit: ObjectId; resolved: ConflictSummary[] } {
       const repository = openRepository(context);
       const take = optionalString(context.options, "take");
       const rawValue = context.options?.value;
@@ -753,9 +755,13 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const selection: ResolutionOptions = { ...(typeof field === "string" ? { field } : {}),
         ...(take === undefined ? { value: decodeRecord(Buffer.from(JSON.stringify({ value }), "utf8")).value }
           : { take: take as "ours" | "theirs" | "base" }) };
-      const commit = repository.resolveConflicts(requiredArgument(context, 0, "path", "Pass a conflicted path."), selection,
-        { message: "Resolve recorded conflicts", author: signatureFor(context, new Date()) }, new Date());
-      return { ok: true, commit };
+      const path = requiredArgument(context, 0, "path", "Pass a conflicted path.");
+      const at = optionalString(context.options, "at");
+      const resolved = summarizeConflicts(repository.objects, readCommit(repository.objects, repository.resolve(at ?? "HEAD")).tree)
+        .filter((row) => row.path === normalizeRepoPath(repository.root, path) && (selection.field === undefined || row.unit === selection.field));
+      const commit = repository.resolveConflicts(path, selection,
+        { message: "Resolve recorded conflicts", author: signatureFor(context, new Date()) }, new Date(), at);
+      return { ok: true, commit, resolved };
     },
   });
 
