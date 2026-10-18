@@ -1,7 +1,7 @@
 /** Conflict resolution replays real descendant histories without changing their identities. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -277,4 +277,24 @@ test("different explicit choices already recorded by content merge retain exactl
     repo.switchTo("main", now); repo.merge("resolver-b", { message: "different choices", author, recordConflicts: true }, now);
     assert.equal(repo.status().conflicts?.length, partial ? 1 : 2); assert.deepEqual(repo.verify().corrupt, []);
   }
+});
+
+test("text field selectors refuse by unit name and replay preflights descendant mode conflicts", () => {
+  const { repo: text, path: textPath } = conflict(true);
+  assert.throws(() => text.resolveConflicts(textPath, { field: "status", take: "ours" }, { message: "invalid field", author }, now), /text.txt:status/);
+  const { repo, path, merged } = conflict();
+  chmodSync(join(repo.root, path), 0o755); repo.stage([path]); repo.commit({ message: "descendant executable mode", author }, now);
+  const before = repo.resolve("HEAD"); const operations = repo.operations.read();
+  assert.throws(() => repo.resolveConflicts(path, { take: "theirs" }, { message: "structural refusal", author }, now, merged), /rewrite|conflict/i);
+  assert.equal(repo.resolve("HEAD"), before); assert.deepEqual(repo.operations.read(), operations);
+});
+
+test("merge descendants leave parents outside the resolved ancestry unchanged", () => {
+  const { repo, path, merged } = conflict();
+  const outside = readCommit(repo.objects, merged).parents[1];
+  repo.createBranch("outside", outside, now); repo.switchTo("outside", now); const extra = edit(repo, "outside.txt", "independent");
+  repo.switchTo("main", now); repo.merge("outside", { message: "join unrelated descendant", author, recordConflicts: true }, now);
+  repo.resolveConflicts(path, { take: "theirs" }, { message: "ancestor resolution", author }, now, merged);
+  assert.equal(statusAt(repo, "HEAD", path), "theirs"); assert.equal(repo.resolve("outside"), extra);
+  assert.equal(readFileSync(join(repo.root, "outside.txt"), "utf8"), "independent"); assert.deepEqual(repo.verify().corrupt, []);
 });
