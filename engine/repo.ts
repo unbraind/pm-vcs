@@ -2096,6 +2096,8 @@ export class Repository {
       }
       const plan = this.planned(() => planResolution(this.rewriteContext(options.committer ?? options.author), target,
         tree, options.author, options.message, this.refSnapshots(), this.headSnapshot(), entry.fileId as FileId));
+      if (plan.moves.length === 0) throw new ObjectStoreError("unreachable_revision",
+        `${at} is not reachable from any branch, tag or HEAD; nothing would carry the resolution.`);
       return this.applyRewrite(plan, now) as ObjectId;
     });
   }

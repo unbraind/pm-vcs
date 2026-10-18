@@ -10,7 +10,8 @@ import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
 import { decodeRecord, effectiveChangeId, readCommit, writeCommit } from "../engine/model.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
-import { readConflict, summarizeConflicts } from "../engine/conflicts.ts";
+import { encodeConflict, readConflict, summarizeConflicts } from "../engine/conflicts.ts";
+import { mergeTrees } from "../engine/rewrite.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { withoutPmContext } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
@@ -361,4 +362,60 @@ test("legacy merge modes refuse competing explicit resolutions before publicatio
     repo.merge("resolver-b", { message: "record choices", author, recordConflicts: true }, now);
     assert.equal(repo.status().conflicts?.length, 1); assert.deepEqual(repo.verify().corrupt, []);
   }
+});
+
+
+test("unreachable conflict resolution refuses without publishing an empty operation", () => {
+  const { repo, path, merged } = conflict();
+  repo.reset("other", "hard", now);
+  const before = { refs: repo.refs.list("refs"), head: repo.refs.readHead(), operations: repo.operations.read(),
+    index: readFileSync(join(repo.controlDirectory, "index")), bytes: readFileSync(join(repo.root, path)) };
+  assert.throws(() => repo.resolveConflicts(path, { take: "theirs" }, { message: "unreachable", author }, now, merged),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "unreachable_revision" && error.message.includes(merged));
+  assert.deepEqual({ refs: repo.refs.list("refs"), head: repo.refs.readHead(), operations: repo.operations.read(),
+    index: readFileSync(join(repo.controlDirectory, "index")), bytes: readFileSync(join(repo.root, path)) }, before);
+});
+
+test("resolved fields with a payload kind transition preserve the structural merge refusal", () => {
+  const { repo, path, merged } = conflict();
+  const base = readCommit(repo.objects, merged).tree;
+  const files = flattenTree(repo.objects, base); const entry = files.get(path)!;
+  const tree = (text: string) => buildTree(repo.objects, new Map([[path, { ...entry,
+    conflicts: undefined, id: repo.objects.write("blob", Buffer.from(text)) }]]));
+  const ours = tree("ours blob"); const theirs = tree("theirs blob");
+  const result = mergeTrees({ store: repo.objects, config: repo.config, committer: author, recordConflicts: true }, base, ours, theirs);
+  assert.deepEqual(result.conflicts, [{ path, reason: "content" }]);
+  assert.equal(flattenTree(repo.objects, result.tree).get(path)!.id, flattenTree(repo.objects, ours).get(path)!.id);
+});
+
+test("competing field resolutions report both fresh and resolution conflicts", () => {
+  const { repo, path } = conflict(); repo.createBranch("choice", "HEAD", now);
+  repo.resolveConflicts(path, { take: "ours" }, { message: "ours", author }, now);
+  edit(repo, path, JSON.stringify({ status: "ours", independent: 1 }));
+  repo.switchTo("choice", now); repo.resolveConflicts(path, { take: "theirs" }, { message: "theirs", author }, now);
+  edit(repo, path, JSON.stringify({ status: "theirs", independent: 2 }));
+  repo.switchTo("main", now);
+  const result = repo.merge("choice", { message: "both disputes", author, recordConflicts: true }, now);
+  assert.deepEqual(new Set(result.conflicts.flatMap((row) => row.fields ?? [])), new Set(["status", "independent"]));
+  assert.deepEqual(new Set(repo.status().conflicts!.map((row) => row.unit)), new Set(["status", "independent"]));
+});
+
+test("converging carried conflict addresses remain unique beside a competing resolution", () => {
+  const repo = Repository.init(temp()); const path = "text.txt";
+  const content = (choice: string) => `header\nseparator\nspacer\n${choice}\ntail\n`;
+  edit(repo, path, content("base")); repo.createBranch("other", "HEAD", now);
+  repo.switchTo("other", now); edit(repo, path, content("theirs"));
+  repo.switchTo("main", now); edit(repo, path, content("ours"));
+  const merged = repo.merge("other", { message: "dispute", author, recordConflicts: true }, now).head;
+  const base = readCommit(repo.objects, merged).tree; const entry = flattenTree(repo.objects, base).get(path)!;
+  const sides = { base: repo.objects.write("blob", Buffer.from("old header")),
+    ours: repo.objects.write("blob", Buffer.from("header")), theirs: repo.objects.write("blob", Buffer.from("other header")) };
+  const tree = (prefix: string, chosen: string, offset: number) => buildTree(repo.objects, new Map([[path, { ...entry,
+    id: repo.objects.write("blob", Buffer.from(`${prefix}${content(chosen)}`)),
+    conflicts: [repo.objects.write("conflict", encodeConflict({ kind: "text", start: offset, end: offset + 1, ...sides }))] }]]));
+  const result = mergeTrees({ store: repo.objects, config: repo.config, committer: author, recordConflicts: true },
+    base, tree("", "ours", 0), tree("prefix\n", "theirs", 1));
+  const output = flattenTree(repo.objects, result.tree).get(path)!;
+  assert.equal(output.conflicts!.length, 2); assert.equal(new Set(output.conflicts).size, 2);
+  assert.equal(repo.objects.readTyped(output.id, "blob").toString(), "prefix\nheader\nseparator\nspacer\nours\ntail\n");
 });

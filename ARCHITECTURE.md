@@ -711,11 +711,16 @@ independent work survives, and a descendant's competing edit keeps its own reada
 projection with new content-addressed alternatives. Unsupported structural conflicts
 refuse before refs or working files move. The complete ref transaction has one
 `resolve` operation-log entry and one `undo` reverses it. Other linked instances
-refresh their working checkout explicitly after shared refs move.
+refresh their working checkout explicitly after shared refs move. A selected stored
+commit unreachable from every ref and HEAD refuses with `unreachable_revision`,
+without an empty operation-log entry.
 
 Concurrent tip resolutions remain independent until merged. Recorded merge also
 compares explicit choices when one chose the original ours projection; different
 choices become new conflict units rather than silently accepting the changed bytes.
+Their report retains fresh field disagreements alongside resolution disagreements;
+converging carried hunk addresses are unique. Payload kind transitions preserve
+the structural conflict instead of interpreting the new payload as the old kind.
 Legacy merge modes refuse competing explicit choices before publication and name
 `--record-conflicts` as the way to retain both alternatives. Inherited text units
 are matched by their original sides and mapped projection coordinates, so independent

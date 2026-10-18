@@ -744,6 +744,7 @@ in `status`, `show`, `log` or `items`, then resolve at HEAD with
 `--value done`). Working PM documents stay readable. `--fail-on-conflict` preserves
 the previous stopping behavior. Use `--at <revision>` to insert a resolution after an ancestor and replay every
 branch/tag descendant with stable change IDs and one undoable operation. Descendant
-edits to that unit remain readable and become new recorded conflicts. See
+edits to that unit remain readable and become new recorded conflicts. An unreachable
+stored ancestor refuses without recording an operation. See
 [Phase 7 child 2](.agents/pm/features/pm-vcs-p7resolve.toon); structural conflicts
 still need explicit reconciliation. See the [storage contract](ARCHITECTURE.md#phase-7-conflict-storage-contract).
