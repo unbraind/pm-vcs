@@ -707,8 +707,8 @@ resolution through automatic descendant rebase is **deferred** to
 [`pm-vcs-p7resolve`](.agents/pm/features/pm-vcs-p7resolve.toon). This is not a claim
 that sibling branches automatically receive a tip resolution. The existing
 rewrite engine remains fail-on-conflict; its conflict-aware replay belongs to
-that child. Annotation, signing and bisect remain the other three planned
-features, each with tracker acceptance criteria and estimates.
+that child. Annotation ships in child 3, under the contract below. Signing and
+bisect remain planned with their own tracker acceptance criteria and estimates.
 
 Publication closure, bundle export and GC follow both tree unit addresses and
 all alternatives. `verify` requires correctly typed conflict objects and sides,

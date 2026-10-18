@@ -6,7 +6,7 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:43.507Z"
-updated_at: "2026-10-18T18:44:53.516Z"
+updated_at: "2026-10-18T19:03:16.753Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
@@ -15,14 +15,16 @@ acceptance_criteria: "TOON and JSON name change id, author, agent harness/model 
 parent: pm-vcs-phase7
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:52.890Z",codex-agent,"cli:update:dep",detected
-comments[2]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-10-18T18:31:35.748Z",codex-agent,"Plan: add immutable text-line and structured field/list-entry annotation using stable FileIds, following renames and copy ancestry. Walk only parents of the selected revision; cache immutable metadata/payloads and stop once requested units have origins. Read PM harness/model provenance from the owning change snapshot history where recorded; retain explicit commit item links and native item identity. Group adjacent text rows by origin by default, expose --full and --at, and report unresolved side origins. Instrument actual object reads on a 2000-change synthetic history. PR 1 is pushed as #125 with CI running; this branch starts independently from main."
   "2026-10-18T18:44:53.512Z",codex-agent,"Focused annotation acceptance passed 17/17 and measured engine/annotate.ts at 100% statements/branches/functions/lines with no ignores or threshold changes. This includes real native PM event capture with synthetic model provenance, packed TOON/JSON, stable change selectors, text/list/scalar attribution, rename/copy/rewrites, repeated contenders, absence, shallow boundaries and 2000-change object-read assertions. Additional cache/copy controls passed 2/2; the linked complete 18-test rerun is in progress. Behavioral reverts in an isolated source copy: remove only unchanged-unit parent matching -> node --test --test-name-pattern=\"^text annotation follows\" test/annotate.test.ts fails 0/1; remove only stable-identity fallback from locate -> node --test --test-name-pattern=\"^stable file identities\" test/annotate.test.ts fails 0/1 (rename incorrectly attributed to the move). Production TypeScript is imported directly; no dist rebuild is needed. Source is restored. Full isolated npm/Bun release checks and CI follow; no item closure or release approval is claimed."
-files[5]{path,scope}:
+  "2026-10-18T19:03:16.753Z",codex-agent,"First CI coverage run passed the full functional suite and all 67 production files except the new annotate handler default-options branch: vcs-commands.ts:512 was 99.71% branches, while engine/annotate.ts and engine/repo.ts were both 100% in all dimensions. Added a real harness call without --at/--full, asserting current HEAD attribution; the targeted command test passes. Updated command-registration inventory to 42 and removed stale architecture wording that still called annotation planned. Interrupted local old-source release runs are excluded from acceptance; both full gates restart after this test/documentation commit. No runtime code, thresholds, dependency pins or workflows change."
+files[6]{path,scope}:
   engine/annotate.ts,project
   engine/repo.ts,project
   test/annotate.test.ts,project
   test/raw-coverage.test.ts,project
+  test/vcs-commands.test.ts,project
   vcs-commands.ts,project
 tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/annotate.test.ts,project,600,codex-agent,"2026-10-18T18:44:00.427Z",local_mutation,feat/phase7-annotate

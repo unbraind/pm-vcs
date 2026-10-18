@@ -45,6 +45,10 @@ test("text annotation follows actual setters, groups adjacent lines, handles emp
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs annotate", args: ["./text.txt"], options: { at: first, full: true }, pmRoot: join(repo.root, ".agents/pm") });
   assert.equal(result.errorMessage, undefined); assert.equal((result.result as { annotations: unknown[] }).annotations.length, 3);
+  const current = await harness.runCommand({ command: "vcs annotate", args: ["text.txt"], pmRoot: join(repo.root, ".agents/pm") });
+  assert.equal(current.errorMessage, undefined);
+  const latest = (current.result as { annotations: { text: string; changeId: string }[] }).annotations;
+  assert.ok(latest.some((row) => row.text === "changed" && row.changeId === change(repo, next)));
 });
 
 test("structured annotation attributes scalar leaves and list entries across insertion, reorder, duplicates and punctuation", () => {
