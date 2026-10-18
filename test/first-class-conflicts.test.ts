@@ -1,5 +1,7 @@
 /** Recorded disagreements remain live data through ordinary work, transfer, bounded history and explicit resolution. */
 import assert from "node:assert/strict";
+import { deflateSync } from "node:zlib";
+import { inspectRepresentations } from "../engine/representations.ts";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -11,6 +13,7 @@ import { startRepositoryServer } from "../engine/serve.ts";
 import { Repository } from "../engine/repo.ts";
 import { decodeRecord, decodeTree, encodeRecord, encodeTree, readCommit, writeCommit } from "../engine/model.ts";
 import { decodeConflict, encodeConflict, fieldSide, readConflict, resolvePayload, summarizeConflicts, carryConflicts, type ConflictUnit } from "../engine/conflicts.ts";
+import { mergeTrees } from "../engine/rewrite.ts";
 import { buildTree, decodeIndex, encodeIndex, flattenTree } from "../engine/worktree.ts";
 import { inspectClosure } from "../engine/closure.ts";
 import { collectGarbage } from "../engine/gc.ts";
@@ -40,7 +43,7 @@ async function fixture() {
   return { repo, client, parent, root };
 }
 /** Stage real bytes and record a native commit. */
-function commit(repo: Repository, path: string, text: string) {
+function commit(repo: Repository, path: string, text: string | Buffer) {
   mkdirSync(dirname(join(repo.root, path)), { recursive: true }); writeFileSync(join(repo.root, path), text);
   repo.stage([path]); return repo.commit({ message: "fixture edit", author }, now);
 }
@@ -483,4 +486,52 @@ test("structured field selectors preserve empty names and whitespace exactly", a
   }
   assert.deepEqual(JSON.parse(readFileSync(join(repo.root, path), "utf8")), JSON.parse(values("theirs")));
   assert.equal(repo.status().conflicts, undefined);
+});
+
+
+test("existing conflict units survive idempotent merges, independent descendants and restore", async () => {
+  const { repo, path } = await divergent(); const { report } = record(repo, path);
+  const tree = readCommit(repo.objects, report.head).tree;
+  const identical = mergeTrees({ store: repo.objects, config: repo.config, committer: author, recordConflicts: true }, null, tree, tree);
+  assert.equal(identical.tree, tree); assert.equal(summarizeConflicts(repo.objects, identical.tree).length, 1);
+  repo.createBranch("descendant", "HEAD", now); repo.switchTo("descendant", now);
+  commit(repo, path, JSON.stringify({ status: "in_progress", x: 1, y: 7 }));
+  repo.switchTo("main", now); commit(repo, path, JSON.stringify({ status: "in_progress", x: 5, y: 2 }));
+  repo.merge("descendant", { author, message: "independent descendants", recordConflicts: true }, now);
+  assert.equal(repo.status().conflicts?.length, 1);
+  assert.deepEqual(JSON.parse(readFileSync(join(repo.root, path), "utf8")), { status: "in_progress", x: 5, y: 7 });
+  repo.resolveConflicts(path, { take: "ours" }, { author, message: "resolved" }, now);
+  repo.restore([path], report.head); assert.equal(repo.readIndex().find((entry) => entry.path === path)!.conflicts?.length, 1);
+  repo.commit({ author, message: "restore conflicted snapshot" }, now);
+  assert.equal(repo.status().conflicts?.length, 1); assert.deepEqual(repo.verify().corrupt, []);
+});
+
+
+test("owned writer PID bytes cannot masquerade as zlib, while raw matches and foreign wrappers still refuse erasure", async () => {
+  for (const [pid, selection] of [[80007123, "ordinary"], [80007123, "raw"], [80007123, "base64"], [80007, "ordinary"]] as const) {
+    assert.throws(() => inspectRepresentations(Buffer.from(String(pid)), () => false), /zlib data/);
+    const { repo } = await fixture();
+    const secret = selection === "ordinary" ? Buffer.from("owned-pid-erasure-fixture-96273184") : Buffer.from(String(pid), selection === "raw" ? "utf8" : "base64");
+    commit(repo, "secret", secret); repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+    const descriptor = Object.getOwnPropertyDescriptor(process, "pid")!;
+    Object.defineProperty(process, "pid", { configurable: true, value: pid });
+    try {
+      if (selection !== "ordinary") {
+        assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /Control metadata retains selected payload/);
+        assert.deepEqual(readFileSync(join(repo.root, "secret")), secret); assert.equal(repo.objects.denials().length, 0);
+      } else {
+        repo.objects.withWriteLock(() => {
+          const lock = join(repo.controlDirectory, "objects.lock"); const owner = readFileSync(lock);
+          writeFileSync(lock, deflateSync(secret));
+          try { assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /Control metadata retains selected payload/); }
+          finally { writeFileSync(lock, owner); }
+        });
+        writeFileSync(join(repo.controlDirectory, "dirty.json"), String(pid));
+        assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /zlib data/);
+        rmSync(join(repo.controlDirectory, "dirty.json"));
+        repo.obliterate("secret", "erase-fixture", "incident", now);
+        assert.deepEqual(repo.verify().corrupt, []); assert.equal(repo.objects.denials().length, 1);
+      }
+    } finally { Object.defineProperty(process, "pid", descriptor); }
+  }
 });

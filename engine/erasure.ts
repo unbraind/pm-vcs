@@ -78,6 +78,14 @@ function containsSelectedBytes(bytes: Buffer, payloads: readonly Buffer[]): bool
   return inspectRepresentations(bytes, /** A retained full payload or fragment prevents a false physical-erasure receipt. */ (candidate) => payloads.some(/** Preserve ambiguous or independently owned copies rather than deleting them. */ (payload) => candidate.includes(payload)));
 }
 
+/** Inspect a schema-validated live writer PID as raw and canonical base64 bytes, without mistaking decimal 80-prefixed PIDs for zlib streams. */
+function containsPidBytes(bytes: Buffer, payloads: readonly Buffer[]): boolean {
+  if (payloads.some((payload) => bytes.includes(payload))) return true;
+  const text = bytes.toString("utf8");
+  const decoded = Buffer.from(text, "base64");
+  return decoded.toString("base64") === text && containsSelectedBytes(decoded, payloads);
+}
+
 /** Validate proposed and actual audit representations without retaining a selected payload in generated metadata. */
 function assertAuditSafe(candidates: readonly Buffer[], payloads: readonly Buffer[]): void {
   for (const candidate of candidates) if (containsSelectedBytes(candidate, payloads)) {
@@ -174,8 +182,13 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         }
       }
       for (const entry of readdirSync(instance.controlDirectory, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name !== "layers.json" && containsSelectedBytes(readFileSync(join(instance.controlDirectory, entry.name)), payloads)) {
-          throw new ObjectStoreError("unsupported_erasure_storage", "Control metadata retains selected payload bytes; clean the ambiguous copy before retrying.");
+        if (entry.isFile() && entry.name !== "layers.json") {
+          const bytes = readFileSync(join(instance.controlDirectory, entry.name));
+          // A verified live writer's decimal PID is typed control metadata, not an encoded payload.
+          // Other lock contents retain full representation inspection; raw selected bytes remain forbidden.
+          const ownedPid = entry.name === "objects.lock" && bytes.equals(Buffer.from(String(process.pid)));
+          const retained = ownedPid ? containsPidBytes(bytes, payloads) : containsSelectedBytes(bytes, payloads);
+          if (retained) throw new ObjectStoreError("unsupported_erasure_storage", "Control metadata retains selected payload bytes; clean the ambiguous copy before retrying.");
         }
       }
     }

@@ -2,22 +2,38 @@ id: pm-vcs-simi
 title: Investigate intermittent uninspectable payload refusal in publication erasure setup
 description: "During the full Bun-invoked release check at e03471b, test/publication-validation.test.ts:143 failed at its initial repo.obliterate call on line 147, before the fresh binary staging assertions. The scanner raised uninspectable_payload: Recognizable zlib data cannot be completely inspected. The stack reaches control metadata inspection in engine/erasure.ts:174 and engine/representations.ts:29. The test and both engine files are unchanged from origin/main. That run passed 1540/1541 tests with no skips and all-source per-file 100% coverage. The corresponding complete npm release check passed 1541/1541. A focused reproduction passed 1/1 and the complete publication-validation file passed 7/7. The offending bytes were not retained by fixture cleanup, so the exact cause remains unproven. Investigate generated control metadata and representation recognition without relaxing fail-closed inspection, thresholds, or skips."
 type: Issue
-status: open
+status: in_progress
 priority: 2
 tags[2]: erasure,testing
 created_at: "2026-10-15T21:04:31.257Z"
-updated_at: "2026-10-15T21:35:33.467Z"
+updated_at: "2026-10-18T04:23:16.829Z"
 author: codex-agent
 acceptance_criteria: Identify and retain a sanitized deterministic reproducer; preserve conservative erasure refusals; stabilize the fixture only with an independently failing behavioral proof.
-comments[2]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-10-15T21:06:53.529Z",codex-agent,"Follow-up only: scanner and publication test are byte-identical to origin/main. The failure stack is in eraseFile control-file inspection, before the binary staging assertions. Focused reproduction passed 1/1; full publication-validation file passed 7/7. Do not infer a Bun runtime defect: the failed Bun-invoked release command executes this test through Node. Preserve fail-closed behavior; the specific offending control bytes were not retained, and a generated-metadata interaction is an unconfirmed hypothesis."
   "2026-10-15T21:35:33.467Z",codex-agent,"Discovered while validating pm-vcs-00mb, pm-vcs-sl77 and pm-vcs-w3yi. The unchanged complete Bun release retry at e03471b exited 0: 1541/1541 passed, 0 fail/cancel/skip/todo, all 65 source files at per-file 100% coverage. The original control-metadata inspection refusal remains unexplained; focused success and a full retry do not remediate it. Keep this follow-up open; no scanner, publication test, safety bound or threshold was changed."
-files[3]{path,scope}:
+  "2026-10-18T04:23:07.287Z",codex-agent,"A deterministic instance of this failure class is retained: decimal PID text beginning with 80 satisfies the zlib header recognition test. The exact current writer PID is typed lock metadata, inspected for raw and canonical base64 aliases, while changed lock contents and all other control files retain complete representation inspection. Tests retain refusals for raw/base64 selected-byte aliases, compressed selected bytes in a changed lock, and an 80-prefixed value in unrelated control metadata. Focused regression passes 1/1. Reverting only eraseFile to origin/main makes the same test fail 0/1 with uninspectable_payload; source imports require no dist rebuild. Earlier CI bytes/PIDs were not retained, so this proves a failure mode without claiming the original PID. Global scanner bounds and untrusted-payload refusals are unchanged. Both linked commands passed after reviewing and locally acknowledging the historical command provenance; the initial trust refusal was not treated as a passing test."
+files[4]{path,scope}:
   engine/erasure.ts,project
   engine/representations.ts,project
+  test/first-class-conflicts.test.ts,project
   test/publication-validation.test.ts,project
-tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
-  node --test --test-name-pattern='publication fresh binary staging' test/publication-validation.test.ts,project,codex-agent,"2026-10-15T21:06:34.835Z",local_mutation,fix/served-config-date-fetch-paths
+tests[2]:
+  - command: node --test --test-name-pattern='publication fresh binary staging' test/publication-validation.test.ts
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-15T21:06:34.835Z"
+      source_kind: local_mutation
+      source_ref: fix/served-config-date-fetch-paths
+  - command: "node --test --test-name-pattern=\"owned writer PID\" test/first-class-conflicts.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-18T04:20:50.601Z"
+      source_kind: local_mutation
+      source_ref: feat/phase7-first-class-conflicts
 docs[1]{path,scope}:
   docs/links-layers-obliteration.md,project
 body: ""

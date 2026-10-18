@@ -375,13 +375,13 @@ export class ObjectStore {
   }
 
   /**
-   * Read a matching kind for a partial listing, advancing in 64-byte compressed chunks until the header is available.
+   * Read a matching kind or alternative kinds in one prefix scan for a partial listing, advancing in 64-byte compressed chunks until the header is available.
    * This prefix is a hint, never closure evidence: matching objects still undergo full frame and hash verification.
    * Inflated output is capped at 4 KiB per attempt. A 64 KiB compressed-input budget exhaustion raises
    * object_prefix_limit rather than silently hiding an ambiguous object. Missing or malformed prefixes are omitted;
    * operational I/O failures remain visible. Ordinary recognizable unrelated objects avoid full payload reads.
    */
-  readIfType(id: ObjectId, type: ObjectType): StoredObject | undefined {
+  readIfType(id: ObjectId, type: ObjectType, alternatives: readonly ObjectType[] = []): StoredObject | undefined {
     this.assertId(id);
     if (this.denial(id) !== undefined) return undefined;
     let fd: number;
@@ -411,7 +411,7 @@ export class ObjectStore {
           }
         }
         if (prefix.includes(0)) {
-          matching = /^([a-z]+) (0|[1-9][0-9]*)\0/.exec(prefix.toString("latin1"))?.[1] === type;
+          matching = [type, ...alternatives].some((candidate) => /^([a-z]+) (0|[1-9][0-9]*)\0/.exec(prefix.toString("latin1"))?.[1] === candidate);
           break;
         }
         // Any valid frame header fits in 32 bytes: longest kind, a space, at most 16 decimal length digits and NUL.
