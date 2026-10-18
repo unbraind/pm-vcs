@@ -1,7 +1,7 @@
 /** Immutable attribution through ordinary PM records, branch merges, renames and bounded histories. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -374,4 +374,62 @@ test("unattached text alternatives stay unavailable and copied hunk ancestry kee
   const unavailable = annotatePath(repo.objects, proposal, path, true)[2].alternatives!.find((side) => side.side === "theirs")!;
   assert.equal(unavailable.unavailable, true); assert.deepEqual(unavailable.origins, []);
   assert.notEqual(change(repo, first), change(repo, theirs));
+});
+
+
+test("supported annotations stop at unsupported ancestry while selected kinds and historical corruption still refuse", () => {
+  for (const record of [false, true]) {
+    const repo = Repository.init(temp()); const path = record ? "item.toon" : "text.txt"; const fileId = "a".repeat(32);
+    const manifest = repo.objects.write("manifest", encodeManifest({ mode: "fixed", totalLength: 0, fragments: [] }));
+    const old = writeCommit(repo.objects, { tree: buildTree(repo.objects, new Map([[path, { id: manifest, fileId, mode: "100644" }]])),
+      parents: [], author, committer: author, message: "fragmented predecessor" });
+    const side = (value: string) => record ? fieldSide(repo.objects, value) : repo.objects.write("blob", Buffer.from(value));
+    const sides = { base: side("base"), ours: side("ours"), theirs: side("theirs") };
+    const dispute = repo.objects.write("conflict", encodeConflict(record ? { kind: "field", field: "status", ...sides }
+      : { kind: "text", start: 0, end: 1, ...sides }));
+    const payload = record ? repo.objects.write("record", encodeRecord({ status: "ours" })) : repo.objects.write("blob", Buffer.from("ours\n"));
+    const tip = writeCommit(repo.objects, { tree: buildTree(repo.objects, new Map([[path, { id: payload, fileId, mode: "100644", conflicts: [dispute] }]])),
+      parents: [old], author, committer: author, message: "supported successor" });
+    let reads = 0; const read = repo.objects.read.bind(repo.objects);
+    repo.objects.read = (id) => { if (id === manifest) reads++; return read(id); };
+    const rows = annotatePath(repo.objects, tip, path);
+    assert.equal(rows[0].changeId, tip); assert.ok(rows[0].alternatives!.every((side) => side.unavailable === true));
+    assert.equal(reads, 1); repo.objects.read = read;
+    assert.throws(() => annotatePath(repo.objects, old, path), { code: "unsupported_annotation" });
+    const location = join(repo.sharedControlDirectory, "objects", manifest.slice(0, 2), manifest.slice(2));
+    writeFileSync(location, "corrupt compressed ancestor");
+    assert.throws(() => annotatePath(repo.objects, tip, path), { code: "corrupt_object" });
+    rmSync(location); mkdirSync(location);
+    assert.throws(() => annotatePath(repo.objects, tip, path), { code: "EISDIR" });
+  }
+});
+
+test("unavailable optional PM history omits agent metadata and caches failure without masking unrelated I/O", async () => {
+  for (const kind of ["wrong-kind", "malformed", "missing", "obliterated", "corrupt", "directory"]) {
+    const root = temp(); const client = new PmClient({ cwd: root, pmRoot: join(root, ".agents/pm"), noExtensions: true });
+    await client.init("optionalhistory", { defaults: true, author: "fixture" });
+    const item = (await client.create({ type: "Task", title: "Optional provenance", author: "fixture" })).item.id;
+    const repo = Repository.init(root); repo.stage([]); const base = repo.commit({ message: "tracker", author }, now);
+    const files = flattenTree(repo.objects, readCommit(repo.objects, base).tree); const path = `.agents/pm/history/${item}.jsonl`;
+    const history = files.get(path)!;
+    const id = kind === "wrong-kind" ? repo.objects.write("record", encodeRecord({ author: "fixture" }))
+      : kind === "malformed" ? repo.objects.write("blob", Buffer.from("invalid JSON record\n")) : history.id;
+    files.set(path, { ...history, id });
+    const fileId = "d".repeat(32);
+    files.set("text.txt", { fileId, mode: "100644", id: repo.objects.write("blob", Buffer.from("first\nretained\n")) });
+    const first = writeCommit(repo.objects, { tree: buildTree(repo.objects, files), parents: [base], author, committer: author, items: [item], message: "first setter" });
+    files.set("text.txt", { fileId, mode: "100644", id: repo.objects.write("blob", Buffer.from("second\nretained\n")) });
+    const tip = writeCommit(repo.objects, { tree: buildTree(repo.objects, files), parents: [first], author, committer: author, items: [item], message: "second setter" });
+    const location = join(repo.sharedControlDirectory, "objects", id.slice(0, 2), id.slice(2));
+    if (kind === "missing" || kind === "directory") { rmSync(location); if (kind === "directory") mkdirSync(location); }
+    if (kind === "corrupt") writeFileSync(location, "corrupt optional history");
+    if (kind === "obliterated") { repo.setAuthority("fixture", "read-fixture", "erase-fixture"); repo.identity(); repo.obliterate(history.fileId!, "erase-fixture", "fixture", now); }
+    if (kind === "directory") { assert.throws(() => annotatePath(repo.objects, tip, "text.txt", true), { code: "EISDIR" }); continue; }
+    let reads = 0; const read = repo.objects.read.bind(repo.objects);
+    repo.objects.read = (address) => { if (address === id) reads++; return read(address); };
+    const rows = annotatePath(repo.objects, tip, "text.txt", true);
+    assert.deepEqual(rows.map((row) => row.changeId), [tip, first]);
+    assert.ok(rows.every((row) => row.agentHarness === undefined && row.agentModel === undefined && row.items.includes(item)));
+    assert.equal(reads, 1);
+  }
 });

@@ -87,6 +87,7 @@ class Annotator {
   readonly documents = new Map<ObjectId, RecordDocument>();
   readonly origins = new Map<string, AnnotationOrigin>();
   readonly histories = new Map<ObjectId, readonly RecordDocument[]>();
+  readonly unsupported = new Set<ObjectId>();
   readonly shallow: ReadonlySet<ObjectId>;
 
   constructor(store: ObjectStore) { this.store = store; this.shallow = new Set(store.partialState()?.shallow ?? []); }
@@ -142,6 +143,28 @@ class Annotator {
     return units;
   }
 
+  /** Treat unsupported historical payload kinds as lineage boundaries; preserve corruption and I/O errors. */
+  historicalContent(entry: TreeEntry): readonly Unit[] | undefined {
+    if (this.unsupported.has(entry.id)) return undefined;
+    try { return this.content(entry); } catch (error) {
+      if (error instanceof ObjectStoreError && error.code === "unsupported_annotation") {
+        this.unsupported.add(entry.id); return undefined;
+      }
+      throw error;
+    }
+  }
+
+  /** Optional immutable PM history is unavailable after typed read/validation failure; cache that absence too. */
+  history(id: ObjectId): readonly RecordDocument[] {
+    let events = this.histories.get(id);
+    if (events !== undefined) return events;
+    events = [];
+    try { events = this.store.readTyped(id, "blob").toString("utf8").split("\n").filter(Boolean).map((line) => decodeRecord(Buffer.from(line))); }
+    catch (error) { if (!(error instanceof ObjectStoreError)) throw error; }
+    this.histories.set(id, events);
+    return events;
+  }
+
   /** Resolve provenance from that immutable change's own PM history, never today's mutable tracker. */
   origin(id: ObjectId, file: Located): AnnotationOrigin {
     const key = `${id}:${file.path}`;
@@ -156,12 +179,7 @@ class Annotator {
       if (!/^[a-zA-Z0-9_-]+$/.test(item)) continue;
       const history = this.locate(commit.tree, `.agents/pm/history/${item}.jsonl`);
       if (history === undefined) continue;
-      let events = this.histories.get(history.entry.id);
-      if (events === undefined) {
-        events = this.store.readTyped(history.entry.id, "blob").toString("utf8").split("\n").filter(Boolean).map((line) => decodeRecord(Buffer.from(line)));
-        this.histories.set(history.entry.id, events);
-      }
-      for (const event of events) {
+      for (const event of this.history(history.entry.id)) {
         if (event.author !== commit.author.name) continue;
         agentHarness = typeof event.agent_harness === "string" ? event.agent_harness : undefined;
         agentModel = typeof event.agent_model === "string" ? event.agent_model : undefined;
@@ -189,7 +207,9 @@ class Annotator {
         const before = this.locate(tree, task.file.path, task.file.entry.fileId)
           ?? (task.file.entry.copiedFrom === undefined ? undefined : this.locate(tree, task.file.path, task.file.entry.copiedFrom));
         if (before === undefined) continue;
-        const matches = corresponding(this.content(before.entry), currentUnits);
+        const prior = this.historicalContent(before.entry);
+        if (prior === undefined) continue;
+        const matches = corresponding(prior, currentUnits);
         const inherited = new Map<string, number>();
         for (const [key, index] of wanted) {
           const previous = matches.get(key);
@@ -225,7 +245,8 @@ class Annotator {
       const located = this.locate(commit.tree, task.file.path, task.file.entry.fileId)
         ?? (task.file.entry.copiedFrom === undefined ? undefined : this.locate(commit.tree, task.file.path, task.file.entry.copiedFrom));
       if (located !== undefined) {
-        const units = this.content(located.entry);
+        const units = this.historicalContent(located.entry);
+        if (units === undefined) continue;
         const value = unit.kind === "field" ? this.documents.get(located.entry.id)?.[unit.field] : undefined;
         const range = task.range === undefined ? undefined : ancestralRange(this.content(task.file.entry), units, task.range);
         const index = range !== undefined && range.end - range.start === splitLines(expected as string).length

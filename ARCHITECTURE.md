@@ -735,7 +735,9 @@ identities never borrow prior attribution at the same path. Each row includes
 stable change ID, author and explicit linked item IDs (plus a native PM item's
 own ID). Recorded harness/model fields come from the owning snapshot's matching
 PM history events. Missing provenance stays absent; current mutable tracker
-state does not participate. Multiple reachable versions of a stable change ID
+state does not participate. Typed read/validation failure in optional history leaves
+agent provenance absent and caches that absence; unexpected I/O errors propagate.
+Multiple reachable versions of a stable change ID
 require selecting a commit or ref explicitly.
 
 Unresolved units retain all conflict alternative groups and their available
@@ -747,7 +749,9 @@ setters after prefix insertion/deletion, renames and copies. A side without
 matching ancestry remains unavailable. Absent fields and zero-line hunks still emit a row. Shallow
 boundaries are marked explicitly and missing side ancestry is reported as
 unavailable rather than inventing an author. Fragmented files and links refuse
-with a typed unsupported-annotation error.
+with a typed unsupported-annotation error. Unsupported payload kinds encountered
+in ancestry stop that lineage branch instead of aborting a supported selected file.
+Those boundaries are cached; historical corruption and unexpected I/O still refuse.
 
 The demand-driven walk follows only parents of the selected revision. It reads
 requested file payloads and the tree metadata needed to locate that FileId;
