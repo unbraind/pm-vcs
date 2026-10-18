@@ -373,10 +373,12 @@ export function mergeTrees(
       const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels, identity.fileId);
       const carried = inherited.flatMap((id) => carryConflicts(ctx.store, [id], ourEntry.conflicts?.includes(id) === true ? ourEntry.id : theirEntry.id, resolution.id, identity.fileId)!);
       const units = [...carried, ...(resolution.conflicts ?? [])];
-      if (ctx.recordConflicts === true && baseEntry?.conflicts !== undefined) {
+      if (baseEntry?.conflicts !== undefined) {
         const explicit = competingResolutions(ctx.store, { ...baseEntry, conflicts: baseEntry.conflicts }, ourEntry, theirEntry,
           { id: resolution.id, ...(units.length > 0 ? { conflicts: units } : {}) });
         if (explicit.id !== resolution.id || JSON.stringify(explicit.conflicts) !== JSON.stringify(units.length > 0 ? units : undefined)) {
+          if (ctx.recordConflicts !== true) throw new ObjectStoreError("resolution_conflict",
+            `Competing resolutions at ${path}: ${explicit.fields.join(", ") || "text hunks"}. Use --record-conflicts to retain both choices.`);
           files.set(path, { id: explicit.id, mode: ourEntry.mode, ...identity, conflicts: explicit.conflicts });
           conflicts.push({ path, reason: explicit.fields.length > 0 ? "record" : "content", fields: explicit.fields, recorded: true });
           continue;

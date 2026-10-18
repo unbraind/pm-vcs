@@ -716,6 +716,11 @@ refresh their working checkout explicitly after shared refs move.
 Concurrent tip resolutions remain independent until merged. Recorded merge also
 compares explicit choices when one chose the original ours projection; different
 choices become new conflict units rather than silently accepting the changed bytes.
+Legacy merge modes refuse competing explicit choices before publication and name
+`--record-conflicts` as the way to retain both alternatives. Inherited text units
+are matched by their original sides and mapped projection coordinates, so independent
+prefix insertions cannot leave a resolved unit behind. Diff3 retains an unchanged
+current-base anchor when an insertion precedes it; independent edits stay clean.
 JSON and TOON resolve output include one `resolved` row per selected unit. A missing
 selection is a typed error naming the path and field. See
 [`pm-vcs-p7resolve`](.agents/pm/features/pm-vcs-p7resolve.toon). Annotation, signing

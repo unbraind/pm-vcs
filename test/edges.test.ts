@@ -251,37 +251,23 @@ test("a hunk that only deletes reports a zero right start", () => {
   assert.equal(hunks[0].leftStart, 1);
 });
 
-test("diff3 resynchronises on a base line only after both cursors have passed it", () => {
-  // Our side moves a line earlier, so that line matches the base at a position
-  // their side has already gone past. Accepting it as a resynchronisation point
-  // would emit a region running backwards and produce garbled output; the search
-  // skips any candidate behind either cursor.
-  //
-  // The reorder overlaps their edit, so this is a genuine conflict. What is being
-  // asserted is that the conflict is *well-formed*: our side, the base and their
-  // side each appear intact and in that order, and both sides' content survives.
-  const merged = mergeContent(
-    "one\ntwo\nthree\nfour\n",
-    "two\none\nthree\nfour\n",
-    "one\ntwo\nthree\nFOUR\n",
-  );
+test("diff3 separates independent reordering from later edits and retains genuine overlapping conflicts", () => {
+  const base = "one\ntwo\nthree\nfour\n";
+  const ours = "two\none\nthree\nfour\n";
+  // Reordering the first two lines and editing the fourth are independent.
+  const disjoint = mergeContent(base, ours, "one\ntwo\nthree\nFOUR\n");
+  assert.equal(disjoint.clean, true);
+  assert.equal(disjoint.text, "two\none\nthree\nFOUR\n");
+  assert.deepEqual(disjoint.conflicts, []);
+
+  // Editing the line that the other side moved is a real delete/edit overlap.
+  const merged = mergeContent(base, ours, "ONE\ntwo\nthree\nfour\n");
   assert.equal(merged.clean, false);
   assert.equal(merged.conflicts.length, 1);
-
-  const [conflict] = merged.conflicts;
-  // Our reordering and their edit both survive into the reported conflict.
-  assert.deepEqual(conflict.ours, ["one", "three", "four"]);
-  assert.deepEqual(conflict.base, ["three", "four"]);
-  assert.deepEqual(conflict.theirs, ["three", "FOUR"]);
-
-  // The markers appear once each and in the order a three-way merge tool expects.
+  assert.deepEqual(merged.conflicts[0], { ours: [], base: ["one"], theirs: ["ONE"] });
   const markers = merged.text.split("\n").filter((line) => /^(<{7}|\|{7}|={7}|>{7})/.test(line));
-  assert.deepEqual(
-    markers.map((line) => line.slice(0, 7)),
-    ["<<<<<<<", "|||||||", "=======", ">>>>>>>"],
-  );
-  // The stable prefix ahead of the conflict is emitted plainly, not swallowed.
-  assert.ok(merged.text.startsWith("two\n<<<<<<<"));
+  assert.deepEqual(markers.map((line) => line.slice(0, 7)), ["<<<<<<<", "|||||||", "=======", ">>>>>>>"]);
+  assert.ok(merged.text.endsWith("two\none\nthree\nfour\n"));
 });
 
 test("an ignore line that is only a negation marker is skipped", () => {

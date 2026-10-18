@@ -163,6 +163,8 @@ test("unit-specific refusals name the path and field and preserve published stat
       (error: unknown) => error instanceof Error && "code" in error && error.code === "no_matching_conflict" && error.message.includes(`${path}:${field}`));
     assert.deepEqual({ refs: repo.refs.list("refs"), operations: repo.operations.read(), index: readFileSync(join(repo.controlDirectory, "index")) }, before);
   }
+  assert.throws(() => repo.resolveConflicts(path, { take: "ours" }, { message: "no remaining units", author }, now),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "no_matching_conflict" && error.message.includes(`${path}:*`));
   assert.throws(() => repo.resolveConflicts("unknown", { field: "status", take: "base" }, { message: "invalid", author }, now, merged), /unknown:status/);
 });
 
@@ -342,4 +344,21 @@ test("shifted inherited text units resolve through independent prefix edits with
   assert.equal(repo.status().conflicts, undefined);
   assert.equal(readFileSync(join(repo.root, path), "utf8"), "prefix\nheader\ntheirs\ntail\n");
   assert.deepEqual(repo.verify().corrupt, []);
+});
+
+
+test("legacy merge modes refuse competing explicit resolutions before publication, including an unchanged ours choice", () => {
+  for (const text of [false, true]) {
+    const { repo, path } = conflict(text); repo.createBranch("resolver-b", "HEAD", now);
+    repo.resolveConflicts(path, { take: "ours" }, { message: "a resolves", author }, now);
+    repo.switchTo("resolver-b", now); repo.resolveConflicts(path, { take: "theirs" }, { message: "b resolves", author }, now);
+    repo.switchTo("main", now);
+    const before = { refs: repo.refs.list("refs"), index: readFileSync(join(repo.controlDirectory, "index")), bytes: readFileSync(join(repo.root, path)), operations: repo.operations.read() };
+    assert.throws(() => repo.merge("resolver-b", { message: "legacy refusal", author }, now),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "resolution_conflict" && error.message.includes(path));
+    assert.deepEqual({ refs: repo.refs.list("refs"), index: readFileSync(join(repo.controlDirectory, "index")), bytes: readFileSync(join(repo.root, path)), operations: repo.operations.read() }, before);
+    assert.equal(repo.readMergeState(), null);
+    repo.merge("resolver-b", { message: "record choices", author, recordConflicts: true }, now);
+    assert.equal(repo.status().conflicts?.length, 1); assert.deepEqual(repo.verify().corrupt, []);
+  }
 });
