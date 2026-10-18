@@ -130,7 +130,8 @@ pm vcs diff main feature
 | `pm vcs diff [from] [to]` | Unified diff between two revisions' trees. |
 | `pm vcs branch [name]` | List, create (`--at`) or delete (`--delete`) branches. `--remotes` adds each remote-tracking branch with its `ahead`/`behind` counts against HEAD. |
 | `pm vcs switch <rev>` | Move HEAD and update the working tree. Refuses rather than overwrite uncommitted work. |
-| `pm vcs merge <rev>` | Three-way merge. `--fail-on-conflict` to gate CI. |
+| `pm vcs merge <rev>` | Three-way merge. `--record-conflicts` commits field/hunk disagreements; `--fail-on-conflict` preserves the stopping gate. |
+| `pm vcs resolve <path>` | Resolve recorded units at HEAD with `--field` and `--take ours\|theirs\|base` or `--value`. |
 | `pm vcs tag [name]` | List or create tags. |
 | `pm vcs undo` | Reverse a recorded operation, refs and working tree together. |
 | `pm vcs oplog` | Every operation, with the refs it moved and where from. |
@@ -368,6 +369,7 @@ engine/repo.ts       The porcelain.
 | `series` | portable patch-series metadata |
 | `link` | immutable target repository identity, commit ID and exact file mappings |
 | `tombstone` | terminal FileId, affected addresses and bounded audit metadata |
+| `conflict` | one field or hunk, with separately addressed base/ours/theirs |
 
 `record` is the one git does not have, and the reason this system exists.
 
@@ -662,6 +664,7 @@ Everything below is tracked as an epic in this repository's own tracker, under
 | **4** | pm-vcs versioning its own source, with a CI gate proving the tracked history matches the source tree byte for byte | [`pm-vcs-390t`](.agents/pm/epics/pm-vcs-390t.toon) |
 | **5** | The forge: a patch series as an object kind, review state as records, and a served repository | [`pm-vcs-5h6j`](.agents/pm/epics/pm-vcs-5h6j.toon) |
 | **6** | Scale: packed storage, a reachability index, shallow and partial history, and garbage collection bounded by the operation log | [`pm-vcs-b7cb`](.agents/pm/epics/pm-vcs-b7cb.toon) |
+| **7** | Agents never stop on a conflict: opt-in field/hunk conflict objects and tip resolution shipped here; descendant propagation, annotation, signing and bisect planned | [`pm-vcs-phase7`](.agents/pm/epics/pm-vcs-phase7.toon) |
 
 ---
 
@@ -732,3 +735,13 @@ Publication requires explicit stable FileId leases, including renamed, deleted a
 historical files. Large fragmented content uses bounded manifest hierarchies;
 legacy flat manifests remain readable through verified bounded streams. See
 [publication lease workflows and manifest API contracts](docs/publication-leases-and-manifests.md).
+
+
+For agents, `pm vcs merge <revision> --record-conflicts` records genuine field or
+text disagreements and allows the next commit. Read the flat `conflicts` table
+in `status`, `show`, `log` or `items`, then resolve at HEAD with
+`pm vcs resolve <path> --field status --take theirs` (or `--take ours`, `--take base`,
+`--value done`). Working PM documents stay readable. `--fail-on-conflict` preserves
+the previous stopping behavior. Ancestor resolution propagation is planned in
+[Phase 7 child 2](.agents/pm/features/pm-vcs-p7resolve.toon); structural conflicts
+still need explicit reconciliation. See the [storage contract](ARCHITECTURE.md#phase-7-conflict-storage-contract).

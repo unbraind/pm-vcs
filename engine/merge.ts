@@ -280,6 +280,7 @@ function sameLines(left: readonly string[], right: readonly string[]): boolean {
  * @param ours - Our side's text.
  * @param theirs - Their side's text.
  * @param labels - Names written into conflict markers.
+ * @param record - Optional unit receiver; selects a marker-free ours projection.
  * @returns The merged text and every conflict encountered.
  */
 export function mergeContent(
@@ -287,10 +288,12 @@ export function mergeContent(
   ours: string,
   theirs: string,
   labels: ConflictLabels = DEFAULT_CONFLICT_LABELS,
+  record?: (unit: ContentConflict, start: number, end: number, final: boolean) => void,
 ): ContentMergeResult {
   const regions = alignThreeWay(splitLines(base), splitLines(ours), splitLines(theirs));
   const output: string[] = [];
   const conflicts: ContentConflict[] = [];
+  let finalConflict = false;
 
   for (const region of regions) {
     if (region.stable) {
@@ -310,6 +313,12 @@ export function mergeContent(
       continue;
     }
     conflicts.push({ base: region.base, ours: region.ours, theirs: region.theirs });
+    if (record !== undefined) {
+      finalConflict = region === regions[regions.length - 1];
+      record(region, output.length, output.length + region.ours.length, finalConflict);
+      output.push(...region.ours);
+      continue;
+    }
     output.push(
       `<<<<<<< ${labels.ours}`,
       ...region.ours,
@@ -324,7 +333,7 @@ export function mergeContent(
   // Terminate the result only if a side that contributed content was terminated.
   // Appending a newline unconditionally makes the merge record a one-byte content
   // change neither side made, which then shows up as a diff against both parents.
-  const terminated = ours.endsWith("\n") || theirs.endsWith("\n");
+  const terminated = finalConflict ? ours.endsWith("\n") : ours.endsWith("\n") || theirs.endsWith("\n");
   const joined = output.join("\n");
   return {
     clean: conflicts.length === 0,

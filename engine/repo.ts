@@ -116,6 +116,7 @@ function prefixesOf(path: string): string[] {
 
 import { splitLines, unifiedDiff } from "./diff.ts";
 import { type IgnoreRules, isIgnored, isRuntimeIgnored, readIgnoreRules } from "./ignore.ts";
+import { carryConflicts, summarizeConflicts, resolvePayload, type ResolutionOptions } from "./conflicts.ts";
 import { parseWorkingRecord, renderWorkingRecord } from "./record-format.ts";
 import {
   type HeadSnapshot,
@@ -224,6 +225,8 @@ export interface LogEntry {
 
 /** Message, signatures, emptiness policy, and PM attribution supplied when recording a commit. */
 export interface CommitOptions {
+  /** Record conflicts as immutable tree data when explicitly requested. */
+  readonly recordConflicts?: boolean;
   readonly message: string;
   readonly author: Signature;
   /** Defaults to the author, matching the common case of committing your own work. */
@@ -579,6 +582,7 @@ export class Repository {
       mode: entry.mode as FileMode,
       fileId: entry.fileId,
       copiedFrom: entry.copiedFrom,
+      conflicts: entry.conflicts,
     }])));
   }
 
@@ -713,6 +717,7 @@ export class Repository {
       const existing = index.get(path);
       let fileId = existing === undefined ? undefined : existing.fileId ?? migratedFileId(existing);
       let copiedFrom = existing?.copiedFrom;
+      let conflictSource = existing;
       if (fileId === undefined) {
         const identityMatches = stat === undefined ? [] : originalEntries.filter((entry) => entry.path !== path
           && !denied.some(/** Erased identities cannot be inferred from a recycled filesystem inode. */ (denial) => denial.tombstone.fileId === entry.fileId)
@@ -722,6 +727,7 @@ export class Repository {
         const matches = identityMatches.length === 1 ? identityMatches : contentMatches;
         if (matches.length === 1) {
           const source = matches[0];
+          conflictSource = source;
           const sourceFileId = source.fileId ?? migratedFileId(source);
           if (!existsSync(join(this.root, ...source.path.split("/")))) {
             fileId = sourceFileId;
@@ -737,7 +743,8 @@ export class Repository {
       }
       if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
       else this.stageContent(path, content, fileId);
-      index.set(path, { path, id, mode, fileId, ...(copiedFrom === undefined ? {} : { copiedFrom }),
+      const conflicts = conflictSource === undefined ? undefined : carryConflicts(this.objects, conflictSource.conflicts, conflictSource.id, id, fileId);
+      index.set(path, { path, id, mode, fileId, ...(conflicts === undefined ? {} : { conflicts }), ...(copiedFrom === undefined ? {} : { copiedFrom }),
         ...(stat === undefined ? {} : { stat }) });
       if (!existing || existing.id !== id || existing.mode !== mode || existing.fileId !== fileId) changed.push(path);
     }
@@ -825,7 +832,9 @@ export class Repository {
       }), snapshot.contents);
     }
     const merge = this.readMergeState();
+    const conflicts = summarizeConflicts(this.objects, this.headTree());
     const annotated: StatusReport = { ...report,
+      ...(conflicts.length > 0 ? { conflicts } : {}),
       ...(layers.length > 0 ? { excludedLayers: layers.map(/** Make private exclusions visible in status. */ (layer) => ({ name: layer.name, paths: layer.files.map(/** Report names without exposing snapshot bytes. */ (file) => file.path) })) } : {}),
       ...(obliterated.length > 0 ? { obliterated } : {}) };
     if (merge === null) return annotated;
@@ -889,6 +898,7 @@ export class Repository {
       mode: value.mode === "100755" ? "100755" : "100644",
       ...(value.fileId === undefined ? {} : { fileId: value.fileId }),
       ...(value.copiedFrom === undefined ? {} : { copiedFrom: value.copiedFrom }),
+      ...(value.conflicts === undefined ? {} : { conflicts: value.conflicts }),
       ...(view !== null && !viewIncludes(view, path) ? { sparse: true } : {}),
     }));
   }
@@ -1588,7 +1598,8 @@ export class Repository {
       // drop this engine refuses to perform.
       const committedPaths = new Map(flattenTree(this.objects, parent === null ? null : readCommit(this.objects, parent).tree));
       const unseen = index.filter((entry) => entry.sparse === true
-        && (committedPaths.get(entry.path)?.id !== entry.id || committedPaths.get(entry.path)?.mode !== entry.mode))
+        && (committedPaths.get(entry.path)?.id !== entry.id || committedPaths.get(entry.path)?.mode !== entry.mode
+          || JSON.stringify(committedPaths.get(entry.path)?.conflicts) !== JSON.stringify(entry.conflicts)))
         .map((entry) => entry.path)
         .sort(compareByteOrder);
       if (unseen.length > 0) {
@@ -1966,7 +1977,7 @@ export class Repository {
       }
       const baseTree = this.virtualBaseTree(bases, options.committer ?? options.author);
       const { tree, merged, conflicts } = mergeTrees(
-        this.rewriteContext(options.committer ?? options.author),
+        { ...this.rewriteContext(options.committer ?? options.author), recordConflicts: options.recordConflicts },
         baseTree,
         readCommit(this.objects, ours).tree,
         readCommit(this.objects, theirs).tree,
@@ -1978,7 +1989,7 @@ export class Repository {
       // preserving with respect to re-walking it per conflict. Hoisting avoids n
       // full tree walks and n re-reads of every entry from the object store.
       const mergedTree = flattenTree(this.objects, tree);
-      const markerConflicts = conflicts.filter((conflict) => {
+      const markerConflicts = options.recordConflicts === true ? [] : conflicts.filter((conflict) => {
         const entry = mergedTree.get(conflict.path);
         return entry === undefined ? false : this.blobHasConflictMarkers(entry.id);
       });
@@ -2000,6 +2011,9 @@ export class Repository {
           `Merging ${revision} conflicts at ${outOfView.join(", ")}, which this working tree's view does not materialize. `
           + "Widen the view with `pm vcs view <patterns>` and merge again, or merge in a working tree that can see those paths.",
         );
+      }
+      if (options.recordConflicts === true && conflicts.some((conflict) => mergedTree.get(conflict.path)?.conflicts === undefined)) {
+        throw new ObjectStoreError("unsupported_recorded_conflict", "This slice records field and text conflicts; structural conflicts require explicit reconciliation.");
       }
       if (markerConflicts.length > 0) {
         // No commit: the merged tree carries conflict markers, and recording it
@@ -2035,6 +2049,34 @@ export class Repository {
       this.advanceHead(head, ours, id, "merge", `Merged ${revision} as ${id.slice(0, 12)}.`, now);
       this.materialize(tree);
       return { kind: "merged", head: id, bases, merged, conflicts, clean: conflicts.length === 0 };
+    });
+  }
+
+  /** Record a tip resolution as an ordinary change; ancestor propagation is Phase 7 child 2. */
+  resolveConflicts(path: string, resolution: ResolutionOptions, options: CommitOptions, now: Date): ObjectId {
+    return this.objects.withWriteLock(() => {
+      this.assertNoMergeInProgress();
+      const target = this.resolve("HEAD");
+      const head = this.refs.readHead();
+      const status = this.status();
+      if (status.staged.length + status.unstaged.length > 0) throw new ObjectStoreError("dirty_worktree", "Commit staged and unstaged edits before resolving a conflict.");
+      const canonical = normalizeRepoPath(this.root, path);
+      const index = this.committableIndex();
+      const entry = index.find((entry) => entry.path === canonical);
+      if (entry === undefined || entry.sparse === true) throw new ObjectStoreError("unknown_conflict_path", "Resolve a tracked path visible in this working tree.");
+      const resolved = resolvePayload(this.objects, entry, resolution);
+      const projection = this.workingContent(canonical, this.objects.read(resolved.id));
+      if (this.workingIdentifier(canonical, projection, resolved.id) !== resolved.id) {
+        throw new ObjectStoreError("invalid_resolution", "Resolution cannot round-trip through this document format without changing its value.");
+      }
+      const { conflicts: _old, stat: _stat, ...rest } = entry;
+      const tree = this.indexTree(index.map((current) => current.path === canonical ? { ...rest, ...resolved } : current));
+      const draft = { tree, parents: [target], author: options.author,
+        committer: options.committer ?? options.author, message: options.message };
+      const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
+      this.advanceHead(head, target, id, "resolve", `Resolved conflicts at ${canonical}.`, now);
+      this.materialize(tree);
+      return id;
     });
   }
 
@@ -2650,6 +2692,7 @@ export class Repository {
             index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644",
               ...(entry.fileId === undefined ? {} : { fileId: entry.fileId }),
               ...(entry.copiedFrom === undefined ? {} : { copiedFrom: entry.copiedFrom }),
+              ...(entry.conflicts === undefined ? {} : { conflicts: entry.conflicts }),
             });
           }
           restored.push(path);

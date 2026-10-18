@@ -145,10 +145,10 @@ test("decodeIndex reads the legacy format and refuses malformed or future indexe
     [{ path: "identity-pending", id: "1".repeat(64), mode: "100644", sparse: true }],
   );
   assert.throws(
-    () => decodeIndex("pm-vcs-index 5"),
+    () => decodeIndex("pm-vcs-index 6"),
     (error: unknown) => error instanceof ObjectStoreError
       && error.code === "unsupported_index_version"
-      && /version 5/.test(error.message),
+      && /version 6/.test(error.message),
   );
   assert.throws(
     () => decodeIndex(`pm-vcs-index 4\n${JSON.stringify(["100644", "1".repeat(64), "identity-pending", null, null, null])}`),

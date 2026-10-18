@@ -27,10 +27,11 @@ import {
   importBundle,
   readBundle,
 } from "./engine/bundle.ts";
+import { summarizeConflicts, type ConflictSummary, type ResolutionOptions } from "./engine/conflicts.ts";
 import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
 import { orderCommitsNewestFirst, resolveFileId, traceFile, type FileChangeTrace } from "./engine/attribution.ts";
 import { divergence, reachable } from "./engine/merge.ts";
-import { type Signature, compareByteOrder, decodeCommit, decodeTree, effectiveChangeId, readCommit } from "./engine/model.ts";
+import { type Signature, compareByteOrder, decodeRecord, decodeCommit, decodeTree, effectiveChangeId, readCommit } from "./engine/model.ts";
 import { ObjectStoreError, type ObjectId } from "./engine/objects.ts";
 import { type Operation } from "./engine/oplog.ts";
 import { FIELD_STRATEGIES, type FieldStrategy } from "./engine/records.ts";
@@ -71,6 +72,12 @@ const HISTORY_FLAGS = [
   { long: "--depth", value_name: "N", description: "Keep at most N generations from each advertised tip", value_type: "string" as const },
   { long: "--filter", value_name: "blob:none", description: "Transfer metadata and hydrate blob payloads on demand", value_type: "string" as const },
 ];
+
+/** Omit empty conflict tables from ordinary output while retaining one row per unresolved unit. */
+function conflictOutput(repository: Repository, tree: ObjectId, changeId: ObjectId): { conflicts?: readonly ConflictSummary[] } {
+  const conflicts = summarizeConflicts(repository.objects, tree, changeId);
+  return conflicts.length > 0 ? { conflicts } : {};
+}
 
 /** Envelope every command returns, carrying an explicit verdict. */
 interface VcsEnvelope {
@@ -511,7 +518,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
     name: "vcs items",
     description: "Resolve a native revision range to PM items explicitly associated with its commits or linked to files it changed.",
     arguments: [{ name: "from..to", description: "Native revision range (default: every commit reachable from HEAD)", required: false }],
-    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { commits: readonly ObjectId[]; items: readonly string[] }> {
+    async run(context: CommandHandlerContext): Promise<VcsEnvelope & { commits: readonly ObjectId[]; items: readonly string[]; conflicts?: readonly ConflictSummary[] }> {
       const repository = openRepository(context);
       const range = context.args[0]?.trim();
       let history: Set<ObjectId>;
@@ -545,8 +552,14 @@ export function registerVcsCommands(api: ExtensionApi): void {
           }
         }
       }
+      const conflicts = [...commits].flatMap((id) => {
+        const commit = readCommit(repository.objects, id);
+        return summarizeConflicts(repository.objects, commit.tree, effectiveChangeId(id, commit));
+      });
+      for (const conflict of conflicts) if (conflict.item !== undefined) items.add(conflict.item);
       return {
         ok: true,
+        ...(conflicts.length > 0 ? { conflicts } : {}),
         commits: [...commits].sort(compareByteOrder),
         items: [...items].sort(compareByteOrder),
       };
@@ -605,7 +618,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       { long: "--change-ids", description: "Include each commit's stable change id in the output", value_type: "boolean" },
     ],
     run(context: CommandHandlerContext): VcsEnvelope & {
-      commits: ReadonlyArray<{ id: ObjectId; changeId?: ObjectId; message: string; author: string; at: string; parents: readonly ObjectId[] }>;
+      commits: ReadonlyArray<{ id: ObjectId; changeId?: ObjectId; message: string; author: string; at: string; parents: readonly ObjectId[]; conflicts?: readonly ConflictSummary[] }>;
     } {
       const repository = openRepository(context);
       const includeChangeIds = context.options?.changeIds === true;
@@ -622,6 +635,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
           author: `${entry.commit.author.name} <${entry.commit.author.email}>`,
           at: new Date(entry.commit.author.timestamp).toISOString(),
           parents: entry.commit.parents,
+          ...conflictOutput(repository, entry.commit.tree, entry.changeId),
         })),
       };
     },
@@ -717,12 +731,41 @@ export function registerVcsCommands(api: ExtensionApi): void {
   });
 
   api.registerCommand({
+    name: "vcs resolve",
+    description: "Record a resolving change for selected conflict units at HEAD. Ancestor propagation follows in Phase 7 child 2.",
+    arguments: [{ name: "path", description: "Tracked conflicted path", required: true }],
+    flags: [
+      { long: "--field", value_name: "name", description: "Resolve one structured field", value_type: "string" },
+      { long: "--take", value_name: "side", description: "Select ours, theirs or base", value_type: "string" },
+      { long: "--value", value_name: "value", description: "Replacement JSON value, or plain string", value_type: "string" },
+    ],
+    run(context: CommandHandlerContext): VcsEnvelope & { commit: ObjectId } {
+      const repository = openRepository(context);
+      const take = optionalString(context.options, "take");
+      const supplied = optionalString(context.options, "value");
+      if ((take === undefined) === (supplied === undefined) || (take !== undefined && !["ours", "theirs", "base"].includes(take))) {
+        throw new VcsError("invalid_resolution", "Choose exactly one resolution.", "Pass --take ours|theirs|base or --value <value>.");
+      }
+      let value: unknown = supplied;
+      if (supplied !== undefined) { try { value = JSON.parse(supplied); } catch { /* Plain strings are valid replacement values. */ } }
+      const field = context.options?.field;
+      const selection: ResolutionOptions = { ...(typeof field === "string" ? { field } : {}),
+        ...(take === undefined ? { value: decodeRecord(Buffer.from(JSON.stringify({ value }), "utf8")).value }
+          : { take: take as "ours" | "theirs" | "base" }) };
+      const commit = repository.resolveConflicts(requiredArgument(context, 0, "path", "Pass a conflicted path."), selection,
+        { message: "Resolve recorded conflicts", author: signatureFor(context, new Date()) }, new Date());
+      return { ok: true, commit };
+    },
+  });
+
+  api.registerCommand({
     name: "vcs merge",
     description:
-      "Merge a revision into HEAD. Fast-forwards when there is nothing to reconcile; otherwise merges every path three-way against a correctly computed merge base, per field for record paths and by diff3 for everything else. A merge that leaves conflict markers in any file does not commit: it writes the merged tree to the working tree, records in-progress merge state, and waits for `--continue` or `--abort`.",
+      "Merge a revision into HEAD. Fast-forwards when there is nothing to reconcile; otherwise merges every path three-way against a correctly computed merge base, per field for record paths and by diff3 for everything else. With --record-conflicts, field and hunk disagreements become committed data. In the default mode a merge that leaves conflict markers in any file does not commit: it writes the merged tree to the working tree, records in-progress merge state, and waits for `--continue` or `--abort`.",
     arguments: [{ name: "revision", description: "Revision to merge into HEAD (omit with --continue / --abort)", required: false }],
     flags: [
       { long: "--message", value_name: "text", description: "Message for the merge commit", value_type: "string" },
+      { long: "--record-conflicts", description: "Commit field and text disagreements as first-class conflict objects and continue working", value_type: "boolean" },
       { long: "--fail-on-conflict", description: "Exit non-zero when the merge leaves any conflict", value_type: "boolean" },
       { long: "--continue", description: "Complete an in-progress merge after resolving and staging the conflicted paths", value_type: "boolean" },
       { long: "--abort", description: "Abandon an in-progress merge and restore the working tree to where HEAD was before it", value_type: "boolean" },
@@ -748,8 +791,10 @@ export function registerVcsCommands(api: ExtensionApi): void {
         return { ok: true, merge: repository.mergeContinue(now) };
       }
       const revision = requiredArgument(context, 0, "revision", "Pass the branch or commit you intend to merge, or use --continue / --abort to finish or abandon an in-progress merge.");
+      if (context.options?.recordConflicts === true && context.options?.failOnConflict === true) throw new VcsError("invalid_merge_mode", "Conflicting merge modes.", "Choose --record-conflicts or --fail-on-conflict.");
       const message = optionalString(context.options, "message") ?? `Merge ${revision}`;
       const merge = repository.merge(revision, {
+        recordConflicts: context.options?.recordConflicts === true,
         // `optionalString` trims and the default is a literal, so the message
         // never arrives newline-terminated.
         message: `${message}\n`,
@@ -771,7 +816,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
           "Resolve the listed paths, stage them with `pm vcs add`, and run `pm vcs merge --continue`; or run `pm vcs merge --abort` to abandon the merge.",
         );
       }
-      return { ok: merge.clean, merge };
+      return { ok: context.options?.recordConflicts === true || merge.clean, merge };
     },
   });
 
@@ -1159,6 +1204,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
         message: string;
       };
       diff: string;
+      conflicts?: readonly ConflictSummary[];
     } {
       const repository = openRepository(context);
       const revision = context.args[0]?.trim() || "HEAD";
@@ -1167,6 +1213,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const parent = commit.parents[0];
       return {
         ok: true,
+        ...conflictOutput(repository, commit.tree, effectiveChangeId(id, commit)),
         commit: {
           id,
           changeId: effectiveChangeId(id, commit),

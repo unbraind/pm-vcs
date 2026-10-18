@@ -1,0 +1,68 @@
+id: pm-vcs-p7objects
+title: First-class conflict objects stored in changes
+description: "Opt-in merge recording stores one content-addressed object per conflicting structured field or text hunk, referenced by the tree alongside readable merged content. Existing fail-on-conflict behavior is preserved. Includes explicit tip resolution."
+type: Feature
+status: in_progress
+priority: 1
+tags: []
+created_at: "2026-10-18T03:01:39.215Z"
+updated_at: "2026-10-18T03:52:35.968Z"
+author: codex-agent
+estimated_minutes: 960
+acceptance_criteria: "Conflict units preserve base/ours/theirs and independent edits merge; conflicted snapshots remain committable and transportable; status/show/log/items report units in TOON and JSON; verify, GC, erasure and bounded history retain or safely deny the complete closure; real tracker proof and behavioural revert proofs pass unchanged npm and Bun release gates."
+parent: pm-vcs-phase7
+comments[5]{created_at,author,text}:
+  "2026-10-18T03:02:09.086Z",codex-agent,"Plan: preserve legacy merge behavior by default and under --fail-on-conflict. Add explicit --record-conflicts so automation opts in without changing existing callers. Store per-unit conflict addresses on tree/index entries beside a readable ours projection, never marker text. Ship tip resolve in this slice; ancestor resolution and automatic descendant propagation remain child pm-vcs-p7resolve. No release workflows will change."
+  "2026-10-18T03:08:24.490Z",codex-agent,"Implemented canonical field/hunk conflict objects, versioned tree/index references, explicit merge recording, tip resolve, conflict reporting and lifecycle traversal. Verification is in progress against real PM trackers, two linked working trees and bounded transfers. Ancestor propagation remains deferred to pm-vcs-p7resolve. Pinned pm is 2026.10.13; current published pm is 2026.10.17; the pin is unchanged."
+  "2026-10-18T03:23:35.824Z",codex-agent,"Behavioural revert proofs in an isolated source copy: reverting only the mergePath body to origin/main makes node --test --test-name-pattern=\"^field objects preserve\" test/first-class-conflicts.test.ts fail 0/1 with unsupported_recorded_conflict because unit references disappear. Reverting only collectCommitObjects makes node --test --test-name-pattern=\"^bundle, push/fetch\" test/first-class-conflicts.test.ts fail 0/1 with incomplete_bundle and two missing conflict objects. Tests import production TypeScript directly; no dist rebuild is involved. Both bodies were restored after each controlled proof."
+  "2026-10-18T03:43:38.262Z",codex-agent,"Verification before final release gates: the linked full conflict regression command passed 14/14 with zero failed, skipped or cancelled tests, including real PM_AUTHOR worktrees, readable native items, two continuing agents, third-author resolution, packed CLI TOON/JSON, native Bun reads, real HTTP push/fetch, GC, partial history and erasure. The subsequently added EOF/newline and metadata-only resolution cases passed 2/2 through the linked runner. Native PM round-trip rejection passed 1/1 and refuses a lossy body value before moving HEAD. Linked result tracking is disabled by existing repository policy, so these receipts are recorded here without changing that policy. Controlled revert proofs are in the preceding comment. Full npm/Bun gate and CI receipts will be published in the PR for this branch; no release is approved."
+  "2026-10-18T03:52:33.160Z",codex-agent,"Final retention checks passed for repeated contenders, resolution merges in both directions, moves/copies retaining stable file identities and independent conflict state, and exact structured field names. Repeated-field side selection now refuses ambiguity and requires --value. Field handling treats only own document/policy properties as values, including prototype-named keys. Structured resolution validates a lossless native-format round trip before publishing refs. No CLI/SDK defect requiring an upstream change was found; the pinned host correctly required isolated/snapshot workspace mode for pm_context_mode=none, so linked runs retained the existing schema context. Final npm/Bun gates and CI remain pending."
+files[18]{path,scope}:
+  engine/attribution.ts,project
+  engine/bundle.ts,project
+  engine/closure.ts,project
+  engine/conflicts.ts,project
+  engine/erasure.ts,project
+  engine/gc.ts,project
+  engine/lifecycle.ts,project
+  engine/merge.ts,project
+  engine/model.ts,project
+  engine/objects.ts,project
+  engine/records.ts,project
+  engine/repo.ts,project
+  engine/rewrite.ts,project
+  engine/worktree.ts,project
+  test/first-class-conflicts.test.ts,project
+  test/vcs-commands.test.ts,project
+  test/worktree.test.ts,project
+  vcs-commands.ts,project
+tests[3]:
+  - command: node --test test/first-class-conflicts.test.ts
+    scope: project
+    timeout_seconds: 1800
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-18T03:23:28.873Z"
+      source_kind: local_mutation
+      source_ref: feat/phase7-first-class-conflicts
+    updated_by: codex-agent
+    updated_at: "2026-10-18T03:37:05.108Z"
+  - command: "node --test --test-name-pattern=\"final hunk|staged unit\" test/first-class-conflicts.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-18T03:37:13.754Z"
+      source_kind: local_mutation
+      source_ref: feat/phase7-first-class-conflicts
+  - command: "node --test --test-name-pattern=\"native PM resolution refuses\" test/first-class-conflicts.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-18T03:43:18.612Z"
+      source_kind: local_mutation
+      source_ref: feat/phase7-first-class-conflicts
+docs[1]{path,scope}:
+  ARCHITECTURE.md,project
+body: ""

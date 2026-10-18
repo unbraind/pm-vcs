@@ -1,3 +1,4 @@
+import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Typed erasure metadata and provenance checks at every object arrival boundary. */
 import { inspectRepresentations } from "./representations.ts";
 import { createHash } from "node:crypto";
@@ -97,6 +98,10 @@ export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects
     if (deniedObjects.has(object.id) || (object.payload.length > 0 && digests.has(payloadDigest(object.payload))) || inspectRepresentations(object.payload, /** Nonempty frames and payloads remain denied beneath supported encodings; empty content retains its exact typed address. */ (bytes) => bytes.length > 0 && digests.has(payloadDigest(bytes)))) throw new ObjectStoreError("object_obliterated", "Arrival contains permanently denied payload bytes.");
     if (object.type === "tree") {
       for (const entry of decodeTree(object.payload)) {
+        for (const id of entry.conflicts ?? []) {
+          const denied = deniedObjects.get(id);
+          if (denied !== undefined && (entry.fileId !== denied.tombstone.fileId || !denied.tombstone.roots.includes(id))) throw new ObjectStoreError("invalid_erasure_role", "Conflict denial has the wrong FileId or root.");
+        }
         const affected = deniedObjects.get(entry.id);
         if (affected !== undefined && (entry.mode === "40000" || entry.fileId !== affected.tombstone.fileId || !affected.tombstone.roots.includes(entry.id))) {
           throw new ObjectStoreError("invalid_erasure_role", "Tree denial does not match its payload FileId and root.");
@@ -106,13 +111,15 @@ export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects
           throw new ObjectStoreError("file_obliterated", "Arrival assigns novel payloads to a permanently denied FileId.");
         }
       }
+    } else if (object.type === "conflict") {
+      if (conflictReferences(decodeConflict(object.payload)).some((id) => deniedObjects.has(id))) throw new ObjectStoreError("object_obliterated", "Conflict refers to permanently denied alternatives.");
     } else if (object.type === "manifest") {
       const manifest = decodeManifest(object.payload);
       if ((manifest.pages ?? manifest.fragments).some(/** A new manifest cannot retain erased fragments. */ (fragment) => deniedObjects.has(fragment.id))) {
         throw new ObjectStoreError("object_obliterated", "Arrival manifest refers to permanently denied fragments.");
       }
     }
-    if (!attributed && ["blob", "record", "manifest"].includes(object.type)) {
+    if (!attributed && ["blob", "record", "manifest", "conflict"].includes(object.type)) {
       throw new ObjectStoreError("unattributed_arrival", "Payload writes after erasure require complete FileId provenance.");
     }
   }

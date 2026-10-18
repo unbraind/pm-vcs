@@ -1,3 +1,4 @@
+import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Authorized FileId-scoped erasure over the complete supported loose storage backend. */
 import { type BigIntStats, existsSync, lstatSync, readdirSync, rmSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,9 +25,9 @@ export interface ErasureReceipt {
 
 /** Whole-store planning metadata excludes leaf buffers and retains only decoded ownership/fragment structure. */
 type InventoryObject =
-  | { readonly type: "manifest"; readonly digest: string; readonly fragments: ReturnType<typeof decodeManifest>["fragments"] }
+  | { readonly type: "manifest" | "conflict"; readonly digest: string; readonly fragments: ReturnType<typeof decodeManifest>["fragments"] }
   | { readonly type: "tree"; readonly digest: string; readonly entries: ReturnType<typeof decodeTree> }
-  | { readonly type: Exclude<ObjectType, "manifest" | "tree">; readonly digest: string };
+  | { readonly type: Exclude<ObjectType, "manifest" | "conflict" | "tree">; readonly digest: string };
 
 /** Close one payload over all manifest fragments, failing on incomplete inventory. */
 function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, InventoryObject>, store: ObjectStore): Set<ObjectId> {
@@ -41,7 +42,7 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, Inventory
       if (store.denial(current) !== undefined) continue;
       throw new ObjectStoreError("incomplete_erasure_inventory", "History or index names payloads absent from the complete inventory.");
     }
-    if (object.type === "manifest") pending.push(...object.fragments.map(/** Include every fragment even outside current refs. */ (fragment) => fragment.id));
+    if (object.type === "manifest" || object.type === "conflict") pending.push(...object.fragments.map(/** Include every fragment even outside current refs. */ (fragment) => fragment.id));
     else if (object.type !== "blob" && object.type !== "record" && object.type !== "link") {
       throw new ObjectStoreError("incomplete_erasure_inventory", "A file entry names a non-payload object.");
     }
@@ -107,12 +108,13 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         const manifest = decodeManifest(object.payload);
         inventory.set(id, { type: object.type, digest, fragments: manifest.pages ?? manifest.fragments });
       }
+      else if (object.type === "conflict") inventory.set(id, { type: object.type, digest, fragments: conflictReferences(decodeConflict(object.payload)).map((side) => ({ id: side, length: 0 })) });
       else if (object.type === "tree") inventory.set(id, { type: object.type, digest, entries: decodeTree(object.payload) });
       else inventory.set(id, { type: object.type, digest });
     }
     const history = inspectClosure(store, [...inventory].filter(/** Every unreachable commit still requires a real structural closure. */ ([_id, object]) => object.type === "commit").map(/** Inspect all commit roots, not merely advertised refs. */ ([id]) => id), [], local.map(/** Pending payload absence is legitimate during an authorized cleanup retry. */ (denial) => ({ ...denial, pending: false })));
     if (history.missing.length + history.corrupt.length > 0) throw new ObjectStoreError("incomplete_erasure_inventory", "Complete historical structure is required before erasure.");
-    const entries: { id: string; fileId?: string }[] = [];
+    const entries: { id: string; fileId?: string; conflicts?: readonly string[] }[] = [];
     for (const object of inventory.values()) {
       if (object.type === "tree") entries.push(...object.entries.filter(/** Directory identities belong to structure, never file payload. */ (entry) => entry.mode !== "40000"));
     }
@@ -122,6 +124,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       indexes.set(instance, index);
       entries.push(...index);
     }
+    entries.push(...entries.flatMap((entry) => (entry.conflicts ?? []).map((id) => ({ id, fileId: entry.fileId }))));
     const roots = new Set(existing?.tombstone.roots ?? []);
     for (const entry of entries) if (entry.fileId === fileId) roots.add(entry.id);
     if (roots.size === 0) throw new ObjectStoreError("unknown_file", "No payload is attributable to this FileId.");
@@ -136,7 +139,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     // Unattributed manifests can retain or reconstruct fragments. They cannot
     // be erased under someone else's FileId or silently left recoverable.
     for (const [id, object] of inventory) {
-      if (object.type === "manifest" && !selected.has(id)
+      if ((object.type === "manifest" || object.type === "conflict") && !selected.has(id)
         && object.fragments.some(/** Refuse unknown fragment owners before mutation. */ (fragment) => selected.has(fragment.id))) {
         throw new ObjectStoreError("erasure_dedup_conflict", "An unrelated manifest shares fragments selected for erasure.");
       }

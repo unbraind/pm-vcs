@@ -1,8 +1,9 @@
 import { type PartialState } from "./partial.ts";
 import { assertManifestChild, assertManifestRoot } from "./manifest-pages.ts";
 /** Role-aware history validation: only attributed payload leaves can be intentionally absent. */
+import { decodeConflict, conflictReferences } from "./conflicts.ts";
 import { decodeLink } from "./composition.ts";
-import { decodeCommit, decodeManifest, decodeTree } from "./model.ts";
+import { decodeCommit, decodeManifest, decodeTree, decodeRecord } from "./model.ts";
 import { type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
 
@@ -29,7 +30,7 @@ export interface ClosureMetadata {
 /** Context follows tree ownership through a payload manifest to its physical fragments. */
 interface Reference {
   readonly id: ObjectId;
-  readonly role: "commit" | "tree" | "payload" | "fragment" | "manifest" | "tombstone";
+  readonly role: "commit" | "tree" | "payload" | "fragment" | "manifest" | "tombstone" | "conflict" | "blob" | "record";
   readonly parent?: ReturnType<typeof decodeManifest>;
   /** Content address of `parent`; the dedup key uses it instead of the parent's full page list. */
   readonly parentId?: ObjectId;
@@ -44,7 +45,8 @@ type VerifiedObject =
   | { readonly type: "commit"; readonly structure: ReturnType<typeof decodeCommit> }
   | { readonly type: "tree"; readonly structure: ReturnType<typeof decodeTree> }
   | { readonly type: "manifest"; readonly structure: ReturnType<typeof decodeManifest> }
-  | { readonly type: Exclude<ObjectType, "commit" | "tree" | "manifest">; readonly length: number };
+  | { readonly type: "conflict"; readonly structure: ReturnType<typeof decodeConflict> }
+  | { readonly type: Exclude<ObjectType, "commit" | "tree" | "manifest" | "conflict">; readonly length: number };
 
 /** Validate commit roots against held objects plus an unpublished arrival, without mutating storage. */
 export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), audits = false, trees: readonly ObjectId[] = [], metadata: ClosureMetadata = { commits: new Map(), trees: new Map() }, partial: Pick<PartialState, "shallow" | "promised"> | null = store.partialState()): ClosureReport {
@@ -67,11 +69,11 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
     seen.add(key);
     const denial = denied.get(id);
     if (denial !== undefined) {
-      if (role === "payload" && fileId === denial.tombstone.fileId && root !== undefined && denial.tombstone.roots.includes(root)) result.obliterated.push(id);
+      if (["payload", "conflict", "blob", "record"].includes(role) && fileId === denial.tombstone.fileId && root !== undefined && denial.tombstone.roots.includes(root)) result.obliterated.push(id);
       else result.corrupt.push(`${id}: invalid_erasure_role`);
       continue;
     }
-    if ((role === "payload" || role === "fragment") && partial?.promised.includes(id) === true && !carried.has(id) && !store.has(id)) continue;
+    if ((role === "payload" || role === "fragment" || role === "blob") && partial?.promised.includes(id) === true && !carried.has(id) && !store.has(id)) continue;
     try {
       let object = held.get(id);
       if (object instanceof ObjectStoreError) throw object;
@@ -80,6 +82,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
         if (bytes.type === "commit") object = { type: bytes.type, structure: decodeCommit(bytes.payload) };
         else if (bytes.type === "tree") object = { type: bytes.type, structure: decodeTree(bytes.payload) };
         else if (bytes.type === "manifest") object = { type: bytes.type, structure: decodeManifest(bytes.payload) };
+        else if (bytes.type === "conflict") object = { type: bytes.type, structure: decodeConflict(bytes.payload) };
         else {
           if (bytes.type === "link") decodeLink(bytes.payload);
           object = { type: bytes.type, length: bytes.payload.length };
@@ -88,6 +91,10 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
       }
       const allowed = role === "payload" ? ["blob", "record", "link", "manifest"] : [role === "fragment" ? "blob" : role];
       if (!allowed.includes(object.type)) throw new ObjectStoreError("object_type_mismatch", "History reference has the wrong object kind.");
+      if (role === "record") {
+        const side = decodeRecord((carried.get(id) ?? store.read(id)).payload);
+        if (Object.keys(side).some((key) => key !== "value")) throw new ObjectStoreError("malformed_conflict_side", "A field alternative must be a scalar envelope or absence.");
+      }
       if (reference.length !== undefined && object.type === "blob" && object.length !== reference.length) {
         throw new ObjectStoreError("fragment_length_mismatch", "Fragment length disagrees with its manifest.");
       }
@@ -99,7 +106,12 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
         pending.push({ id: commit.tree, role: "tree" }, ...(partial?.shallow.includes(id) === true ? [] : commit.parents).map(/** Parent references always require real commits. */ (parent) => ({ id: parent, role: "commit" as const })));
       } else if (object.type === "tree") {
         metadata.trees.set(id, object.structure);
-        for (const entry of object.structure) pending.push(entry.mode === "40000" ? { id: entry.id, role: "tree" } : { id: entry.id, role: "payload", fileId: entry.fileId, root: entry.id });
+        for (const entry of object.structure) {
+          pending.push(entry.mode === "40000" ? { id: entry.id, role: "tree" } : { id: entry.id, role: "payload", fileId: entry.fileId, root: entry.id });
+          for (const conflict of entry.conflicts ?? []) pending.push({ id: conflict, role: "conflict", fileId: entry.fileId, root: conflict });
+        }
+      } else if (object.type === "conflict") {
+        for (const side of conflictReferences(object.structure)) pending.push({ id: side, role: object.structure.kind === "field" ? "record" : "blob", fileId, root });
       } else if (object.type === "manifest") {
         const node = object.structure;
         if (node.pages !== undefined) {

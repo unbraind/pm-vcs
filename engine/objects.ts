@@ -46,7 +46,7 @@ import { writePrivateJson } from "./composition.ts";
 const activeLeases = new Set<string>();
 
 /** The kinds of object the store can hold. */
-export const OBJECT_TYPES = ["blob", "tree", "commit", "record", "series", "manifest", "link", "tombstone"] as const;
+export const OBJECT_TYPES = ["blob", "tree", "commit", "record", "series", "manifest", "link", "tombstone", "conflict"] as const;
 
 /** One of the eight object kinds. */
 export type ObjectType = (typeof OBJECT_TYPES)[number];

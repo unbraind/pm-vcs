@@ -11,6 +11,7 @@
 // under a name that does not describe it — after which every identity check in
 // the system is reasoning about a lie.
 
+import { readConflict, conflictReferences } from "./conflicts.ts";
 import { historyOptions, omissionIds, type HistoryOptions } from "./partial.ts";
 import { readFileSync } from "node:fs";
 
@@ -84,6 +85,9 @@ export function collectCommitObjects(store: ObjectStore, commits: readonly Objec
   const walkPayload = (id: ObjectId): void => {
     if (objects.has(id)) return;
     objects.add(id);
+    if (store.readIfType(id, "conflict") !== undefined) {
+      for (const side of conflictReferences(readConflict(store, id))) walkPayload(side);
+    }
     const manifest = store.readIfType(id, "manifest");
     if (manifest !== undefined) {
       const node = decodeManifest(manifest.payload);
@@ -99,6 +103,7 @@ export function collectCommitObjects(store: ObjectStore, commits: readonly Objec
       else {
         if (store.denial(entry.id) !== undefined) continue;
         walkPayload(entry.id);
+        for (const conflict of entry.conflicts ?? []) walkPayload(conflict);
       }
     }
   };

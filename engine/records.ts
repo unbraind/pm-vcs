@@ -80,7 +80,9 @@ function canonical(value: RecordValue | undefined): string {
  * @returns The strategy to apply.
  */
 function strategyFor(field: string, policy: MergePolicy, sample: RecordValue | undefined): FieldStrategy {
-  return policy.fields?.[field] ?? policy.fallback ?? (Array.isArray(sample) ? "set" : "scalar");
+  const fields = policy.fields;
+  return (fields !== undefined && Object.hasOwn(fields, field) ? fields[field] : undefined)
+    ?? policy.fallback ?? (Array.isArray(sample) ? "set" : "scalar");
 }
 
 /**
@@ -170,9 +172,9 @@ export function mergeRecords(
   const changedFields: string[] = [];
 
   for (const field of fields) {
-    const baseValue = base[field];
-    const ourValue = ours[field];
-    const theirValue = theirs[field];
+    const baseValue = Object.hasOwn(base, field) ? base[field] : undefined;
+    const ourValue = Object.hasOwn(ours, field) ? ours[field] : undefined;
+    const theirValue = Object.hasOwn(theirs, field) ? theirs[field] : undefined;
     const ourChanged = canonical(ourValue) !== canonical(baseValue);
     const theirChanged = canonical(theirValue) !== canonical(baseValue);
 
@@ -213,7 +215,7 @@ export function mergeRecords(
       }
     }
 
-    if (resolved !== undefined) merged[field] = resolved;
+    if (resolved !== undefined) Object.defineProperty(merged, field, { value: resolved, writable: true, enumerable: true, configurable: true });
     if (canonical(resolved) !== canonical(baseValue)) changedFields.push(field);
   }
 
