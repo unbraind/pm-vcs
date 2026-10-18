@@ -396,7 +396,7 @@ test("supported annotations stop at unsupported ancestry while selected kinds an
     assert.equal(rows[0].changeId, tip); assert.ok(rows[0].alternatives!.every((side) => side.unavailable === true));
     assert.equal(reads, 1); repo.objects.read = read;
     assert.throws(() => annotatePath(repo.objects, old, path), { code: "unsupported_annotation" });
-    const location = join(repo.sharedControlDirectory, "objects", manifest.slice(0, 2), manifest.slice(2));
+    const location = join(repo.controlDirectory, "objects", manifest.slice(0, 2), manifest.slice(2));
     writeFileSync(location, "corrupt compressed ancestor");
     assert.throws(() => annotatePath(repo.objects, tip, path), { code: "corrupt_object" });
     rmSync(location); mkdirSync(location);
@@ -420,7 +420,7 @@ test("unavailable optional PM history omits agent metadata and caches failure wi
     const first = writeCommit(repo.objects, { tree: buildTree(repo.objects, files), parents: [base], author, committer: author, items: [item], message: "first setter" });
     files.set("text.txt", { fileId, mode: "100644", id: repo.objects.write("blob", Buffer.from("second\nretained\n")) });
     const tip = writeCommit(repo.objects, { tree: buildTree(repo.objects, files), parents: [first], author, committer: author, items: [item], message: "second setter" });
-    const location = join(repo.sharedControlDirectory, "objects", id.slice(0, 2), id.slice(2));
+    const location = join(repo.controlDirectory, "objects", id.slice(0, 2), id.slice(2));
     if (kind === "missing" || kind === "directory") { rmSync(location); if (kind === "directory") mkdirSync(location); }
     if (kind === "corrupt") writeFileSync(location, "corrupt optional history");
     if (kind === "obliterated") { repo.setAuthority("fixture", "read-fixture", "erase-fixture"); repo.identity(); repo.obliterate(history.fileId!, "erase-fixture", "fixture", now); }
