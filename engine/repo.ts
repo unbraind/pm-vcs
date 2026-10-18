@@ -795,10 +795,11 @@ export class Repository {
    * third defect the merge-state work fixes.
    *
    * @param read - Working-file reader; injectable for race and cache tests.
+   * @param refreshCache - Publish verified stat observations; false keeps preflight reads from changing the index.
    * @returns What is staged, what is not, what is untracked, and any in-progress
    *   merge with its conflicted paths.
    */
-  status(read: typeof readWorkingFile = readWorkingFile): StatusReport {
+  status(read: typeof readWorkingFile = readWorkingFile, refreshCache = true): StatusReport {
     const snapshot = this.readIndexSnapshot();
     const indexedPaths = new Map(snapshot.entries.map((entry) => [entry.path, entry.id]));
     const refreshed = new Map<string, IndexEntry["stat"]>();
@@ -825,7 +826,7 @@ export class Repository {
       new Set(readHints(this.controlDirectory).filter((path) => indexedPaths.has(path))),
       excluded,
     );
-    if (refreshed.size > 0) {
+    if (refreshCache && refreshed.size > 0) {
       this.replaceIndex(snapshot.entries.map((entry) => {
         const stat = refreshed.get(entry.path);
         return stat === undefined ? entry : { ...entry, stat };
@@ -990,7 +991,7 @@ export class Repository {
       if (files.size === 0 || layers.some(/** Refuse a local name collision. */ (layer) => layer.name === name)) throw new ObjectStoreError("bad_layers", "Layer is empty or its name already exists.");
       const owned = this.layerPaths();
       const index = new Map(this.readIndex().map(/** Resolve current ownership independently of disk contents. */ (entry) => [entry.path, entry]));
-      const status = this.status();
+      const status = this.status(readWorkingFile, false);
       const dirty = new Set([...status.staged, ...status.unstaged].map(/** Refuse both staged and unstaged changes before overlaying. */ (change) => change.path));
       const layer: LocalLayer = { name, files: [...files].map(/** Store snapshots only in private control metadata. */ ([path, value]) => {
         assertCompositionPath(path, this.ignoreRules());
@@ -1059,7 +1060,7 @@ export class Repository {
       const index = this.readIndex();
       const previous = index.find(/** Preserve stable descriptor identity across a deliberate pin update. */ (entry) => entry.path === path);
       if (existsSync(join(this.root, path)) && previous === undefined) throw new ObjectStoreError("link_collision", "Descriptor path already holds untracked content.");
-      if (previous !== undefined && this.status().unstaged.some(/** Preserve edits to an existing descriptor. */ (entry) => entry.path === path)) throw new ObjectStoreError("link_collision", "Descriptor has unstaged edits.");
+      if (previous !== undefined && this.status(readWorkingFile, false).unstaged.some(/** Preserve edits to an existing descriptor. */ (entry) => entry.path === path)) throw new ObjectStoreError("link_collision", "Descriptor has unstaged edits.");
       const fileId = previous?.fileId ?? randomBytes(16).toString("hex");
       const id = this.objects.write("link", payload, fileId);
       const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
@@ -1778,7 +1779,7 @@ export class Repository {
       const targetTree = readCommit(this.objects, target).tree;
       const current = flattenTree(this.objects, this.headTree());
       const next = flattenTree(this.objects, targetTree);
-      const status = this.status();
+      const status = this.status(readWorkingFile, false);
       const dirty = new Set([
         ...status.unstaged.map((change) => change.path),
         ...status.staged.map((change) => change.path),
@@ -2058,7 +2059,7 @@ export class Repository {
       this.assertNoMergeInProgress();
       const target = this.resolve("HEAD");
       const head = this.refs.readHead();
-      const status = this.status();
+      const status = this.status(readWorkingFile, false);
       if (status.staged.length + status.unstaged.length > 0) throw new ObjectStoreError("dirty_worktree", "Commit staged and unstaged edits before resolving a conflict.");
       const canonical = normalizeRepoPath(this.root, path);
       const index = this.committableIndex();
@@ -2310,7 +2311,7 @@ export class Repository {
    * @throws ObjectStoreError When the working tree has uncommitted changes.
    */
   private assertCleanWorktree(): void {
-    const status = this.status();
+    const status = this.status(readWorkingFile, false);
     if (status.staged.length > 0 || status.unstaged.length > 0) {
       throw new ObjectStoreError(
         "dirty_worktree",
@@ -2351,7 +2352,7 @@ export class Repository {
     mixReason: string,
     overwriteReason: string,
   ): void {
-    const status = this.status();
+    const status = this.status(readWorkingFile, false);
     if (status.staged.length > 0 || status.unstaged.length > 0) {
       throw new ObjectStoreError(
         "dirty_worktree",
@@ -2386,7 +2387,7 @@ export class Repository {
    */
   private assertNoUntrackedCollisions(tree: ObjectId | null, overwriteReason: string): void {
     this.assertLayersAcceptTree(tree);
-    const untracked = this.status().untracked;
+    const untracked = this.status(readWorkingFile, false).untracked;
     if (untracked.length === 0 || tree === null) return;
     const incomingPaths = [...flattenTree(this.objects, tree).keys()];
     const incoming = new Set(incomingPaths);
@@ -2634,7 +2635,7 @@ export class Repository {
       const targetTree = readCommit(this.objects, target).tree;
       if (mode === "hard") {
         this.assertLayersAcceptTree(targetTree);
-        const untracked = [...this.status().untracked].sort(compareByteOrder);
+        const untracked = [...this.status(readWorkingFile, false).untracked].sort(compareByteOrder);
         if (untracked.length > 0) {
           throw new ObjectStoreError(
             "reset_would_discard_untracked",

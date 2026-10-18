@@ -2,6 +2,7 @@
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { scryptSync, createHash, randomBytes } from "node:crypto";
@@ -23,7 +24,7 @@ import { hashObject, frameObject, ObjectStore, ObjectStoreError, type ObjectId }
 import { type Signature, type TreeEntry, readCommit, encodeTree, writeTree, writeCommit, encodeSeries, encodeManifest, encodeCommit, encodeRecord, decodeRecord } from "../engine/model.ts";
 import { readFragmented, writeFragmented } from "../engine/fragments.ts";
 import { mergePath, mergeTrees } from "../engine/rewrite.ts";
-import { flattenTree } from "../engine/worktree.ts";
+import { flattenTree, RACY_WINDOW_NS } from "../engine/worktree.ts";
 import { registerInstance } from "../engine/instances.ts";
 import { LeasedFileTransport as FileTransport } from "./helpers/publication-consumers.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
@@ -1302,6 +1303,9 @@ for (const operation of ["switch", "reset", "undo-ref", "undo-head", "rewrite", 
     if (operation === "undo-head") { repo.switchTo(target, new Date(3000)); repo.switchTo(current, new Date(4000)); }
     if (operation === "rewrite-detached") repo.switchTo(current, new Date(3000));
     repo.addLayer("private", new Map([["vendor/asset.bin", { content: Buffer.from("private preserved bytes"), executable: false }]]));
+    // A cold index and aged real files force cache refresh; refusal must precede that write.
+    repo.writeIndex(repo.readIndex().map(({ stat: _stat, ...entry }) => entry));
+    await delay(Number(RACY_WINDOW_NS / 1_000_000n) + 100);
     const snapshot = { head: repo.refs.rawHead(), refs: repo.refs.list("refs/"), index: readFileSync(join(repo.controlDirectory, "index")), log: readFileSync(join(repo.controlDirectory, "oplog.jsonl")) };
     const action = operation === "switch" ? () => repo.switchTo(target, new Date(5000))
       : operation === "reset" ? () => repo.reset(target, "hard", new Date(5000))

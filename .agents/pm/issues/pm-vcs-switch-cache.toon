@@ -1,0 +1,26 @@
+id: pm-vcs-switch-cache
+title: Preflight status refresh mutates index before refused operations
+description: "Isolated release:check exposed cache writes before a private-layer switch refusal. Deterministic cold indexes with real files aged beyond RACY_WINDOW_NS also expose attached and detached rewrite refusals. Conflict resolution uses the same status path. Internal preflight status reads must not publish optional index cache observations; ordinary public status retains cache warming. Existing real repository refusal regressions are strengthened, including overlapping conflict resolution."
+type: Issue
+status: in_progress
+priority: 1
+tags: []
+created_at: "2026-10-18T10:20:47.215Z"
+updated_at: "2026-10-18T10:27:17.271Z"
+assignee: codex-agent
+claim_principal: codex-agent
+author: codex-agent
+acceptance_criteria: "Real switch refusal preserves raw index, HEAD, refs, operations and private working bytes with optional stat observations absent. Regression fails with only preflight ordering reverted. Both unchanged release gates pass."
+parent: pm-vcs-p7objects
+comments[1]{created_at,author,text}:
+  "2026-10-18T10:27:17.271Z",codex-agent,"Fixed the shared cause: status accepts an optional refreshCache flag (default true); all eight internal mutation-preflight callers disable cache publication. Normal public status still warms verified observations. Real cold-index regressions age filesystem entries beyond RACY_WINDOW_NS, then prove switch/reset/undo/attached-rewrite/detached-rewrite and overlapping text refusal retain raw index, refs, HEAD, operation log and private bytes. Tracker-linked command node --test --test-name-pattern=\"renewed private layer refuses|collapsed text\" test/composition.test.ts test/first-class-conflicts.test.ts passes 7/7; public cache-warming regression passes 1/1. Behavioral revert: remove only refreshCache from the cache-publication condition, leaving all callers/tests fixed. Layer suite yields 3 pass/3 fail (switch and both rewrites mutate index); collapsed-text refusal yields 0/1 pass with the same raw-index mutation. Restored protection; typecheck, lint, zero duplication and docstrings pass. Initial single-operation preflight ordering was discarded because it left rewrite and conflict-resolution refusals exposed."
+files[3]{path,scope}:
+  engine/repo.ts,project
+  test/composition.test.ts,project
+  test/first-class-conflicts.test.ts,project
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  "node --test --test-name-pattern=\"renewed private layer refuses\" test/composition.test.ts",project,600,codex-agent,"2026-10-18T10:21:50.002Z",local_mutation,feat/phase7-first-class-conflicts
+  "node --test --test-name-pattern=\"renewed private layer refuses|collapsed text\" test/composition.test.ts test/first-class-conflicts.test.ts",project,600,codex-agent,"2026-10-18T10:26:31.772Z",local_mutation,feat/phase7-first-class-conflicts
+docs[1]{path,scope}:
+  ARCHITECTURE.md,project
+body: ""

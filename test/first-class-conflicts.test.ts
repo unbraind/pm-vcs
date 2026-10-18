@@ -4,6 +4,7 @@ import { deflateSync } from "node:zlib";
 import { inspectRepresentations } from "../engine/representations.ts";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -14,7 +15,7 @@ import { Repository } from "../engine/repo.ts";
 import { decodeRecord, decodeTree, encodeRecord, encodeTree, readCommit, writeCommit } from "../engine/model.ts";
 import { decodeConflict, encodeConflict, fieldSide, readConflict, resolvePayload, summarizeConflicts, carryConflicts, type ConflictUnit } from "../engine/conflicts.ts";
 import { mergeTrees } from "../engine/rewrite.ts";
-import { buildTree, decodeIndex, encodeIndex, flattenTree } from "../engine/worktree.ts";
+import { buildTree, decodeIndex, encodeIndex, flattenTree, RACY_WINDOW_NS } from "../engine/worktree.ts";
 import { inspectClosure } from "../engine/closure.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
@@ -429,6 +430,8 @@ test("ordinary text edits preserve adjacent insertions and replacement ranges wh
 
 test("collapsed text hunks refuse every recorded side without changing published state", async () => {
   const { repo, path } = await divergent(true); record(repo, path); commit(repo, path, "");
+  repo.writeIndex(repo.readIndex().map(({ stat: _stat, ...entry }) => entry));
+  await delay(Number(RACY_WINDOW_NS / 1_000_000n) + 100);
   const entry = repo.readIndex().find((entry) => entry.path === path)!;
   assert.deepEqual(entry.conflicts!.map((id) => readConflict(repo.objects, id)).map((unit) =>
     unit.kind === "text" ? [unit.start, unit.end] : null), [[0, 0], [0, 0]]);
