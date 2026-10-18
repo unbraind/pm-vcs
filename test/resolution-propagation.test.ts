@@ -8,7 +8,7 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
-import { decodeRecord, effectiveChangeId, readCommit } from "../engine/model.ts";
+import { decodeRecord, effectiveChangeId, readCommit, writeCommit } from "../engine/model.ts";
 import { flattenTree } from "../engine/worktree.ts";
 import { readConflict, summarizeConflicts } from "../engine/conflicts.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -205,4 +205,19 @@ test("partial field resolution propagates without clearing other units, while eq
     }
     assert.deepEqual(repo.verify().missing, []);
   }
+});
+
+test("ancestor selectors accept stable change identities and refuse ambiguous live versions", () => {
+  const { repo, path, merged } = conflict(); const stable = effectiveChangeId(merged, readCommit(repo.objects, merged));
+  assert.equal(repo.resolve(stable), merged);
+  edit(repo, "after.txt", "after");
+  repo.resolveConflicts(path, { take: "theirs" }, { message: "by change id", author }, now, stable);
+  assert.equal(statusAt(repo, "HEAD", path), "theirs");
+  repo.refs.setHeadDetached(repo.resolve("HEAD"));
+  assert.equal(repo.resolve(stable), merged);
+  const alternate = writeCommit(repo.objects, { ...readCommit(repo.objects, merged), message: "another version" });
+  repo.refs.compareAndSwap("refs/heads/alternate", null, alternate);
+  assert.throws(() => repo.resolve(stable), /several reachable versions/);
+  assert.throws(() => repo.resolve("f".repeat(64)), /not a known/);
+  assert.throws(() => Repository.init(temp()).resolve(stable), /not a known/);
 });
