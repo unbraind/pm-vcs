@@ -742,7 +742,8 @@ export function registerVcsCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext): VcsEnvelope & { commit: ObjectId } {
       const repository = openRepository(context);
       const take = optionalString(context.options, "take");
-      const supplied = optionalString(context.options, "value");
+      const rawValue = context.options?.value;
+      const supplied = typeof rawValue === "string" ? rawValue : undefined;
       if ((take === undefined) === (supplied === undefined) || (take !== undefined && !["ours", "theirs", "base"].includes(take))) {
         throw new VcsError("invalid_resolution", "Choose exactly one resolution.", "Pass --take ours|theirs|base or --value <value>.");
       }

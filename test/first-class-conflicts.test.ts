@@ -18,7 +18,7 @@ import { buildTree, decodeIndex, encodeIndex, flattenTree } from "../engine/work
 import { inspectClosure } from "../engine/closure.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
-import { exportBundle, importBundle } from "../engine/bundle.ts";
+import { exportBundle, importBundle, serializeBundle } from "../engine/bundle.ts";
 import { hashObject, ObjectStore, type ObjectId, type ObjectType } from "../engine/objects.ts";
 import { traceFile } from "../engine/attribution.ts";
 import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
@@ -74,6 +74,24 @@ function publishedState(repo: Repository, path: string) {
     content: existsSync(leaf) ? readFileSync(leaf) : null, mode: existsSync(leaf) ? statSync(leaf).mode : null,
     merge: repo.readMergeState(), operations: repo.operations.read() };
 }
+
+/** Prepare independent EOF text and structured-field disputes for command-boundary checks. */
+async function resolutionFixture() {
+  const state = await fixture(); const { repo } = state;
+  commit(repo, "text.txt", "base\n"); commit(repo, "item.toon", JSON.stringify({ status: "base" }));
+  repo.createBranch("other", "HEAD", now); repo.switchTo("other", now);
+  commit(repo, "text.txt", "theirs\n"); commit(repo, "item.toon", JSON.stringify({ status: "theirs" }));
+  repo.switchTo("main", now);
+  commit(repo, "text.txt", "ours\n"); commit(repo, "item.toon", JSON.stringify({ status: "ours" }));
+  record(repo, "text.txt"); return state;
+}
+
+const rawResolutionCases = [
+  ["text.txt", "line\n", "line\n"], ["text.txt", "", ""], ["text.txt", "  chosen  ", "  chosen  "],
+  ["text.txt", " \n\t ", " \n\t "], ["text.txt", '"quoted\\n"', "quoted\n"],
+  ["item.toon", "  chosen  ", "  chosen  "], ["item.toon", "", ""], ["item.toon", " \t ", " \t "],
+  ["item.toon", "false", false], ["item.toon", "null", null], ["item.toon", "42", 42],
+] as const;
 
 test("real PM worktrees: two PM_AUTHOR identities keep working, a third resolves exactly one status unit", async () => {
   const { repo, client, parent, root } = await fixture();
@@ -232,6 +250,52 @@ test("FileId obliteration removes conflict units and all alternatives and preven
   assert.deepEqual(receiver.verify().missing, []); assert.deepEqual(receiver.verify().corrupt, []);
 });
 
+test("bundle arrivals cannot attach novel field or text conflict roots to an erased FileId", async (t) => {
+  for (const text of [false, true]) await t.test(text ? "text alternatives" : "field alternatives", async () => {
+    const { repo } = await fixture(); const path = text ? "secret.txt" : "secret.toon";
+    const values = ["base", "ours", "theirs"].map((side) => text ? `unique-erased-${side}-e2a932\n`
+      : JSON.stringify({ status: `unique-erased-${side}-e2a932` }));
+    commit(repo, path, values[0]!); repo.createBranch("other", "HEAD", now);
+    repo.switchTo("other", now); commit(repo, path, values[2]!);
+    repo.switchTo("main", now); commit(repo, path, values[1]!);
+    const { entry } = record(repo, path);
+    repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+    repo.obliterate(path, "erase-fixture", "fixture-cleanup", now);
+    const sender = Repository.init(temp());
+    const sides = ["base", "ours", "theirs"].map((side) => text
+      ? sender.objects.write("blob", Buffer.from(`novel-${side}-alternative\n`))
+      : fieldSide(sender.objects, `novel-${side}-alternative`));
+    const unit = sender.objects.write("conflict", encodeConflict({ base: sides[0]!, ours: sides[1]!, theirs: sides[2]!,
+      ...(text ? { kind: "text", start: 0, end: 1 } : { kind: "field", field: "status" }) }));
+    /** Model an untrusted peer carrying new structural objects without resending erased payloads. */
+    const incoming = (name: string, id: ObjectId, fileId: string, conflicts: readonly ObjectId[], alternatives = false) => {
+      const tree = sender.objects.write("tree", encodeTree([{ name, mode: "100644", id, fileId, conflicts }]));
+      const tip = writeCommit(sender.objects, { tree, parents: [], author, committer: author, message: "incoming conflict" });
+      return serializeBundle(sender.objects, { refs: { "refs/heads/arrival": tip }, prerequisites: [],
+        objects: [...new Set([tree, tip, ...(alternatives ? [unit, ...sides, ...(sender.objects.has(id) ? [id] : [])] : [])])] });
+    };
+    const before = { state: publishedState(repo, path), refs: repo.refs.list("refs/"),
+      inventory: [...repo.objects.walkInventory()].map((object) => object.id).sort(), denials: repo.objects.denials() };
+    for (const conflicts of [[unit], [entry.conflicts![0]!, unit], [unit, entry.conflicts![0]!]]) {
+      const bundle = incoming("new-name", entry.id, entry.fileId!, conflicts, true);
+      assert.throws(() => importBundle(repo.objects, repo.refs, bundle), { code: "file_obliterated" });
+      assert.deepEqual({ state: publishedState(repo, path), refs: repo.refs.list("refs/"),
+        inventory: [...repo.objects.walkInventory()].map((object) => object.id).sort(), denials: repo.objects.denials() }, before);
+      for (const id of [unit, ...sides]) assert.equal(repo.objects.has(id), false);
+    }
+    importBundle(repo.objects, repo.refs, incoming("historical-name", entry.id, entry.fileId!, entry.conflicts!));
+    assert.deepEqual(repo.verify().missing, []); assert.deepEqual(repo.verify().corrupt, []);
+    const projection = text ? sides[1]! : sender.objects.write("record", encodeRecord({ status: "novel-ours-alternative" }));
+    importBundle(repo.objects, repo.refs, incoming("independent", projection, "e".repeat(32), [unit], true));
+    assert.equal(repo.objects.has(unit), true);
+    assert.deepEqual(repo.verify().missing, []); assert.deepEqual(repo.verify().corrupt, []);
+    const acceptedRefs = repo.refs.list("refs/");
+    assert.throws(() => importBundle(repo.objects, repo.refs, incoming("reused-unit", entry.id, entry.fileId!, [unit])), { code: "file_obliterated" });
+    assert.throws(() => importBundle(repo.objects, repo.refs, incoming("wrong-owner", entry.id, "e".repeat(32), entry.conflicts!)), { code: "invalid_erasure_role" });
+    assert.deepEqual(repo.refs.list("refs/"), acceptedRefs);
+  });
+});
+
 test("conflict schemas, tree/index versions and absence envelopes fail closed on malformed inputs", async () => {
   const { repo } = await fixture();
   const base = fieldSide(repo.objects, undefined); const ours = fieldSide(repo.objects, null); const theirs = fieldSide(repo.objects, false);
@@ -309,6 +373,45 @@ test("CLI values, unfiltered unit selection and structural recording refusal hav
   rmSync(join(repo.root, path)); repo.stage([path]); repo.commit({ message: "delete vs edit", author }, now);
   assert.throws(() => repo.merge("other", { message: "structural", author, recordConflicts: true }, now), /structural conflicts/);
   assert.equal(repo.readMergeState(), null);
+});
+
+test("resolve command preserves raw empty and whitespace values before optional JSON decoding", async () => {
+  const { repo } = await resolutionFixture(); const head = repo.resolve("HEAD");
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  for (const [path, value, expected] of rawResolutionCases) {
+    repo.reset(head, "hard", now);
+    const result = await harness.runCommand({ command: "vcs resolve", args: [path], options: { value }, pmRoot: join(repo.root, ".agents/pm") });
+    assert.equal(result.errorMessage, undefined);
+    const actual = readFileSync(join(repo.root, path), "utf8");
+    assert.deepEqual(path === "text.txt" ? actual : JSON.parse(actual).status, expected, `${path}: ${JSON.stringify(value)}`);
+    assert.equal(repo.status().conflicts?.length, 1);
+    assert.notEqual(repo.resolve("HEAD"), head);
+    assert.deepEqual(repo.verify().missing, []); assert.deepEqual(repo.verify().corrupt, []);
+  }
+});
+
+test("packed CLI resolves literal empty strings, spaces and EOF newlines through the real host", async () => {
+  const { repo } = await resolutionFixture(); const coverage = process.env.NODE_V8_COVERAGE;
+  process.env.NODE_V8_COVERAGE = "";
+  try { installPackedExtension(repo.root); } finally {
+    if (coverage === undefined) delete process.env.NODE_V8_COVERAGE;
+    else process.env.NODE_V8_COVERAGE = coverage;
+  }
+  repo.stage([]); repo.commit({ message: "install resolution consumer", author }, now);
+  const head = repo.resolve("HEAD");
+  for (const [path, value, expected] of rawResolutionCases) {
+    repo.reset(head, "hard", now);
+    const result = JSON.parse(execFileSync(process.execPath, [pmExecutable, "--json", "vcs", "resolve", path, "--value", value], {
+      cwd: repo.root, env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "consumer-agent" },
+      encoding: "utf8", timeout: 120_000,
+    }));
+    assert.equal(result.ok, true);
+    const actual = readFileSync(join(repo.root, path), "utf8");
+    assert.deepEqual(path === "text.txt" ? actual : JSON.parse(actual).status, expected);
+    assert.equal(repo.status().conflicts?.length, 1);
+    assert.notEqual(repo.resolve("HEAD"), head);
+    assert.deepEqual(repo.verify().missing, []); assert.deepEqual(repo.verify().corrupt, []);
+  }
 });
 
 test("ordinary text edits preserve adjacent insertions and replacement ranges when a later agent resolves", async () => {

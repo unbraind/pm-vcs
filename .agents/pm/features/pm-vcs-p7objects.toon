@@ -6,12 +6,14 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-18T03:01:39.215Z"
-updated_at: "2026-10-18T08:42:05.636Z"
+updated_at: "2026-10-18T09:55:39.097Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 estimated_minutes: 960
 acceptance_criteria: "Conflict units preserve base/ours/theirs and independent edits merge; conflicted snapshots remain committable and transportable; status/show/log/items report units in TOON and JSON; verify, GC, erasure and bounded history retain or safely deny the complete closure; real tracker proof and behavioural revert proofs pass unchanged npm and Bun release gates."
 parent: pm-vcs-phase7
-comments[17]{created_at,author,text}:
+comments[20]{created_at,author,text}:
   "2026-10-18T03:02:09.086Z",codex-agent,"Plan: preserve legacy merge behavior by default and under --fail-on-conflict. Add explicit --record-conflicts so automation opts in without changing existing callers. Store per-unit conflict addresses on tree/index entries beside a readable ours projection, never marker text. Ship tip resolve in this slice; ancestor resolution and automatic descendant propagation remain child pm-vcs-p7resolve. No release workflows will change."
   "2026-10-18T03:08:24.490Z",codex-agent,"Implemented canonical field/hunk conflict objects, versioned tree/index references, explicit merge recording, tip resolve, conflict reporting and lifecycle traversal. Verification is in progress against real PM trackers, two linked working trees and bounded transfers. Ancestor propagation remains deferred to pm-vcs-p7resolve. Pinned pm is 2026.10.13; current published pm is 2026.10.17; the pin is unchanged."
   "2026-10-18T03:23:35.824Z",codex-agent,"Behavioural revert proofs in an isolated source copy: reverting only the mergePath body to origin/main makes node --test --test-name-pattern=\"^field objects preserve\" test/first-class-conflicts.test.ts fail 0/1 with unsupported_recorded_conflict because unit references disappear. Reverting only collectCommitObjects makes node --test --test-name-pattern=\"^bundle, push/fetch\" test/first-class-conflicts.test.ts fail 0/1 with incomplete_bundle and two missing conflict objects. Tests import production TypeScript directly; no dist rebuild is involved. Both bodies were restored after each controlled proof."
@@ -29,6 +31,9 @@ comments[17]{created_at,author,text}:
   "2026-10-18T08:14:17.683Z",codex-agent,"Final range review identified an additional EOF ownership edge within #124: after ordinary deletion, a nonempty inherited range can end where a later zero-width inherited range sits at EOF. The current original-line-count condition lets an earlier unit overwrite the later region newline choice. Reclaiming this item to reproduce the producer through real branch merges and protect the final region ownership before completing the round."
   "2026-10-18T08:16:45.655Z",codex-agent,"Additional EOF producer confirmed and fixed: a first recorded final-line disagreement is followed by a second append disagreement, then an ordinary deletion leaves ranges [1,2) and [2,2). Resolving theirs previously lost the final newline; base could also inherit the earlier unit newline incorrectly. Only the rightmost selected region at EOF now owns termination. All ours/theirs/base choices pass through the real Repository. Behavioural revert: remove only index === 0 from the EOF condition; node --test --test-name-pattern=\"^a final zero-width\" test/first-class-conflicts.test.ts fails 0/1 with a missing trailing newline. Restored guard passes 1/1; the full conflict suite passes 44/44, and fresh module-scoped c8 measures engine/conflicts.ts at 100% statements/branches/functions/lines. Lint/zero-duplication/docstring checks pass. Previous head 8e65907 CI passed, but this new source fix requires both complete release gates and fresh CI; old-head CI is not treated as acceptance of the new source."
   "2026-10-18T08:42:03.384Z",codex-agent,"Final acceptance after the EOF ownership fix: npm run release:check AND bun run release:check passed on 2540c24604364ae2cc2eb0879c97bab9135261dd, each 1607/1607 with zero failures/skips/cancellations/TODOs. Both used full Git history and fresh HOME/global/system identity isolation. All 66 intended source files retain 100% statements/branches/functions/lines under unchanged --all --100 --per-file thresholds; measured npm totals are 22963 statements/lines, 777 functions and 6969 branches, all covered. Every remaining acceptance, self-host, audit, packaging, changelog and release-policy gate passed. The complete conflict suite is 44/44. The additional EOF-owner-only revert fails 0/1 as recorded above; structural guard, overlapping-range refusal/coalescing and cache reverts retain their independent red proofs. Releasing the claim without closing the feature. The next receipt commit changes only tracker evidence and its self-host archive; source/tests remain byte-identical to 2540c24. A fresh clone will verify strict health, then the updated PR/replies and current-head CI receipt will be maintained at PR #122 and its checks page. CodeRabbit itself auto-resolved the original threads after the earlier replies; no thread was manually resolved by this agent."
+  "2026-10-18T09:43:45.992Z",codex-agent,"New review round on fc0cbd0: preserve completed issue #123/#124 fixes and receipts. Address two new threads: reject novel conflict roots attached to permanently erased FileIds, and preserve raw --value whitespace/empty strings at the CLI boundary. Add real-repository regressions with narrow behavioral revert proofs, run both unchanged release gates under isolated Git identity, push and reply, then wait for CI. Branch is current with origin and contains origin/main; no merge or receipt reconciliation is needed."
+  "2026-10-18T09:50:55.628Z",codex-agent,"Round 2 behavioral revert proofs: (1) remove only the new conflict-root/FileId guard in assertArrivalsAllowed, leaving all tests and other production code fixed: node --test --test-name-pattern=\"bundle arrivals cannot attach\" test/first-class-conflicts.test.ts fails both field/text child scenarios (0/3 aggregate), because importBundle publishes the forbidden tree instead of throwing file_obliterated. Restored guard accepts historical erased roots and unrelated FileIds while rejecting a novel root alone or in either order with an inherited root; refusal preserves refs, index, HEAD, operations, denial registry and object inventory. (2) restore only optionalString(context.options, \"value\") in vcs resolve, rebuild, then node --test --test-name-pattern=\"resolve command preserves raw|packed CLI resolves literal\" test/first-class-conflicts.test.ts: 0/2 pass, both handler and real packed CLI return line without its requested EOF newline. Restored raw-value reader and rebuilt. Eleven valid value cases cover empty text deletion, empty/spaced/whitespace-only fields and text, EOF newline, quoted strings and JSON false/null/42. Typecheck, lint, zero-duplication and docstrings pass."
+  "2026-10-18T09:55:39.097Z",codex-agent,"Round 2 additional arrival controls pass (3/3 aggregate): historical erased roots remain transferable, independent FileIds accept novel alternatives, and an erased FileId cannot adopt a conflict already held for another identity; wrong-owner denied roots retain invalid_erasure_role. Tracker-linked run initially hit its default 120-second packed-consumer timeout after engine/handler assertions passed; the linked test now has a 600-second budget and is rerunning. Result tracking remains disabled, so receipts are retained in comments. Both fixes and narrow revert proofs are ready for full isolated npm/Bun release checks."
 files[19]{path,scope}:
   engine/attribution.ts,project
   engine/bundle.ts,project
@@ -49,7 +54,7 @@ files[19]{path,scope}:
   test/vcs-commands.test.ts,project
   test/worktree.test.ts,project
   vcs-commands.ts,project
-tests[5]:
+tests[6]:
   - command: node --test test/first-class-conflicts.test.ts
     scope: project
     timeout_seconds: 1800
@@ -92,6 +97,16 @@ tests[5]:
       created_at: "2026-10-18T08:16:42.503Z"
       source_kind: local_mutation
       source_ref: feat/phase7-first-class-conflicts
+  - command: "node --test --test-name-pattern=\"bundle arrivals cannot attach|resolve command preserves raw|packed CLI resolves literal\" test/first-class-conflicts.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-18T09:49:07.175Z"
+      source_kind: local_mutation
+      source_ref: feat/phase7-first-class-conflicts
+    updated_by: codex-agent
+    updated_at: "2026-10-18T09:53:07.882Z"
 docs[1]{path,scope}:
   ARCHITECTURE.md,project
 body: ""

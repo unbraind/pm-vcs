@@ -686,7 +686,9 @@ all disagreements are resolved: its flat `conflicts` table reports every unit.
 native item ids when available. Editing and committing carries unresolved units;
 text ranges follow edits to their projection. Explicit `resolve <path>` with
 `--field` and `--take ours|theirs|base` or `--value` records a new resolving change.
-Values are JSON when parseable, otherwise plain strings. Omit `--field` to resolve
+Values are JSON when parseable, otherwise plain strings. Plain strings preserve
+all whitespace, including EOF newlines; an empty `--value ""` deletes a text hunk
+or sets a field to the empty string. Omit `--field` to resolve
 all units in the path. Ordinary edits alone do not assert a resolution. Repeated unresolved contenders
 are retained as separate units. If one field has different values for the selected
 side across those disputes, `resolve --take` refuses before publication; use
@@ -710,4 +712,6 @@ all alternatives. `verify` requires correctly typed conflict objects and sides,
 valid schemas and verified digests. Partial history may promise hunk blobs under
 `blob:none`, but cannot promise conflict metadata or scalar envelopes. FileId
 obliteration includes unit objects and alternatives, and preserves existing
-fail-closed deduplication and retained-copy safeguards.
+fail-closed deduplication and retained-copy safeguards. An arrival may retain an
+erased FileId's permitted historical payload and conflict roots, but cannot attach
+a new conflict root to that identity, even when its readable payload is unchanged.
