@@ -2072,7 +2072,7 @@ export class Repository {
       const canonical = normalizeRepoPath(this.root, path);
       const index = [...flattenTree(this.objects, readCommit(this.objects, target).tree)].map(([path, entry]) => ({ path, ...entry }));
       const entry = index.find((entry) => entry.path === canonical);
-      if (entry === undefined || !this.committableIndex().some((entry) => entry.path === canonical && entry.sparse !== true)) {
+      if (entry === undefined || !this.committableIndex().some((current) => (current.path === canonical || current.fileId === entry.fileId) && current.sparse !== true)) {
         throw new ObjectStoreError("unknown_conflict_path", `No visible tracked path with a conflict at ${canonical}:${resolution.field ?? "*"}.`);
       }
       if (!(entry.conflicts ?? []).some((id) => {
@@ -2095,7 +2095,7 @@ export class Repository {
         return id;
       }
       const plan = this.planned(() => planResolution(this.rewriteContext(options.committer ?? options.author), target,
-        tree, options.author, options.message, this.refSnapshots(), this.headSnapshot()));
+        tree, options.author, options.message, this.refSnapshots(), this.headSnapshot(), entry.fileId as FileId));
       return this.applyRewrite(plan, now) as ObjectId;
     });
   }

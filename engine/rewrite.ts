@@ -688,7 +688,7 @@ function planReplay(
 /** Insert a resolving change after an ancestor and replay descendant deltas with durable disagreements. */
 export function planResolution(
   ctx: RewriteContext, revision: ObjectId, tree: ObjectId, author: Signature, message: string,
-  refs: readonly RefSnapshot[], head: HeadSnapshot,
+  refs: readonly RefSnapshot[], head: HeadSnapshot, fileId: FileId,
 ): RewritePlan {
   const original = readCommit(ctx.store, revision);
   const draft = { tree, parents: [revision], author, committer: ctx.committer, message };
@@ -700,8 +700,21 @@ export function planResolution(
     let replayed = commit.tree;
     for (const [index, parent] of commit.parents.entries()) {
       if (parent === parents[index]) continue;
-      const merged = mergeTrees({ ...ctx, recordConflicts: true }, readCommit(ctx.store, parent).tree,
-        replayed, readCommit(ctx.store, parents[index]).tree);
+      const ownPath = [...flattenTree(ctx.store, replayed)].find(([, entry]) => entry.fileId === fileId)?.[0];
+      /** A resolution follows its identity through a descendant's rename before replaying content deltas. */
+      const aligned = (tree: ObjectId): ObjectId => {
+        const files = flattenTree(ctx.store, tree);
+        if (ownPath === undefined) return tree;
+        // Every rewritten parent descends from the resolved identity. Its deletion
+        // would already have refused before a child could be planned.
+        const source = [...files].find(([, entry]) => entry.fileId === fileId)!;
+        if (source[0] === ownPath) return tree;
+        if (files.has(ownPath)) throw new RewriteConflictError([{ path: ownPath, reason: "identity" }]);
+        files.delete(source[0]); files.set(ownPath, source[1]);
+        return buildTree(ctx.store, files);
+      };
+      const merged = mergeTrees({ ...ctx, recordConflicts: true }, aligned(readCommit(ctx.store, parent).tree),
+        replayed, aligned(readCommit(ctx.store, parents[index]).tree));
       if (merged.conflicts.some((conflict) => conflict.recorded !== true)) throw new RewriteConflictError(merged.conflicts);
       replayed = merged.tree;
     }

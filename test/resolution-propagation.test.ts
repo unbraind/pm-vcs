@@ -1,7 +1,7 @@
 /** Conflict resolution replays real descendant histories without changing their identities. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -9,7 +9,7 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
 import { decodeRecord, effectiveChangeId, readCommit, writeCommit } from "../engine/model.ts";
-import { flattenTree } from "../engine/worktree.ts";
+import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { readConflict, summarizeConflicts } from "../engine/conflicts.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { withoutPmContext } from "../scripts/pm-environment.ts";
@@ -26,8 +26,9 @@ function edit(repo: Repository, path: string, text: string, identity = author) {
   writeFileSync(join(repo.root, path), text); repo.stage([path]); return repo.commit({ message: "descendant", author: identity }, now);
 }
 /** Produce a recorded disagreement through ordinary edits. */
-function conflict(text = false) {
+function conflict(text = false, occupied = false) {
   const repo = Repository.init(temp(), "main", { recordPaths: ["*.toon"], recordPolicy: {} });
+  if (occupied) edit(repo, "destination.toon", JSON.stringify({ status: "other identity" }));
   const path = text ? "text.txt" : "item.toon";
   const value = (side: string) => text ? `header\n${side}\ntail\n` : JSON.stringify({ independent: 0, status: side });
   edit(repo, path, value("base")); repo.createBranch("other", "HEAD", now);
@@ -297,4 +298,38 @@ test("merge descendants leave parents outside the resolved ancestry unchanged", 
   repo.resolveConflicts(path, { take: "theirs" }, { message: "ancestor resolution", author }, now, merged);
   assert.equal(statusAt(repo, "HEAD", path), "theirs"); assert.equal(repo.resolve("outside"), extra);
   assert.equal(readFileSync(join(repo.root, "outside.txt"), "utf8"), "independent"); assert.deepEqual(repo.verify().corrupt, []);
+});
+
+
+test("ancestor resolution follows a renamed inherited conflict through further descendants", () => {
+  const { repo, path, merged } = conflict();
+  const fileId = repo.readIndex().find((entry) => entry.path === path)!.fileId;
+  renameSync(join(repo.root, path), join(repo.root, "renamed.toon")); repo.stage([]);
+  const renamed = repo.commit({ message: "rename inherited conflict", author }, now);
+  edit(repo, "after.txt", "after");
+  repo.resolveConflicts(path, { take: "theirs" }, { message: "resolve before rename", author }, now, merged);
+  assert.equal(statusAt(repo, "HEAD", "renamed.toon"), "theirs"); assert.equal(repo.status().conflicts, undefined);
+  assert.equal(repo.readIndex().find((entry) => entry.path === "renamed.toon")!.fileId, fileId);
+  assert.ok(repo.log("HEAD").some((row) => row.changeId === effectiveChangeId(renamed, readCommit(repo.objects, renamed))));
+  assert.equal(existsSync(join(repo.root, path)), false); assert.deepEqual(repo.verify().corrupt, []);
+});
+
+test("a deleted sibling descendant refuses the whole resolution before any ref publication", () => {
+  const { repo, path, merged } = conflict(); repo.createBranch("deleted", "HEAD", now);
+  repo.switchTo("deleted", now); rmSync(join(repo.root, path)); repo.stage([path]); repo.commit({ message: "sibling deletes", author }, now);
+  repo.switchTo("main", now); const before = repo.refs.list("refs"); const operations = repo.operations.read();
+  assert.throws(() => repo.resolveConflicts(path, { take: "theirs" }, { message: "refuse structural loss", author }, now, merged), /rewrite|conflict/i);
+  assert.deepEqual(repo.refs.list("refs"), before); assert.deepEqual(repo.operations.read(), operations);
+});
+
+
+test("a descendant rename onto another parent identity refuses rather than overwriting it during replay", () => {
+  const { repo, path, merged } = conflict(false, true);
+  const files = flattenTree(repo.objects, readCommit(repo.objects, merged).tree);
+  const source = files.get(path)!; files.delete(path); files.set("destination.toon", source);
+  const descendant = writeCommit(repo.objects, { tree: buildTree(repo.objects, files), parents: [merged], author, committer: author, message: "explicit identity replacement" });
+  repo.switchTo(descendant, now);
+  const refs = repo.refs.list("refs"); const operations = repo.operations.read();
+  assert.throws(() => repo.resolveConflicts(path, { take: "theirs" }, { message: "identity collision", author }, now, merged), /rewrite|conflict/i);
+  assert.equal(repo.resolve("HEAD"), descendant); assert.deepEqual(repo.refs.list("refs"), refs); assert.deepEqual(repo.operations.read(), operations);
 });
