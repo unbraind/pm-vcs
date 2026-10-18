@@ -60,6 +60,8 @@ export interface MergeConflict {
   readonly reason: "content" | "record" | "mode" | "identity";
   /** For a record conflict, the fields that disagreed. */
   readonly fields?: readonly string[];
+  /** True only when this particular disagreement is fully represented by unit objects. */
+  readonly recorded?: true;
 }
 
 /** Store access plus the per-repository record policy every merge needs. */
@@ -199,7 +201,7 @@ export function mergePath(
         }), fileId)) } : {}),
         conflict: result.clean
           ? undefined
-          : { path, reason: "record", fields: result.conflicts.map((conflict) => conflict.field) },
+          : { path, reason: "record", fields: result.conflicts.map((conflict) => conflict.field), ...(ctx.recordConflicts === true ? { recorded: true as const } : {}) },
       };
     }
     const baseText = baseObject === null ? "" : baseObject.payload.toString("utf8");
@@ -235,7 +237,7 @@ export function mergePath(
     return {
       ...(units.length > 0 ? { conflicts: units } : {}),
       id: ctx.store.write("blob", Buffer.from(result.text, "utf8"), fileId),
-      conflict: result.clean ? undefined : { path, reason: "content" },
+      conflict: result.clean ? undefined : { path, reason: "content", ...(ctx.recordConflicts === true ? { recorded: true as const } : {}) },
     };
   });
 }

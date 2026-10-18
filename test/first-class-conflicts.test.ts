@@ -535,3 +535,19 @@ test("owned writer PID bytes cannot masquerade as zlib, while raw matches and fo
     } finally { Object.defineProperty(process, "pid", descriptor); }
   }
 });
+
+
+test("preexisting units cannot mask an unrecorded structural disagreement on the same path", async () => {
+  const { repo, path } = await divergent(); const { report } = record(repo, path);
+  const base = readCommit(repo.objects, report.head).parents[0]; const baseCommit = readCommit(repo.objects, base);
+  for (const kind of ["mode", "identity", "kind"] as const) {
+    const files = flattenTree(repo.objects, baseCommit.tree); const entry = files.get(path)!;
+    files.set(path, { ...entry, ...(kind === "mode" ? { mode: "100755" as const }
+      : kind === "identity" ? { fileId: entry.fileId === "a".repeat(32) ? "b".repeat(32) : "a".repeat(32) }
+      : { id: repo.objects.write("blob", Buffer.from("different payload kind")) }) });
+    const commit = writeCommit(repo.objects, { tree: buildTree(repo.objects, files), parents: [base], author, committer: author, message: kind });
+    repo.createBranch(kind, commit, now);
+    assert.throws(() => repo.merge(kind, { author, message: "refuse unrecorded structure", recordConflicts: true }, now), /structural conflicts/);
+    assert.equal(repo.resolve("HEAD"), report.head); assert.equal(repo.readMergeState(), null); assert.equal(repo.status().conflicts?.length, 1);
+  }
+});

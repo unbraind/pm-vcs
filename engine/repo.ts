@@ -2012,7 +2012,7 @@ export class Repository {
           + "Widen the view with `pm vcs view <patterns>` and merge again, or merge in a working tree that can see those paths.",
         );
       }
-      if (options.recordConflicts === true && conflicts.some((conflict) => mergedTree.get(conflict.path)?.conflicts === undefined)) {
+      if (options.recordConflicts === true && conflicts.some((conflict) => conflict.recorded !== true)) {
         throw new ObjectStoreError("unsupported_recorded_conflict", "This slice records field and text conflicts; structural conflicts require explicit reconciliation.");
       }
       if (markerConflicts.length > 0) {
