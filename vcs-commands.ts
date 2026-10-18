@@ -27,7 +27,6 @@ import {
   importBundle,
   readBundle,
 } from "./engine/bundle.ts";
-import { normalizeRepoPath } from "./engine/worktree.ts";
 import { summarizeConflicts, type ConflictSummary, type ResolutionOptions } from "./engine/conflicts.ts";
 import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
 import { orderCommitsNewestFirst, resolveFileId, traceFile, type FileChangeTrace } from "./engine/attribution.ts";
@@ -52,7 +51,7 @@ import { REMOTE_PREFIX, type Remote } from "./engine/remotes.ts";
 import { type CloneReport, type FetchReport, type PushReport, cloneFrom, fetchFrom, pushTo } from "./engine/sync.ts";
 import { resolveRemoteLocation } from "./engine/transport.ts";
 import { readTokenFile, startRepositoryServer, type TokenGrants } from "./engine/serve.ts";
-import { type StatusReport, flattenTree } from "./engine/worktree.ts";
+import { normalizeRepoPath, type StatusReport, flattenTree } from "./engine/worktree.ts";
 import { type ScanReport } from "./engine/instances.ts";
 import type {
   CommandHandlerContext,
