@@ -2,15 +2,43 @@ id: pm-vcs-p7bisect
 title: Bisect stable changes using a linked pm test command
 description: "Add pm vcs bisect driven by pm test <id> --run, persisting change-id results across history rewrites and restoring the original working state."
 type: Feature
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:48.622Z"
-updated_at: "2026-10-18T03:01:58.884Z"
+updated_at: "2026-10-19T14:50:15.844Z"
 author: codex-agent
 estimated_minutes: 480
 acceptance_criteria: Good/bad boundaries identify the first failing stable change using the linked real pm test; rewritten commit ids reuse change results; interrupted/failed tests and conflicted candidates have explicit outcomes; TOON and JSON report the result and original state is restored.
 parent: pm-vcs-phase7
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:58.591Z",codex-agent,"cli:update:dep",detected
+comments[9]{created_at,author,text}:
+  "2026-10-19T12:32:18.951Z",pi-agent,"Plan for bisect: single command 'pm vcs bisect' with start|good|bad|skip|run|status|reset subcommands. Durable session state lives in the worktree's private control directory (atomic write) so a crash mid-walk leaves a resumable session; session milestones (start, conclusion, reset) are appended to PM history as comments on the linked item, so concurrent agents see each other's sessions and append-only history is never clobbered. Candidates are ordered oldest-first by ancestry; outcomes are keyed by stable change identity so rewritten commit ids (rebase/amend/describe) reuse recorded results. Linked test execution reuses the pm SDK runTest (pm test --run semantics). Outcomes: good, bad, skip (manual), untestable (spawn/timeout/signal/empty), conflicted (candidate carries unresolved conflict units). Original branch and commit are restored after success, refusal, SIGINT and crash-resume."
+  "2026-10-19T13:15:08.442Z",codex-agent,"Resuming the interrupted implementation as codex-agent. Reviewing durable state, linked-test semantics, restore safety, candidate ordering and cross-agent history before completing real-repository proofs and unchanged release gates. Existing uncommitted work is preserved."
+  "2026-10-19T13:24:41.877Z",codex-agent,"Review fixes: execute each candidate in a disposable native repository so tracked PM history and original checkout bytes survive test side effects, SIGINT and SIGKILL. Rebased results now map stable identities to current ancestry. Exit 125 is skip; unresolved potential culprits produce ambiguous rather than a false first_bad. Per-worktree process leases prevent concurrent local mutation; separate linked instances append start/step/halt/done/reset receipts to the shared tracker. The annotate refactor shares immutable historical harness/model provenance with the bisect report."
+  "2026-10-19T13:33:56.892Z",codex-agent,"Behavioral revert proof: disabling only selectBisectCandidate (returning no candidate) made both the 64-change history and rewritten-history regressions fail (0 passed, 2 failed). Restored the production function immediately. Added explicit candidate-log budget/omission reporting because the pinned PM host rejects universal read-output controls for the mixed bisect command. Long comments must be verified through full item reads; the SDK comments response abbreviates them. Public-data demo uses a locally trusted linked test, not a command inherited from a foreign Git ref."
+  "2026-10-19T13:39:21.833Z",codex-agent,"Public-data proof completed: imported 34 committed public pm-csv tracker snapshots, spanning source revisions 53807ddccac4d5190deebdb52661ec398a44d0ed through 417072bd7c402f5f8d3387beb37b33d8c887ab6b. A real linked PM test identified the deliberately introduced regression at snapshot 18 (source fad7e30c040dff33f789bd6c5176882b27825427) in four executions; original checkout verified at the bad tip. Reproducer: test/bisect-demo.ts; complete TOON receipt: docs/bisect-demo.toon. Seven focused safety/CLI/legacy/budget tests pass, including SIGKILL during an active test, worker ownership refusal, unauthorized-worker refusal and resume. Annotation provenance retains its original caches; the 2000-change bounded-read regression passes."
+  "2026-10-19T13:40:44.889Z",codex-agent,"The recorded linked test was executed through the pinned PM CLI with --run --only-index 1 --timeout 900 --progress: 26 tests passed, zero failed/skipped/cancelled. Full read-only annotation checks also pass, including the bounded 2000-change read proof. Core tracker authority passes with extensions disabled; normal health separately flags a pre-existing pm-github host-version skew. No dependency pins or append-only history were repaired or rewritten."
+  "2026-10-19T13:56:31.357Z",codex-agent,"The full gate exposed packaging coupling: native consumers configured with **/*.toon correctly interpret every installed .toon file as a PM item, so a TOON-format report cannot use that extension. Renamed the unchanged public demo receipt to docs/bisect-demo.txt and updated its documentation link; no parser rules or tests were weakened. Reproducing both existing packed-consumer regressions after the rename."
+  "2026-10-19T14:05:51.439Z",codex-agent,"Both packed-consumer regressions pass after renaming the raw TOON receipt as text (2 passed, 0 failed). The full-source inventory guard also requires its explicit expected count to increase from 67 to 70 for engine/bisect.ts, bisect-commands.ts and bisect-test-runner.ts. Updated only that count; all production globs, ignore-directive prohibition and per-file 100 percent coverage thresholds remain intact."
+  "2026-10-19T14:50:13.738Z",codex-agent,"Final acceptance: npm run release:check and bun run release:check each passed 1,695/1,695 tests, zero failed/skipped/cancelled/todo. All 70 production files have per-file 100 percent statements, branches, functions and lines at unchanged thresholds (24,576 lines/statements and 848 functions; npm 7,662 branches, Bun 7,661). Both full gates used isolated HOME/Git configuration and verified copies of the indexed implementation. Final fixture-counter isolation passed the complete focused suite: 28/28. Direct installed Bun CLI bisect also found the known culprit in two linked-test executions and preserved the original checkout. Public demo: 34 distinct real tracker trees, four executions, known snapshot 18; behavioral revert: two expected regression failures. Only the PM acceptance receipt and claim-release record remain to be committed with a regenerated self-host archive. Item remains nonterminal for orchestrator verification."
+files[9]{path,scope}:
+  bisect-commands.ts,project
+  bisect-test-runner.ts,project
+  engine/annotate.ts,project
+  engine/bisect.ts,project
+  test/bisect-demo.ts,project
+  test/bisect.test.ts,project
+  test/raw-coverage.test.ts,project
+  test/vcs-commands.test.ts,project
+  vcs-commands.ts,project
+tests[3]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref},updated_by,updated_at}:
+  node --test test/bisect.test.ts,project,900,codex-agent,"2026-10-19T13:34:01.603Z",local_mutation,feat/vcs-bisect-linked-test,codex-agent,"2026-10-19T13:46:31.153Z"
+  "npm run release:check",project,3600,codex-agent,"2026-10-19T13:34:05.939Z",local_mutation,feat/vcs-bisect-linked-test,codex-agent,"2026-10-19T13:46:33.569Z"
+  "bun run release:check",project,3600,codex-agent,"2026-10-19T13:34:09.666Z",local_mutation,feat/vcs-bisect-linked-test,codex-agent,"2026-10-19T13:46:36.325Z"
+docs[3]{path,scope}:
+  docs/bisect-demo.txt,project
+  docs/bisect.md,project
+  README.md,project
 body: ""
