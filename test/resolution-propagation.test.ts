@@ -8,6 +8,7 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
+import { annotatePath } from "../engine/annotate.ts";
 import { decodeRecord, effectiveChangeId, readCommit, writeCommit } from "../engine/model.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { encodeConflict, readConflict, summarizeConflicts } from "../engine/conflicts.ts";
@@ -64,6 +65,29 @@ test("ancestor resolution carries through sibling branches, tags and detached HE
     assert.deepEqual(repo.verify().corrupt, []); assert.deepEqual(repo.verify().missing, []);
     repo.undo(null, now); assert.equal(repo.resolve("main"), second); assert.equal(repo.resolve("sibling"), sibling);
     assert.equal(repo.resolve("review"), second); assert.equal(statusAt(repo, "HEAD", path), "ours");
+  }
+});
+
+test("resolved units annotate to the resolving change through descendant propagation", () => {
+  for (const text of [false, true]) for (const take of ["ours", "theirs", "base"] as const) {
+    const { repo, path, merged } = conflict(text);
+    const before = annotatePath(repo.objects, merged, path, true);
+    const unchanged = before.find((row) => text ? row.start === 1 : row.field === "independent")!;
+    const descendant = edit(repo, "followup.txt", "independent descendant");
+    repo.resolveConflicts(path, { take }, { message: "explicit resolution", author: { ...author, name: "resolving-agent" } }, now, merged);
+    const tip = repo.resolve("HEAD"); const replayed = readCommit(repo.objects, tip);
+    const resolution = replayed.parents[0];
+    assert.equal(effectiveChangeId(tip, replayed), effectiveChangeId(descendant, readCommit(repo.objects, descendant)));
+    for (const revision of [resolution, tip]) {
+      const rows = annotatePath(repo.objects, revision, path, true);
+      const resolved = rows.find((row) => text ? row.start === 2 : row.field === "status")!;
+      assert.equal(resolved.changeId, effectiveChangeId(resolution, readCommit(repo.objects, resolution)), `${path}: take ${take}`);
+      assert.equal(resolved.author, "resolving-agent");
+      assert.equal(text ? resolved.text : resolved.value, take);
+      assert.equal(resolved.alternatives, undefined);
+      assert.equal(rows.find((row) => text ? row.start === 1 : row.field === "independent")!.changeId, unchanged.changeId);
+    }
+    assert.deepEqual(repo.verify().missing, []); assert.deepEqual(repo.verify().corrupt, []);
   }
 });
 
