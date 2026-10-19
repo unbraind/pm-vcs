@@ -65,6 +65,8 @@ are good, and bad changes narrow the search to their ancestry. It selects a
 candidate that splits the remaining ancestry as evenly as possible, including
 merged branches. Each walk reads immutable commit metadata once while constructing
 its range and caches candidate ancestry, stopping at good-boundary ancestors.
+In shallow repositories, ancestry stops at the recorded shallow commits while
+retaining those commits as possible boundaries or candidates.
 The 2,000-commit scaling regression counts 2,000 setup reads for 1,600 candidates
 and zero further commit reads per decision step or final verdict. Candidate
 materialization and linked-test execution are separate from these decision reads.
@@ -73,7 +75,10 @@ is later fixed violate this assumption; refine the linked test or boundaries.
 
 A passing execution is `good`; a normal assertion failure is `bad`. Exit 125 is
 `skip`; a refused, empty, timed-out or otherwise unrunnable execution is
-`untestable`. Shell exits 126/127 are untestable. A candidate carrying unresolved
+`untestable`. Shell exits 126/127 are untestable. A candidate whose payloads
+cannot be checked out records `untestable` with the object-store
+error code and is not retried automatically. Unexpected checkout errors and
+runner exceptions preserve the pending candidate for a retry. A candidate carrying unresolved
 conflict units is `conflicted` and never executes the linked tests. Any
 interrupted linked test takes precedence over other outcomes and halts the walk.
 Interrupted observations are logged and retried on resume.

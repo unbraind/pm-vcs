@@ -14,6 +14,8 @@ import { classifyRuns, runCandidateTest, type BisectReport } from "../bisect-com
 import { bisectCandidates, bisectRemaining, decodeBisectSession, bisectVerdict, bisectVerdicts, readBisectSession, runBisect, selectBisectCandidate, writeBisectSession, withBisectLease, type BisectStep } from "../engine/bisect.ts";
 import { effectiveChangeId, readCommit, writeCommit, type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
+import { ObjectStoreError } from "../engine/objects.ts";
+import { cloneFrom } from "../engine/sync.ts";
 import { buildTree } from "../engine/worktree.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -745,6 +747,85 @@ test("runner failure leaves original bytes, index and HEAD unchanged and preserv
   const result = await fixture.bisect(["run"]);
   assert.equal((result.result as { bisect: { verdict: { commit: string } } }).bisect.verdict.commit, culprit);
   assert.ok(storedSession(fixture)?.steps.some((step) => step.retry && step.detail?.includes("previous process")));
+});
+
+test("bisect shallow boundaries retain both merge parents without reading their absent ancestors", async () => {
+  const fixture = await setup();
+  const store = fixture.repository.objects;
+  const ancestor = edit(fixture, "state.txt", "old", "omitted ancestor");
+  const good = edit(fixture, "state.txt", "good", "good boundary");
+  const tree = readCommit(store, good).tree;
+  const side = writeCommit(store, { tree, parents: [ancestor], author, committer: author, message: "side boundary" });
+  const bad = writeCommit(store, { tree, parents: [good, side], author, committer: author, message: "merge" });
+  fixture.repository.refs.compareAndSwap("refs/heads/main", good, bad);
+  const destination = join(fixture.root, "shallow-clone");
+  await cloneFrom(fixture.root, destination, new Date(), "origin", fixture.root, undefined, { depth: 2 });
+  const clone = Repository.open(destination);
+  assert.equal(clone.objects.has(ancestor), false);
+  assert.deepEqual(new Set(clone.objects.partialState()!.shallow), new Set([good, side]));
+  const candidates = bisectCandidates(clone.objects, good, bad);
+  assert.deepEqual(candidates.map((candidate) => candidate.commit), [side, bad]);
+  assert.equal(selectBisectCandidate(clone.objects, candidates, new Set([side]))?.commit, side);
+  assert.equal(clone.objects.has(ancestor), false, "range decisions must not hydrate omitted history");
+});
+
+test("bisect denied candidate checkout records untestable once and finishes without running its test", async () => {
+  const fixture = await setup();
+  const item = await linkedTestItem(fixture, "Denied candidate", join(fixture.root, "count.txt"));
+  const good = fixture.repository.commit({ message: "empty good", author, allowEmpty: true }, new Date());
+  const denied = edit(fixture, "state.txt", "erased fixture payload", "denied candidate");
+  const bad = fixture.repository.commit({ message: "bad tip", author, allowEmpty: true }, new Date());
+  fixture.repository.setAuthority("fixture", "read-fixture", "erase-fixture");
+  fixture.repository.obliterate("state.txt", "erase-fixture", "incident", new Date());
+  assert.equal((await fixture.bisect(["start", good, bad], { item })).errorMessage, undefined);
+  const index = readFileSync(join(fixture.repository.controlDirectory, "index"));
+  let runs = 0;
+  const runner = async () => { runs++; return { outcome: "good" as const }; };
+  const result = await runBisect(fixture.repository, storedSession(fixture)!, runner, {
+    author: "fixture", now: () => new Date(),
+    progress: async (session) => { assert.deepEqual(storedSession(fixture), JSON.parse(JSON.stringify(session))); },
+  });
+  assert.equal(runs, 0);
+  assert.equal(result.session.status, "done");
+  assert.equal(result.session.pending, undefined);
+  assert.equal(result.remaining, 0);
+  assert.equal(result.next, null);
+  assert.equal(result.session.verdict?.kind, "ambiguous");
+  const step = result.session.steps.find((entry) => entry.commit === denied)!;
+  assert.equal(step.outcome, "untestable");
+  assert.equal(step.retry, undefined);
+  assert.equal(step.detail, "candidate could not be materialized: object_not_found");
+  assert.deepEqual(result.session.verdict?.unresolved, [step]);
+  const repeated = await runBisect(fixture.repository, result.session, runner, { author: "fixture", now: () => new Date() });
+  assert.deepEqual(repeated.session.steps, result.session.steps);
+  assert.equal(runs, 0);
+  assert.equal(headCommit(fixture), bad);
+  assert.deepEqual(readFileSync(join(fixture.repository.controlDirectory, "index")), index);
+  assert.equal(existsSync(join(fixture.root, "state.txt")), false);
+  assert.equal(existsSync(join(fixture.repository.controlDirectory, "BISECT_WORKSPACE")), false);
+});
+
+test("bisect preserves retry behavior for unexpected checkout errors and typed runner errors", async (context) => {
+  const fixture = await setup();
+  const item = await linkedTestItem(fixture, "Retry failures", join(fixture.root, "count.txt"));
+  const good = edit(fixture, "state.txt", "good", "good");
+  const middle = edit(fixture, "state.txt", "middle", "middle");
+  const bad = edit(fixture, "state.txt", "bad", "bad");
+  await fixture.bisect(["start", good, bad], { item });
+  const session = storedSession(fixture)!;
+  const options = { author: "fixture", now: () => new Date() };
+  const unexpected = new Error("unexpected checkout failure");
+  const init = context.mock.method(Repository, "init", () => { throw unexpected; });
+  try {
+    await assert.rejects(runBisect(fixture.repository, session, async () => { assert.fail("checkout failed before runner"); }, options), (error) => error === unexpected);
+  } finally { init.mock.restore(); }
+  assert.equal(storedSession(fixture)?.pending?.commit, middle);
+  const runnerError = new ObjectStoreError("fixture_runner", "typed runner failure");
+  await assert.rejects(runBisect(fixture.repository, storedSession(fixture)!, async () => { throw runnerError; }, options), (error) => error === runnerError);
+  assert.equal(storedSession(fixture)?.pending?.commit, middle);
+  assert.ok(storedSession(fixture)?.steps.some((step) => step.retry));
+  assert.equal(headCommit(fixture), bad);
+  assert.equal(existsSync(join(fixture.repository.controlDirectory, "BISECT_WORKSPACE")), false);
 });
 
 test("tracked and root trackers keep authoritative history while candidate trees are disposable", async () => {

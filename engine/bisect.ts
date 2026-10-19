@@ -232,14 +232,14 @@ function ancestryOf(store: ObjectStore, candidates: readonly BisectCandidate[], 
 }
 
 /** Collect one boundary's ancestry, stopping before excluded ancestors are read. */
-function boundaryAncestry(start: ObjectId, excluded: ReadonlySet<ObjectId>, read: (id: ObjectId) => ReturnType<typeof readCommit>): Set<ObjectId> {
+function boundaryAncestry(start: ObjectId, excluded: ReadonlySet<ObjectId>, read: (id: ObjectId) => ReturnType<typeof readCommit>, shallow: ReadonlySet<ObjectId>): Set<ObjectId> {
   const visited = new Set<ObjectId>();
   const pending = [start];
   while (pending.length > 0) {
     const id = pending.pop() as ObjectId;
     if (visited.has(id)) continue;
     visited.add(id);
-    if (!excluded.has(id)) pending.push(...read(id).parents);
+    if (!excluded.has(id) && !shallow.has(id)) pending.push(...read(id).parents);
   }
   return visited;
 }
@@ -252,8 +252,9 @@ export function bisectCandidates(store: ObjectStore, good: ObjectId, bad: Object
     if (commit === undefined) { commit = readCommit(store, id); commits.set(id, commit); }
     return commit;
   };
-  const excluded = boundaryAncestry(good, new Set(), read);
-  const ancestry = boundaryAncestry(bad, excluded, read);
+  const shallow = new Set(store.partialState()?.shallow ?? []);
+  const excluded = boundaryAncestry(good, new Set(), read, shallow);
+  const ancestry = boundaryAncestry(bad, excluded, read, shallow);
   const range = [...ancestry].filter((id) => !excluded.has(id));
   if (!ancestry.has(good) || range.length === 0) {
     throw new ObjectStoreError(
@@ -470,11 +471,17 @@ export async function runBisect(
         const conflicts = summarizeConflicts(repository.objects, commit.tree, selected.changeId);
         if (conflicts.length > 0) outcome = { outcome: "conflicted", detail: `${conflicts.length} unresolved conflict unit(s)` };
         else {
-          const scratch = Repository.init(workspace);
-          const closure = collectCommitObjects(repository.objects, [selected.commit]);
-          scratch.objects.accept([...closure].map((id) => ({ id, ...repository.objects.read(id) })), false);
-          scratch.switchTo(selected.commit, options.now());
-          outcome = await runner(selected, workspace);
+          let materializationError: string | undefined;
+          try {
+            const scratch = Repository.init(workspace);
+            const closure = collectCommitObjects(repository.objects, [selected.commit]);
+            scratch.objects.accept([...closure].map((id) => ({ id, ...repository.objects.read(id) })), false);
+            scratch.switchTo(selected.commit, options.now());
+          } catch (error) {
+            if (!(error instanceof ObjectStoreError)) throw error;
+            materializationError = `candidate could not be materialized: ${error.code}`;
+          }
+          outcome = materializationError === undefined ? await runner(selected, workspace) : { outcome: "untestable", detail: materializationError };
         }
       } finally {
         rmSync(workspaceRoot, { recursive: true, force: true });
