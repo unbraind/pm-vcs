@@ -1,4 +1,4 @@
-import { carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
+import { inheritedConflict, competingResolutions, carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
 import { manifestFragments } from "./manifest-pages.ts";
 // History rewriting, and the three-way tree merge rewriting shares with `merge`.
 //
@@ -66,6 +66,10 @@ export interface MergeConflict {
 
 /** Store access plus the per-repository record policy every merge needs. */
 export interface RewriteContext {
+  /** Build a heuristic virtual base without refusing competing explicit resolutions. */
+  readonly virtualBase?: boolean;
+  /** CLI operation whose supported recovery command a competing-resolution refusal should name. */
+  readonly operation?: "merge" | "rebase" | "cherry-pick" | "revert";
   /** Opt in to durable units rather than marker blobs. */
   readonly recordConflicts?: boolean;
   /** Object store holding and receiving every object the rewrite builds. */
@@ -338,9 +342,17 @@ export function mergeTrees(
         if (ourEntry) files.set(path, ourEntry);
         continue;
       }
+      const removed = new Set<ObjectId>();
+      for (const id of baseEntry?.conflicts ?? []) {
+        const oursInherited = inheritedConflict(ctx.store, id, baseEntry!.id, ourEntry);
+        const theirsInherited = inheritedConflict(ctx.store, id, baseEntry!.id, theirEntry);
+        if (oursInherited === undefined || theirsInherited === undefined) {
+          if (oursInherited !== undefined) removed.add(oursInherited);
+          if (theirsInherited !== undefined) removed.add(theirsInherited);
+        }
+      }
       const inherited = [...new Set([...(ourEntry.conflicts ?? []), ...(theirEntry.conflicts ?? [])])]
-        .filter((id) => !(baseEntry?.conflicts?.includes(id) === true
-          && (ourEntry.conflicts?.includes(id) !== true || theirEntry.conflicts?.includes(id) !== true)));
+        .filter((id) => !removed.has(id));
       if (ourEntry.id === theirEntry.id && ourEntry.mode === theirEntry.mode) {
         files.set(path, {
           id: ourEntry.id,
@@ -365,6 +377,24 @@ export function mergeTrees(
       const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels, identity.fileId);
       const carried = inherited.flatMap((id) => carryConflicts(ctx.store, [id], ourEntry.conflicts?.includes(id) === true ? ourEntry.id : theirEntry.id, resolution.id, identity.fileId)!);
       const units = [...carried, ...(resolution.conflicts ?? [])];
+      if (baseEntry?.conflicts !== undefined && ctx.virtualBase !== true
+        && (resolution.conflict === undefined || resolution.conflict.recorded === true)) {
+        const explicit = competingResolutions(ctx.store, { ...baseEntry, conflicts: baseEntry.conflicts }, ourEntry, theirEntry,
+          { id: resolution.id, ...(units.length > 0 ? { conflicts: units } : {}) });
+        if (explicit.id !== resolution.id || JSON.stringify(explicit.conflicts) !== JSON.stringify(units.length > 0 ? units : undefined)) {
+          if (ctx.recordConflicts !== true) {
+            const remedy = ctx.operation === "merge"
+              ? "Retry `pm vcs merge` with --record-conflicts to retain both choices."
+              : `Resolve the competing choices on one side first, then retry ${ctx.operation === undefined ? "the rewrite" : `\`pm vcs ${ctx.operation}\``}.`;
+            throw new ObjectStoreError("resolution_conflict",
+              `Competing resolutions at ${path}: ${explicit.fields.join(", ") || "text hunks"}. ${remedy}`);
+          }
+          files.set(path, { id: explicit.id, mode: ourEntry.mode, ...identity, conflicts: [...new Set(explicit.conflicts)] });
+          const fields = [...new Set([...(resolution.conflict?.fields ?? []), ...explicit.fields])];
+          conflicts.push({ path, reason: fields.length > 0 ? "record" : "content", fields, recorded: true });
+          continue;
+        }
+      }
       files.set(path, resolution.id === ourEntry.id && resolution.conflict?.reason === "content" && units.length === 0 ? ourEntry : {
         id: resolution.id,
         ...(units.length > 0 ? { conflicts: [...new Set(units)] } : {}),
@@ -482,9 +512,10 @@ function repointDescendant(
   originalId: ObjectId,
   original: Commit,
   rewrittenParents: readonly ObjectId[],
+  tree: ObjectId = original.tree,
 ): ObjectId {
   return writeCommit(store, {
-    tree: original.tree,
+    tree,
     parents: rewrittenParents,
     author: original.author,
     committer,
@@ -593,6 +624,7 @@ function replayWithDescendants(
   ctx: RewriteContext,
   edits: ReadonlyMap<ObjectId, EditBuilder>,
   refs: readonly RefSnapshot[],
+  replay?: (original: Commit, parents: readonly ObjectId[]) => ObjectId,
 ): ReadonlyMap<ObjectId, readonly ObjectId[]> {
   const store = ctx.store;
   const tips = refs.map((ref) => ref.target);
@@ -641,7 +673,7 @@ function replayWithDescendants(
     const rewrittenParents = original.parents.map((parent) => resolveRewritten(parent, map, store));
     const builder = edits.get(id);
     const replacements = builder === undefined
-      ? [repointDescendant(store, ctx.committer, id, original, rewrittenParents)]
+      ? [repointDescendant(store, ctx.committer, id, original, rewrittenParents, replay?.(original, rewrittenParents))]
       : builder(rewrittenParents);
     map.set(id, replacements);
   }
@@ -672,6 +704,45 @@ function planReplay(
 ): RewritePlan {
   const map = replayWithDescendants(ctx, edits, refs);
   return { command, summary, moves: computeMoves(refs, map, head, ctx.store) };
+}
+
+/** Insert a resolving change after an ancestor and replay descendant deltas with durable disagreements. */
+export function planResolution(
+  ctx: RewriteContext, revision: ObjectId, tree: ObjectId, author: Signature, message: string,
+  refs: readonly RefSnapshot[], head: HeadSnapshot, fileId: FileId,
+): RewritePlan {
+  const original = readCommit(ctx.store, revision);
+  const draft = { tree, parents: [revision], author, committer: ctx.committer, message };
+  const resolution = writeCommit(ctx.store, { ...draft, changeId: identityWithoutChangeLine(draft) });
+  const edits = new Map<ObjectId, EditBuilder>([[revision, () => [revision, resolution]]]);
+  const roots = head.kind === "detached" && head.target !== null
+    ? [...refs, { name: "HEAD", target: head.target }] : refs;
+  const map = replayWithDescendants(ctx, edits, roots, (commit, parents) => {
+    let replayed = commit.tree;
+    for (const [index, parent] of commit.parents.entries()) {
+      if (parent === parents[index]) continue;
+      const ownPath = [...flattenTree(ctx.store, replayed)].find(([, entry]) => entry.fileId === fileId)?.[0];
+      /** A resolution follows its identity through a descendant's rename before replaying content deltas. */
+      const aligned = (tree: ObjectId): ObjectId => {
+        const files = flattenTree(ctx.store, tree);
+        if (ownPath === undefined) return tree;
+        // Every rewritten parent descends from the resolved identity. Its deletion
+        // would already have refused before a child could be planned.
+        const source = [...files].find(([, entry]) => entry.fileId === fileId)!;
+        if (source[0] === ownPath) return tree;
+        if (files.has(ownPath)) throw new RewriteConflictError([{ path: ownPath, reason: "identity" }]);
+        files.delete(source[0]); files.set(ownPath, source[1]);
+        return buildTree(ctx.store, files);
+      };
+      const merged = mergeTrees({ ...ctx, recordConflicts: true }, aligned(readCommit(ctx.store, parent).tree),
+        replayed, aligned(readCommit(ctx.store, parents[index]).tree));
+      if (merged.conflicts.some((conflict) => conflict.recorded !== true)) throw new RewriteConflictError(merged.conflicts);
+      replayed = merged.tree;
+    }
+    return replayed;
+  });
+  return { command: "resolve", summary: `Resolved conflicts after ${effectiveChangeId(revision, original).slice(0, 12)}.`,
+    moves: computeMoves(refs, map, head, ctx.store) };
 }
 
 /**

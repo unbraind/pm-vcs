@@ -578,7 +578,7 @@ on every commit.
 | committed pinned links and private local layers | Epic Games Lore | **shipped** |
 | authorized FileId-scoped permanent erasure | Epic Games Lore | **shipped for loose storage** |
 | conflicts stored in changes | `jj` conflict objects | **Phase 7: opt-in field/hunk storage and tip resolution** |
-| ancestor resolution propagation | `jj` descendant rebase | **Phase 7 child 2: planned** |
+| ancestor resolution propagation | `jj` descendant rebase | **Phase 7 child 2: shipped** |
 | per-line / per-field annotation | `git blame`, with PM provenance | **Phase 7 child 3: shipped** |
 | test-driven stable-change bisect | `git bisect` | **Phase 7 child 5: planned** |
 | signed changes | ed25519 over stable change ids | **Phase 7 child 4: planned** |
@@ -698,17 +698,48 @@ An explicit text `--value` replaces each connected disputed range once; disjoint
 ranges remain separate replacements. All ranges use the original projection's
 coordinates. The rightmost disputed region at EOF supplies its final-newline
 state, including a zero-width region adjacent to an earlier hunk ending there.
+Competing text resolutions compare EOF newline state only when each mapped
+hunk reaches that side's EOF; unrelated final-newline edits cannot turn an
+agreed middle-hunk choice into a new dispute.
+Competing-resolution refusals name the invoking command: merge offers its
+`--record-conflicts` option; rebase, cherry-pick and revert direct the caller to
+reconcile choices on one side before retrying that operation. Refusal preserves
+refs, index, worktree and operation history.
 Internal status checks used for mutation preflight do not publish index cache
 observations, so refusal preserves even an aged cold index. Public `status`
 continues to warm verified cache entries.
 
-The first slice resolves at HEAD. Selecting an ancestor and propagating its
-resolution through automatic descendant rebase is **deferred** to
-[`pm-vcs-p7resolve`](.agents/pm/features/pm-vcs-p7resolve.toon). This is not a claim
-that sibling branches automatically receive a tip resolution. The existing
-rewrite engine remains fail-on-conflict; its conflict-aware replay belongs to
-that child. Annotation ships in child 3, under the contract below. Signing and
-bisect remain planned with their own tracker acceptance criteria and estimates.
+Tip resolution appends an ordinary change on the current branch. Explicit
+`resolve <path> --at <revision>` inserts the resolving change after that ancestor
+and automatically replays all descendants reachable from branches, tags or the
+current detached HEAD. Every descendant keeps its stable change and file identities;
+its original delta is merged against each rewritten parent. Inherited units clear,
+independent work survives, and a descendant's competing edit keeps its own readable
+projection with new content-addressed alternatives. Unsupported structural conflicts
+refuse before refs or working files move. The complete ref transaction has one
+`resolve` operation-log entry and one `undo` reverses it. Other linked instances
+refresh their working checkout explicitly after shared refs move. A selected stored
+commit unreachable from every ref and HEAD refuses with `unreachable_revision`,
+without an empty operation-log entry.
+
+Concurrent tip resolutions remain independent until merged. Recorded merge also
+compares explicit choices when one chose the original ours projection; different
+choices become new conflict units rather than silently accepting the changed bytes.
+Their report retains fresh field disagreements alongside resolution disagreements;
+converging carried hunk addresses are unique. Payload kind transitions preserve
+the structural conflict instead of interpreting the new payload as the old kind.
+Legacy merge modes refuse competing explicit choices before publication and name
+`--record-conflicts` as the way to retain both alternatives. Inherited text units
+are matched by their original sides and mapped projection coordinates, so independent
+prefix insertions cannot leave a resolved unit behind. Matching prefers the exact
+mapped address; a unique origin also survives sequential staged mappings that differ
+from direct mapping. Multiple unmatched candidates remain ambiguous. Virtual merge
+bases skip explicit-choice refusal; the real merge applies its normal conflict policy. Diff3 retains an unchanged
+current-base anchor when an insertion precedes it; independent edits stay clean.
+JSON and TOON resolve output include one `resolved` row per selected unit. A missing
+selection is a typed error naming the path and field. See
+[`pm-vcs-p7resolve`](.agents/pm/features/pm-vcs-p7resolve.toon). Annotation ships under the contract
+below; signing and bisect remain planned.
 
 Publication closure, bundle export and GC follow both tree unit addresses and
 all alternatives. `verify` requires correctly typed conflict objects and sides,
@@ -730,7 +761,9 @@ output groups consecutive lines with one change by default; `--full` emits one
 row per line. The host supplies TOON and `--json` output.
 
 Attribution follows immutable stable FileIds through renames, copy ancestry and
-rewritten changes. Merge parents supply their own unchanged units. Replacement
+rewritten changes. Merge parents supply their own unchanged units. Clearing a
+recorded unit attributes it to the resolving change, including an unchanged
+`--take ours` projection; descendant replay preserves that resolving origin. Replacement
 identities never borrow prior attribution at the same path. Each row includes
 stable change ID, author and explicit linked item IDs (plus a native PM item's
 own ID). Recorded harness/model fields come from the owning snapshot's matching

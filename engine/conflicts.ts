@@ -195,3 +195,75 @@ export function resolvePayload(store: ObjectStore, entry: { readonly id: ObjectI
   const remaining = entry.conflicts!.filter((id) => !selected.some((entry) => entry.id === id));
   return { id: store.write(object.type, payload, entry.fileId), ...(remaining.length > 0 ? { conflicts: remaining } : {}) };
 }
+
+/** Identify an unresolved origin independently of the projection coordinates that ordinary edits can shift. */
+function originKey(unit: ConflictUnit): string {
+  return JSON.stringify([unit.kind, unit.base, unit.ours, unit.theirs,
+    unit.kind === "field" ? unit.field : [unit.endings?.base, unit.endings?.ours, unit.endings?.theirs]]);
+}
+
+/** Prefer the mapped inherited unit; a unique origin also survives non-compositional staged range mappings. */
+export function inheritedConflict(store: ObjectStore, id: ObjectId, previous: ObjectId,
+  entry: { id: ObjectId; conflicts?: readonly ObjectId[]; fileId?: string }): ObjectId | undefined {
+  const key = originKey(readConflict(store, id));
+  const candidates = (entry.conflicts ?? []).filter((candidate) => originKey(readConflict(store, candidate)) === key);
+  if (candidates.length === 0) return undefined;
+  const mapped = carryConflicts(store, [id], previous, entry.id, entry.fileId)![0];
+  return candidates.find((candidate) => candidate === mapped)
+    ?? (candidates.length === 1 ? candidates[0] : undefined);
+}
+
+/** Preserve competing explicit resolutions, including choosing the original readable projection. */
+export function competingResolutions(
+  store: ObjectStore,
+  base: { id: ObjectId; conflicts: readonly ObjectId[] },
+  ours: { id: ObjectId; conflicts?: readonly ObjectId[]; fileId?: string },
+  theirs: { id: ObjectId; conflicts?: readonly ObjectId[] },
+  merged: { id: ObjectId; conflicts?: readonly ObjectId[] },
+): { id: ObjectId; conflicts?: readonly ObjectId[]; fields: string[] } {
+  let result = merged;
+  const fields: string[] = [];
+  for (const id of base.conflicts) {
+    const unit = readConflict(store, id);
+    if (inheritedConflict(store, id, base.id, ours) !== undefined || inheritedConflict(store, id, base.id, theirs) !== undefined) continue;
+    const present = (result.conflicts ?? []).map((id) => readConflict(store, id));
+    let dispute: ConflictUnit;
+    if (unit.kind === "field") {
+      if (present.some((current) => (current as Extract<ConflictUnit, { kind: "field" }>).field === unit.field)) continue;
+      const value = (id: ObjectId): RecordValue | undefined => {
+        const record = decodeRecord(store.readTyped(id, "record"));
+        return Object.hasOwn(record, unit.field) ? record[unit.field] : undefined;
+      };
+      const ourSide = fieldSide(store, value(ours.id), ours.fileId);
+      const theirSide = fieldSide(store, value(theirs.id), ours.fileId);
+      if (ourSide === theirSide) continue;
+      dispute = { kind: "field", field: unit.field, base: fieldSide(store, value(base.id), ours.fileId), ours: ourSide, theirs: theirSide };
+      fields.push(unit.field);
+    } else {
+      const mapped = (payload: ObjectId): Extract<ConflictUnit, { kind: "text" }> =>
+        readConflict(store, carryConflicts(store, [id], base.id, payload, ours.fileId)![0]) as Extract<ConflictUnit, { kind: "text" }>;
+      const position = mapped(result.id);
+      if (present.some((current) => {
+        const range = current as Extract<ConflictUnit, { kind: "text" }>;
+        return range.start <= position.end && range.end >= position.start;
+      })) continue;
+      const side = (payload: ObjectId): { id: ObjectId; ending: boolean } => {
+        const text = store.readTyped(payload, "blob").toString("utf8");
+        const range = mapped(payload);
+        const lines = splitLines(text);
+        return { id: store.write("blob", Buffer.from(lines.slice(range.start, range.end).join("\n")), ours.fileId),
+          ending: range.end === lines.length ? text.endsWith("\n") : true };
+      };
+      const before = side(base.id); const left = side(ours.id); const right = side(theirs.id);
+      if (left.id === right.id && left.ending === right.ending) continue;
+      const final = position.end === splitLines(store.readTyped(result.id, "blob").toString("utf8")).length;
+      dispute = { kind: "text", start: position.start, end: position.end, base: before.id, ours: left.id, theirs: right.id,
+        ...(final ? { endings: { base: before.ending, ours: left.ending, theirs: right.ending } } : {}) };
+    }
+    const conflict = store.write("conflict", encodeConflict(dispute), ours.fileId);
+    const projection = resolvePayload(store, { ...result, fileId: ours.fileId, conflicts: [conflict] }, { take: "ours" });
+    const carried = carryConflicts(store, [...(result.conflicts ?? []), conflict], result.id, projection.id, ours.fileId);
+    result = { id: projection.id, conflicts: carried };
+  }
+  return { ...result, fields };
+}

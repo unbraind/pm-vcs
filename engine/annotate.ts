@@ -193,6 +193,13 @@ class Annotator {
     return origin;
   }
 
+  /** Identify projected units that still carry a recorded field or text disagreement. */
+  disputed(entry: TreeEntry, units: readonly Unit[]): Set<string> {
+    const conflicts = (entry.conflicts ?? []).map((id) => readConflict(this.store, id));
+    return new Set(units.filter((unit) => conflicts.some((conflict) => conflict.kind === "field"
+      ? unit.field === conflict.field : Number(unit.key) >= conflict.start && Number(unit.key) < conflict.end)).map((unit) => unit.key));
+  }
+
   /** Attribute requested units iteratively; merge parents retain incoming attribution and traversal stops at setters. */
   blame(id: ObjectId, file: Located): AnnotationRow[] {
     const units = this.content(file.entry); const result: AnnotationRow[] = [];
@@ -210,6 +217,11 @@ class Annotator {
         const prior = this.historicalContent(before.entry);
         if (prior === undefined) continue;
         const matches = corresponding(prior, currentUnits);
+        const disputedBefore = this.disputed(before.entry, prior);
+        const disputedNow = this.disputed(task.file.entry, currentUnits);
+        for (const [key, previous] of matches) {
+          if (disputedBefore.has(previous) && !disputedNow.has(key)) matches.delete(key);
+        }
         const inherited = new Map<string, number>();
         for (const [key, index] of wanted) {
           const previous = matches.get(key);

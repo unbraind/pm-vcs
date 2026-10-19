@@ -240,7 +240,10 @@ function alignThreeWay(
     let nextBase = base.length;
     let nextOurs = ours.length;
     let nextTheirs = theirs.length;
-    for (let probe = baseCursor + 1; probe <= base.length; probe += 1) {
+    // A prefix insertion can leave the current base line as the next stable
+    // anchor. The prefix still consumes a side; otherwise the stable-run arm
+    // above would already have handled this position.
+    for (let probe = baseCursor; probe <= base.length; probe += 1) {
       const ourIndex = ourMatches.get(probe);
       const theirIndex = theirMatches.get(probe);
       if (ourIndex === undefined || theirIndex === undefined) continue;

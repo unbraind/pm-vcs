@@ -116,7 +116,7 @@ function prefixesOf(path: string): string[] {
 
 import { splitLines, unifiedDiff } from "./diff.ts";
 import { type IgnoreRules, isIgnored, isRuntimeIgnored, readIgnoreRules } from "./ignore.ts";
-import { carryConflicts, summarizeConflicts, resolvePayload, type ResolutionOptions } from "./conflicts.ts";
+import { readConflict, carryConflicts, summarizeConflicts, resolvePayload, type ResolutionOptions } from "./conflicts.ts";
 import { parseWorkingRecord, renderWorkingRecord } from "./record-format.ts";
 import {
   type HeadSnapshot,
@@ -128,6 +128,7 @@ import {
   mergeTrees,
   planCherryPick,
   planDescribe,
+  planResolution,
   planRebase,
   planRevert,
   planSplit,
@@ -1986,7 +1987,7 @@ export class Repository {
       }
       const baseTree = this.virtualBaseTree(bases, options.committer ?? options.author);
       const { tree, merged, conflicts } = mergeTrees(
-        { ...this.rewriteContext(options.committer ?? options.author), recordConflicts: options.recordConflicts },
+        { ...this.rewriteContext(options.committer ?? options.author), recordConflicts: options.recordConflicts, operation: "merge" },
         baseTree,
         readCommit(this.objects, ours).tree,
         readCommit(this.objects, theirs).tree,
@@ -2061,31 +2062,43 @@ export class Repository {
     });
   }
 
-  /** Record a tip resolution as an ordinary change; ancestor propagation is Phase 7 child 2. */
-  resolveConflicts(path: string, resolution: ResolutionOptions, options: CommitOptions, now: Date): ObjectId {
+  /** Record a resolution at HEAD or after a selected ancestor, replaying descendants in one undoable operation. */
+  resolveConflicts(path: string, resolution: ResolutionOptions, options: CommitOptions, now: Date, at?: string): ObjectId {
     return this.objects.withWriteLock(() => {
       this.assertNoMergeInProgress();
-      const target = this.resolve("HEAD");
-      const head = this.refs.readHead();
+      const target = this.resolve(at ?? "HEAD");
       const status = this.status(readWorkingFile, false);
       if (status.staged.length + status.unstaged.length > 0) throw new ObjectStoreError("dirty_worktree", "Commit staged and unstaged edits before resolving a conflict.");
       const canonical = normalizeRepoPath(this.root, path);
-      const index = this.committableIndex();
+      const index = [...flattenTree(this.objects, readCommit(this.objects, target).tree)].map(([path, entry]) => ({ path, ...entry }));
       const entry = index.find((entry) => entry.path === canonical);
-      if (entry === undefined || entry.sparse === true) throw new ObjectStoreError("unknown_conflict_path", "Resolve a tracked path visible in this working tree.");
+      if (entry === undefined || !this.committableIndex().some((current) => (current.path === canonical || current.fileId === entry.fileId) && current.sparse !== true)) {
+        throw new ObjectStoreError("unknown_conflict_path", `No visible tracked path with a conflict at ${canonical}:${resolution.field ?? "*"}.`);
+      }
+      if (!(entry.conflicts ?? []).some((id) => {
+        const unit = readConflict(this.objects, id);
+        return resolution.field === undefined || (unit.kind === "field" && unit.field === resolution.field);
+      })) throw new ObjectStoreError("no_matching_conflict", `No recorded conflict at ${canonical}:${resolution.field ?? "*"}.`);
       const resolved = resolvePayload(this.objects, entry, resolution);
       const projection = this.workingContent(canonical, this.objects.read(resolved.id));
       if (this.workingIdentifier(canonical, projection, resolved.id) !== resolved.id) {
         throw new ObjectStoreError("invalid_resolution", "Resolution cannot round-trip through this document format without changing its value.");
       }
-      const { conflicts: _old, stat: _stat, ...rest } = entry;
-      const tree = this.indexTree(index.map((current) => current.path === canonical ? { ...rest, ...resolved } : current));
-      const draft = { tree, parents: [target], author: options.author,
-        committer: options.committer ?? options.author, message: options.message };
-      const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
-      this.advanceHead(head, target, id, "resolve", `Resolved conflicts at ${canonical}.`, now);
-      this.materialize(tree);
-      return id;
+      const { conflicts: _old, ...rest } = entry;
+      const tree = buildTree(this.objects, new Map(index.map((current) => [current.path, current.path === canonical ? { ...rest, ...resolved } : current])));
+      if (at === undefined) {
+        const draft = { tree, parents: [target], author: options.author,
+          committer: options.committer ?? options.author, message: options.message };
+        const id = writeCommit(this.objects, { ...draft, changeId: identityWithoutChangeLine(draft) });
+        this.advanceHead(this.refs.readHead(), target, id, "resolve", `Resolved conflicts at ${canonical}.`, now);
+        this.materialize(tree);
+        return id;
+      }
+      const plan = this.planned(() => planResolution(this.rewriteContext(options.committer ?? options.author), target,
+        tree, options.author, options.message, this.refSnapshots(), this.headSnapshot(), entry.fileId as FileId));
+      if (plan.moves.length === 0) throw new ObjectStoreError("unreachable_revision",
+        `${at} is not reachable from any branch, tag or HEAD; nothing would carry the resolution.`);
+      return this.applyRewrite(plan, now) as ObjectId;
     });
   }
 
@@ -2232,7 +2245,7 @@ export class Repository {
       // Conflicts between two bases are resolved by keeping the first base's
       // side. A virtual base is a heuristic, not a snapshot anyone committed, and
       // recording markers in it would push them into the real merge's output.
-      const { tree: merged } = mergeTrees(this.rewriteContext(committer), nestedBase, tree, otherTree);
+      const { tree: merged } = mergeTrees({ ...this.rewriteContext(committer), virtualBase: true }, nestedBase, tree, otherTree);
       tree = merged;
     }
     return tree;
@@ -2529,7 +2542,7 @@ export class Repository {
       this.assertCleanWorktree();
       const plan = this.planned(() => (
           planRebase(
-            this.rewriteContext(committer),
+            { ...this.rewriteContext(committer), operation: "rebase" },
             this.resolve(source),
             this.resolve(onto),
             this.refSnapshots(),
@@ -2610,8 +2623,8 @@ export class Repository {
       const expected = head.target;
       if (expected === null) throw new ObjectStoreError("unborn_head", `HEAD has no commit yet to ${command} onto.`);
       const commit = this.planned(/** Both replay kinds preserve the tree merge's FileId provenance. */ () => command === "cherry-pick"
-        ? planCherryPick(this.rewriteContext(committer), this.resolve(revision), expected)
-        : planRevert(this.rewriteContext(committer), this.resolve(revision), expected, message));
+        ? planCherryPick({ ...this.rewriteContext(committer), operation: command }, this.resolve(revision), expected)
+        : planRevert({ ...this.rewriteContext(committer), operation: command }, this.resolve(revision), expected, message));
       const tree = readCommit(this.objects, commit).tree;
       const verb = command === "cherry-pick" ? "Cherry-picked" : "Reverted";
       this.assertNoUntrackedCollisions(tree, `${verb} changes would overwrite it.`);
