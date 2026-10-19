@@ -279,6 +279,28 @@ test("equal text choices with independent prefix edits do not manufacture a conf
   assert.equal(repo.status().conflicts, undefined); assert.equal(readFileSync(join(repo.root, path), "utf8"), "prefix\nheader\nours\ntail\n");
 });
 
+test("equal middle-hunk resolutions ignore unrelated EOF newline changes in either merge mode", () => {
+  for (const terminated of [false, true]) for (const recordConflicts of [false, true]) for (const changedSide of ["main", "resolver-b"]) {
+    const repo = Repository.init(temp()); const path = "text.txt";
+    const value = (side: string, ending = terminated) => `header\n${side}\ntail${ending ? "\n" : ""}`;
+    edit(repo, path, value("base")); repo.createBranch("other", "HEAD", now);
+    repo.switchTo("other", now); edit(repo, path, value("theirs"));
+    repo.switchTo("main", now); edit(repo, path, value("ours"));
+    repo.merge("other", { message: "middle conflict", author, recordConflicts: true }, now);
+    repo.createBranch("resolver-b", "HEAD", now);
+    for (const branch of ["main", "resolver-b"]) {
+      repo.switchTo(branch, now);
+      repo.resolveConflicts(path, { take: "ours" }, { message: `${branch} middle choice`, author }, now);
+      if (branch === changedSide) edit(repo, path, value("ours", !terminated));
+    }
+    repo.switchTo("main", now);
+    repo.merge("resolver-b", { message: "agree despite independent newline", author, recordConflicts }, now);
+    assert.equal(repo.status().conflicts, undefined);
+    assert.equal(readFileSync(join(repo.root, path), "utf8"), value("ours", true));
+    assert.deepEqual(repo.verify().corrupt, []);
+  }
+});
+
 test("different text EOF choices and disjoint edits retain one conflict with the correct newline states", () => {
   const repo = Repository.init(temp()); edit(repo, "text.txt", "base\n"); repo.createBranch("other", "HEAD", now);
   repo.switchTo("other", now); edit(repo, "text.txt", "theirs\n"); repo.switchTo("main", now); edit(repo, "text.txt", "ours\n");

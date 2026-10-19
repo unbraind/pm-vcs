@@ -250,7 +250,9 @@ export function competingResolutions(
       const side = (payload: ObjectId): { id: ObjectId; ending: boolean } => {
         const text = store.readTyped(payload, "blob").toString("utf8");
         const range = mapped(payload);
-        return { id: store.write("blob", Buffer.from(splitLines(text).slice(range.start, range.end).join("\n")), ours.fileId), ending: text.endsWith("\n") };
+        const lines = splitLines(text);
+        return { id: store.write("blob", Buffer.from(lines.slice(range.start, range.end).join("\n")), ours.fileId),
+          ending: range.end === lines.length ? text.endsWith("\n") : true };
       };
       const before = side(base.id); const left = side(ours.id); const right = side(theirs.id);
       if (left.id === right.id && left.ending === right.ending) continue;

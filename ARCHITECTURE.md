@@ -698,6 +698,9 @@ An explicit text `--value` replaces each connected disputed range once; disjoint
 ranges remain separate replacements. All ranges use the original projection's
 coordinates. The rightmost disputed region at EOF supplies its final-newline
 state, including a zero-width region adjacent to an earlier hunk ending there.
+Competing text resolutions compare EOF newline state only when each mapped
+hunk reaches that side's EOF; unrelated final-newline edits cannot turn an
+agreed middle-hunk choice into a new dispute.
 Internal status checks used for mutation preflight do not publish index cache
 observations, so refusal preserves even an aged cold index. Public `status`
 continues to warm verified cache entries.
