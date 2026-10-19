@@ -78,8 +78,11 @@ export function traceFile(
   treeCache: Map<ObjectId | null, FlattenedTree> = new Map(),
 ): FileChangeTrace[] {
   const traces: FileChangeTrace[] = [];
+  const shallow = new Set(store.partialState()?.shallow ?? []);
   for (const commitId of commitsNewestFirst) {
     const commit = readCommit(store, commitId);
+    // A boundary with omitted ancestry cannot establish a file delta.
+    if (commit.parents.length > 0 && shallow.has(commitId)) continue;
     const current = [...flattened(store, commit.tree, treeCache)].filter(([, entry]) => entry.fileId === fileId);
     const parentTree = commit.parents[0] === undefined ? null : readCommit(store, commit.parents[0]).tree;
     const before = [...flattened(store, parentTree, treeCache)].filter(([, entry]) => entry.fileId === fileId);

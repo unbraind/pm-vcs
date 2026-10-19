@@ -16,7 +16,7 @@ import { effectiveChangeId, readCommit, writeCommit, type Signature } from "../e
 import { Repository } from "../engine/repo.ts";
 import { ObjectStoreError } from "../engine/objects.ts";
 import { cloneFrom } from "../engine/sync.ts";
-import { buildTree } from "../engine/worktree.ts";
+import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
@@ -79,14 +79,14 @@ async function activate(): Promise<ReturnType<typeof createExtensionTestHarness>
  *
  * @returns The prepared fixture.
  */
-async function setup(): Promise<Fixture> {
+async function setup(clonedRoot?: string): Promise<Fixture> {
   const dir = makeTempDir();
   owned.push(dir);
-  const root = dir.root;
+  const root = clonedRoot ?? dir.root;
   const pmRoot = join(root, ".agents", "pm");
   const client = new PmClient({ pmRoot, cwd: root, noExtensions: true });
   await client.init("test", { defaults: true, author: "agent-a" });
-  const repository = Repository.init(root, "main");
+  const repository = clonedRoot === undefined ? Repository.init(root, "main") : Repository.open(root);
   const harness = await activate();
   // Linked tests execute against the workspace root pm resolves; pinning it to
   // the fixture root makes the recorded command run against the switched tree
@@ -769,6 +769,42 @@ test("bisect shallow boundaries retain both merge parents without reading their 
   assert.equal(clone.objects.has(ancestor), false, "range decisions must not hydrate omitted history");
 });
 
+test("shallow culprit reports preserve explicit links after manual bad, run and status", async () => {
+  for (const mode of ["bad", "run"]) {
+    const source = await setup();
+    const ancestor = edit(source, "state.txt", "old", "omitted ancestor");
+    writeFileSync(join(source.root, "probe.js"), PROBE);
+    const good = commitFiles(source, ["probe.js"], "good boundary");
+    const broken = source.repository.objects.write("blob", Buffer.from("broken side"));
+    const entries = new Map(flattenTree(source.repository.objects, readCommit(source.repository.objects, good).tree));
+    entries.set("state.txt", { ...entries.get("state.txt")!, id: broken });
+    const tree = buildTree(source.repository.objects, entries);
+    const side = writeCommit(source.repository.objects, { tree, parents: [ancestor], author, committer: author, message: "shallow culprit", items: ["explicit-z", "explicit-a", "explicit-z"] });
+    const bad = writeCommit(source.repository.objects, { tree, parents: [good, side], author, committer: author, message: "merge" });
+    source.repository.refs.compareAndSwap("refs/heads/main", good, bad);
+    const destination = join(source.root, "clone");
+    await cloneFrom(source.root, destination, new Date(), "origin", source.root, undefined, { depth: 2 });
+    const fixture = await setup(destination);
+    const item = await linkedTestItem(fixture, "Shallow diagnosis", join(fixture.root, "count.txt"));
+    const owner = (await fixture.client.create({ type: "Task", title: "Unproven file owner", author: "fixture" })).item.id;
+    await fixture.client.files(owner, { add: ["state.txt"], author: "fixture" });
+    assert.equal(fixture.repository.objects.has(ancestor), false);
+    assert.equal((await fixture.bisect(["start", good, bad], { item })).errorMessage, undefined);
+    for (const args of [mode === "bad" ? ["bad", side] : ["run"], ["status"]]) {
+      const result = await fixture.bisect(args);
+      assert.equal(result.errorMessage, undefined);
+      const report = (result.result as { bisect: BisectReport }).bisect;
+      assert.equal(report.status, "done");
+      assert.equal(report.verdict!.commit, side);
+      assert.deepEqual(report.verdict!.items, ["explicit-a", "explicit-z"]);
+      assert.equal(report.verdict!.itemsBoundary, "shallow");
+    }
+    assert.equal(fixture.repository.objects.has(ancestor), false, "reporting must not hydrate omitted history");
+    assert.equal(headCommit(fixture), bad);
+    assert.equal((await fixture.bisect(["reset"])).errorMessage, undefined);
+  }
+});
+
 test("bisect denied candidate checkout records untestable once and finishes without running its test", async () => {
   const fixture = await setup();
   const item = await linkedTestItem(fixture, "Denied candidate", join(fixture.root, "count.txt"));
@@ -1152,6 +1188,35 @@ test("a worker cannot run before its owner receipt is published", async () => {
   assert.equal(runsRecorded(count), 0);
   assert.throws(() => execFileSync(process.execPath, [join(packageRoot, "bisect-test-runner.ts"), item, "agent", fixture.pmRoot, join(fixture.root, "receipt")],
     { input: "", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, PM_SOURCE_WORKSPACE_ROOT: fixture.root } }), /not authorized/);
+});
+
+test("an early worker exit with a broken stdin pipe is untestable without crashing the parent", async () => {
+  const fixture = await setup();
+  const item = await linkedTestItem(fixture, "Early exit", join(fixture.root, "count.txt"));
+  // Run in a separate parent so an uncaught EPIPE is observed as a process failure.
+  // The worker exits during preload, and receipt publication waits for that exit
+  // before writing authorization to the real pipe. No SDK behavior is mocked.
+  const script = `
+    import fs from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    import { runCandidateTest } from ${JSON.stringify(new URL("../bisect-commands.ts", import.meta.url).href)};
+    const originalWrite = fs.writeFileSync;
+    fs.writeFileSync = (...args) => {
+      if (String(args[0]).endsWith("BISECT_WORKER")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+      return originalWrite(...args);
+    };
+    syncBuiltinESMExports();
+    process.env.NODE_OPTIONS = "--import=data:text/javascript,process.exit(42)";
+    console.log(JSON.stringify(await runCandidateTest(...process.argv.slice(1))));
+  `;
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script, item, "fixture", fixture.pmRoot, fixture.root, fixture.repository.controlDirectory], {
+    cwd: fixture.root, encoding: "utf8", timeout: 30_000,
+  });
+  const result = JSON.parse(output) as { outcome: string; detail: string };
+  assert.equal(result.outcome, "untestable");
+  assert.match(result.detail, /Linked PM test runner exited 42/);
+  assert.equal(existsSync(join(fixture.repository.controlDirectory, "BISECT_WORKER")), false);
+  assert.equal(runsRecorded(join(fixture.root, "count.txt")), 0);
 });
 
 test("the compiled command runs the linked SDK worker with the same contract", async () => {

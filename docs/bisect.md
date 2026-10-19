@@ -66,7 +66,10 @@ candidate that splits the remaining ancestry as evenly as possible, including
 merged branches. Each walk reads immutable commit metadata once while constructing
 its range and caches candidate ancestry, stopping at good-boundary ancestors.
 In shallow repositories, ancestry stops at the recorded shallow commits while
-retaining those commits as possible boundaries or candidates.
+retaining those commits as possible boundaries or candidates. A shallow culprit
+with omitted parents retains its explicit PM associations; `itemsBoundary: shallow`
+reports that file-derived associations could not be established. File change
+traces also omit deltas at these boundaries instead of inventing additions.
 The 2,000-commit scaling regression counts 2,000 setup reads for 1,600 candidates
 and zero further commit reads per decision step or final verdict. Candidate
 materialization and linked-test execution are separate from these decision reads.

@@ -96,6 +96,7 @@ interface BisectVerdictReport {
   readonly author?: string;
   readonly at?: string;
   readonly items: readonly string[];
+  readonly itemsBoundary?: "shallow";
   readonly agentHarness?: string;
   readonly agentModel?: string;
   readonly unresolved: readonly BisectStep[];
@@ -166,6 +167,8 @@ function walkOf(repository: Repository, session: BisectSession): BisectWalk {
  */
 async function linkedItems(context: CommandHandlerContext, repository: Repository, commitId: string, explicit: readonly string[]): Promise<string[]> {
   const commit = readCommit(repository.objects, commitId);
+  // A shallow boundary has no trustworthy parent delta; retain explicit links.
+  if (commit.parents.length > 0 && repository.objects.partialState()?.shallow.includes(commitId)) return [...new Set(explicit)].sort(compareByteOrder);
   const current = flattenTree(repository.objects, commit.tree);
   const parent = flattenTree(repository.objects, commit.parents[0] === undefined ? null : readCommit(repository.objects, commit.parents[0]).tree);
   const changed = new Set([...current, ...parent].filter(([path, entry]) => entry.fileId !== undefined && current.get(path)?.id !== parent.get(path)?.id).map(([, entry]) => entry.fileId as string));
@@ -206,6 +209,7 @@ async function verdictReport(context: CommandHandlerContext, repository: Reposit
     author: `${commit.author.name} <${commit.author.email}>`,
     at: new Date(commit.author.timestamp).toISOString(),
     items: await linkedItems(context, repository, verdict.commit, provenance.items),
+    ...(commit.parents.length > 0 && repository.objects.partialState()?.shallow.includes(verdict.commit) ? { itemsBoundary: "shallow" as const } : {}),
     ...(provenance.agentHarness === undefined ? {} : { agentHarness: provenance.agentHarness }),
     ...(provenance.agentModel === undefined ? {} : { agentModel: provenance.agentModel }),
     unresolved: verdict.unresolved,
@@ -423,6 +427,9 @@ export async function runCandidateTest(item: string, author: string, pmRoot: str
       let errors = "";
       child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
       child.stderr.on("data", (chunk: Buffer) => { errors += chunk.toString(); });
+      // An early worker exit can close stdin before authorization is written.
+      // The child error/close handlers classify that failure as untestable.
+      child.stdin.on("error", () => {});
       child.on("error", reject);
       child.on("close", (code) => {
         rmSync(receipt, { force: true });

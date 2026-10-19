@@ -7,6 +7,7 @@ import { orderCommitsNewestFirst, resolveFileId, traceFile } from "../engine/att
 import { readCommit, type Signature } from "../engine/model.ts";
 import { ObjectStoreError } from "../engine/objects.ts";
 import { Repository } from "../engine/repo.ts";
+import { cloneFrom } from "../engine/sync.ts";
 import { mergeTrees } from "../engine/rewrite.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
@@ -219,4 +220,31 @@ test("topological attribution order handles a history fragment whose parent is a
   repository.stage([]);
   const child = repository.commit({ message: "two\n", author }, new Date(2));
   assert.deepEqual(orderCommitsNewestFirst(repository.objects, [child]), [child]);
+});
+
+
+test("file tracing omits unprovable shallow deltas while retaining later changes and real roots", async () => {
+  directory = makeTempDir();
+  const source = Repository.init(join(directory.root, "source"));
+  const file = join(source.root, "state.txt");
+  writeFileSync(file, "ancestor");
+  source.stage(["state.txt"]);
+  const ancestor = source.commit({ message: "ancestor", author }, new Date());
+  writeFileSync(file, "boundary");
+  source.stage(["state.txt"]);
+  const boundary = source.commit({ message: "boundary", author }, new Date());
+  writeFileSync(file, "tip");
+  source.stage(["state.txt"]);
+  const tip = source.commit({ message: "tip", author }, new Date());
+  for (const depth of [2, 3]) {
+    const root = join(directory.root, `clone-${depth}`);
+    await cloneFrom(source.root, root, new Date(), "origin", source.root, undefined, { depth });
+    const clone = Repository.open(root);
+    const commits = orderCommitsNewestFirst(clone.objects, clone.allReachable());
+    const fileId = resolveFileId(clone.objects, commits, "state.txt")!;
+    const traces = traceFile(clone.objects, commits, fileId);
+    assert.deepEqual(traces.map((trace) => trace.commit), depth === 2 ? [tip] : [tip, boundary, ancestor]);
+    assert.equal(traces.at(-1)!.kind, depth === 2 ? "modified" : "added");
+    assert.equal(clone.objects.has(ancestor), depth === 3);
+  }
 });
