@@ -23,7 +23,6 @@ import {
   type BisectVerdict,
   markBisectOutcome,
   readBisectSession,
-  recoverBisectWorker,
   runBisect,
   selectBisectCandidate,
   writeBisectSession,
@@ -78,7 +77,7 @@ interface BisectReport {
   readonly item: string;
   readonly status: BisectSession["status"];
   readonly halted?: string;
-  readonly boundaries: { readonly good: { readonly revision: string; readonly commit: string }; readonly bad: { readonly revision: string; readonly commit: string } };
+  readonly boundaries: { readonly good: { readonly revision?: string; readonly commit: string }; readonly bad: { readonly revision?: string; readonly commit: string } };
   readonly original: { readonly branch: string | null; readonly commit: string };
   readonly steps: readonly BisectStep[];
   readonly stepsTaken: number;
@@ -168,7 +167,7 @@ function walkOf(repository: Repository, session: BisectSession): BisectWalk {
 async function linkedItems(context: CommandHandlerContext, repository: Repository, commitId: string, explicit: readonly string[]): Promise<string[]> {
   const commit = readCommit(repository.objects, commitId);
   const current = flattenTree(repository.objects, commit.tree);
-  const parent = flattenTree(repository.objects, readCommit(repository.objects, commit.parents[0] as string).tree);
+  const parent = flattenTree(repository.objects, commit.parents[0] === undefined ? null : readCommit(repository.objects, commit.parents[0]).tree);
   const changed = new Set([...current, ...parent].filter(([path, entry]) => entry.fileId !== undefined && current.get(path)?.id !== parent.get(path)?.id).map(([, entry]) => entry.fileId as string));
   const items = new Set(explicit);
   if (changed.size > 0) {
@@ -213,6 +212,37 @@ async function verdictReport(context: CommandHandlerContext, repository: Reposit
   };
 }
 
+/** Render immutable ids at the requested precision without changing durable state. */
+function reportId(id: string, full: boolean): string {
+  return full ? id : id.slice(0, 12);
+}
+
+/** Shorten only hexadecimal revision ids; named refs retain their spelling. */
+function reportRevision(revision: string, full: boolean): string {
+  return /^[0-9a-f]{64}$/.test(revision) ? reportId(revision, full) : revision;
+}
+
+/** Drop boundary detail already represented by the boundaries and compact step ids. */
+function reportStep(step: BisectStep, full: boolean): BisectStep {
+  const { detail, ...rest } = step;
+  return { ...rest, commit: reportId(step.commit, full), changeId: reportId(step.changeId, full),
+    ...(detail === undefined || (step.by === "boundary" && detail.startsWith("declared boundary ")) ? {} : { detail }) };
+}
+
+/** Keep a named revision only when it adds information to its resolved commit. */
+function reportBoundary(repository: Repository, revision: string, full: boolean): { revision?: string; commit: string } {
+  const commit = repository.resolve(revision);
+  return { ...(revision === commit ? {} : { revision: reportRevision(revision, full) }), commit: reportId(commit, full) };
+}
+
+/** Compact verdict ids and unresolved observations without dropping provenance. */
+function compactVerdict(verdict: BisectVerdictReport, full: boolean): BisectVerdictReport {
+  return { ...verdict,
+    ...(verdict.change === undefined ? {} : { change: reportId(verdict.change, full) }),
+    ...(verdict.commit === undefined ? {} : { commit: reportId(verdict.commit, full) }),
+    unresolved: verdict.unresolved.map((step) => reportStep(step, full)) };
+}
+
 /**
  * Builds the report for one session.
  *
@@ -224,22 +254,23 @@ async function verdictReport(context: CommandHandlerContext, repository: Reposit
  */
 async function reportOf(context: CommandHandlerContext, repository: Repository, session: BisectSession, budget: number): Promise<BisectReport> {
   const walk = walkOf(repository, session);
+  const full = context.options.full === true;
   const report: BisectReport = {
     session: session.id,
     item: session.item,
     status: session.status,
     ...(session.halted === undefined ? {} : { halted: session.halted }),
     boundaries: {
-      good: { revision: session.good, commit: repository.resolve(session.good) },
-      bad: { revision: session.bad, commit: repository.resolve(session.bad) },
+      good: reportBoundary(repository, session.good, full),
+      bad: reportBoundary(repository, session.bad, full),
     },
-    original: session.original,
-    steps: session.steps,
+    original: { ...session.original, commit: reportId(session.original.commit, full) },
+    steps: session.steps.map((step) => reportStep(step, full)),
     stepsTaken: session.steps.length,
     stepsOmitted: 0,
     remaining: walk.remaining,
-    next: walk.next === null ? null : { commit: walk.next.commit, changeId: walk.next.changeId },
-    ...(walk.verdict === undefined ? {} : { verdict: await verdictReport(context, repository, walk.verdict) }),
+    next: walk.next === null ? null : { commit: reportId(walk.next.commit, full), changeId: reportId(walk.next.changeId, full) },
+    ...(walk.verdict === undefined ? {} : { verdict: compactVerdict(await verdictReport(context, repository, walk.verdict), full) }),
   };
   let projected = report;
   while (projected.steps.length > 0 && JSON.stringify(projected).length > budget * 4) {
@@ -274,19 +305,19 @@ async function recordMilestone(context: CommandHandlerContext, session: BisectSe
  * @param session - Session recorded on PM history.
  * @returns The listing without the per-candidate step log.
  */
-function listSession(session: BisectSession): BisectSessionListing {
+function listSession(session: BisectSession, full: boolean): BisectSessionListing {
   return {
     session: session.id,
     item: session.item,
     status: session.status,
-    good: session.good,
-    bad: session.bad,
+    good: reportRevision(session.good, full),
+    bad: reportRevision(session.bad, full),
     startedAt: session.startedAt,
     startedBy: session.startedBy,
     steps: session.steps.length,
     ...(session.halted === undefined ? {} : { halted: session.halted }),
     ...(session.verdict === undefined ? {}
-      : { verdict: { kind: session.verdict.kind, ...(session.verdict.change === undefined ? {} : { change: session.verdict.change }) } }),
+      : { verdict: { kind: session.verdict.kind, ...(session.verdict.change === undefined ? {} : { change: reportId(session.verdict.change, full) }) } }),
   };
 }
 
@@ -430,10 +461,11 @@ export function registerBisectCommands(api: ExtensionApi): void {
       { name: "bad", description: "The bad boundary for start", required: false },
     ],
     flags: [
+      { long: "--full", description: "Print complete commit and change ids instead of 12-character ids", value_type: "boolean" },
       { long: "--budget", value_name: "tokens", description: "Approximate candidate-log token budget (default 1600, minimum 256); verdict metadata is always retained", value_type: "number" },
       { long: "--item", value_name: "pm-item", description: "PM item whose recorded linked test drives the bisect (required for start; filters status)", value_type: "string" },
     ],
-    async run(context: CommandHandlerContext): Promise<{ ok: boolean; bisect?: BisectReport; sessions?: readonly BisectSessionListing[]; reset?: { session: string; restored: BisectSession["original"] } }> {
+    async run(context: CommandHandlerContext): Promise<{ ok: boolean; bisect?: BisectReport; sessions?: readonly BisectSessionListing[]; reset?: { session: string; restored: BisectSession["original"]; warning?: string } }> {
       const repository = openRepository(context);
       const action = context.args[0]?.trim();
       const author = invocationAuthor(context);
@@ -520,7 +552,13 @@ export function registerBisectCommands(api: ExtensionApi): void {
               "Inspect it with `pm vcs bisect status`, or abandon it with `pm vcs bisect reset`.",
             );
           }
-          const revision = repository.resolve(context.args[1]?.trim() || "HEAD");
+          const requested = context.args[1]?.trim();
+          const next = requested ? null : walkOf(repository, session).next;
+          if (!requested && next === null) {
+            throw new VcsError("no_bisect_candidate", "There is no next candidate to mark.",
+              "Pass an explicit revision to good/bad/skip, or inspect `pm vcs bisect status` and reset the session.");
+          }
+          const revision = requested ? repository.resolve(requested) : (next as BisectCandidate).commit;
           const marked = markBisectOutcome(repository, session, revision, action as BisectOutcome, { author, now });
           const walk = walkOf(repository, marked);
           const concluded = walk.remaining === 0
@@ -549,17 +587,20 @@ export function registerBisectCommands(api: ExtensionApi): void {
         if (action === "status") {
           const item = optionalString(context.options, "item");
           const local = readBisectSession(repository);
-          const sessions = (await trackerSessions(context, item)).map(listSession);
+          const sessions = (await trackerSessions(context, item)).map((session) => listSession(session, context.options.full === true));
           const bisect = local === null || (item !== undefined && local.item !== item) ? null : await reportOf(context, repository, local, budget);
           return { ok: true, ...(bisect === null ? {} : { bisect }), sessions };
         }
 
         if (action === "reset") {
           const session = requireSession(repository, action);
-          recoverBisectWorker(repository);
-          await recordMilestone(context, { ...session, status: "abandoned" }, "reset");
           clearBisectSession(repository);
-          return { ok: true, reset: { session: session.id, restored: session.original } };
+          let warning: string | undefined;
+          try { await recordMilestone(context, { ...session, status: "abandoned" }, "reset"); }
+          catch (error) { warning = `Local session cleared; reset milestone could not be recorded: ${String(error)}`; }
+          return { ok: true, reset: { session: session.id,
+            restored: { ...session.original, commit: reportId(session.original.commit, context.options.full === true) },
+            ...(warning === undefined ? {} : { warning }) } };
         }
 
         throw new VcsError(

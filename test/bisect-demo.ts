@@ -48,7 +48,7 @@ try {
   const environment = { ...withoutPmContext(process.env), PM_SOURCE_WORKSPACE_ROOT: root, PM_AUTHOR: "demo-agent" };
   const run = (args: string[]) => execFileSync(process.execPath, [pmExecutable, "--author", "demo-agent", ...args], { cwd: root, env: environment, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
   run(["vcs", "bisect", "start", imported[0], imported[33], "--item", item, "--json"]);
-  const result = JSON.parse(run(["vcs", "bisect", "run", "--json"])) as { bisect: { verdict: { commit: string; change: string }; steps: { by: string }[] } };
+  const result = JSON.parse(run(["vcs", "bisect", "run", "--json", "--full"])) as { bisect: { verdict: { commit: string; change: string }; steps: { by: string }[] } };
   assert.equal(result.bisect.verdict.commit, imported[17]);
   assert.equal(result.bisect.verdict.change, effectiveChangeId(imported[17], readCommit(repository.objects, imported[17])));
   assert.equal(repository.refs.resolveHead(), imported[33]);

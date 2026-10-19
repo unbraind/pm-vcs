@@ -31,18 +31,27 @@ repository. Those intentional history additions remain after the walk.
 | --- | --- |
 | `bisect start <good> <bad> --item <id>` | Validate ancestry, recorded tests, clean tracked tree and absence of private layers; save boundaries and original checkout identity. |
 | `bisect run` | Continue the session using the recorded linked tests. |
-| `bisect good [revision]` | Record a manual passing outcome; defaults to HEAD. |
-| `bisect bad [revision]` | Record a manual failing outcome; defaults to HEAD. |
-| `bisect skip [revision]` | Record a manual skip; defaults to HEAD. |
+| `bisect good [revision]` | Record a manual passing outcome; defaults to the walk's next candidate. |
+| `bisect bad [revision]` | Record a manual failing outcome; defaults to the walk's next candidate. |
+| `bisect skip [revision]` | Record a manual skip; defaults to the walk's next candidate. |
 | `bisect status [--item <id>]` | Show the local session and latest milestones from all sessions in the shared tracker. |
-| `bisect reset` | Append an abandonment receipt and remove local session state and any interrupted candidate workspace. |
+| `bisect reset` | Remove local session state and interrupted candidate workspaces first; attempt an abandonment receipt and report a warning if it fails. |
+
+Manual marks leave HEAD in place. With no revision, `good`, `bad` and `skip`
+apply to `next` from `bisect status`; if no candidate remains they refuse with a
+remedy to pass an explicit revision or inspect and reset the session. An explicit
+revision can correct an earlier verdict, including a boundary verdict.
 
 All commands use the host's normal TOON output and accept its global `--json`
 format. Reports include the session, boundaries, original checkout, ordered
 candidate log, remaining work and next candidate. A conclusion includes the
 stable change id, current commit, author, linked PM items and historical agent
 harness/model when the change carries that provenance. Missing provenance stays
-absent. The package flag `--budget <tokens>` (default 1600, minimum 256) bounds the
+absent. Object ids use 12 characters by default; `--full` restores complete ids
+in boundaries, steps, verdicts, original checkout and session listings. A boundary
+prints `revision` only when it differs from its resolved commit. Boundary details
+already represented in the report are omitted; durable observations remain full.
+The package flag `--budget <tokens>` (default 1600, minimum 256) bounds the
 candidate log using a conservative JSON character estimate. Verdict metadata is
 always retained and can exceed that target. `stepsTaken` and `stepsOmitted` make
 truncation explicit; durable state and PM history retain the complete log. The
@@ -54,7 +63,12 @@ command.
 Bisect assumes a persistent regression: good descendants imply their ancestors
 are good, and bad changes narrow the search to their ancestry. It selects a
 candidate that splits the remaining ancestry as evenly as possible, including
-merged branches. Multiple unrelated failures, flaky tests or a regression that
+merged branches. Each walk reads immutable commit metadata once while constructing
+its range and caches candidate ancestry, stopping at good-boundary ancestors.
+The 2,000-commit scaling regression counts 2,000 setup reads for 1,600 candidates
+and zero further commit reads per decision step or final verdict. Candidate
+materialization and linked-test execution are separate from these decision reads.
+Multiple unrelated failures, flaky tests or a regression that
 is later fixed violate this assumption; refine the linked test or boundaries.
 
 A passing execution is `good`; a normal assertion failure is `bad`. Exit 125 is
@@ -103,7 +117,9 @@ It deliberately introduces a persistent failing flag at snapshot 18, records
 range spans public commits `53807ddccac4d5190deebdb52661ec398a44d0ed` through
 `417072bd7c402f5f8d3387beb37b33d8c887ab6b`. Four linked-test executions identified
 snapshot 18 (`fad7e30c040dff33f789bd6c5176882b27825427`) and verified the original
-checkout remained at the bad tip. The regression flag is synthetic; the tracker
+checkout remained at the bad tip. The captured default TOON report decreased from
+2,834 to 1,516 bytes (1,318 bytes saved, 46.5%) with compact ids and redundant
+boundary text removed. The regression flag is synthetic; the tracker
 snapshots are actual public history. See the [captured TOON report](bisect-demo.txt).
 
 To reproduce with a local copy of the public source repository:

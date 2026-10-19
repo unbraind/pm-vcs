@@ -10,8 +10,8 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension from "../index.ts";
 import builtExtension from "../dist/index.js";
-import { classifyRuns, runCandidateTest } from "../bisect-commands.ts";
-import { bisectCandidates, decodeBisectSession, bisectVerdict, bisectVerdicts, readBisectSession, runBisect, selectBisectCandidate, withBisectLease } from "../engine/bisect.ts";
+import { classifyRuns, runCandidateTest, type BisectReport } from "../bisect-commands.ts";
+import { bisectCandidates, bisectRemaining, decodeBisectSession, bisectVerdict, bisectVerdicts, readBisectSession, runBisect, selectBisectCandidate, writeBisectSession, withBisectLease, type BisectStep } from "../engine/bisect.ts";
 import { effectiveChangeId, readCommit, writeCommit, type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
 import { buildTree } from "../engine/worktree.ts";
@@ -99,7 +99,7 @@ async function setup(): Promise<Fixture> {
     client,
     harness,
     bisect: (args, options = {}, global = { author: "bisector" }) => harnessFixture.runCommand({
-      command: "vcs bisect", args, options, global, pmRoot,
+      command: "vcs bisect", args, options: { full: true, ...options }, global, pmRoot,
     }) as Promise<{ result: unknown; errorMessage: string | undefined }>,
   };
 }
@@ -724,6 +724,7 @@ test("engine primitives handle empty candidate sets and unknown ranges", async (
   const repository = fixture.repository;
   const base = repository.commit({ message: "base", author, allowEmpty: true }, new Date());
   const next = repository.commit({ message: "next", author, allowEmpty: true }, new Date());
+  assert.throws(() => bisectCandidates(repository.objects, next, base), /No changes sit between/);
   assert.throws(() => bisectCandidates(repository.objects, base, base), /No changes sit between/);
   assert.deepEqual(bisectCandidates(repository.objects, base, next).map((candidate) => candidate.commit), [next]);
   assert.equal(selectBisectCandidate(repository.objects, [], new Set()), null);
@@ -777,7 +778,7 @@ test("a session whose bad boundary is judged good concludes with no bad change",
   edit(fixture, "state.txt", "ok interior", "interior");
   const bad = headCommit(fixture);
   await fixture.bisect(["start", base, bad], { item });
-  const inverted = await fixture.bisect(["good"]);
+  const inverted = await fixture.bisect(["good", "HEAD"]);
   const done = (inverted.result as { bisect: { status: string; verdict: { kind: string; items: string[]; unresolved: unknown[] } } }).bisect;
   assert.equal(done.status, "done");
   assert.equal(done.verdict.kind, "no_bad_change");
@@ -826,7 +827,7 @@ test("two linked instances retain independent sessions visible in shared PM hist
   const invoke = async (args: readonly string[], options = {}) => {
     process.env.PM_SOURCE_WORKSPACE_ROOT = second.root;
     const handler = otherHarness.activation.commands.handlers.find((entry) => entry.command === "vcs bisect")!;
-    const result = await handler.run({ command: "vcs bisect", args: [...args], options, pm_root: fixture.pmRoot,
+    const result = await handler.run({ command: "vcs bisect", args: [...args], options: { full: true, ...options }, pm_root: fixture.pmRoot,
       source_workspace_root: second.root, repo_root: second.root, global: { author: "agent-b" } });
     return { result };
   };
@@ -869,9 +870,11 @@ test("installed CLI emits complete JSON and budgeted TOON reports for the linked
     cwd: fixture.root, encoding: "utf8", env: { ...withoutPmContext(process.env), PM_AUTHOR: "installed-agent" },
   });
   run(["vcs", "bisect", "start", base, "main", "--item", item, "--json"]);
-  const result = JSON.parse(run(["vcs", "bisect", "run", "--json"])) as { bisect: { verdict: { commit: string; items: string[] } } };
+  const result = JSON.parse(run(["vcs", "bisect", "run", "--json", "--full"])) as { bisect: { verdict: { commit: string; items: string[] } } };
   assert.equal(result.bisect.verdict.commit, culprit);
   assert.ok(result.bisect.verdict.items.includes(item));
+  const compact = JSON.parse(run(["vcs", "bisect", "status", "--json"])) as { bisect: BisectReport };
+  assert.equal(compact.bisect.verdict!.commit, culprit.slice(0, 12));
   const toon = run(["vcs", "bisect", "status", "--budget", "1600"]);
   assert.match(toon, /bisect:/);
   assert.match(toon, /first_bad/);
@@ -1003,7 +1006,7 @@ test("the compiled command runs the linked SDK worker with the same contract", a
   edit(fixture, "state.txt", "broken tip", "tip");
   const harness = await createExtensionTestHarness(builtExtension, { capabilities: manifest.capabilities });
   const handler = harness.activation.commands.handlers.find((entry) => entry.command === "vcs bisect")!;
-  const invoke = async (args: string[], options = {}) => handler.run({ command: "vcs bisect", args, options, pm_root: fixture.pmRoot,
+  const invoke = async (args: string[], options = {}) => handler.run({ command: "vcs bisect", args, options: { full: true, ...options }, pm_root: fixture.pmRoot,
     source_workspace_root: fixture.root, repo_root: fixture.root, global: { author: "compiled-agent" } });
   await invoke(["start", base, "main"], { item });
   const result = await invoke(["run"]) as { bisect: { verdict: { commit: string } } };
@@ -1026,4 +1029,167 @@ test("deleting a linked file reports its owning PM item", async () => {
   const verdict = (result.result as { bisect: { verdict: { commit: string; items: string[] } } }).bisect.verdict;
   assert.equal(verdict.commit, culprit);
   assert.ok(verdict.items.includes(owner));
+});
+
+test("root commits from unrelated merged history report file-derived and explicit linked items", async () => {
+  const fixture = await setup();
+  const item = await linkedTestItem(fixture, "Root diagnosis", join(fixture.root, "count.txt"));
+  const owner = (await fixture.client.create({ type: "Task", title: "Root file owner", author: "fixture" })).item.id;
+  await fixture.client.files(owner, { add: ["root.txt"], author: "fixture" });
+  const good = fixture.repository.commit({ message: "good root", author, allowEmpty: true }, new Date());
+  const blob = fixture.repository.objects.write("blob", Buffer.from("bad root contents"));
+  const tree = buildTree(fixture.repository.objects, new Map([["root.txt", { id: blob, mode: "100644" as const, fileId: "a".repeat(32) }]]));
+  const root = writeCommit(fixture.repository.objects, { tree, parents: [], author, committer: author, message: "unrelated bad root", items: [item] });
+  const bad = writeCommit(fixture.repository.objects, { tree, parents: [good, root], author, committer: author, message: "merge unrelated root" });
+  fixture.repository.refs.compareAndSwap("refs/heads/main", good, bad);
+  fixture.repository.materialize(tree);
+  await fixture.bisect(["start", good, bad], { item });
+  const marked = await fixture.bisect(["bad", root]);
+  assert.equal(marked.errorMessage, undefined);
+  const verdict = (marked.result as { bisect: { verdict: { commit: string; items: string[] } } }).bisect.verdict;
+  assert.equal(verdict.commit, root);
+  assert.deepEqual(new Set(verdict.items), new Set([item, owner]));
+});
+
+test("manual good bad and skip default to the next candidate while HEAD stays at the bad boundary", async () => {
+  for (const outcome of ["good", "bad", "skip"]) {
+    const fixture = await setup();
+    const item = await linkedTestItem(fixture, "Manual candidate", join(fixture.root, "count.txt"));
+    const good = edit(fixture, "state.txt", "good", "good");
+    for (let index = 0; index < 5; index++) edit(fixture, "state.txt", String(index), `change ${index}`);
+    const bad = headCommit(fixture);
+    const started = await fixture.bisect(["start", good, bad], { item });
+    const next = (started.result as { bisect: { next: { commit: string } } }).bisect.next.commit;
+    assert.notEqual(next, bad);
+    await fixture.bisect([outcome]);
+    const step = storedSession(fixture)!.steps.at(-1)!;
+    assert.equal(step.commit, next);
+    assert.equal(step.outcome, outcome);
+    assert.equal(step.by, "manual");
+    assert.equal(headCommit(fixture), bad);
+    await fixture.bisect(["reset"]);
+  }
+});
+
+test("manual marks without an open candidate refuse with an explicit revision remedy", async () => {
+  const fixture = await setup();
+  const item = await linkedTestItem(fixture, "No manual candidate", join(fixture.root, "count.txt"));
+  const good = edit(fixture, "state.txt", "good", "good");
+  const bad = edit(fixture, "state.txt", "bad", "bad");
+  await fixture.bisect(["start", good, bad], { item });
+  const refused = await fixture.bisect(["skip"]);
+  assert.match(refused.errorMessage ?? "", /no next candidate/i);
+  assert.match(refused.errorMessage ?? "", /explicit revision/);
+  assert.equal(storedSession(fixture)!.steps.length, 2);
+  assert.equal((await fixture.bisect(["good", bad])).errorMessage, undefined);
+});
+
+test("reset clears local state before a missing linked item can reject its milestone", async () => {
+  const fixture = await setup();
+  const item = await linkedTestItem(fixture, "Lost reset item", join(fixture.root, "count.txt"));
+  const good = edit(fixture, "state.txt", "good", "good");
+  edit(fixture, "state.txt", "middle", "middle");
+  const bad = edit(fixture, "state.txt", "bad", "bad");
+  await fixture.bisect(["start", good, bad], { item });
+  mkdirSync(join(fixture.repository.controlDirectory, "BISECT_WORKSPACE"));
+  rmSync(join(fixture.pmRoot, "tasks", `${item}.toon`));
+  const reset = (await fixture.bisect(["reset"], { full: false })).result as { ok: boolean; reset: { restored: { commit: string }; warning: string } };
+  assert.equal(reset.ok, true);
+  assert.match(reset.reset.warning, /Local session cleared; reset milestone could not be recorded:.*not found/);
+  assert.equal(reset.reset.restored.commit, bad.slice(0, 12));
+  assert.equal(storedSession(fixture), null);
+  assert.equal(existsSync(join(fixture.repository.controlDirectory, "BISECT_WORKSPACE")), false);
+  const replacement = await linkedTestItem(fixture, "Replacement item", join(fixture.root, "count.txt"));
+  assert.equal((await fixture.bisect(["start", good, bad], { item: replacement })).errorMessage, undefined);
+});
+
+test("2000-commit bisect reads each commit once and performs zero additional commit reads per decision step", async (context) => {
+  const fixture = await setup();
+  const store = fixture.repository.objects;
+  const tree = buildTree(store, new Map());
+  const history: string[] = [];
+  for (let index = 0; index < 2000; index++) {
+    history.push(writeCommit(store, { tree, parents: history.slice(-1), author, committer: author, message: `commit ${index}` }));
+  }
+  const reads = new Map<string, number>();
+  const originalRead = store.read.bind(store);
+  let count = 0;
+  let limit = 2000;
+  store.read = (id) => {
+    assert.ok(++count <= limit, `commit read bound exceeded: ${count} > ${limit}`);
+    reads.set(id, (reads.get(id) ?? 0) + 1);
+    return originalRead(id);
+  };
+  try {
+    const candidates = bisectCandidates(store, history[399], history[1999]);
+    assert.equal(candidates.length, 1600);
+    assert.equal([...reads.values()].reduce((total, count) => total + count, 0), 2000);
+    assert.ok([...reads.values()].every((count) => count === 1));
+    reads.clear();
+    count = 0;
+    limit = 0;
+    const steps: BisectStep[] = [{ ...candidates.at(-1)!, outcome: "bad" as const, by: "boundary" as const, at: "2000-01-01T00:00:00Z", author: "fixture" }];
+    let decisions = 0;
+    for (;;) {
+      const verdicts = bisectVerdicts(steps);
+      const remaining = bisectRemaining(store, candidates, verdicts);
+      const selected = selectBisectCandidate(store, candidates, remaining);
+      if (selected === null) {
+        assert.equal(bisectVerdict(store, candidates, verdicts).commit, history[1200]);
+        break;
+      }
+      steps.push({ ...selected, outcome: history.indexOf(selected.commit) >= 1200 ? "bad" : "good", by: "boundary", at: "2000-01-01T00:00:00Z", author: "fixture" });
+      decisions++;
+      assert.equal(reads.size, 0, `decision ${decisions} reread commit metadata`);
+    }
+    assert.ok(decisions <= 11, `expected at most 11 decisions, got ${decisions}`);
+    assert.equal(reads.size, 0);
+    context.diagnostic(`2000 total commits, 1600 candidates: 2000 setup reads, ${decisions} decisions, 0 commit reads per decision and final verdict`);
+  } finally { store.read = originalRead; }
+});
+
+test("reports compact every object id by default and --full preserves complete ids and useful detail", async () => {
+  const fixture = await setup();
+  const item = await linkedTestItem(fixture, "Compact report", join(fixture.root, "count.txt"));
+  const good = edit(fixture, "state.txt", "good", "good");
+  const middle = edit(fixture, "state.txt", "middle", "middle");
+  const bad = edit(fixture, "state.txt", "bad", "bad");
+  await fixture.bisect(["start", good, "main"], { item });
+  const state = storedSession(fixture)!;
+  writeBisectSession(fixture.repository, { ...state, steps: [
+    { ...state.steps[0], detail: "additional boundary evidence" }, state.steps[1],
+    { commit: middle, changeId: changeOf(fixture, middle), outcome: "untestable", by: "run", at: state.startedAt, author: "fixture", detail: "exit 127" }] });
+  const compact = await fixture.bisect(["status"], { full: false, budget: 16000 });
+  const full = await fixture.bisect(["status"], { full: true, budget: 16000 });
+  type Output = { bisect: BisectReport; sessions: { good: string; bad: string; verdict?: { change: string } }[] };
+  const short = compact.result as Output;
+  const long = full.result as Output;
+  assert.equal(short.bisect.boundaries.good.commit, good.slice(0, 12));
+  assert.equal(short.bisect.boundaries.good.revision, undefined);
+  assert.equal(short.bisect.boundaries.bad.revision, "main");
+  assert.equal(short.bisect.boundaries.bad.commit, bad.slice(0, 12));
+  assert.equal(short.bisect.original.commit, bad.slice(0, 12));
+  assert.ok(short.bisect.steps.every((step) => step.commit.length === 12 && step.changeId.length === 12));
+  assert.equal(short.bisect.steps[0].detail, "additional boundary evidence");
+  assert.equal(short.bisect.steps[1].detail, undefined);
+  assert.equal(short.bisect.steps[2].detail, "exit 127");
+  assert.equal(short.bisect.verdict!.commit, bad.slice(0, 12));
+  assert.equal(short.bisect.verdict!.change!.length, 12);
+  assert.equal(short.bisect.verdict!.unresolved[0].commit, middle.slice(0, 12));
+  assert.equal(short.sessions[0].good, good.slice(0, 12));
+  assert.equal(short.sessions[0].bad, "main");
+  assert.equal(long.bisect.boundaries.good.commit, good);
+  assert.equal(long.bisect.original.commit, bad);
+  assert.equal(long.bisect.verdict!.unresolved[0].commit, middle);
+  assert.ok(long.bisect.steps.every((step) => step.commit.length === 64 && step.changeId.length === 64));
+  assert.equal(long.sessions[0].good, good);
+  assert.ok(JSON.stringify(short).length < JSON.stringify(long).length);
+  await fixture.bisect(["bad", middle]);
+  const done = (await fixture.bisect(["status"], { full: false })).result as Output;
+  assert.equal(done.sessions[0].verdict!.change.length, 12);
+  await fixture.bisect(["reset"]);
+  await fixture.bisect(["start", good, bad], { item });
+  const next = (await fixture.bisect(["status"], { full: false })).result as Output;
+  assert.equal(next.bisect.next!.commit, middle.slice(0, 12));
+  assert.equal(next.bisect.next!.changeId.length, 12);
 });

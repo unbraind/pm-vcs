@@ -18,11 +18,11 @@ function flattened(
 }
 
 /** Order a commit set so every child precedes its parents, independent of wall clocks. */
-export function orderCommitsNewestFirst(store: ObjectStore, commits: readonly ObjectId[]): ObjectId[] {
+export function orderCommitsNewestFirst(store: ObjectStore, commits: readonly ObjectId[], read = (id: ObjectId) => readCommit(store, id)): ObjectId[] {
   const included = new Set(commits);
   const remainingChildren = new Map<ObjectId, number>(commits.map((commit) => [commit, 0]));
   for (const commitId of commits) {
-    for (const parent of readCommit(store, commitId).parents) {
+    for (const parent of read(commitId).parents) {
       if (included.has(parent)) remainingChildren.set(parent, (remainingChildren.get(parent) as number) + 1);
     }
   }
@@ -31,7 +31,7 @@ export function orderCommitsNewestFirst(store: ObjectStore, commits: readonly Ob
   while (ready.length > 0) {
     const commitId = ready.shift() as ObjectId;
     ordered.push(commitId);
-    for (const parent of readCommit(store, commitId).parents) {
+    for (const parent of read(commitId).parents) {
       if (!included.has(parent)) continue;
       const count = (remainingChildren.get(parent) as number) - 1;
       remainingChildren.set(parent, count);

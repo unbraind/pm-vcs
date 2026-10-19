@@ -212,31 +212,61 @@ export function clearBisectSession(repository: Repository): void {
   rmSync(join(repository.controlDirectory, "BISECT_WORKSPACE"), { recursive: true, force: true });
 }
 
-/**
- * Lists the candidate changes between the boundaries, oldest first.
- *
- * The order is a reversed topological walk, so every ancestor precedes its
- * descendants and "first" has one meaning even when the range crosses a merge.
- * The bad boundary is itself a candidate; the good boundary is not.
- *
- * @param store - Object store holding the boundary ancestry.
- * @param good - Exclusive good boundary.
- * @param bad - Inclusive bad boundary.
- * @returns The candidates, oldest first, with each commit's stable change identity.
- * @throws ObjectStoreError When the boundaries do not bound any changes.
- */
+/** Ancestry is private to one candidate array and released with that walk. */
+const walkAncestry = new WeakMap<readonly BisectCandidate[], ReadonlyMap<ObjectId, ReadonlySet<ObjectId>>>();
+
+/** Build range-only closures once; ordered parents already have their closures. */
+function ancestryOf(store: ObjectStore, candidates: readonly BisectCandidate[], read = (id: ObjectId) => readCommit(store, id)): ReadonlyMap<ObjectId, ReadonlySet<ObjectId>> {
+  const cached = walkAncestry.get(candidates);
+  if (cached !== undefined) return cached;
+  const included = new Set(candidates.map((candidate) => candidate.commit));
+  const closures = new Map<ObjectId, ReadonlySet<ObjectId>>();
+  for (const candidate of candidates) {
+    const closure = new Set([candidate.commit]);
+    for (const parent of read(candidate.commit).parents) {
+      if (included.has(parent)) for (const ancestor of closures.get(parent) as ReadonlySet<ObjectId>) closure.add(ancestor);
+    }
+    closures.set(candidate.commit, closure);
+  }
+  walkAncestry.set(candidates, closures);
+  return closures;
+}
+
+/** Collect one boundary's ancestry, stopping before excluded ancestors are read. */
+function boundaryAncestry(start: ObjectId, excluded: ReadonlySet<ObjectId>, read: (id: ObjectId) => ReturnType<typeof readCommit>): Set<ObjectId> {
+  const visited = new Set<ObjectId>();
+  const pending = [start];
+  while (pending.length > 0) {
+    const id = pending.pop() as ObjectId;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    if (!excluded.has(id)) pending.push(...read(id).parents);
+  }
+  return visited;
+}
+
+/** Resolve a range with one immutable commit read per visited id, sharing ancestry across its steps. */
 export function bisectCandidates(store: ObjectStore, good: ObjectId, bad: ObjectId): BisectCandidate[] {
-  const excluded = reachable(store, good);
-  const range = [...reachable(store, bad)].filter((id) => !excluded.has(id));
-  if (!reachable(store, bad).has(good) || range.length === 0) {
+  const commits = new Map<ObjectId, ReturnType<typeof readCommit>>();
+  const read = (id: ObjectId): ReturnType<typeof readCommit> => {
+    let commit = commits.get(id);
+    if (commit === undefined) { commit = readCommit(store, id); commits.set(id, commit); }
+    return commit;
+  };
+  const excluded = boundaryAncestry(good, new Set(), read);
+  const ancestry = boundaryAncestry(bad, excluded, read);
+  const range = [...ancestry].filter((id) => !excluded.has(id));
+  if (!ancestry.has(good) || range.length === 0) {
     throw new ObjectStoreError(
       "invalid_bisect_range",
       `No changes sit between the good boundary ${good.slice(0, 12)} and the bad boundary ${bad.slice(0, 12)}. `
       + "Pass a good revision that is an ancestor of the bad one.",
     );
   }
-  return orderCommitsNewestFirst(store, range).reverse()
-    .map((commitId) => ({ commit: commitId, changeId: effectiveChangeId(commitId, readCommit(store, commitId)) }));
+  const candidates = orderCommitsNewestFirst(store, range, read).reverse()
+    .map((commitId) => ({ commit: commitId, changeId: effectiveChangeId(commitId, read(commitId)) }));
+  ancestryOf(store, candidates, read);
+  return candidates;
 }
 
 /**
@@ -273,10 +303,11 @@ export function bisectRemaining(
   candidates: readonly BisectCandidate[],
   verdicts: ReadonlyMap<ObjectId, BisectStep>,
 ): ReadonlySet<ObjectId> {
+  const ancestry = ancestryOf(store, candidates);
   const current = new Map(candidates.map((candidate) => [candidate.changeId, candidate.commit]));
-  const closures = (outcome: BisectOutcome): Set<ObjectId>[] => [...verdicts.values()]
+  const closures = (outcome: BisectOutcome): ReadonlySet<ObjectId>[] => [...verdicts.values()]
     .filter((step) => step.outcome === outcome && current.has(step.changeId))
-    .map((step) => reachable(store, current.get(step.changeId) as ObjectId));
+    .map((step) => ancestry.get(current.get(step.changeId) as ObjectId) as ReadonlySet<ObjectId>);
   const good = closures("good");
   const bad = closures("bad");
   const covered = (id: ObjectId): boolean => good.some((closure) => closure.has(id));
@@ -304,11 +335,12 @@ export function selectBisectCandidate(
 ): BisectCandidate | null {
   const open = candidates.filter((candidate) => remaining.has(candidate.commit));
   if (open.length === 0) return null;
+  const ancestry = ancestryOf(store, candidates);
   const half = remaining.size / 2;
   let best = open[0];
   let bestDistance = Number.POSITIVE_INFINITY;
   for (const candidate of open) {
-    const closure = reachable(store, candidate.commit);
+    const closure = ancestry.get(candidate.commit) as ReadonlySet<ObjectId>;
     const distance = Math.abs([...remaining].filter((id) => closure.has(id)).length - half);
     if (distance < bestDistance || (distance === bestDistance && candidate.commit < best.commit)) {
       best = candidate;
@@ -335,9 +367,10 @@ export function bisectVerdict(
   verdicts: ReadonlyMap<ObjectId, BisectStep>,
 ): BisectVerdict {
   const unresolved: BisectStep[] = [];
+  const ancestry = ancestryOf(store, candidates);
   const current = new Map(candidates.map((candidate) => [candidate.changeId, candidate.commit]));
   const goodClosures = [...verdicts.values()].filter((step) => step.outcome === "good" && current.has(step.changeId))
-    .map((step) => reachable(store, current.get(step.changeId) as ObjectId));
+    .map((step) => ancestry.get(current.get(step.changeId) as ObjectId) as ReadonlySet<ObjectId>);
   for (const candidate of candidates) {
     const step = verdicts.get(candidate.changeId);
     if (step === undefined) continue;
