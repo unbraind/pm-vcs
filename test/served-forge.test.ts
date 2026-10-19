@@ -225,7 +225,9 @@ test("real served forge and ref publication reject missing expired foreign and o
   } finally { await server.close(); source.directory.cleanup(); }
 });
 
-test("installed pm vcs commands propose fetch apply rederive review and land through a real served process", { timeout: 180_000 }, async () => {
+// This is a successful publication scenario; its lease must cover every allowed CLI startup.
+const installedForgeBudgetMs = 180_000;
+test("installed pm vcs commands propose fetch apply rederive review and land through a real served process", { timeout: installedForgeBudgetMs }, async () => {
   const sandbox = createSandbox({ mergeInstall: false, commitFence: false });
   const source = fixture(); const server = await serverProcess(source.directory.root);
   try {
@@ -243,7 +245,7 @@ test("installed pm vcs commands propose fetch apply rederive review and land thr
       assert.equal(result.status, 0, result.stderr + result.stdout); return JSON.parse(result.stdout) as RecordDocument;
     };
     const fileId = sender.readIndex()[0]!.fileId!;
-    cli(["lease", "acquire", fileId, "origin", "--refs", "refs/heads/main", "--ttl-ms", "60000"]);
+    cli(["lease", "acquire", fileId, "origin", "--refs", "refs/heads/main", "--ttl-ms", String(installedForgeBudgetMs)]);
     cli(["push", "origin"]);
     const cloneRoot = join(source.directory.root, "clone");
     await cloneFrom(remote, cloneRoot, new Date(), "origin", source.directory.root, new HttpTransport(remote, { token: "token-a" }));
