@@ -202,14 +202,15 @@ function originKey(unit: ConflictUnit): string {
     unit.kind === "field" ? unit.field : [unit.endings?.base, unit.endings?.ours, unit.endings?.theirs]]);
 }
 
-/** Locate the exact inherited unit after mapping its original coordinates into one descendant projection. */
+/** Prefer the mapped inherited unit; a unique origin also survives non-compositional staged range mappings. */
 export function inheritedConflict(store: ObjectStore, id: ObjectId, previous: ObjectId,
   entry: { id: ObjectId; conflicts?: readonly ObjectId[]; fileId?: string }): ObjectId | undefined {
   const key = originKey(readConflict(store, id));
   const candidates = (entry.conflicts ?? []).filter((candidate) => originKey(readConflict(store, candidate)) === key);
   if (candidates.length === 0) return undefined;
   const mapped = carryConflicts(store, [id], previous, entry.id, entry.fileId)![0];
-  return candidates.find((candidate) => candidate === mapped);
+  return candidates.find((candidate) => candidate === mapped)
+    ?? (candidates.length === 1 ? candidates[0] : undefined);
 }
 
 /** Preserve competing explicit resolutions, including choosing the original readable projection. */

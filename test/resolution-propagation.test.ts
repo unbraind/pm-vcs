@@ -11,7 +11,7 @@ import { Repository } from "../engine/repo.ts";
 import { annotatePath } from "../engine/annotate.ts";
 import { decodeRecord, effectiveChangeId, readCommit, writeCommit } from "../engine/model.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
-import { encodeConflict, readConflict, summarizeConflicts } from "../engine/conflicts.ts";
+import { encodeConflict, inheritedConflict, readConflict, summarizeConflicts } from "../engine/conflicts.ts";
 import { mergeTrees } from "../engine/rewrite.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { withoutPmContext } from "../scripts/pm-environment.ts";
@@ -442,4 +442,55 @@ test("converging carried conflict addresses remain unique beside a competing res
   const output = flattenTree(repo.objects, result.tree).get(path)!;
   assert.equal(output.conflicts!.length, 2); assert.equal(new Set(output.conflicts).size, 2);
   assert.equal(repo.objects.readTyped(output.id, "blob").toString(), "prefix\nheader\nseparator\nspacer\nours\ntail\n");
+});
+
+
+test("sequentially carried conflict origins survive a clean merge when direct range mapping differs", () => {
+  const repo = Repository.init(temp()); const path = "text.txt";
+  edit(repo, path, "base\n"); repo.createBranch("other", "HEAD", now);
+  repo.switchTo("other", now); edit(repo, path, "theirs\n");
+  repo.switchTo("main", now); edit(repo, path, "a\n");
+  const merged = repo.merge("other", { message: "original dispute", author, recordConflicts: true }, now).head;
+  const base = flattenTree(repo.objects, readCommit(repo.objects, merged).tree).get(path)!;
+  const original = readConflict(repo.objects, base.conflicts![0]); assert.equal(original.kind, "text");
+  repo.createBranch("right", "HEAD", now);
+  edit(repo, path, "b\n"); const left = edit(repo, path, "a\nb\n");
+  const leftEntry = flattenTree(repo.objects, readCommit(repo.objects, left).tree).get(path)!;
+  repo.switchTo("right", now); edit(repo, path, "b\na\n");
+  const rightId = repo.status().conflicts![0].conflict;
+  assert.equal(leftEntry.conflicts![0], rightId);
+  const shifted = readConflict(repo.objects, rightId);
+  assert.ok(shifted.kind === "text" && shifted.start === 1 && shifted.end === 2);
+  repo.switchTo("main", now);
+  repo.merge("right", { message: "retain carried dispute", author, recordConflicts: true }, now);
+  assert.equal(readFileSync(join(repo.root, path), "utf8"), "b\na\nb\n");
+  assert.equal(repo.status().conflicts?.length, 1, "ordinary staged edits must not silently resolve their shared dispute");
+  const retained = readConflict(repo.objects, repo.status().conflicts![0].conflict);
+  assert.deepEqual([retained.base, retained.ours, retained.theirs], [original.base, original.ours, original.theirs]);
+  assert.deepEqual(repo.verify().missing, []); assert.deepEqual(repo.verify().corrupt, []);
+  assert.ok(original.kind === "text");
+  const extra = repo.objects.write("conflict", encodeConflict({ ...original, start: 2, end: 2 }));
+  assert.equal(inheritedConflict(repo.objects, base.conflicts![0], base.id,
+    { ...leftEntry, conflicts: [rightId, extra] }), undefined, "several unmatched same-origin units remain ambiguous");
+  assert.equal(inheritedConflict(repo.objects, base.conflicts![0], base.id,
+    { ...leftEntry, conflicts: [rightId, base.conflicts![0]] }), base.conflicts![0], "an exact mapped unit wins over other same-origin candidates");
+});
+
+test("criss-crossed resolution reconciliations build a virtual base without refusing competing choices", () => {
+  for (const text of [false, true]) {
+    const { repo, path } = conflict(text); repo.createBranch("resolver-b", "HEAD", now);
+    const a = repo.resolveConflicts(path, { take: "ours" }, { message: "a chooses", author }, now);
+    repo.createBranch("a-choice", "HEAD", now);
+    repo.switchTo("resolver-b", now);
+    const b = repo.resolveConflicts(path, { take: "theirs" }, { message: "b chooses", author }, now);
+    repo.createBranch("b-choice", "HEAD", now);
+    repo.merge("a-choice", { message: "b reconciles", author, recordConflicts: true }, now);
+    repo.switchTo("main", now);
+    repo.merge("b-choice", { message: "a reconciles", author, recordConflicts: true }, now);
+    const result = repo.merge("resolver-b", { message: "join criss-cross", author, recordConflicts: true }, now);
+    assert.deepEqual(new Set(result.bases), new Set([a, b]));
+    assert.ok(repo.status().conflicts!.length > 0, "the real merge retains unresolved choices");
+    assert.ok(!readFileSync(join(repo.root, path), "utf8").includes("<<<<<<<"));
+    assert.deepEqual(repo.verify().missing, []); assert.deepEqual(repo.verify().corrupt, []);
+  }
 });

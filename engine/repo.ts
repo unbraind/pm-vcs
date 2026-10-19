@@ -2245,7 +2245,7 @@ export class Repository {
       // Conflicts between two bases are resolved by keeping the first base's
       // side. A virtual base is a heuristic, not a snapshot anyone committed, and
       // recording markers in it would push them into the real merge's output.
-      const { tree: merged } = mergeTrees(this.rewriteContext(committer), nestedBase, tree, otherTree);
+      const { tree: merged } = mergeTrees({ ...this.rewriteContext(committer), virtualBase: true }, nestedBase, tree, otherTree);
       tree = merged;
     }
     return tree;

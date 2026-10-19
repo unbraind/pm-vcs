@@ -66,6 +66,8 @@ export interface MergeConflict {
 
 /** Store access plus the per-repository record policy every merge needs. */
 export interface RewriteContext {
+  /** Build a heuristic virtual base without refusing competing explicit resolutions. */
+  readonly virtualBase?: boolean;
   /** Opt in to durable units rather than marker blobs. */
   readonly recordConflicts?: boolean;
   /** Object store holding and receiving every object the rewrite builds. */
@@ -373,7 +375,8 @@ export function mergeTrees(
       const resolution = mergePath(ctx, path, baseEntry?.id ?? null, ourEntry.id, theirEntry.id, labels, identity.fileId);
       const carried = inherited.flatMap((id) => carryConflicts(ctx.store, [id], ourEntry.conflicts?.includes(id) === true ? ourEntry.id : theirEntry.id, resolution.id, identity.fileId)!);
       const units = [...carried, ...(resolution.conflicts ?? [])];
-      if (baseEntry?.conflicts !== undefined && (resolution.conflict === undefined || resolution.conflict.recorded === true)) {
+      if (baseEntry?.conflicts !== undefined && ctx.virtualBase !== true
+        && (resolution.conflict === undefined || resolution.conflict.recorded === true)) {
         const explicit = competingResolutions(ctx.store, { ...baseEntry, conflicts: baseEntry.conflicts }, ourEntry, theirEntry,
           { id: resolution.id, ...(units.length > 0 ? { conflicts: units } : {}) });
         if (explicit.id !== resolution.id || JSON.stringify(explicit.conflicts) !== JSON.stringify(units.length > 0 ? units : undefined)) {

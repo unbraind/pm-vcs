@@ -724,7 +724,10 @@ the structural conflict instead of interpreting the new payload as the old kind.
 Legacy merge modes refuse competing explicit choices before publication and name
 `--record-conflicts` as the way to retain both alternatives. Inherited text units
 are matched by their original sides and mapped projection coordinates, so independent
-prefix insertions cannot leave a resolved unit behind. Diff3 retains an unchanged
+prefix insertions cannot leave a resolved unit behind. Matching prefers the exact
+mapped address; a unique origin also survives sequential staged mappings that differ
+from direct mapping. Multiple unmatched candidates remain ambiguous. Virtual merge
+bases skip explicit-choice refusal; the real merge applies its normal conflict policy. Diff3 retains an unchanged
 current-base anchor when an insertion precedes it; independent edits stay clean.
 JSON and TOON resolve output include one `resolved` row per selected unit. A missing
 selection is a typed error naming the path and field. See
