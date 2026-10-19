@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { collectCommitObjects } from "./bundle.ts";
 import { orderCommitsNewestFirst } from "./attribution.ts";
 import { summarizeConflicts } from "./conflicts.ts";
-import { reachable } from "./merge.ts";
 import { effectiveChangeId, readCommit } from "./model.ts";
 import { ObjectStoreError, type ObjectId, type ObjectStore } from "./objects.ts";
 import { Repository } from "./repo.ts";
@@ -48,7 +47,7 @@ export interface BisectVerdict {
   readonly kind: "first_bad" | "ambiguous" | "no_bad_change";
   readonly change?: ObjectId;
   readonly commit?: ObjectId;
-  /** Verdicts that never resolved to good or bad, older than the first bad change. */
+  /** Unresolved ancestors of the first bad change, or all unresolved steps if none is bad. */
   readonly unresolved: readonly BisectStep[];
 }
 
@@ -353,13 +352,13 @@ export function selectBisectCandidate(
 /**
  * Concludes a completed walk: the first failing stable change, honestly.
  *
- * The oldest candidate marked bad is the first failing change. Candidates before
- * it that ended skip, untestable or conflicted are reported instead of assumed
- * good, because a walk that could not test a change must not claim it passed.
+ * The oldest candidate marked bad is the first failing change. Its ancestors
+ * that ended skip, untestable or conflicted are reported instead of assumed
+ * good; unrelated branches cannot be the cause of this bad change.
  *
  * @param candidates - Ordered candidates of the current boundaries.
  * @param verdicts - Recorded verdicts by stable change identity.
- * @returns The verdict, including every unresolved step that precedes the answer.
+ * @returns The verdict, including unresolved steps in the answer's ancestry.
  */
 export function bisectVerdict(
   store: ObjectStore,
@@ -371,15 +370,17 @@ export function bisectVerdict(
   const current = new Map(candidates.map((candidate) => [candidate.changeId, candidate.commit]));
   const goodClosures = [...verdicts.values()].filter((step) => step.outcome === "good" && current.has(step.changeId))
     .map((step) => ancestry.get(current.get(step.changeId) as ObjectId) as ReadonlySet<ObjectId>);
+  const firstBad = candidates.find((candidate) => verdicts.get(candidate.changeId)?.outcome === "bad");
+  const scope = firstBad === undefined ? undefined : ancestry.get(firstBad.commit) as ReadonlySet<ObjectId>;
   for (const candidate of candidates) {
+    if (candidate === firstBad) break;
     const step = verdicts.get(candidate.changeId);
-    if (step === undefined) continue;
-    if (step.outcome === "bad") {
-      return { kind: unresolved.length === 0 ? "first_bad" : "ambiguous", change: candidate.changeId, commit: candidate.commit, unresolved };
-    }
-    if (step.outcome !== "good" && !goodClosures.some((closure) => closure.has(candidate.commit))) unresolved.push(step);
+    if (step === undefined || step.outcome === "good") continue;
+    if (scope !== undefined && !scope.has(candidate.commit)) continue;
+    if (!goodClosures.some((closure) => closure.has(candidate.commit))) unresolved.push(step);
   }
-  return { kind: "no_bad_change", unresolved };
+  if (firstBad === undefined) return { kind: "no_bad_change", unresolved };
+  return { kind: unresolved.length === 0 ? "first_bad" : "ambiguous", change: firstBad.changeId, commit: firstBad.commit, unresolved };
 }
 
 /** Records a step on a session, persisting nothing: callers own durability. */
@@ -470,7 +471,7 @@ export async function runBisect(
         if (conflicts.length > 0) outcome = { outcome: "conflicted", detail: `${conflicts.length} unresolved conflict unit(s)` };
         else {
           const scratch = Repository.init(workspace);
-          const closure = collectCommitObjects(repository.objects, [...reachable(repository.objects, selected.commit)]);
+          const closure = collectCommitObjects(repository.objects, [selected.commit]);
           scratch.objects.accept([...closure].map((id) => ({ id, ...repository.objects.read(id) })), false);
           scratch.switchTo(selected.commit, options.now());
           outcome = await runner(selected, workspace);

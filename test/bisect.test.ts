@@ -276,6 +276,83 @@ test("bisect walks a merged history and finds a culprit introduced on the merged
   rmSync(countFile, { force: true });
 });
 
+test("bisect verdict excludes skipped siblings in both byte orders but retains skipped ancestors", async () => {
+  for (const skippedFirst of [true, false]) {
+    for (const skippedAncestor of [false, true]) {
+      const fixture = await setup();
+      const { repository } = fixture;
+      const item = await linkedTestItem(fixture, "Sibling verdict", join(fixture.root, "count.txt"));
+      const good = repository.commit({ message: "good", author, allowEmpty: true }, new Date());
+      const tree = readCommit(repository.objects, good).tree;
+      const ancestor = writeCommit(repository.objects, { tree, parents: [good], author, committer: author, message: "shared ancestor" });
+      const parent = skippedAncestor ? ancestor : good;
+      const siblings = ["A", "B"].map((message) => writeCommit(repository.objects, { tree, parents: [parent], author, committer: author, message }));
+      const bad = writeCommit(repository.objects, { tree, parents: siblings, author, committer: author, message: "merge" });
+      repository.refs.compareAndSwap("refs/heads/main", good, bad);
+      await fixture.bisect(["start", good, bad], { item });
+      const candidates = bisectCandidates(repository.objects, good, bad);
+      const orderedSiblings = candidates.filter((candidate) => siblings.includes(candidate.commit));
+      // Oldest-first topological ties reverse byte order. Exercise either sibling as bad.
+      assert.ok(orderedSiblings[0].commit > orderedSiblings[1].commit);
+      const skipped = orderedSiblings[skippedFirst ? 0 : 1];
+      const culprit = orderedSiblings[skippedFirst ? 1 : 0];
+      const session = storedSession(fixture)!;
+      const marked = { ...session, steps: [...session.steps,
+        ...(skippedAncestor ? [{ commit: ancestor, changeId: changeOf(fixture, ancestor), outcome: "skip" as const,
+          by: "manual" as const, at: session.startedAt, author: "fixture" }] : []),
+        { ...skipped, outcome: "skip" as const, by: "manual" as const, at: session.startedAt, author: "fixture" },
+        { ...culprit, outcome: "bad" as const, by: "manual" as const, at: session.startedAt, author: "fixture" },
+      ] };
+      const verdict = bisectVerdict(repository.objects, candidates, bisectVerdicts(marked.steps));
+      assert.equal(verdict.kind, skippedAncestor ? "ambiguous" : "first_bad");
+      assert.equal(verdict.commit, culprit.commit);
+      assert.deepEqual(verdict.unresolved.map((step) => step.commit), skippedAncestor ? [ancestor] : []);
+      const result = await runBisect(repository, marked, async () => assert.fail("no open candidate should execute"),
+        { author: "fixture", now: () => new Date() });
+      assert.equal(result.session.status, "done");
+      assert.equal(result.remaining, 0);
+      assert.equal(result.next, null);
+      assert.deepEqual(result.session.verdict, verdict);
+    }
+  }
+});
+
+test("bisect materialization copies four selected tree objects independent of history depth", async (context) => {
+  for (const depth of [12, 64]) {
+    const fixture = await setup();
+    const item = await linkedTestItem(fixture, "Bounded materialization", join(fixture.root, "count.txt"));
+    mkdirSync(join(fixture.root, "nested"));
+    const history: string[] = [];
+    for (let index = 0; index < depth; index++) {
+      history.push(edit(fixture, "nested/state.txt", String(index), `state ${index}`));
+    }
+    const bad = history.at(-1)!;
+    await fixture.bisect(["start", history[0], bad], { item });
+    const copied: number[] = [];
+    const culprit = Math.floor(depth / 2);
+    const result = await runBisect(fixture.repository, storedSession(fixture)!, async (candidate, workspace) => {
+      const scratch = Repository.open(workspace);
+      const inventory = scratch.objects.inventory();
+      copied.push(inventory.length);
+      // One commit, root tree, nested tree and blob; no ancestor payload belongs here.
+      assert.equal(inventory.length, 4, `copied objects at history depth ${depth}`);
+      assert.deepEqual(inventory.filter((entry) => entry.object.type === "commit").map((entry) => entry.id), [candidate.commit]);
+      assert.equal(scratch.refs.resolveHead(), candidate.commit);
+      const index = history.indexOf(candidate.commit);
+      assert.equal(readFileSync(join(workspace, "nested/state.txt"), "utf8"), String(index));
+      assert.equal(trackedClean({ ...fixture, repository: scratch }), true);
+      return { outcome: index >= culprit ? "bad" : "good" };
+    }, { author: "fixture", now: () => new Date() });
+    assert.equal(result.session.verdict?.kind, "first_bad");
+    assert.equal(result.session.verdict.commit, history[culprit]);
+    assert.ok(copied.length > 1);
+    assert.equal(headCommit(fixture), bad);
+    assert.equal(readFileSync(join(fixture.root, "nested/state.txt"), "utf8"), String(depth - 1));
+    assert.equal(existsSync(join(fixture.repository.controlDirectory, "BISECT_WORKSPACE")), false);
+    context.diagnostic(`${depth} commits: ${copied.length} candidates, ${copied.reduce((total, count) => total + count, 0)} copied objects, exactly 4 per candidate`);
+  }
+});
+
 test("bisect reports skipped and untestable candidates as unresolved instead of guessing", async () => {
   const fixture = await setup();
   const countFile = join(fixture.root, "bisect-count-untestable.txt");
