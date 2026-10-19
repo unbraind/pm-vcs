@@ -1987,7 +1987,7 @@ export class Repository {
       }
       const baseTree = this.virtualBaseTree(bases, options.committer ?? options.author);
       const { tree, merged, conflicts } = mergeTrees(
-        { ...this.rewriteContext(options.committer ?? options.author), recordConflicts: options.recordConflicts },
+        { ...this.rewriteContext(options.committer ?? options.author), recordConflicts: options.recordConflicts, operation: "merge" },
         baseTree,
         readCommit(this.objects, ours).tree,
         readCommit(this.objects, theirs).tree,
@@ -2542,7 +2542,7 @@ export class Repository {
       this.assertCleanWorktree();
       const plan = this.planned(() => (
           planRebase(
-            this.rewriteContext(committer),
+            { ...this.rewriteContext(committer), operation: "rebase" },
             this.resolve(source),
             this.resolve(onto),
             this.refSnapshots(),
@@ -2623,8 +2623,8 @@ export class Repository {
       const expected = head.target;
       if (expected === null) throw new ObjectStoreError("unborn_head", `HEAD has no commit yet to ${command} onto.`);
       const commit = this.planned(/** Both replay kinds preserve the tree merge's FileId provenance. */ () => command === "cherry-pick"
-        ? planCherryPick(this.rewriteContext(committer), this.resolve(revision), expected)
-        : planRevert(this.rewriteContext(committer), this.resolve(revision), expected, message));
+        ? planCherryPick({ ...this.rewriteContext(committer), operation: command }, this.resolve(revision), expected)
+        : planRevert({ ...this.rewriteContext(committer), operation: command }, this.resolve(revision), expected, message));
       const tree = readCommit(this.objects, commit).tree;
       const verb = command === "cherry-pick" ? "Cherry-picked" : "Reverted";
       this.assertNoUntrackedCollisions(tree, `${verb} changes would overwrite it.`);

@@ -411,6 +411,46 @@ test("legacy merge modes refuse competing explicit resolutions before publicatio
 });
 
 
+for (const operation of ["merge", "rebase", "cherry-pick", "revert"] as const) {
+  test(`competing resolution ${operation} refusal names only supported recovery flags`, async () => {
+    const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+    const flags = new Set(harness.assertCommandContract({ command: `vcs ${operation}` }).flags.map((flag) => flag.long));
+    for (const text of [false, true]) {
+      const { repo, path, merged } = conflict(text); repo.createBranch("resolver-b", "HEAD", now);
+      repo.resolveConflicts(path, { take: "ours" }, { message: "a resolves", author }, now);
+      repo.switchTo("resolver-b", now);
+      repo.resolveConflicts(path, { take: "theirs" }, { message: "b resolves", author }, now);
+      const before = { refs: repo.refs.list("refs"), head: repo.refs.readHead(), index: readFileSync(join(repo.controlDirectory, "index")),
+        bytes: readFileSync(join(repo.root, path)), operations: repo.operations.read() };
+      assert.throws(() => {
+        if (operation === "merge") repo.merge("main", { message: "refuse choices", author }, now);
+        else if (operation === "rebase") repo.rebase("main", "resolver-b", author, now);
+        else if (operation === "cherry-pick") repo.cherryPick("main", author, now);
+        else repo.revert(merged, "revert conflict", author, now);
+      }, (error: unknown) => {
+        assert.ok(error instanceof Error && "code" in error && error.code === "resolution_conflict");
+        assert.ok(error.message.includes(path));
+        for (const flag of error.message.match(/--[a-z][a-z-]*/g) ?? []) assert.ok(flags.has(flag), `${operation} does not accept ${flag}`);
+        assert.ok(error.message.includes(`pm vcs ${operation}`), error.message);
+        if (operation === "merge") assert.match(error.message, /--record-conflicts/);
+        else assert.match(error.message, /Resolve .* first, then retry/);
+        return true;
+      });
+      assert.deepEqual({ refs: repo.refs.list("refs"), head: repo.refs.readHead(), index: readFileSync(join(repo.controlDirectory, "index")),
+        bytes: readFileSync(join(repo.root, path)), operations: repo.operations.read() }, before);
+      if (operation === "merge") {
+        assert.throws(() => mergeTrees({ store: repo.objects, config: repo.config, committer: author },
+          readCommit(repo.objects, merged).tree, readCommit(repo.objects, repo.resolve("HEAD")).tree,
+          readCommit(repo.objects, repo.resolve("main")).tree),
+        (error: unknown) => error instanceof Error && "code" in error && error.code === "resolution_conflict"
+          && error.message.endsWith("then retry the rewrite.") && !error.message.includes("--"));
+      }
+      assert.equal(repo.readMergeState(), null);
+      assert.deepEqual(repo.verify().corrupt, []);
+    }
+  });
+}
+
 test("unreachable conflict resolution refuses without publishing an empty operation", () => {
   const { repo, path, merged } = conflict();
   repo.reset("other", "hard", now);

@@ -16,6 +16,8 @@ import { join } from "node:path";
 import { connect } from "node:net";
 import { exportBundle, parseBundle } from "../engine/bundle.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
+import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import extension from "../index.ts";
 import type { LeaseProof } from "../engine/publication-leases.ts";
 import { afterEach, test } from "node:test";
 
@@ -836,6 +838,8 @@ test("an unauthenticated server is read-only unless the operator explicitly reop
   const readonly = await serveRoot({ unauthenticatedWrites: false });
   const name = readonly.repository.root.slice(join(readonly.repository.root, "..").length + 1);
   const tip = readonly.repository.refs.read("refs/heads/main");
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const serveFlags = new Set(harness.assertCommandContract({ command: "vcs serve" }).flags.map((flag) => flag.long));
 
   // Reads stay open: an operator who serves without --auth meant to serve reads.
   const read = await rawRequest(readonly.server, `/${name}/advertise`, { body: "{}" });
@@ -847,8 +851,14 @@ test("an unauthenticated server is read-only unless the operator explicitly reop
     const answer = await rawRequest(readonly.server, `/${name}/${endpoint}`, { body: JSON.stringify({ updates: [], now: 0, session: "s", objects: [] }) });
     assert.equal(answer.status, FORBIDDEN_STATUS, `${endpoint}: wrong status`);
     assert.match(answer.body.toString("utf8"), /accepts reads without a token/, `${endpoint}: wrong body`);
+    const message = (JSON.parse(answer.body.toString("utf8")) as { error: { message: string } }).error.message;
+    assert.match(message, /operator.*`pm vcs serve`/);
+    for (const flag of message.match(/--[a-z][a-z-]*/g) ?? []) assert.ok(serveFlags.has(flag), `serve does not accept ${flag}`);
     assert.equal(answer.body.equals(DENIED_BODY), false);
   }
+  const wire = new HttpTransport(`http://${readonly.server.host}:${readonly.server.port}/${name}`);
+  await assert.rejects(wire.publish([], false, now),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "forbidden" && error.message.includes("`pm vcs serve`"));
   assert.equal(readonly.repository.refs.read("refs/heads/main"), tip);
 
   // The same server with the override behaves as before the hardening.

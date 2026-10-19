@@ -68,6 +68,8 @@ export interface MergeConflict {
 export interface RewriteContext {
   /** Build a heuristic virtual base without refusing competing explicit resolutions. */
   readonly virtualBase?: boolean;
+  /** CLI operation whose supported recovery command a competing-resolution refusal should name. */
+  readonly operation?: "merge" | "rebase" | "cherry-pick" | "revert";
   /** Opt in to durable units rather than marker blobs. */
   readonly recordConflicts?: boolean;
   /** Object store holding and receiving every object the rewrite builds. */
@@ -380,8 +382,13 @@ export function mergeTrees(
         const explicit = competingResolutions(ctx.store, { ...baseEntry, conflicts: baseEntry.conflicts }, ourEntry, theirEntry,
           { id: resolution.id, ...(units.length > 0 ? { conflicts: units } : {}) });
         if (explicit.id !== resolution.id || JSON.stringify(explicit.conflicts) !== JSON.stringify(units.length > 0 ? units : undefined)) {
-          if (ctx.recordConflicts !== true) throw new ObjectStoreError("resolution_conflict",
-            `Competing resolutions at ${path}: ${explicit.fields.join(", ") || "text hunks"}. Use --record-conflicts to retain both choices.`);
+          if (ctx.recordConflicts !== true) {
+            const remedy = ctx.operation === "merge"
+              ? "Retry `pm vcs merge` with --record-conflicts to retain both choices."
+              : `Resolve the competing choices on one side first, then retry ${ctx.operation === undefined ? "the rewrite" : `\`pm vcs ${ctx.operation}\``}.`;
+            throw new ObjectStoreError("resolution_conflict",
+              `Competing resolutions at ${path}: ${explicit.fields.join(", ") || "text hunks"}. ${remedy}`);
+          }
           files.set(path, { id: explicit.id, mode: ourEntry.mode, ...identity, conflicts: [...new Set(explicit.conflicts)] });
           const fields = [...new Set([...(resolution.conflict?.fields ?? []), ...explicit.fields])];
           conflicts.push({ path, reason: fields.length > 0 ? "record" : "content", fields, recorded: true });

@@ -232,7 +232,7 @@ export function bearerToken(header: string | undefined): string | null {
  * missing-repository denial.
  */
 const READONLY_BODY = Buffer.from(
-  `${JSON.stringify({ error: { code: "forbidden", message: "This served repository accepts reads without a token. A write needs --auth, or the operator's explicit open-writes override." } })}\n`,
+  `${JSON.stringify({ error: { code: "forbidden", message: "This served repository accepts reads without a token. For writes, the operator must run `pm vcs serve` with --auth, or explicitly enable open writes." } })}\n`,
   "utf8",
 );
 
