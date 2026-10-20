@@ -516,6 +516,7 @@ export async function runBisect(
  * @param outcome - Verdict being recorded.
  * @param options - Authorship and clock for the step.
  * @returns The extended session.
+ * @throws ObjectStoreError When the revision is outside the range or contradicts its good boundary.
  */
 export function markBisectOutcome(
   repository: Repository,
@@ -524,9 +525,13 @@ export function markBisectOutcome(
   outcome: BisectOutcome,
   options: BisectRunOptions,
 ): BisectSession {
-  const range = bisectCandidates(repository.objects, repository.resolve(session.good), repository.resolve(session.bad));
-  if (revision !== repository.resolve(session.good) && !range.some((candidate) => candidate.commit === revision)) {
+  const good = repository.resolve(session.good);
+  const range = bisectCandidates(repository.objects, good, repository.resolve(session.bad));
+  if (revision !== good && !range.some((candidate) => candidate.commit === revision)) {
     throw new ObjectStoreError("outside_bisect_range", "The marked revision is outside this session's range; pass a candidate from bisect status.");
+  }
+  if (revision === good && outcome !== "good") {
+    throw new ObjectStoreError("good_boundary_verdict", "The good boundary bounds the range and cannot be marked bad or skipped; reset and start with an earlier good revision.");
   }
   const commit = readCommit(repository.objects, revision);
   return withStep(session, { commit: revision, changeId: effectiveChangeId(revision, commit), outcome,

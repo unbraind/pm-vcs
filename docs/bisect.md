@@ -40,7 +40,9 @@ repository. Those intentional history additions remain after the walk.
 Manual marks leave HEAD in place. With no revision, `good`, `bad` and `skip`
 apply to `next` from `bisect status`; if no candidate remains they refuse with a
 remedy to pass an explicit revision or inspect and reset the session. An explicit
-revision can correct an earlier verdict, including a boundary verdict.
+revision can correct an earlier verdict, including the bad boundary. The good
+boundary defines the excluded ancestry and only accepts `good`; marking it `bad`
+or `skip` refuses with a remedy to reset and start with an earlier good revision.
 
 All commands use the host's normal TOON output and accept its global `--json`
 format. Reports include the session, boundaries, original checkout, ordered

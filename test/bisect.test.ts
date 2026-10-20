@@ -11,7 +11,7 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import builtExtension from "../dist/index.js";
 import { classifyRuns, runCandidateTest, type BisectReport } from "../bisect-commands.ts";
-import { bisectCandidates, bisectRemaining, decodeBisectSession, bisectVerdict, bisectVerdicts, readBisectSession, runBisect, selectBisectCandidate, writeBisectSession, withBisectLease, type BisectStep } from "../engine/bisect.ts";
+import { bisectCandidates, bisectRemaining, decodeBisectSession, bisectVerdict, bisectVerdicts, markBisectOutcome, readBisectSession, runBisect, selectBisectCandidate, writeBisectSession, withBisectLease, type BisectStep } from "../engine/bisect.ts";
 import { effectiveChangeId, readCommit, writeCommit, type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
 import { ObjectStoreError } from "../engine/objects.ts";
@@ -1292,6 +1292,63 @@ test("manual good bad and skip default to the next candidate while HEAD stays at
     assert.equal(headCommit(fixture), bad);
     await fixture.bisect(["reset"]);
   }
+});
+
+test("manual engine verdicts reject every non-good outcome on the good boundary", async () => {
+  const fixture = await setup();
+  const item = await linkedTestItem(fixture, "Good boundary contract", join(fixture.root, "count.txt"));
+  const good = edit(fixture, "state.txt", "good", "good");
+  const middle = edit(fixture, "state.txt", "middle", "middle");
+  const bad = edit(fixture, "state.txt", "bad", "bad");
+  await fixture.bisect(["start", good, bad], { item });
+  const session = storedSession(fixture)!;
+  const original = JSON.stringify(session);
+  const options = { author: "fixture", now: () => new Date(1_000) };
+  for (const outcome of ["bad", "skip", "untestable", "conflicted"] as const) {
+    assert.throws(() => markBisectOutcome(fixture.repository, session, good, outcome, options),
+      (error: unknown) => error instanceof ObjectStoreError && error.code === "good_boundary_verdict"
+        && /reset and start with an earlier good revision/.test(error.message), outcome);
+    assert.equal(JSON.stringify(session), original);
+    assert.deepEqual(storedSession(fixture), session);
+    assert.equal(readFileSync(join(fixture.root, "state.txt"), "utf8"), "bad");
+  }
+  assert.equal(markBisectOutcome(fixture.repository, session, good, "good", options).steps.at(-1)?.outcome, "good");
+  for (const outcome of ["good", "bad", "skip", "untestable", "conflicted"] as const) {
+    assert.equal(markBisectOutcome(fixture.repository, session, middle, outcome, options).steps.at(-1)?.outcome, outcome);
+  }
+  const outside = writeCommit(fixture.repository.objects, {
+    tree: readCommit(fixture.repository.objects, good).tree, parents: [], author, committer: author, message: "unrelated",
+  });
+  assert.throws(() => markBisectOutcome(fixture.repository, session, outside, "good", options),
+    (error: unknown) => error instanceof ObjectStoreError && error.code === "outside_bisect_range");
+});
+
+test("manual CLI verdicts refuse bad and skip on the good boundary without publishing history", async () => {
+  const fixture = await setup();
+  const item = await linkedTestItem(fixture, "Good boundary refusal", join(fixture.root, "count.txt"));
+  const good = edit(fixture, "state.txt", "good", "good");
+  edit(fixture, "state.txt", "middle", "middle");
+  const bad = edit(fixture, "state.txt", "bad", "bad");
+  await fixture.bisect(["start", good, bad], { item });
+  const session = storedSession(fixture);
+  const milestones = await comments(fixture, item);
+  for (const outcome of ["bad", "skip"]) {
+    const refused = await fixture.bisect([outcome, good]);
+    assert.match(refused.errorMessage ?? "", /good boundary/);
+    assert.match(refused.errorMessage ?? "", /reset and start with an earlier good revision/);
+    assert.deepEqual(storedSession(fixture), session);
+    assert.deepEqual(await comments(fixture, item), milestones);
+    const status = await fixture.bisect(["status"]);
+    assert.equal(status.errorMessage, undefined);
+    assert.equal((status.result as { bisect: BisectReport }).bisect.remaining, 1);
+    assert.equal(headCommit(fixture), bad);
+    assert.equal(trackedClean(fixture), true);
+  }
+  assert.equal((await fixture.bisect(["good", good])).errorMessage, undefined);
+  assert.equal(storedSession(fixture)!.steps.at(-1)?.outcome, "good");
+  const corrected = await fixture.bisect(["good", bad]);
+  assert.equal(corrected.errorMessage, undefined);
+  assert.equal((corrected.result as { bisect: BisectReport }).bisect.verdict?.kind, "no_bad_change");
 });
 
 test("manual marks without an open candidate refuse with an explicit revision remedy", async () => {
