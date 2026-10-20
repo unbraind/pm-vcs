@@ -25,9 +25,10 @@ after(() => rmSync(scratch, { recursive: true, force: true }));
 const posixOnly = { skip: process.platform === "win32" };
 
 /** Every merge driver `.gitattributes` asks Git to use, e.g. `pm-history` from `merge=pm-history`. */
+/** Custom attribute drivers; Git supplies text, binary and union without local registration. */
 const declaredDrivers = [
   ...new Set([...readFileSync(join(root, ".gitattributes"), "utf8").matchAll(/\bmerge=([\w-]+)/g)].map((match) => match[1])),
-].sort();
+].filter((driver) => !["text", "binary", "union"].includes(driver)).sort();
 
 /**
  * Create a consumer checkout: a fresh Git repository carrying this
