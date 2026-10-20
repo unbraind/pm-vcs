@@ -18,11 +18,11 @@ function flattened(
 }
 
 /** Order a commit set so every child precedes its parents, independent of wall clocks. */
-export function orderCommitsNewestFirst(store: ObjectStore, commits: readonly ObjectId[]): ObjectId[] {
+export function orderCommitsNewestFirst(store: ObjectStore, commits: readonly ObjectId[], read = (id: ObjectId) => readCommit(store, id)): ObjectId[] {
   const included = new Set(commits);
   const remainingChildren = new Map<ObjectId, number>(commits.map((commit) => [commit, 0]));
   for (const commitId of commits) {
-    for (const parent of readCommit(store, commitId).parents) {
+    for (const parent of read(commitId).parents) {
       if (included.has(parent)) remainingChildren.set(parent, (remainingChildren.get(parent) as number) + 1);
     }
   }
@@ -31,7 +31,7 @@ export function orderCommitsNewestFirst(store: ObjectStore, commits: readonly Ob
   while (ready.length > 0) {
     const commitId = ready.shift() as ObjectId;
     ordered.push(commitId);
-    for (const parent of readCommit(store, commitId).parents) {
+    for (const parent of read(commitId).parents) {
       if (!included.has(parent)) continue;
       const count = (remainingChildren.get(parent) as number) - 1;
       remainingChildren.set(parent, count);
@@ -78,8 +78,11 @@ export function traceFile(
   treeCache: Map<ObjectId | null, FlattenedTree> = new Map(),
 ): FileChangeTrace[] {
   const traces: FileChangeTrace[] = [];
+  const shallow = new Set(store.partialState()?.shallow ?? []);
   for (const commitId of commitsNewestFirst) {
     const commit = readCommit(store, commitId);
+    // A boundary with omitted ancestry cannot establish a file delta.
+    if (commit.parents.length > 0 && shallow.has(commitId)) continue;
     const current = [...flattened(store, commit.tree, treeCache)].filter(([, entry]) => entry.fileId === fileId);
     const parentTree = commit.parents[0] === undefined ? null : readCommit(store, commit.parents[0]).tree;
     const before = [...flattened(store, parentTree, treeCache)].filter(([, entry]) => entry.fileId === fileId);

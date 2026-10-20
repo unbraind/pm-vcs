@@ -19,6 +19,7 @@ import type { LeaseRequest } from "./engine/publication-leases.ts";
 import { existsSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
+import { registerBisectCommands } from "./bisect-commands.ts";
 import { registerCompositionCommands } from "./composition-commands.ts";
 import { registerForgeCommands } from "./forge-commands.ts";
 import { VcsError } from "./git.ts";
@@ -386,6 +387,7 @@ function remoteListing(repository: Repository, head: ObjectId | null): RemoteBra
 export function registerVcsCommands(api: ExtensionApi): void {
   registerCompositionCommands(api);
   registerForgeCommands(api);
+  registerBisectCommands(api);
   api.registerCommand({
     name: "vcs init",
     description:
