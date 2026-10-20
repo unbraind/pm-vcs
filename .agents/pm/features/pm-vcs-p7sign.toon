@@ -6,14 +6,14 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:46.220Z"
-updated_at: "2026-10-20T07:32:15.160Z"
+updated_at: "2026-10-20T07:54:06.273Z"
 author: codex-agent
 estimated_minutes: 480
 acceptance_criteria: "verify --signatures checks trusted ed25519 signatures; configured serve and push refuse unsigned or untrusted changes before ref publication; malformed, revoked and tampered signatures fail closed; signing keys never enter history."
 parent: pm-vcs-phase7
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:55.791Z",codex-agent,"cli:update:dep",detected
-comments[8]{created_at,author,text}:
+comments[10]{created_at,author,text}:
   "2026-10-20T07:04:49.950Z",codex-agent,"Design: explicit sign command avoids implicit key access during commit/rewrite. Ed25519 signs a versioned domain-separated canonical payload binding stable change id, tree, author, message and sorted pm item links; parents and committer are excluded so ancestry-only rewrites preserve validity. Content-changing rewrites remove the attestation and require explicit signing. Receiver policy binds SHA-256 SPKI fingerprints to author email identities and has effective-time revocations. Administrative trust/revoke operations share the object-store write lease with push; policy is reloaded under ref locks immediately before the complete batch publishes. Both HTTP and filesystem publication use that boundary. Private key files must be external to the repository and errors never include key bytes."
   "2026-10-20T07:16:46.490Z",codex-agent,"Implementation and focused adversarial suite are in place. Receiver checks only requested publication closure, including all ancestors, not unrelated uploaded objects; forged series publication also enforces policy. Effective-time revocations are evaluated after crypto at the transaction boundary. Focused suite passed 14/14 before the additional rebase scenario; actual rebase scenario passed 1/1. Full unchanged-threshold coverage is running. verify --signatures reports all rows in a nonzero error on failure because the existing pm host cannot return a structured report together with a nonzero exit (documented pm-cli #826 limitation). No dependency pins changed."
   "2026-10-20T07:22:38.119Z",codex-agent,"Behavioral revert proof in isolated source copies: replacing only assertTrustedChanges with its pre-feature no-enforcement behavior made all 4 selected filesystem push, resumable publish, HTTP and forge refusal tests fail (0 pass, 4 fail). Replacing only retainedAttestation with no retention made both selected rewrite tests fail (0/2); unconditional retention also made both fail (0/2), catching stale content signatures. Unmodified focused source passed 15/15, plus linked-instance CLI coverage passed 2/2. New signature-policy and cryptographic modules and signing commands each measured 100% statements, branches, functions and lines in focused coverage. Final release gates remain pending. The linked-test timeout was raised to 600 seconds after the default 120-second run timed out on the shared host; no coverage threshold changed."
@@ -22,24 +22,61 @@ comments[8]{created_at,author,text}:
   "2026-10-20T07:30:05.606Z",codex-agent,"Final timing regression passes (1/1); reverting only the final moveRefs revocation recheck makes it fail (0/1, missing rejection). It advances the receiver clock after the real FileId lease preflight to make the scheduled-time boundary deterministic, while leaving crypto, policy, objects, refs and transport real. Native Bun Ed25519 signing/verification smoke also passed 1/1. The full linked suite was rerun after this change; final release-gate evidence is attached through PR #134."
   "2026-10-20T07:30:23.212Z",codex-agent,"Updated linked-suite receipt: 17 tests, 17 pass, 0 fail/cancelled/skipped/todo; pm test runner exited 0. The same 2000-change full native verification benchmark measured 4770.950 ms on this run. Timing varies with shared-host load; no performance guarantee or coverage threshold adjustment is inferred. Full release gates on the final committed candidate remain pending on PR #134."
   "2026-10-20T07:32:15.160Z",codex-agent,"Final benchmark now invokes the actual vcs verify --signatures command handler through the real extension loader, including receiver policy-file reads, native object verification, reachable-history reads and the full 2000-row result; all 2000 signatures were valid in 6473.737 ms on the focused run. CI CodeQL flagged the intentionally rejected 1024-bit RSA fixtures; these negative-test keys are strengthened to 2048 bits so algorithm-refusal coverage remains without weak-key examples. Production signing remains Ed25519 only. Scheduled revocation rechecks are also documented after FileId lease preflights."
-files[15]{path,scope}:
-  engine/config.ts,project
-  engine/forge.ts,project
-  engine/http-protocol.ts,project
-  engine/model.ts,project
-  engine/repo.ts,project
-  engine/rewrite.ts,project
-  engine/serve.ts,project
-  engine/signature-policy.ts,project
-  engine/signatures.ts,project
-  engine/transport.ts,project
-  signing-commands.ts,project
-  test/helpers/signature-policy-worker.ts,project
-  test/signatures.test.ts,project
-  test/vcs-commands.test.ts,project
-  vcs-commands.ts,project
-tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref},updated_by,updated_at}:
-  node --test test/signatures.test.ts,project,600,codex-agent,"2026-10-20T07:15:08.477Z",local_mutation,feat/ed25519-change-signatures,codex-agent,"2026-10-20T07:18:18.132Z"
+  "2026-10-20T07:53:16.788Z",codex-agent,"CI Node 22 and Node 26 measured every production file at 100% statements, branches, functions and lines, including all signing code. Each ran 1728 tests: 1727 passed and exactly one failed because the existing raw-coverage guard still expected 70 production files instead of 73. Updating only that explicit inventory count for the three new modules; coverage includes, thresholds and ignore-directive prohibitions remain unchanged. Both local full gates are being restarted on the resulting committed head. CodeQL and Windows launcher checks pass."
+  "2026-10-20T07:54:05.467Z",codex-agent,"Inventory correction verified with node --test test/raw-coverage.test.ts: 3/3 pass, zero fail/cancelled/skipped/todo. The inventory now explicitly counts all 73 measured production files; the no-suppression rule and per-file 100% coverage gates are intact. Releasing the implementation claim for final exact-head release checks and orchestrator review; item remains in_progress."
+files[16]:
+  - path: engine/config.ts
+    scope: project
+  - path: engine/forge.ts
+    scope: project
+  - path: engine/http-protocol.ts
+    scope: project
+  - path: engine/model.ts
+    scope: project
+  - path: engine/repo.ts
+    scope: project
+  - path: engine/rewrite.ts
+    scope: project
+  - path: engine/serve.ts
+    scope: project
+  - path: engine/signature-policy.ts
+    scope: project
+  - path: engine/signatures.ts
+    scope: project
+  - path: engine/transport.ts
+    scope: project
+  - path: signing-commands.ts
+    scope: project
+  - path: test/helpers/signature-policy-worker.ts
+    scope: project
+  - path: test/raw-coverage.test.ts
+    scope: project
+    note: Explicit measured production inventory now includes the three new signing modules
+  - path: test/signatures.test.ts
+    scope: project
+  - path: test/vcs-commands.test.ts
+    scope: project
+  - path: vcs-commands.ts
+    scope: project
+tests[2]:
+  - command: node --test test/signatures.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-20T07:15:08.477Z"
+      source_kind: local_mutation
+      source_ref: feat/ed25519-change-signatures
+    updated_by: codex-agent
+    updated_at: "2026-10-20T07:18:18.132Z"
+  - command: node --test test/raw-coverage.test.ts
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-20T07:54:02.024Z"
+      source_kind: local_mutation
+      source_ref: feat/ed25519-change-signatures
 docs[2]{path,scope}:
   docs/change-signatures.md,project
   README.md,project
