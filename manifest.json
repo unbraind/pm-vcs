@@ -5,7 +5,7 @@
   "author": "@unbraind",
   "entry": "./dist/index.js",
   "priority": 50,
-  "pm_min_version": "2026.10.10",
+  "pm_min_version": "2026.8.1",
   "capabilities": [
     "commands",
     "schema"
