@@ -6,9 +6,11 @@ import { existsSync, readFileSync, readdirSync, symlinkSync, writeFileSync } fro
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, test } from "node:test";
+import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { exportBundle, parseBundle } from "../engine/bundle.ts";
+import { requireClosure } from "../engine/closure.ts";
 import { parseConfig, writeConfig } from "../engine/config.ts";
 import { createSeries, exportSeriesBundle } from "../engine/series.ts";
 import { Repository } from "../engine/repo.ts";
@@ -51,6 +53,167 @@ function trust(repository: Repository, publicKey: KeyObject): string {
     publicKey: publicKey.export({ type: "spki", format: "pem" }).toString(), identity: author.email,
   });
 }
+
+/** Count decoded-commit visits while retaining real, independently validated native object metadata. */
+class CountedCommits extends Map<string, Commit> {
+  visits = 0;
+  /** Observe traversal work without replacing cryptography or the native store. */
+  override get(id: string): Commit | undefined {
+    this.visits++;
+    return super.get(id);
+  }
+}
+
+test("publication stops at receiver-verified history while checking new commits and every unverified merge parent", async () => {
+  const { repository, keys, id, signed, original, dir } = fixture();
+  const tracker = new PmClient({ pmRoot: repository.root, cwd: repository.root, noExtensions: true });
+  await tracker.init("native-signatures", { defaults: true, author: "synthetic-agent" });
+  assert.equal(existsSync(join(repository.root, ".git")), false, "native signing works without a Git repository");
+  trust(repository, keys.publicKey);
+  const metadata = new CountedCommits(requireClosure(repository.objects, [id]).commits);
+  assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+  assert.equal(metadata.visits, 1);
+  metadata.visits = 0;
+  assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+  assert.equal(metadata.visits, 0, "a verified boundary skips the old crypto and ancestry walk");
+  const draft = { ...signed, attestation: undefined, parents: [id], message: "new child" };
+  const child = { ...draft, attestation: signChange(id, draft, keys.privateKey) };
+  const childId = writeCommit(repository.objects, child);
+  metadata.set(childId, child);
+  assertTrustedChanges(repository.controlDirectory, metadata, [childId, childId]);
+  assert.equal(metadata.visits, 1, "only the new commit needs a signature check");
+  const mergeDraft = { ...draft, parents: [childId, original], message: "merge unsigned side history" };
+  const merge = { ...mergeDraft, attestation: signChange(id, mergeDraft, keys.privateKey) };
+  const mergeId = writeCommit(repository.objects, merge);
+  metadata.set(mergeId, merge); metadata.set(original, readCommit(repository.objects, original));
+  metadata.visits = 0;
+  assert.throws(() => assertTrustedChanges(repository.controlDirectory, metadata, [mergeId]), { reason: "unsigned", commitId: original });
+  assert.equal(metadata.visits, 2);
+  metadata.visits = 0;
+  assert.throws(() => assertTrustedChanges(repository.controlDirectory, metadata, [mergeId]), { reason: "unsigned" });
+  assert.equal(metadata.visits, 2, "a failed closure cannot install a positive boundary");
+  assert.throws(() => assertTrustedChanges(repository.controlDirectory, new Map(), [id]), { code: "incomplete_bundle" });
+  const receiver = Repository.init(join(dir.root, "receiver"));
+  trust(receiver, keys.publicKey);
+  assert.throws(() => assertTrustedChanges(receiver.controlDirectory, metadata, [original]), { reason: "unsigned" });
+  repository.refs.compareAndSwap("refs/heads/main", original, childId);
+  const wire = new FileTransport("receiver", receiver.root);
+  const bundle = exportBundle(repository.objects, repository.refs, []);
+  await wire.push(bundle, [{ ref: "refs/heads/main", expected: null, next: childId }], false, new Date());
+  await wire.push(bundle, [{ ref: "refs/heads/tagged", expected: null, next: childId }], false, new Date());
+  assert.equal(receiver.refs.read("refs/heads/tagged"), childId);
+  // Even a cached tip cannot conceal corruption in the independently validated object closure.
+  writeFileSync(join(receiver.controlDirectory, "objects", id.slice(0, 2), id.slice(2)), "corrupt object");
+  const operations = receiver.operations.read();
+  await assert.rejects(wire.publish([{ ref: "refs/heads/corrupt", expected: null, next: childId }], false, new Date()), { code: "incomplete_bundle" });
+  assert.equal(receiver.refs.read("refs/heads/corrupt"), null);
+  assert.deepEqual(receiver.operations.read(), operations);
+});
+
+test("cached history expires on policy changes and receiver deadlines, including during the final publication preflight", () => {
+  const { repository, keys, id, signed, policy } = fixture();
+  const fingerprint = trust(repository, keys.publicKey);
+  const metadata = new CountedCommits([[id, signed]]);
+  assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+  const policyFile = join(repository.controlDirectory, TRUSTED_KEYS_FILE);
+  for (const changed of [{ ...policy, keys: [] }, { ...policy, keys: [{ ...policy.keys[0]!, identity: "other@example.invalid" }] }]) {
+    writeFileSync(policyFile, JSON.stringify(changed));
+    assert.throws(() => assertTrustedChanges(repository.controlDirectory, metadata, [id]), { reason: "untrusted" });
+  }
+  writeFileSync(policyFile, JSON.stringify(policy));
+  updateTrustedKeys(repository.objects, repository.controlDirectory, { keyId: fingerprint, effectiveAt: 100 });
+  const clock = Date.now;
+  let now = 0;
+  Date.now = () => now;
+  try {
+    assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+    metadata.visits = 0;
+    const finalCheck = assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+    assert.equal(metadata.visits, 0);
+    now = 100;
+    assert.throws(finalCheck, { reason: "revoked", commitId: id });
+    assert.equal(metadata.visits, 1, "the cached tip is reverified when its historical receipt expires");
+    assert.throws(() => assertTrustedChanges(repository.controlDirectory, metadata, [id]), { reason: "revoked" });
+  } finally { Date.now = clock; }
+});
+
+test("an unrelated scheduled revocation expires receipts without refusing valid history", () => {
+  const { repository, keys, id, signed } = fixture();
+  trust(repository, keys.publicKey);
+  const other = generateKeyPairSync("ed25519");
+  const fingerprint = trust(repository, other.publicKey);
+  updateTrustedKeys(repository.objects, repository.controlDirectory, { keyId: fingerprint, effectiveAt: 100 });
+  const metadata = new CountedCommits([[id, signed]]);
+  const clock = Date.now;
+  let now = 0;
+  Date.now = () => now;
+  try {
+    const finalCheck = assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+    now = 100;
+    finalCheck();
+    metadata.visits = 0;
+    assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+    assert.equal(metadata.visits, 0);
+  } finally { Date.now = clock; }
+});
+
+test("signature receipts bound retained commits and receivers; eviction only repeats verification", () => {
+  const { repository, keys, signed, id, dir } = fixture();
+  trust(repository, keys.publicKey);
+  const metadata = new CountedCommits();
+  let tip = id;
+  metadata.set(id, signed);
+  repository.objects.withWriteLock(() => {
+    for (let index = 0; index < 4096; index++) {
+      const draft = { ...signed, attestation: undefined, parents: [tip], message: `bounded history ${index}` };
+      const commit = { ...draft, attestation: signChange(id, draft, keys.privateKey) };
+      tip = writeCommit(repository.objects, commit);
+      metadata.set(tip, commit);
+    }
+  });
+  assertTrustedChanges(repository.controlDirectory, metadata, [tip]);
+  metadata.visits = 0;
+  assertTrustedChanges(repository.controlDirectory, metadata, [tip]);
+  assert.equal(metadata.visits, 1, "an evicted tip is checked before stopping at its verified parent");
+  for (let index = 0; index < 16; index++) {
+    const receiver = Repository.init(join(dir.root, `receiver-${index}`));
+    trust(receiver, keys.publicKey);
+    assertTrustedChanges(receiver.controlDirectory, new Map([[id, signed]]), [id]);
+  }
+  metadata.visits = 0;
+  assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+  assert.equal(metadata.visits, 1, "receiver eviction discards its signature receipts");
+});
+
+test("receiver clock rollback recomputes the revocation interval before reusing or installing receipts", () => {
+  const { repository, keys, id, signed } = fixture();
+  trust(repository, keys.publicKey);
+  const other = generateKeyPairSync("ed25519");
+  const fingerprint = trust(repository, other.publicKey);
+  updateTrustedKeys(repository.objects, repository.controlDirectory, { keyId: fingerprint, effectiveAt: 100 });
+  const draft = { ...signed, attestation: undefined, message: "other signer" };
+  const otherCommit = { ...draft, attestation: signChange(id, draft, other.privateKey) };
+  const otherId = writeCommit(repository.objects, otherCommit);
+  const metadata = new CountedCommits([[id, signed], [otherId, otherCommit]]);
+  const clock = Date.now;
+  let now = 200;
+  Date.now = () => now;
+  try {
+    const finalCheck = assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+    now = 50;
+    metadata.visits = 0;
+    finalCheck();
+    assert.equal(metadata.visits, 1, "final preflights also discard receipts from a later clock interval");
+    assertTrustedChanges(repository.controlDirectory, metadata, [otherId]);
+    now = 100;
+    assert.throws(() => assertTrustedChanges(repository.controlDirectory, metadata, [otherId]), { reason: "revoked" });
+    assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+    now = 50;
+    assertTrustedChanges(repository.controlDirectory, metadata, [otherId]);
+    now = 100;
+    assert.throws(() => assertTrustedChanges(repository.controlDirectory, metadata, [otherId]), { reason: "revoked" });
+  } finally { Date.now = clock; }
+});
 
 test("canonical domain/version and content binding resist replay, tampering, truncation and other versions", () => {
   const { id, original, signed, commit, keys, policy } = fixture();
@@ -251,6 +414,17 @@ test("2,000 native signed changes report measured verification wall time", async
   assert.deepEqual(result.corrupt, []); assert.deepEqual(result.missing, []);
   assert.equal(result.signatures.length, 2000); assert.ok(result.signatures.every(row => row.status === "valid"));
   console.log(`SIGNATURE-BENCHMARK changes=2000 valid=2000 elapsed_ms=${elapsed.toFixed(3)}`);
+  const metadata = new CountedCommits(requireClosure(repository.objects, [parent!]).commits);
+  const coldStart = performance.now();
+  assertTrustedChanges(repository.controlDirectory, metadata, [parent!]);
+  const coldElapsed = performance.now() - coldStart;
+  assert.equal(metadata.visits, 2000);
+  metadata.visits = 0;
+  const warmStart = performance.now();
+  assertTrustedChanges(repository.controlDirectory, metadata, [parent!]);
+  const warmElapsed = performance.now() - warmStart;
+  assert.equal(metadata.visits, 0);
+  console.log(`SIGNATURE-PUBLICATION-BENCHMARK changes=2000 cold_ms=${coldElapsed.toFixed(3)} warm_ms=${warmElapsed.toFixed(3)} warm_commit_visits=0`);
   updateTrustedKeys(repository.objects, repository.controlDirectory, { keyId: fingerprint, effectiveAt: Date.now() + 1 });
   assert.throws(() => assertTrustedChanges(repository.controlDirectory, commits), { reason: "revoked" });
 });
@@ -404,6 +578,7 @@ test("a scheduled revocation taking effect during other receiver preflights stil
   /** Restore these synchronous test-local preflight controls after the transport settles. */
   const restore = (): void => { PublicationLeases.prototype.assertPublication = original; Date.now = clock; };
   try {
+    assertTrustedChanges(receiver.controlDirectory, new Map([[id, readCommit(repository.objects, id)]]), [id]);
     const wire = new FileTransport("receiver", receiver.root);
     await assert.rejects(wire.push(exportBundle(repository.objects, repository.refs, []), [{ ref: "refs/heads/main", expected: null, next: id }], false, new Date()), { reason: "revoked" });
     assert.equal(receiver.refs.resolveHead(), null);

@@ -21,7 +21,7 @@ export interface ClosureReport {
 
 /** Receiver-validated structural metadata reusable only while its object-store write lease remains held. */
 export interface ClosureMetadata {
-  /** Decoded commits, excluding payload bytes. */
+  /** Hash-validated decoded commits; signature enforcement requires complete ancestry and grants no trust from structure alone. */
   readonly commits: Map<ObjectId, ReturnType<typeof decodeCommit>>;
   /** Decoded directory entries, excluding payload bytes. */
   readonly trees: Map<ObjectId, ReturnType<typeof decodeTree>>;

@@ -42,16 +42,45 @@ export function readTrustedKeys(control: string): TrustedKeys | null {
   try { return parseTrustedKeys(JSON.parse(readFileSync(join(control, TRUSTED_KEYS_FILE), "utf8"))); }
   catch { throw new ObjectStoreError("bad_signature_policy", "Trusted-key policy is unavailable or malformed; publication refused."); }
 }
-/** Verify requested closure and return a cheap revocation recheck for after other publication preflights. */
+/** Positive receipts cover complete ancestry under one exact receiver policy and clock interval. */
+interface VerifiedHistory {
+  readonly policy: string;
+  readonly verifiedAt: number;
+  readonly expiresAt: number;
+  readonly commits: Set<ObjectId>;
+}
+/** Process-local acceleration only: at most 16 receivers and 4,096 complete-history boundaries each. */
+const verifiedHistories = new Map<string, VerifiedHistory>();
+/** Never infer signature trust from structural validation, uploaded objects or sender-provided metadata. */
+function verifiedHistory(control: string, policy: TrustedKeys): VerifiedHistory {
+  const encoded = JSON.stringify(policy);
+  const now = Date.now();
+  let history = verifiedHistories.get(control);
+  if (history === undefined || history.policy !== encoded || now < history.verifiedAt || now >= history.expiresAt) {
+    history = { policy: encoded, verifiedAt: now, commits: new Set(), expiresAt: policy.revocations.reduce(
+      (deadline, entry) => entry.effectiveAt > now ? Math.min(deadline, entry.effectiveAt) : deadline, Infinity) };
+    verifiedHistories.delete(control);
+    if (verifiedHistories.size >= 16) verifiedHistories.delete(verifiedHistories.keys().next().value!);
+    verifiedHistories.set(control, history);
+  }
+  return history;
+}
+/**
+ * Verify requested ancestry, stopping only at locally signature-verified complete-history boundaries.
+ * Metadata must come from an independently hash-validated complete closure under the held store lease;
+ * cached signatures never replace object integrity validation. Return a final receiver-clock recheck.
+ */
 export function assertTrustedChanges(control: string, commits: ReadonlyMap<ObjectId, Commit>, roots: readonly ObjectId[] = [...commits.keys()]): () => void {
   const policy = readTrustedKeys(control);
   if (policy === null) return () => {};
+  const history = verifiedHistory(control, policy);
   const pending = [...roots];
   const checked = new Map<ObjectId, ReturnType<typeof verifyChangeSignature>>();
   while (pending.length > 0) {
     const id = pending.pop()!;
     if (checked.has(id)) continue;
-    // The caller supplies metadata from a complete, independently verified closure.
+    if (!commits.has(id)) throw new ObjectStoreError("incomplete_bundle", "Signature verification requires complete validated commit metadata.");
+    if (history.commits.has(id)) continue;
     const commit = commits.get(id)!;
     const result = verifyChangeSignature(id, commit, policy, -1);
     if (result.status !== "valid") throw new ChangeSignatureError({ ...result, status: result.status });
@@ -61,6 +90,12 @@ export function assertTrustedChanges(control: string, commits: ReadonlyMap<Objec
   /** Check effective times after crypto, and again after any other expensive publication checks. */
   const recheckRevocations = (): void => {
     const now = Date.now();
+    // Even unchanged policy bytes can invalidate all historical receipts when a scheduled revocation begins.
+    if (now < history.verifiedAt || now >= history.expiresAt) {
+      verifiedHistories.delete(control);
+      assertTrustedChanges(control, commits, roots);
+      return;
+    }
     for (const result of checked.values()) {
       if (policy.revocations.some(entry => entry.keyId === result.keyId && entry.effectiveAt <= now)) {
         throw new ChangeSignatureError({ ...result, status: "revoked" });
@@ -68,6 +103,11 @@ export function assertTrustedChanges(control: string, commits: ReadonlyMap<Objec
     }
   };
   recheckRevocations();
+  // Publish no positive receipt until the entire requested closure has passed, including every side parent.
+  for (const id of checked.keys()) {
+    if (history.commits.size >= 4096) history.commits.delete(history.commits.values().next().value!);
+    history.commits.add(id);
+  }
   return recheckRevocations;
 }
 /** Add an immutable fingerprint/identity binding, or append a revocation without deleting earlier effective times. */

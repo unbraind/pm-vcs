@@ -91,6 +91,19 @@ uses the same rule so it cannot bypass enforcement. Invalid batches move no
 refs and append no publication operation. Immutable uploaded objects and upload
 receipts may remain for retry/collection under existing retention rules.
 
+Publication retains process-local positive signature receipts for complete
+ancestry, bounded to 16 receivers and 4,096 commit boundaries per receiver.
+Subsequent signature walks stop at those boundaries, after independently
+validating the requested object closure again. Uploaded or structurally valid
+objects alone never establish signature trust. Receipts are discarded whenever
+any policy content changes, the receiver clock moves before the receipt's
+verification time, or the next scheduled revocation becomes effective.
+The final publication preflight repeats ancestry verification if that deadline
+passes during other checks, including when the requested tip was cached. This
+preserves historical revocation without repeating old cryptographic checks on
+every publication. Restarting the process or evicting receipts simply requires
+full signature verification again; receipts never travel in bundles or metadata.
+
 A `ChangeSignatureError` has code `change_signature_refused`, `changeId`,
 `commitId` and `reason`: unsigned, untrusted, revoked, malformed or tampered.
 These fields survive HTTP transport. Missing or malformed configured policy
