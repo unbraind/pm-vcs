@@ -6,9 +6,7 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-19T22:37:30.807Z"
-updated_at: "2026-10-19T23:25:30.096Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-20T00:22:37.529Z"
 author: codex-agent
 estimated_minutes: 120
 acceptance_criteria: A real shallow-merge regression covers bad/run/status when the first bad commit has an omitted parent; available explicit associations remain available; missing provenance has an honest omission or boundary receipt; complete-history and root-commit reports remain correct.
@@ -17,10 +15,14 @@ repro_steps: "Create an empty-tree ancestor A, good G with parent A, side S with
 expected_result: Keep the core bisect conclusion available and report unavailable file-derived attribution explicitly instead of throwing or inventing provenance.
 actual_result: Start succeeds; marking S bad and later status both fail with No object for the omitted first-parent commit. The disposable reproduction verified the parent object is absent.
 component: bisect
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-10-19T23:25:30.095Z",codex-agent,"Fixed in PR 131 review round: real depth-two merge clone verifies missing ancestor, manual bad plus status, automatic run plus status, explicit association deduplication/order, honest itemsBoundary=shallow, no hydration, restored HEAD and reset. Focused regression passes; reverting only linkedItems fails on missing parent. Related traceFile shallow-parent read fixed with an independent passing/reverting regression. Item remains in progress for orchestrator verification."
-files[1]{path,scope}:
+  "2026-10-20T00:22:31.544Z",codex-agent,"Final acceptance: linked command node --test --test-name-pattern=\"shallow culprit\" test/bisect.test.ts passed 1/1 via pinned PM. Both full release gates passed 1709/1709 with all 70 production files at unchanged per-file 100 percent coverage in all dimensions. The regression covers manual bad and automated run followed by status, retains sorted explicit links, reports itemsBoundary=shallow, preserves missing ancestry and original HEAD, and resets successfully. Reverting only linkedItems independently fails on the omitted parent. Releasing the claim; item remains in progress for orchestrator verification."
+files[2]{path,scope}:
   bisect-commands.ts,project
+  test/bisect.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-name-pattern='shallow culprit' test/bisect.test.ts,project,codex-agent,"2026-10-20T00:08:27.444Z",local_mutation,feat/vcs-bisect-linked-test
 docs[1]{path,scope}:
   docs/bisect.md,project
 body: ""
