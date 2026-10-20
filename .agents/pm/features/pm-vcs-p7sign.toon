@@ -6,19 +6,18 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:46.220Z"
-updated_at: "2026-10-20T07:22:38.119Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-20T07:25:17.216Z"
 author: codex-agent
 estimated_minutes: 480
 acceptance_criteria: "verify --signatures checks trusted ed25519 signatures; configured serve and push refuse unsigned or untrusted changes before ref publication; malformed, revoked and tampered signatures fail closed; signing keys never enter history."
 parent: pm-vcs-phase7
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:55.791Z",codex-agent,"cli:update:dep",detected
-comments[3]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-10-20T07:04:49.950Z",codex-agent,"Design: explicit sign command avoids implicit key access during commit/rewrite. Ed25519 signs a versioned domain-separated canonical payload binding stable change id, tree, author, message and sorted pm item links; parents and committer are excluded so ancestry-only rewrites preserve validity. Content-changing rewrites remove the attestation and require explicit signing. Receiver policy binds SHA-256 SPKI fingerprints to author email identities and has effective-time revocations. Administrative trust/revoke operations share the object-store write lease with push; policy is reloaded under ref locks immediately before the complete batch publishes. Both HTTP and filesystem publication use that boundary. Private key files must be external to the repository and errors never include key bytes."
   "2026-10-20T07:16:46.490Z",codex-agent,"Implementation and focused adversarial suite are in place. Receiver checks only requested publication closure, including all ancestors, not unrelated uploaded objects; forged series publication also enforces policy. Effective-time revocations are evaluated after crypto at the transaction boundary. Focused suite passed 14/14 before the additional rebase scenario; actual rebase scenario passed 1/1. Full unchanged-threshold coverage is running. verify --signatures reports all rows in a nonzero error on failure because the existing pm host cannot return a structured report together with a nonzero exit (documented pm-cli #826 limitation). No dependency pins changed."
   "2026-10-20T07:22:38.119Z",codex-agent,"Behavioral revert proof in isolated source copies: replacing only assertTrustedChanges with its pre-feature no-enforcement behavior made all 4 selected filesystem push, resumable publish, HTTP and forge refusal tests fail (0 pass, 4 fail). Replacing only retainedAttestation with no retention made both selected rewrite tests fail (0/2); unconditional retention also made both fail (0/2), catching stale content signatures. Unmodified focused source passed 15/15, plus linked-instance CLI coverage passed 2/2. New signature-policy and cryptographic modules and signing commands each measured 100% statements, branches, functions and lines in focused coverage. Final release gates remain pending. The linked-test timeout was raised to 600 seconds after the default 120-second run timed out on the shared host; no coverage threshold changed."
+  "2026-10-20T07:25:14.135Z",codex-agent,"Review candidate: https://github.com/unbraind/pm-vcs/pull/134 (draft until full release gates finish). The pinned pm linked runner passed the complete focused suite 16/16 with zero failures, cancellations, skips or todos; 2000/2000 native changes verified in 16760.378 ms including object-integrity and history reads under shared-host load. Test-result tracking is disabled by existing tracker policy, so this comment preserves the result. Strict pm health exited 0 and validate returned ok with existing repository advisories; no history was repaired. Typecheck, lint, zero-duplication and docstring checks passed. The PR contains the design, threat table, before/after and behavioral revert proof. The final unchanged-threshold npm and Bun gates will be recorded on that linked PR. Implementation is ready for orchestrator review; retain in_progress and do not close or merge."
 files[15]{path,scope}:
   engine/config.ts,project
   engine/forge.ts,project
