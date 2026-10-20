@@ -91,6 +91,9 @@ export function updateTrustedKeys(store: ObjectStore, control: string,
       next = { ...current, keys: [...current.keys, { identity: update.identity, publicKey }] };
     } else {
       keyId = update.keyId;
+      if (!current.keys.some(entry => keyFingerprint(entry.publicKey) === keyId)) {
+        throw new ObjectStoreError("bad_signature_policy", "This fingerprint is not trusted.");
+      }
       next = { ...current, revocations: [...current.revocations, update] };
     }
     parseTrustedKeys(next);

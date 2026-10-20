@@ -23,7 +23,7 @@ import { requireClosure, type ClosureMetadata } from "./closure.ts";
 import { isAncestor } from "./merge.ts";
 import { type ObjectId, type ObjectType, ObjectStoreError, hashObject } from "./objects.ts";
 import { assertRefName, BRANCH_PREFIX, type RefEntry, TAG_PREFIX } from "./refs.ts";
-import type { RepositoryConfig } from "./config.ts";
+import { sharedConfig, type RepositoryConfig } from "./config.ts";
 import { REPOSITORY_FORMAT, Repository } from "./repo.ts";
 import { HttpTransport } from "./http-transport.ts";
 import { serveForge, type ForgeRequest } from "./forge.ts";
@@ -366,7 +366,7 @@ export class FileTransport implements Transport {
       repositoryId: repository.objects.recordedIdentity(),
       refs: [...repository.refs.list(BRANCH_PREFIX), ...repository.refs.list(TAG_PREFIX)],
       head: head.kind === "branch" ? head.ref : null,
-      config: repository.config,
+      config: sharedConfig(repository.config),
       formatVersion: REPOSITORY_FORMAT,
       capabilities: [...TRANSPORT_CAPABILITIES],
     };

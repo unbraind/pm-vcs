@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 
 import { DEFAULT_CONFIG, type RepositoryConfig, isRecordPath, matchesGlob, parseConfig, readConfig, writeConfig } from "../engine/config.ts";
@@ -101,4 +101,27 @@ test("readConfig rejects a file that is not valid JSON", () => {
     () => readConfig(path),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "bad_config",
   );
+});
+
+
+test("config replacement leaves an already-open reader on a complete previous snapshot", () => {
+  dir = makeTempDir();
+  const path = `${dir.root}/config.json`;
+  writeConfig(path, DEFAULT_CONFIG);
+  const previous = openSync(path, "r");
+  try {
+    const next = { ...DEFAULT_CONFIG, recordPaths: ["records/**"] };
+    writeConfig(path, next);
+    assert.deepEqual(JSON.parse(readFileSync(previous, "utf8")), DEFAULT_CONFIG);
+    assert.deepEqual(readConfig(path).recordPaths, next.recordPaths);
+    assert.deepEqual(readdirSync(dir.root), ["config.json"]);
+  } finally { closeSync(previous); }
+});
+
+test("failed config replacement cleans its sibling temporary file", () => {
+  dir = makeTempDir();
+  const path = `${dir.root}/config.json`;
+  mkdirSync(path);
+  assert.throws(() => writeConfig(path, DEFAULT_CONFIG));
+  assert.deepEqual(readdirSync(dir.root), ["config.json"]);
 });

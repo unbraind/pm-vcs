@@ -1,3 +1,4 @@
+import { sharedConfig } from "./config.ts";
 import { join } from "node:path";
 import { readCommit } from "./model.ts";
 import { historyOptions, type HistoryOptions } from "./partial.ts";
@@ -393,7 +394,7 @@ export async function cloneFrom(
   // agent to delete the directory by hand before it can try again.
   const preexisting = existsSync(root);
   mkdirSync(root, { recursive: true });
-  const repository = Repository.init(root, branch ?? DEFAULT_BRANCH, advertisement.config);
+  const repository = Repository.init(root, branch ?? DEFAULT_BRANCH, sharedConfig(advertisement.config));
   let fetched: FetchReport;
   try {
     if (advertisement.repositoryId !== undefined) repository.objects.adoptIdentity(advertisement.repositoryId);

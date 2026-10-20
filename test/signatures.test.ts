@@ -14,7 +14,8 @@ import { createSeries, exportSeriesBundle } from "../engine/series.ts";
 import { Repository } from "../engine/repo.ts";
 import { decodeCommit, encodeCommit, effectiveChangeId, readCommit, writeCommit, writeTree, type Commit } from "../engine/model.ts";
 import { PublicationLeases } from "../engine/publication-leases.ts";
-import { FileTransport } from "../engine/transport.ts";
+import { cloneFrom, fetchFrom } from "../engine/sync.ts";
+import { FileTransport, type Advertisement } from "../engine/transport.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
 import { startRepositoryServer, TokenGrants } from "../engine/serve.ts";
 import { assertWireSuccess, encodeErrorBody } from "../engine/http-protocol.ts";
@@ -60,6 +61,8 @@ test("canonical domain/version and content binding resist replay, tampering, tru
   for (const changed of [
     { ...signed, changeId: "f".repeat(64) }, { ...signed, tree: "a".repeat(64) }, { ...signed, message: "other" },
     { ...signed, items: ["pm-vcs-synthetic"] }, { ...signed, author: { ...author, email: "other@example.invalid" } },
+    { ...signed, author: { ...author, name: "Other" } }, { ...signed, author: { ...author, timestamp: 2 } },
+    { ...signed, author: { ...author, timezoneOffsetMinutes: 60 } },
   ]) assert.equal(verifyChangeSignature(id, changed, policy, 0).status, "tampered");
   assert.equal(verifyChangeSignature(id, { ...signed, parents: [original], committer: { ...author, timestamp: 99 } }, policy, 0).status, "valid");
   assert.deepEqual(changeSigningPayload(id, { ...signed, items: ["b", "a", "a"] }), changeSigningPayload(id, { ...signed, items: ["a", "b"] }));
@@ -132,10 +135,10 @@ test("explicit signing replays descendants and retains signatures only for uncha
   const { repository, original, keys, policy, id, signed } = fixture();
   const descendant = writeCommit(repository.objects, { ...signed, parents: [original], changeId: "a".repeat(64), attestation: undefined, message: "child" });
   repository.refs.compareAndSwap("refs/heads/main", original, descendant);
-  repository.sign("HEAD", keys.privateKey, new Date());
+  repository.sign("HEAD", keys.privateKey, author, new Date());
   const childBefore = repository.refs.resolveHead()!;
   const childSignature = readCommit(repository.objects, childBefore).attestation;
-  repository.sign(original, keys.privateKey, new Date());
+  repository.sign(original, keys.privateKey, author, new Date());
   const childAfter = readCommit(repository.objects, repository.refs.resolveHead()!);
   assert.equal(childAfter.attestation, childSignature);
   assert.equal(verifyChangeSignature(repository.refs.resolveHead()!, childAfter, policy, 0).status, "valid");
@@ -189,13 +192,13 @@ test("HTTP serve preserves typed signature refusals and reloads trust/revocation
     const updates = [{ ref: "refs/heads/main", expected: null, next: original }];
     await assert.rejects(wire.push(exportBundle(repository.objects, repository.refs, []), updates, false, new Date()),
       (error: unknown) => { assert.ok(error instanceof ChangeSignatureError); assert.equal(error.reason, "unsigned"); assert.equal(error.changeId, original); return true; });
-    const signedId = repository.sign("HEAD", keys.privateKey, new Date())!;
+    const signedId = repository.sign("HEAD", keys.privateKey, author, new Date())!;
     await wire.uploadObjects(parseBundle(exportBundle(repository.objects, repository.refs, [])).lines);
     updateTrustedKeys(receiver.objects, receiver.controlDirectory, { keyId: fingerprint, effectiveAt: Date.now() });
     await assert.rejects(wire.publish([{ ...updates[0], next: signedId }], false, new Date(0)), { code: "change_signature_refused", reason: "revoked" });
     assert.equal(receiver.refs.resolveHead(), null);
     const rotated = generateKeyPairSync("ed25519"); trust(receiver, rotated.publicKey);
-    const rotatedId = repository.sign("HEAD", rotated.privateKey, new Date())!;
+    const rotatedId = repository.sign("HEAD", rotated.privateKey, author, new Date())!;
     await wire.push(exportBundle(repository.objects, repository.refs, []), [{ ...updates[0], next: rotatedId }], false, new Date());
     assert.equal(receiver.refs.resolveHead(), rotatedId);
   } finally { await server.close(); }
@@ -311,6 +314,7 @@ test("agent CLI signs, verifies, trusts and revokes while every written reposito
     ["vcs sign", [], {}], ["vcs sign", [], { key: privatePem }], ["vcs trust-key", [], {}],
     ["vcs trust-key", [author.email], {}], ["vcs trust-key", [author.email, "missing"], {}],
     ["vcs revoke-key", [], {}], ["vcs revoke-key", [fingerprint], { effectiveAt: "bad" }],
+    ["vcs revoke-key", ["f".repeat(64)], {}],
   ] as const) assert.equal((await run(command, [...args], options)).handled, false);
   const leaks = [Buffer.from(privatePem), privateDer, Buffer.from(privateDer.toString("base64")),
     ...privatePem.split("\n").filter(line => line.length > 0 && !line.startsWith("-----")).map(line => Buffer.from(line))];
@@ -345,7 +349,7 @@ test("private key files inside a tree, including symlinks, wrong algorithms and 
 test("actual rebase retains attestations for the same snapshot and invalidates changed snapshots", () => {
   for (const addContent of [false, true]) {
     const { repository, commit, keys, policy, original } = fixture();
-    const signed = repository.sign("HEAD", keys.privateKey, new Date())!;
+    const signed = repository.sign("HEAD", keys.privateKey, author, new Date())!;
     let tree = commit.tree;
     if (addContent) {
       const blob = repository.objects.write("blob", Buffer.from("additional snapshot content"));
@@ -404,4 +408,133 @@ test("a scheduled revocation taking effect during other receiver preflights stil
     await assert.rejects(wire.push(exportBundle(repository.objects, repository.refs, []), [{ ref: "refs/heads/main", expected: null, next: id }], false, new Date()), { reason: "revoked" });
     assert.equal(receiver.refs.resolveHead(), null);
   } finally { restore(); }
+});
+
+
+for (const mode of ["file", "http"] as const) test(`${mode} advertisement and clone keep receiver trust local`, async () => {
+  const { repository, keys, dir } = fixture();
+  writeConfig(join(repository.controlDirectory, "config.json"), {
+    recordPaths: ["records/**"], recordPolicy: { fields: { tags: "set" } },
+  });
+  trust(repository, keys.publicKey);
+  const server = mode === "http" ? await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 }) : null;
+  const url = server === null ? repository.root : `http://${server.host}:${server.port}`;
+  const wire = server === null ? new FileTransport("source", url) : new HttpTransport(url);
+  try {
+    const advertised = await wire.advertise();
+    assert.equal(advertised.config.trustedKeysFile, undefined);
+    assert.deepEqual(advertised.config.recordPaths, ["records/**"]);
+    await cloneFrom(url, join(dir.root, "clone"), new Date(), "origin", dir.root, wire);
+    const clone = Repository.open(join(dir.root, "clone"));
+    assert.equal(readTrustedKeys(clone.controlDirectory), null);
+    assert.equal(clone.config.trustedKeysFile, undefined);
+    assert.deepEqual(clone.config.recordPolicy, { fields: { tags: "set" } });
+    assert.equal(existsSync(join(clone.controlDirectory, TRUSTED_KEYS_FILE)), false);
+    trust(clone, keys.publicKey);
+    const before = readFileSync(join(clone.controlDirectory, TRUSTED_KEYS_FILE));
+    await fetchFrom(clone, "origin", new Date(), wire);
+    assert.deepEqual(readFileSync(join(clone.controlDirectory, TRUSTED_KEYS_FILE)), before);
+    assert.equal(readTrustedKeys(clone.controlDirectory)!.keys.length, 1);
+  } finally { await server?.close(); }
+});
+
+test("clone adoption filters receiver settings even from an older or custom transport", async () => {
+  const { repository, dir } = fixture();
+  /** Simulate an older peer which still includes its local opt-in marker. */
+  class LegacyTransport extends FileTransport {
+    /** Return real native history plus the legacy receiver-only config field. */
+    override async advertise(): Promise<Advertisement> {
+      const advertised = await super.advertise();
+      return { ...advertised, config: { ...advertised.config, trustedKeysFile: TRUSTED_KEYS_FILE } };
+    }
+  }
+  await cloneFrom(repository.root, join(dir.root, "clone"), new Date(), "origin", dir.root, new LegacyTransport("source", repository.root));
+  assert.equal(readTrustedKeys(Repository.open(join(dir.root, "clone")).controlDirectory), null);
+});
+
+test("sign attributes descendant rewrites to its caller and preserves signed authorship and target committer", async () => {
+  const { repository, original, signed, keys, dir } = fixture();
+  const childAuthor = { ...author, name: "Child", timestamp: 5 };
+  const child = writeCommit(repository.objects, { ...signed, changeId: "c".repeat(64), parents: [original], author: childAuthor,
+    committer: { ...childAuthor, name: "Previous committer" }, attestation: undefined, items: ["pm-vcs-synthetic"], message: "child" });
+  repository.refs.compareAndSwap("refs/heads/main", original, child);
+  const keyPath = join(dir.root, "sign.pem");
+  writeFileSync(keyPath, keys.privateKey.export({ type: "pkcs8", format: "pem" }));
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const before = Date.now();
+  const result = await harness.runCommand({ command: "vcs sign", args: [original], options: { key: keyPath },
+    global: { author: "Signer <signer@example.invalid>" }, pmRoot: repository.root });
+  assert.equal(result.handled, true);
+  const rewritten = readCommit(repository.objects, repository.refs.resolveHead()!);
+  assert.equal(rewritten.committer.name, "Signer");
+  assert.equal(rewritten.committer.email, "signer@example.invalid");
+  assert.ok(rewritten.committer.timestamp >= before);
+  assert.deepEqual(rewritten.author, childAuthor);
+  assert.deepEqual(rewritten.items, ["pm-vcs-synthetic"]);
+  assert.equal(rewritten.message, "child");
+  assert.deepEqual(readCommit(repository.objects, rewritten.parents[0]).committer, author);
+});
+
+test("sign rejects unreachable commits before object, ref or operation writes", () => {
+  for (const unborn of [false, true]) {
+    const { repository, keys, signed, original } = fixture();
+    const orphan = writeCommit(repository.objects, { ...signed, message: "orphan", attestation: undefined });
+    if (unborn) repository.refs.compareAndSwap("refs/heads/main", original, null);
+    const objects = repository.objects.inventory();
+    const refs = repository.refs.list("refs/");
+    const operations = repository.operations.read();
+    assert.throws(() => repository.sign(orphan, keys.privateKey, author, new Date()), { code: "unreachable_revision" });
+    assert.deepEqual(repository.objects.inventory(), objects);
+    assert.deepEqual(repository.refs.list("refs/"), refs);
+    assert.deepEqual(repository.operations.read(), operations);
+  }
+});
+
+for (const source of ["tag", "detached", "unborn"] as const) test(`sign accepts a revision reachable only from ${source}`, () => {
+  const { repository, original, keys } = fixture();
+  repository.refs.compareAndSwap("refs/heads/main", original, null);
+  if (source === "detached") repository.refs.setHeadDetached(original);
+  else {
+    repository.refs.compareAndSwap("refs/tags/only", null, original);
+    if (source === "unborn") repository.refs.setHeadToRef("refs/heads/unborn");
+  }
+  repository.sign(original, keys.privateKey, author, new Date());
+  const target = source === "detached" ? repository.refs.resolveHead()! : repository.refs.read("refs/tags/only")!;
+  assert.ok(readCommit(repository.objects, target).attestation);
+  repository.sign(target, keys.privateKey, author, new Date()); // a reachable idempotent signing can have zero moves.
+});
+
+test("unknown and malformed revocations never change durable receiver policy", () => {
+  const { repository, keys, dir } = fixture();
+  const empty = Repository.init(join(dir.root, "empty"));
+  const emptyConfig = readFileSync(join(empty.controlDirectory, "config.json"));
+  assert.throws(() => updateTrustedKeys(empty.objects, empty.controlDirectory, { keyId: "f".repeat(64), effectiveAt: 0 }), { code: "bad_signature_policy" });
+  assert.equal(existsSync(join(empty.controlDirectory, TRUSTED_KEYS_FILE)), false);
+  assert.deepEqual(readFileSync(join(empty.controlDirectory, "config.json")), emptyConfig);
+  const keyId = trust(repository, keys.publicKey);
+  const config = readFileSync(join(repository.controlDirectory, "config.json"));
+  const policy = readFileSync(join(repository.controlDirectory, TRUSTED_KEYS_FILE));
+  for (const update of [{ keyId: "f".repeat(64), effectiveAt: 0 }, { keyId: "invalid", effectiveAt: 0 }, { keyId, effectiveAt: NaN }]) {
+    assert.throws(() => updateTrustedKeys(repository.objects, repository.controlDirectory, update), { code: "bad_signature_policy" });
+    assert.deepEqual(readFileSync(join(repository.controlDirectory, TRUSTED_KEYS_FILE)), policy);
+    assert.deepEqual(readFileSync(join(repository.controlDirectory, "config.json")), config);
+  }
+  updateTrustedKeys(repository.objects, repository.controlDirectory, { keyId, effectiveAt: 0 });
+  assert.deepEqual(readTrustedKeys(repository.controlDirectory)!.revocations, [{ keyId, effectiveAt: 0 }]);
+});
+
+
+test("HTTP parsing discards receiver settings advertised by a legacy server", async () => {
+  const { repository } = fixture();
+  const original = FileTransport.prototype.advertise;
+  /** Keep the actual HTTP server and parser while simulating an older advertisement producer. */
+  FileTransport.prototype.advertise = async function (): Promise<Advertisement> {
+    const advertised = await original.call(this);
+    return { ...advertised, config: { ...advertised.config, trustedKeysFile: TRUSTED_KEYS_FILE } };
+  };
+  const server = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 });
+  try {
+    const advertised = await new HttpTransport(`http://${server.host}:${server.port}`).advertise();
+    assert.equal(advertised.config.trustedKeysFile, undefined);
+  } finally { FileTransport.prototype.advertise = original; await server.close(); }
 });

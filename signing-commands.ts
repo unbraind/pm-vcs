@@ -1,7 +1,7 @@
 /** Explicit agent signing and receiver-administered trust/revocation commands. */
 import { readFileSync } from "node:fs";
 import type { CommandHandlerContext, ExtensionApi } from "@unbrained/pm-cli/sdk/authoring";
-import { openRepository, requiredArgument } from "./vcs-commands.ts";
+import { openRepository, requiredArgument, signatureFor } from "./vcs-commands.ts";
 import { ObjectStoreError } from "./engine/objects.ts";
 import { readSigningKey } from "./engine/signatures.ts";
 import { updateTrustedKeys } from "./engine/signature-policy.ts";
@@ -23,7 +23,8 @@ export function registerSigningCommands(api: ExtensionApi): void {
       if (typeof context.options?.key !== "string") throw new ObjectStoreError("invalid_signing_key", "Pass --key with an external Ed25519 private key file.");
       const key = readSigningKey(context.options.key, repository.root);
       if (repository.instanceLink !== null) readSigningKey(context.options.key, repository.instanceLink.hubRoot);
-      return { ok: true, head: repository.sign(context.args[0] ?? "HEAD", key, new Date()) };
+      const now = new Date();
+      return { ok: true, head: repository.sign(context.args[0] ?? "HEAD", key, signatureFor(context, now), now) };
     },
   });
   api.registerCommand({

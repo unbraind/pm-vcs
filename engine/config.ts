@@ -7,7 +7,9 @@
 // history would be internally inconsistent in a way no later command could
 // detect, let alone repair.
 
-import { lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
+
+import { writePrivateJson } from "./composition.ts";
 
 import { ObjectStoreError } from "./objects.ts";
 import { FIELD_STRATEGIES, type FieldStrategy, type MergePolicy } from "./records.ts";
@@ -194,5 +196,10 @@ export function readConfig(path: string): RepositoryConfig {
  * @param config - The configuration to store.
  */
 export function writeConfig(path: string, config: RepositoryConfig): void {
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+  writePrivateJson(path, config);
+}
+
+/** Select only history-shaping settings for advertisements and remote configuration adoption. */
+export function sharedConfig(config: RepositoryConfig): RepositoryConfig {
+  return { recordPaths: config.recordPaths, recordPolicy: config.recordPolicy };
 }

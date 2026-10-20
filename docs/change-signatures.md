@@ -7,7 +7,10 @@ no Git signing format, executable or crypto dependency is involved.
 `pm vcs sign [revision] --key <file>` signs an existing change and uses the
 normal descendant replay, compare-and-swap and undo machinery. Explicit signing
 keeps secret access out of ordinary commits, automated rewrites and publication.
-It also lets each agent review precisely the version it is attesting.
+It also lets each agent review precisely the version it is attesting. Revisions
+unreachable from every branch, tag and HEAD are refused before writing objects.
+The signed target keeps its committer; descendant replays record the caller as
+committer, preserving each descendant's author, message and item links.
 
 The signed bytes are the concatenation of UTF-8
 `pm-vcs/change-signature`, NUL, `v1`, NUL, and `encodeRecord` canonical JSON
@@ -62,7 +65,8 @@ not a versioned working file or an incoming remote's authority. Its shape is:
 Fingerprints are computed from actual key bytes, never mutable display names.
 Each fingerprint has one author email binding; replacement is refused. Multiple
 keys can be trusted for an identity during rotation. Revocations are append-only
-through the administrative command. The earliest effective time wins. Times are
+through the administrative command, which rejects fingerprints absent from the
+trusted key list before writing policy. The earliest effective time wins. Times are
 nonnegative integer milliseconds since the Unix epoch, checked against the
 receiver clock at publication, after expensive cryptographic verification and
 again after FileId lease preflights.
@@ -91,8 +95,12 @@ A `ChangeSignatureError` has code `change_signature_refused`, `changeId`,
 `commitId` and `reason`: unsigned, untrusted, revoked, malformed or tampered.
 These fields survive HTTP transport. Missing or malformed configured policy
 fails closed. Unconfigured receivers retain legacy publication behavior.
-Clone configuration can reference this policy without granting any trust: an
-administrator must establish the clone's own trust file before publishing there.
+Advertisements include only record paths and merge policy. Clone adoption and
+HTTP advertisement parsing also discard receiver-only settings from older peers.
+Fetching preserves the receiver's existing configuration and trust file. A clone
+starts without enforcement until its own administrator enables it. Configuration
+and trust files use atomic sibling-file replacement with file fsync and supported
+directory fsync; readers observe complete previous or next snapshots.
 
 `pm vcs verify --signatures` performs ordinary object verification and reports
 each reachable commit's stable change ID and status. It returns a structured

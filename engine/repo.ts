@@ -2511,13 +2511,19 @@ export class Repository {
   }
 
   /** Explicitly attest a revision without accessing keys during creation, rewrite or publication. */
-  sign(revision: string, key: KeyObject, now: Date): ObjectId | null {
+  sign(revision: string, key: KeyObject, committer: Signature, now: Date): ObjectId | null {
     return this.objects.withWriteLock(/** Signing and descendant replay share the existing rewrite transaction. */ () => {
       this.assertCleanWorktree();
       const id = this.resolve(revision);
       const original = readCommit(this.objects, id);
+      const refs = this.refSnapshots();
+      const head = this.headSnapshot();
+      if (!refs.some(ref => reachable(this.objects, ref.target).has(id))
+        && (head.target === null || !reachable(this.objects, head.target).has(id))) {
+        throw new ObjectStoreError("unreachable_revision", "Revision is not reachable from a branch, tag or HEAD; nothing would carry the signature.");
+      }
       const attestation = signChange(id, original, key);
-      const plan = planSign(this.rewriteContext(original.committer), id, attestation, this.refSnapshots(), this.headSnapshot());
+      const plan = planSign(this.rewriteContext(committer), id, attestation, refs, head);
       return this.applyRewrite(plan, now);
     });
   }
