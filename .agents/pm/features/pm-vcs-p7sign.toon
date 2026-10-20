@@ -7,14 +7,16 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:46.220Z"
-updated_at: "2026-10-20T12:25:53.182Z"
+updated_at: "2026-10-20T14:16:09.114Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 estimated_minutes: 480
 acceptance_criteria: "verify --signatures checks trusted ed25519 signatures; configured serve and push refuse unsigned or untrusted changes before ref publication; malformed, revoked and tampered signatures fail closed; signing keys never enter history."
 parent: pm-vcs-phase7
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:55.791Z",codex-agent,"cli:update:dep",detected
-comments[18]{created_at,author,text}:
+comments[21]{created_at,author,text}:
   "2026-10-20T07:04:49.950Z",codex-agent,"Design: explicit sign command avoids implicit key access during commit/rewrite. Ed25519 signs a versioned domain-separated canonical payload binding stable change id, tree, author, message and sorted pm item links; parents and committer are excluded so ancestry-only rewrites preserve validity. Content-changing rewrites remove the attestation and require explicit signing. Receiver policy binds SHA-256 SPKI fingerprints to author email identities and has effective-time revocations. Administrative trust/revoke operations share the object-store write lease with push; policy is reloaded under ref locks immediately before the complete batch publishes. Both HTTP and filesystem publication use that boundary. Private key files must be external to the repository and errors never include key bytes."
   "2026-10-20T07:16:46.490Z",codex-agent,"Implementation and focused adversarial suite are in place. Receiver checks only requested publication closure, including all ancestors, not unrelated uploaded objects; forged series publication also enforces policy. Effective-time revocations are evaluated after crypto at the transaction boundary. Focused suite passed 14/14 before the additional rebase scenario; actual rebase scenario passed 1/1. Full unchanged-threshold coverage is running. verify --signatures reports all rows in a nonzero error on failure because the existing pm host cannot return a structured report together with a nonzero exit (documented pm-cli #826 limitation). No dependency pins changed."
   "2026-10-20T07:22:38.119Z",codex-agent,"Behavioral revert proof in isolated source copies: replacing only assertTrustedChanges with its pre-feature no-enforcement behavior made all 4 selected filesystem push, resumable publish, HTTP and forge refusal tests fail (0 pass, 4 fail). Replacing only retainedAttestation with no retention made both selected rewrite tests fail (0/2); unconditional retention also made both fail (0/2), catching stale content signatures. Unmodified focused source passed 15/15, plus linked-instance CLI coverage passed 2/2. New signature-policy and cryptographic modules and signing commands each measured 100% statements, branches, functions and lines in focused coverage. Final release gates remain pending. The linked-test timeout was raised to 600 seconds after the default 120-second run timed out on the shared host; no coverage threshold changed."
@@ -33,7 +35,10 @@ comments[18]{created_at,author,text}:
   "2026-10-20T12:04:53.850Z",codex-agent,"Review round 1 acceptance at immutable c837cefe5021739bd5928fba9dadac8ed794bb8d: npm run release:check and bun run release:check both exited 0. Each ran 1740 tests: 1740 pass, 0 fail/cancelled/skipped/todo. Both measure all 73 production TypeScript files individually at 100 percent statements, branches, functions and lines; scope, thresholds and suppression rules are unchanged. Also passed native TOON, actual installed CLI/stat-cache strace, committed self-host archive equality, production dependency audit (zero vulnerabilities), Git identity audit, package dry run, changelog equality and release verifiers. The Bun script ran in an independent clone of the same head; both used disposable homes and disabled Git global/system configuration. Native Bun Ed25519/atomic-config/advertisement/revocation smoke in a plain directory without Git passed 1/1. Clean-home strict tracker health and separate validation pass; ambient host extension skew remains separate. The original PR item history is preserved byte-for-byte as a prefix. Inspected all ten revert logs: nine assertion failures plus the legacy clone bad_signature_policy failure, with no syntax or module-loading failures. Fixed focused suite passed 35/35. Linked evidence persistence is disabled; these receipts are recorded here."
   "2026-10-20T12:04:55.054Z",codex-agent,"Finalization: align manifest pm_min_version to the peer minimum 2026.10.10 so runtime admission agrees with the pinned host format guard. No pinned SDK/tool versions changed beyond those inherited from main. Regenerate the self-host bundle with this admission metadata and the acceptance receipts, then run both full release checks on that immutable final head before pushing. All six thread fixes and the extra HTTP normalization fix are complete; threads remain open for reviewer verification. Releasing the implementation claim for final immutable acceptance; item remains in_progress for the orchestrator."
   "2026-10-20T12:25:50.814Z",codex-agent,"Final-head verification at 221728a caught one failure in each run: manifest-vocabulary.test.ts deliberately asserts the original public extension API floor 2026.8.1 independently of the development toolchain. Raising manifest pm_min_version was unnecessary and has been reverted to the original value; the test is unchanged. The peer minimum 2026.10.10 remains necessary for the pinned host to write guarded project tracker formats. Both final-head gates were stopped after identifying the same metadata assertion; no full-gate pass is claimed for 221728a. No TypeScript source or test differs from the fully passing c837cef head. Regenerate and rerun both complete release gates on the corrected immutable head before pushing."
-files[22]:
+  "2026-10-20T14:12:35.024Z",codex-agent,"Review round 2: fetched all review threads with complete comment pagination. Two unresolved threads: PRRT_kwDOToJT7M6uWB1u (detached HEAD descendant replay) and PRRT_kwDOToJT7M6uWB1z (conflicting published minimum host versions). Latest CodeRabbit review has no Outside diff range section. Remote head fc71fd0 contains current main. Verify and fix both with behavioral revert proofs, audit all descendant replay callers and host admission metadata, then regenerate the native self-host bundle and run both full release gates at unchanged thresholds. Real native fixtures remain plain directories without Git."
+  "2026-10-20T14:15:11.966Z",codex-agent,"Both round 2 findings confirmed. replayWithDescendants now receives HEAD explicitly, walks detached history as well as branches/tags, and serves both ordinary rewrites and planResolution without duplicate tip-selection logic. Real CLI signing regressions cover a HEAD-only ancestor and a shared ancestor, assert reachable valid signatures, preserved child content/authorship/change identity, named-ref moves, detached HEAD and single-operation undo. Full-diff audit found describe, rebase, squash and split share the same defect; four native regressions cover them. Runtime floor is now consistently 2026.10.10 in manifest, peer metadata and README; pinned SDK/tool dependencies unchanged. The installed pinned SDK project-runtime guard explicitly rejects dependency declarations below 2026.10.10 for guarded tracker formats, so lowering the peer minimum is unsafe. Updated manifest vocabulary assertion and added actual compatibility admission tests rejecting 2026.8.1 and 2026.10.9 and admitting 2026.10.10. Typecheck/test compile, lint, zero-duplication and docstrings pass."
+  "2026-10-20T14:16:09.101Z",codex-agent,"Round 2 behavioral revert proofs completed in an isolated source copy with real native repositories, unchanged tests and no worktree source mutation. Reverting only detached-tip selection inside replayWithDescendants: node --test \"--test-name-pattern=sign replays detached HEAD\" test/signatures.test.ts => exit 1, 0/2 pass, 2 assertion failures (live HEAD unchanged); node --test \"--test-name-pattern=replays descendants carried only\" test/rewrite.test.ts => exit 1, 0/4 pass, 4 assertion failures. Restoring only manifest pm_min_version to 2026.8.1: node --test \"--test-name-pattern=published host requirements\" test/manifest-vocabulary.test.ts => exit 1, 0/1 pass, 1 assertion failure. No syntax or module-load errors. Fixed focused commands: 8/8 pass. Pinned pm linked execution of node --test test/signatures.test.ts test/rewrite.test.ts test/manifest-vocabulary.test.ts: exit 0, 77/77 pass, zero fail/cancel/skip/todo; evidence persistence is disabled by existing policy (tracking_disabled), so this comment preserves the receipt. Entire PR diff audited for descendant-tip parity, receiver-only configuration boundaries, atomic policy/config writes, signed-field preservation and host admission contracts; no additional instance found beyond the four shared rewrite callers fixed here. Dist is ignored and untracked; production build is regenerated by gates. Both unresolved threads are valid; no replies or resolutions made."
+files[24]:
   - path: engine/config.ts
     scope: project
   - path: engine/forge.ts
@@ -70,16 +75,20 @@ files[22]:
     scope: project
   - path: test/helpers/signature-policy-worker.ts
     scope: project
+  - path: test/manifest-vocabulary.test.ts
+    scope: project
   - path: test/raw-coverage.test.ts
     scope: project
     note: Explicit measured production inventory now includes the three new signing modules
+  - path: test/rewrite.test.ts
+    scope: project
   - path: test/signatures.test.ts
     scope: project
   - path: test/vcs-commands.test.ts
     scope: project
   - path: vcs-commands.ts
     scope: project
-tests[3]:
+tests[4]:
   - command: node --test test/signatures.test.ts
     scope: project
     timeout_seconds: 600
@@ -104,6 +113,14 @@ tests[3]:
     provenance:
       author: codex-agent
       created_at: "2026-10-20T10:18:13.020Z"
+      source_kind: local_mutation
+      source_ref: feat/ed25519-change-signatures
+  - command: node --test test/signatures.test.ts test/rewrite.test.ts test/manifest-vocabulary.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-20T14:15:16.910Z"
       source_kind: local_mutation
       source_ref: feat/ed25519-change-signatures
 docs[2]{path,scope}:

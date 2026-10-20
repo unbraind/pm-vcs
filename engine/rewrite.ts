@@ -19,7 +19,7 @@ import { manifestFragments } from "./manifest-pages.ts";
 // remains terminal, and replayed payloads retain FileId provenance.
 //
 // Descendant rewriting is mandatory and is the hard part. Rewriting a commit that
-// has descendants replays every descendant reachable from any branch or tag, and
+// has descendants replays every descendant reachable from any branch, tag or detached HEAD, and
 // moves every branch and tag that pointed into the rewritten range to its
 // rewritten counterpart. A rewrite that orphaned a branch would be a data-loss
 // bug, which is why the descendant replay below is the same code path every
@@ -622,10 +622,10 @@ type EditBuilder = (rewrittenParents: readonly ObjectId[]) => readonly ObjectId[
 
 /**
  * Applies a set of commit edits and replays every descendant reachable from a
- * ref, so rewriting a commit never leaves a branch pointing at a commit whose
- * ancestry no longer leads to it.
+ * ref or detached HEAD, so rewriting never leaves live history whose
+ * ancestry no longer leads to the replacement.
  *
- * `edits` maps an original commit to a builder. Every commit reachable from a ref
+ * `edits` maps an original commit to a builder. Every commit reachable from a live tip
  * that passes through an edited commit is replayed unchanged except for rewritten
  * parents and a fresh committer — its tree, message, author and change id are
  * preserved, because only its ancestry moved, not its content. The replacement
@@ -633,19 +633,22 @@ type EditBuilder = (rewrittenParents: readonly ObjectId[]) => readonly ObjectId[
  *
  * @param ctx - Store, record policy, and the committer for re-pointed descendants.
  * @param edits - The directly-rewritten commits and their builders.
- * @param refs - Every branch and tag, the tips descendant replay walks back from.
+ * @param refs - Every branch and tag, the named tips descendant replay walks back from.
+ * @param head - HEAD before the rewrite, including detached history without a named ref.
  * @returns The full old-to-new mapping, edits and descendants alike.
  */
 function replayWithDescendants(
   ctx: RewriteContext,
   edits: ReadonlyMap<ObjectId, EditBuilder>,
   refs: readonly RefSnapshot[],
+  head: HeadSnapshot,
   replay?: (original: Commit, parents: readonly ObjectId[]) => ObjectId,
 ): ReadonlyMap<ObjectId, readonly ObjectId[]> {
   const store = ctx.store;
-  const tips = refs.map((ref) => ref.target);
+  const tips = [...refs.map((ref) => ref.target),
+    ...(head.kind === "detached" && head.target !== null ? [head.target] : [])];
 
-  // The relevant subgraph: everything reachable from any ref. Descendants of an
+  // The relevant subgraph: everything reachable from any live tip. Descendants of an
   // edited commit live here, and so do the edited commits themselves.
   const reachableFromTips = new Set<ObjectId>();
   const walk: ObjectId[] = [...tips];
@@ -718,7 +721,7 @@ function planReplay(
   command: string,
   summary: string,
 ): RewritePlan {
-  const map = replayWithDescendants(ctx, edits, refs);
+  const map = replayWithDescendants(ctx, edits, refs, head);
   return { command, summary, moves: computeMoves(refs, map, head, ctx.store) };
 }
 
@@ -731,9 +734,7 @@ export function planResolution(
   const draft = { tree, parents: [revision], author, committer: ctx.committer, message };
   const resolution = writeCommit(ctx.store, { ...draft, changeId: identityWithoutChangeLine(draft) });
   const edits = new Map<ObjectId, EditBuilder>([[revision, () => [revision, resolution]]]);
-  const roots = head.kind === "detached" && head.target !== null
-    ? [...refs, { name: "HEAD", target: head.target }] : refs;
-  const map = replayWithDescendants(ctx, edits, roots, (commit, parents) => {
+  const map = replayWithDescendants(ctx, edits, refs, head, (commit, parents) => {
     let replayed = commit.tree;
     for (const [index, parent] of commit.parents.entries()) {
       if (parent === parents[index]) continue;

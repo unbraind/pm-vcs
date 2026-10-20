@@ -504,6 +504,44 @@ for (const source of ["tag", "detached", "unborn"] as const) test(`sign accepts 
   repository.sign(target, keys.privateKey, author, new Date()); // a reachable idempotent signing can have zero moves.
 });
 
+for (const shared of [false, true]) test(`sign replays detached HEAD descendants of a ${shared ? "shared" : "HEAD-only"} ancestor`, async () => {
+  const { repository, original, keys, policy, dir } = fixture();
+  repository.switchTo(original, new Date());
+  writeFileSync(join(repository.root, "first.txt"), "first\n");
+  repository.stage(["first.txt"]);
+  const parent = repository.commit({ message: "detached parent\n", author }, new Date());
+  writeFileSync(join(repository.root, "second.txt"), "second\n");
+  repository.stage(["second.txt"]);
+  const tip = repository.commit({ message: "detached child\n", author }, new Date());
+  const before = readCommit(repository.objects, tip);
+  const keyPath = join(dir.root, "sign.pem");
+  writeFileSync(keyPath, keys.privateKey.export({ type: "pkcs8", format: "pem" }));
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const target = shared ? original : parent;
+  const result = await harness.runCommand({ command: "vcs sign", args: [target], options: { key: keyPath },
+    global: { author: "Signer <signer@example.invalid>" }, pmRoot: repository.root });
+  assert.equal(result.handled, true);
+  const head = repository.refs.readHead();
+  assert.equal(head.kind, "detached");
+  assert.notEqual(head.target, tip, "the signed ancestor must be carried by the live HEAD");
+  const after = readCommit(repository.objects, head.target!);
+  assert.equal(after.tree, before.tree);
+  assert.equal(effectiveChangeId(head.target!, after), effectiveChangeId(tip, before));
+  assert.deepEqual(after.author, before.author);
+  assert.equal(after.message, before.message);
+  assert.equal(after.committer.email, "signer@example.invalid");
+  const history = repository.log("HEAD");
+  const attested = history.find(entry => entry.changeId === effectiveChangeId(target, readCommit(repository.objects, target)))!;
+  assert.equal(verifyChangeSignature(attested.id, attested.commit, policy, 0).status, "valid");
+  assert.equal(repository.refs.read("refs/heads/main"), shared ? attested.id : original);
+  assert.equal(repository.operations.read().at(-1)!.command, "sign");
+  assert.equal(readFileSync(join(repository.root, "first.txt"), "utf8"), "first\n");
+  assert.equal(readFileSync(join(repository.root, "second.txt"), "utf8"), "second\n");
+  repository.undo(null, new Date());
+  assert.equal(repository.refs.resolveHead(), tip, "undo restores detached history in one operation");
+  assert.equal(repository.refs.read("refs/heads/main"), original);
+});
+
 test("unknown and malformed revocations never change durable receiver policy", () => {
   const { repository, keys, dir } = fixture();
   const empty = Repository.init(join(dir.root, "empty"));
