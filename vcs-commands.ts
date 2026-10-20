@@ -1283,8 +1283,9 @@ export function registerVcsCommands(api: ExtensionApi): void {
         const policy = readTrustedKeys(repository.instanceLink?.controlDirectory ?? repository.controlDirectory) ?? EMPTY_TRUST;
         const now = Date.now();
         const signatures = repository.allReachable().map(id => verifyChangeSignature(id, readCommit(repository.objects, id), policy, now));
-        if (signatures.some(entry => entry.status !== "valid")) {
-          throw new VcsError("change_signatures_invalid", signatures.map(entry => `Change ${entry.changeId} at commit ${entry.commitId}: ${entry.status}`).join("; "),
+        const invalid = signatures.filter(entry => entry.status !== "valid");
+        if (invalid.length > 0) {
+          throw new VcsError("change_signatures_invalid", `${invalid.length} change(s) failed: ${invalid.slice(0, 20).map(entry => `Change ${entry.changeId} at commit ${entry.commitId}: ${entry.status}`).join("; ")}${invalid.length > 20 ? "; …" : ""}`,
             "Trust the author key or explicitly re-sign changed content; revoked keys require a new key.");
         }
         return { ok: true, ...result, signatures };

@@ -70,6 +70,8 @@ trusted key list before writing policy. The earliest effective time wins. Times 
 nonnegative integer milliseconds since the Unix epoch, checked against the
 receiver clock at publication, after expensive cryptographic verification and
 again after FileId lease preflights.
+The revocation command rejects unparseable or pre-epoch `--effective-at` values
+with an option-specific error before changing receiver policy or configuration.
 Revocation applies to all signatures by that key, including historical ones;
 there is no sender-controlled signing time or grandfathering.
 
@@ -119,7 +121,9 @@ directory fsync; readers observe complete previous or next snapshots.
 `pm vcs verify --signatures` performs ordinary object verification and reports
 each reachable commit's stable change ID and status. It returns a structured
 `signatures` table when all are valid. Any invalid result throws a nonzero gate
-error listing **every** row, including valid rows. The pm host cannot return a
+error counting only failed changes and listing at most 20 failures, with an
+ellipsis when more failures remain. Valid changes are omitted from this error.
+The pm host cannot return a
 structured report and a nonzero status together (the existing pm-cli #826 gap).
 Ordinary `verify` retains its existing object-integrity contract.
 

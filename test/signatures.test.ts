@@ -280,8 +280,18 @@ test("trust cannot be replaced by a display alias and revocations remain effecti
   assert.throws(() => readTrustedKeys(repository.controlDirectory), { code: "bad_signature_policy" });
   assert.throws(() => updateTrustedKeys(repository.objects, repository.controlDirectory, { keyId: fingerprint, effectiveAt: 0 }), { code: "bad_signature_policy" });
   assert.throws(() => parseConfig({ trustedKeysFile: "other.json" }), { code: "bad_config" });
-  assert.throws(() => updateTrustedKeys(Repository.init(join(dir.root, "empty")).objects, join(dir.root, "empty", ".pm-vcs"),
-    { publicKey: "secret", identity: author.email }), { code: "bad_signature_policy" });
+  const empty = Repository.init(join(dir.root, "empty"));
+  const control = empty.controlDirectory;
+  const config = readFileSync(join(empty.controlDirectory, "config.json"));
+  assert.throws(() => updateTrustedKeys(empty.objects, control,
+    { publicKey: "secret", identity: author.email }), { code: "bad_signature_policy", message: "Trust requires an Ed25519 public key." });
+  assert.deepEqual(readFileSync(join(empty.controlDirectory, "config.json")), config);
+  assert.equal(existsSync(join(empty.controlDirectory, TRUSTED_KEYS_FILE)), false);
+  assert.doesNotThrow(() => updateTrustedKeys(empty.objects, control,
+    { publicKey: keys.publicKey.export({ format: "pem", type: "spki" }).toString(), identity: author.email }));
+  const trusted = readTrustedKeys(empty.controlDirectory);
+  assert.notEqual(trusted, null, "trust updates must target the initialized repository's control directory");
+  assert.equal(trusted!.keys[0]!.publicKey, publicKeyText(keys.publicKey));
 });
 
 test("policy validates every shape and key before granting trust", () => {
@@ -510,6 +520,57 @@ test("agent CLI signs, verifies, trusts and revokes while every written reposito
   const allBytes = [exportBundle(repository.objects, repository.refs, []), ...outputs.map(output => Buffer.from(output)),
     ...repository.objects.inventory().map(entry => entry.object.payload)];
   for (const bytes of allBytes) for (const secret of leaks) assert.equal(bytes.includes(secret), false, "private material leaked to history or output");
+});
+
+test("revocation CLI identifies invalid effective-at input without changing receiver files", async () => {
+  const { repository, keys } = fixture();
+  const tracker = new PmClient({ pmRoot: repository.root, cwd: repository.root, noExtensions: true });
+  await tracker.init("revocation-input", { defaults: true, author: "synthetic-agent" });
+  assert.equal(existsSync(join(repository.root, ".git")), false);
+  const fingerprint = trust(repository, keys.publicKey);
+  const policy = readFileSync(join(repository.controlDirectory, TRUSTED_KEYS_FILE));
+  const config = readFileSync(join(repository.controlDirectory, "config.json"));
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  for (const effectiveAt of ["bad", "", "1969-12-31T23:59:59.999Z", "+999999-01-01T00:00:00Z"]) {
+    const result = await harness.runCommand({ command: "vcs revoke-key", args: [fingerprint], options: { effectiveAt }, pmRoot: repository.root });
+    assert.equal(result.handled, false);
+    assert.match(result.errorMessage!, /--effective-at must be an ISO instant at or after the Unix epoch/);
+    assert.deepEqual(readFileSync(join(repository.controlDirectory, TRUSTED_KEYS_FILE)), policy);
+    assert.deepEqual(readFileSync(join(repository.controlDirectory, "config.json")), config);
+  }
+  const result = await harness.runCommand({ command: "vcs revoke-key", args: [fingerprint],
+    options: { effectiveAt: "1970-01-01T00:00:00.000Z" }, pmRoot: repository.root });
+  assert.equal(result.handled, true);
+  assert.deepEqual(readTrustedKeys(repository.controlDirectory)!.revocations, [{ keyId: fingerprint, effectiveAt: 0 }]);
+});
+
+test("signature verification diagnostics count only failures and cap history-sized lists", async () => {
+  const { repository, keys, signed, id, original } = fixture();
+  trust(repository, keys.publicKey);
+  repository.refs.compareAndSwap("refs/heads/main", original, id);
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  let tip = id;
+  const handler = harness.activation.commands.handlers.find(entry => entry.command === "vcs verify")!;
+  for (let count = 1; count <= 21; count++) {
+    const next = writeCommit(repository.objects, { ...signed, changeId: undefined, attestation: undefined, parents: [tip], message: `unsigned ${count}` });
+    repository.refs.compareAndSwap("refs/heads/main", tip, next);
+    tip = next;
+    if (count !== 1 && count !== 20 && count !== 21) continue;
+    const result = await harness.runCommand({ command: "vcs verify", options: { signatures: true }, pmRoot: repository.root });
+    assert.equal(result.handled, false);
+    assert.ok(result.errorMessage!.includes(`${count} change(s) failed:`));
+    assert.equal(result.errorMessage!.includes(`at commit ${id}: valid`), false);
+    // The host truncates displayed errors; inspect the real registered handler's complete diagnostic too.
+    await assert.rejects(async () => handler.run({ command: "vcs verify", args: [], options: { signatures: true }, global: {}, pm_root: repository.root }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message.match(/: unsigned/g)!.length, Math.min(count, 20));
+        assert.equal(error.message.includes(`at commit ${id}: valid`), false);
+        assert.equal(error.message.includes("; …"), count > 20);
+        assert.match(error.message, /Trust the author key or explicitly re-sign/);
+        return true;
+      });
+  }
 });
 
 test("private key files inside a tree, including symlinks, wrong algorithms and invalid data are refused with fixed errors", () => {

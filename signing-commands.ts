@@ -49,6 +49,9 @@ export function registerSigningCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const keyId = requiredArgument(context, 0, "fingerprint", "Supply the fingerprint returned by trust-key.");
       const effectiveAt = context.options?.effectiveAt === undefined ? Date.now() : Date.parse(String(context.options.effectiveAt));
+      if (!Number.isSafeInteger(effectiveAt) || effectiveAt < 0) {
+        throw new ObjectStoreError("invalid_option", "--effective-at must be an ISO instant at or after the Unix epoch.");
+      }
       return { ok: true, keyId: updateTrustedKeys(repository.objects, repository.instanceLink?.controlDirectory ?? repository.controlDirectory,
         { keyId, effectiveAt }) };
     },
