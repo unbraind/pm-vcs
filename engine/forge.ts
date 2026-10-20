@@ -133,8 +133,9 @@ function publishSeries(repository: Repository, request: ForgeRequest, principal:
     { name: archive, expected: repository.refs.read(archive), next: request.series! }];
   repository.refs.transaction(updates,
     /** Check every patch root, including side histories, at the catalog publication point. */ () => {
-      assertTrustedChanges(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, roots);
+      const recheckRevocations = assertTrustedChanges(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, roots);
       leases.assertPublication(leaseUpdates, request.proofs!, metadata);
+      recheckRevocations();
     });
   repository.operations.append("forge-series", "Published native proposal and pending review.", updates.map(update => ({ ref: update.name, before: update.expected, after: update.next })), new Date());
   return { id: request.series!, revision: review };

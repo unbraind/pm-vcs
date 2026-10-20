@@ -42,10 +42,10 @@ export function readTrustedKeys(control: string): TrustedKeys | null {
   try { return parseTrustedKeys(JSON.parse(readFileSync(join(control, TRUSTED_KEYS_FILE), "utf8"))); }
   catch { throw new ObjectStoreError("bad_signature_policy", "Trusted-key policy is unavailable or malformed; publication refused."); }
 }
-/** Enforce every commit in the requested closure, immediately before the ref transaction writes anything. */
-export function assertTrustedChanges(control: string, commits: ReadonlyMap<ObjectId, Commit>, roots: readonly ObjectId[] = [...commits.keys()]): void {
+/** Verify requested closure and return a cheap revocation recheck for after other publication preflights. */
+export function assertTrustedChanges(control: string, commits: ReadonlyMap<ObjectId, Commit>, roots: readonly ObjectId[] = [...commits.keys()]): () => void {
   const policy = readTrustedKeys(control);
-  if (policy === null) return;
+  if (policy === null) return () => {};
   const pending = [...roots];
   const checked = new Map<ObjectId, ReturnType<typeof verifyChangeSignature>>();
   while (pending.length > 0) {
@@ -58,14 +58,17 @@ export function assertTrustedChanges(control: string, commits: ReadonlyMap<Objec
     checked.set(id, result);
     pending.push(...commit.parents);
   }
-  // Effective times are tested AFTER expensive crypto, at the publication point,
-  // so a scheduled revocation cannot expire unnoticed during a large batch.
-  const now = Date.now();
-  for (const result of checked.values()) {
-    if (policy.revocations.some(entry => entry.keyId === result.keyId && entry.effectiveAt <= now)) {
-      throw new ChangeSignatureError({ ...result, status: "revoked" });
+  /** Check effective times after crypto, and again after any other expensive publication checks. */
+  const recheckRevocations = (): void => {
+    const now = Date.now();
+    for (const result of checked.values()) {
+      if (policy.revocations.some(entry => entry.keyId === result.keyId && entry.effectiveAt <= now)) {
+        throw new ChangeSignatureError({ ...result, status: "revoked" });
+      }
     }
-  }
+  };
+  recheckRevocations();
+  return recheckRevocations;
 }
 /** Add an immutable fingerprint/identity binding, or append a revocation without deleting earlier effective times. */
 export function updateTrustedKeys(store: ObjectStore, control: string,

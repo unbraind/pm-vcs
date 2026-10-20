@@ -435,8 +435,9 @@ export class FileTransport implements Transport {
     const leases = new PublicationLeases(repository.objects, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, principal);
     repository.refs.transaction(updates.map(/** Preserve the sender observation as the receiver CAS expectation. */ (update) => ({ name: update.ref, expected: update.expected, next: update.next })),
       /** Check expiry at the publication linearization point, using only the receiver clock. */ () => {
-        assertTrustedChanges(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, updates.map(update => update.next));
+        const recheckRevocations = assertTrustedChanges(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, updates.map(update => update.next));
         leases.assertPublication(updates, proofs, metadata);
+        recheckRevocations();
       });
   }
 

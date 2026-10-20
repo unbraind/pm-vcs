@@ -13,12 +13,13 @@ import { parseConfig, writeConfig } from "../engine/config.ts";
 import { createSeries, exportSeriesBundle } from "../engine/series.ts";
 import { Repository } from "../engine/repo.ts";
 import { decodeCommit, encodeCommit, effectiveChangeId, readCommit, writeCommit, writeTree, type Commit } from "../engine/model.ts";
+import { PublicationLeases } from "../engine/publication-leases.ts";
 import { FileTransport } from "../engine/transport.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
 import { startRepositoryServer, TokenGrants } from "../engine/serve.ts";
 import { assertWireSuccess, encodeErrorBody } from "../engine/http-protocol.ts";
 import { EMPTY_TRUST, TRUSTED_KEYS_FILE, assertTrustedChanges, parseTrustedKeys, readTrustedKeys, updateTrustedKeys } from "../engine/signature-policy.ts";
-import { ChangeSignatureError, changeSigningPayload, keyFingerprint, parsePublicKey, publicKeyText, readSigningKey, retainedAttestation, signChange, verifyChangeSignature, type TrustedKeys } from "../engine/signatures.ts";
+import { ChangeSignatureError, changeSigningPayload, keyFingerprint, parsePublicKey, publicKeyText, readSigningKey, retainedAttestation, signChange, verifyChangeSignature, type ChangeSignatureResult, type TrustedKeys } from "../engine/signatures.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const directories: ReturnType<typeof makeTempDir>[] = [];
@@ -80,7 +81,7 @@ test("malformed envelopes and algorithms fail closed without echoing input", () 
     .map(value => Buffer.from(JSON.stringify(value)).toString("base64"))]) {
     assert.equal(verifyChangeSignature(id, { ...signed, attestation }, policy, 0).status, "malformed");
   }
-  const rsa = generateKeyPairSync("rsa", { modulusLength: 1024 });
+  const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 });
   assert.throws(() => parsePublicKey(publicKeyText(rsa.publicKey)));
   assert.throws(() => signChange(id, signed, rsa.privateKey), { code: "invalid_signing_key" });
   assert.throws(() => signChange(id, signed, keys.publicKey), { code: "invalid_signing_key" });
@@ -121,7 +122,7 @@ test("policy validates every shape and key before granting trust", () => {
   ];
   for (const value of invalid) assert.throws(() => parseTrustedKeys(value), { code: "bad_signature_policy" });
   assert.deepEqual(parseTrustedKeys(policy), policy);
-  const rsa = generateKeyPairSync("rsa", { modulusLength: 1024 });
+  const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 });
   assert.throws(() => updateTrustedKeys(repository.objects, repository.controlDirectory, {
     identity: author.email, publicKey: rsa.publicKey.export({ format: "pem", type: "spki" }).toString(),
   }), { code: "bad_signature_policy" });
@@ -223,8 +224,8 @@ test("wire error reconstruction accepts only validated change ids and fixed refu
   }
 });
 
-test("2,000 native signed changes report measured verification wall time", () => {
-  const { repository, commit, keys, policy } = fixture();
+test("2,000 native signed changes report measured verification wall time", async () => {
+  const { repository, commit, keys } = fixture();
   const commits = new Map<string, Commit>();
   let parent: string | undefined;
   repository.objects.withWriteLock(() => {
@@ -236,15 +237,17 @@ test("2,000 native signed changes report measured verification wall time", () =>
     }
   });
   repository.refs.compareAndSwap("refs/heads/main", repository.refs.resolveHead(), parent!);
-  const start = performance.now();
-  const integrity = repository.verify();
-  const results = repository.allReachable().map(id => verifyChangeSignature(id, readCommit(repository.objects, id), policy, Date.now()));
-  const elapsed = performance.now() - start;
-  assert.deepEqual(integrity.corrupt, []); assert.deepEqual(integrity.missing, []);
-  assert.equal(results.length, 2000); assert.ok(results.every(result => result.status === "valid"));
-  console.log(`SIGNATURE-BENCHMARK changes=2000 valid=2000 elapsed_ms=${elapsed.toFixed(3)}`);
   assertTrustedChanges(repository.controlDirectory, commits); // unconfigured compatibility boundary.
   const fingerprint = trust(repository, keys.publicKey);
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const start = performance.now();
+  const verified = await harness.runCommand({ command: "vcs verify", options: { signatures: true }, pmRoot: repository.root });
+  const elapsed = performance.now() - start;
+  assert.equal(verified.handled, true);
+  const result = verified.result as { signatures: ChangeSignatureResult[]; corrupt: string[]; missing: string[] };
+  assert.deepEqual(result.corrupt, []); assert.deepEqual(result.missing, []);
+  assert.equal(result.signatures.length, 2000); assert.ok(result.signatures.every(row => row.status === "valid"));
+  console.log(`SIGNATURE-BENCHMARK changes=2000 valid=2000 elapsed_ms=${elapsed.toFixed(3)}`);
   updateTrustedKeys(repository.objects, repository.controlDirectory, { keyId: fingerprint, effectiveAt: Date.now() + 1 });
   assert.throws(() => assertTrustedChanges(repository.controlDirectory, commits), { reason: "revoked" });
 });
@@ -332,7 +335,7 @@ test("private key files inside a tree, including symlinks, wrong algorithms and 
   assert.equal(readSigningKey(outside, repository.root).asymmetricKeyType, "ed25519");
   const inside = join(repository.root, "private-key"); writeFileSync(inside, pem);
   const linked = join(dir.root, "linked"); symlinkSync(inside, linked);
-  const wrong = join(dir.root, "rsa"); writeFileSync(wrong, generateKeyPairSync("rsa", { modulusLength: 1024 }).privateKey.export({ type: "pkcs8", format: "pem" }));
+  const wrong = join(dir.root, "rsa"); writeFileSync(wrong, generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }));
   const bad = join(dir.root, "bad"); writeFileSync(bad, "bad");
   for (const path of [inside, linked, repository.root, wrong, bad, join(dir.root, "absent")]) {
     assert.throws(() => readSigningKey(path, repository.root), { code: "invalid_signing_key", message: "Signing requires an external Ed25519 private key file." });
@@ -376,4 +379,29 @@ test("linked instances administer shared trust and reject private keys stored in
   assert.equal((await run("vcs verify", [], { signatures: true })).handled, true);
   assert.equal((await run("vcs revoke-key", [keyFingerprint(publicKeyText(keys.publicKey))])).handled, true);
   assert.match((await run("vcs verify", [], { signatures: true })).errorMessage!, /revoked/);
+});
+
+test("a scheduled revocation taking effect during other receiver preflights still refuses publication", async () => {
+  const { repository, dir, keys, id } = fixture();
+  const receiver = Repository.init(join(dir.root, "receiver")); const fingerprint = trust(receiver, keys.publicKey);
+  const effectiveAt = 100;
+  updateTrustedKeys(receiver.objects, receiver.controlDirectory, { keyId: fingerprint, effectiveAt });
+  repository.refs.compareAndSwap("refs/heads/main", repository.refs.resolveHead(), id);
+  const original = PublicationLeases.prototype.assertPublication;
+  const clock = Date.now;
+  let receiverNow = 0;
+  Date.now = () => receiverNow;
+  // Run real lease checks, then advance only the receiver clock across the
+  // scheduled effective time. Crypto, trust, stores, refs and transport stay real.
+  PublicationLeases.prototype.assertPublication = function (...args: Parameters<typeof original>): void {
+    original.apply(this, args);
+    receiverNow = effectiveAt;
+  };
+  /** Restore these synchronous test-local preflight controls after the transport settles. */
+  const restore = (): void => { PublicationLeases.prototype.assertPublication = original; Date.now = clock; };
+  try {
+    const wire = new FileTransport("receiver", receiver.root);
+    await assert.rejects(wire.push(exportBundle(repository.objects, repository.refs, []), [{ ref: "refs/heads/main", expected: null, next: id }], false, new Date()), { reason: "revoked" });
+    assert.equal(receiver.refs.resolveHead(), null);
+  } finally { restore(); }
 });

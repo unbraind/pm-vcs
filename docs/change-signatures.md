@@ -64,7 +64,8 @@ Each fingerprint has one author email binding; replacement is refused. Multiple
 keys can be trusted for an identity during rotation. Revocations are append-only
 through the administrative command. The earliest effective time wins. Times are
 nonnegative integer milliseconds since the Unix epoch, checked against the
-receiver clock at publication, after expensive cryptographic verification.
+receiver clock at publication, after expensive cryptographic verification and
+again after FileId lease preflights.
 Revocation applies to all signatures by that key, including historical ones;
 there is no sender-controlled signing time or grandfathering.
 
