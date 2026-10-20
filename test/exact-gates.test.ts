@@ -175,9 +175,11 @@ test("jscpd 5 scans short sources and rejects empty scopes, clones and missing p
 test("operational entry points enforce real audits through direct CLI processes", () => {
   const fixture = makeTempDir();
   try {
+    const archive = readFileSync(join(packageRoot, "selfhost.bundle"));
     const selfHost = tool(fixture.root, "scripts/self-host.ts", []);
     passed(selfHost);
     assert.match(selfHost.stdout, /committed bundle.*byte-identical/);
+    assert.deepEqual(readFileSync(join(packageRoot, "selfhost.bundle")), archive, "verification must not repair a stale archive");
     const identities = tool(fixture.root, "scripts/audit-git-identities.ts", []);
     passed(identities);
     assert.match(identities.stdout, /git identity audit approved/);
@@ -231,7 +233,7 @@ test("the identity gate runs through a symlinked checkout and rejects a seeded v
 });
 
 
-test("the direct self-host entry point accepts committed Dependabot action bumps but rejects operational changes", () => {
+test("the direct self-host entry point accepts action bumps but requires committed snapshots for test changes", () => {
   const fixture = makeTempDir();
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" };
   delete env.NODE_TEST_CONTEXT;
@@ -253,13 +255,15 @@ test("the direct self-host entry point accepts committed Dependabot action bumps
     source(fixture.root, "package.json", JSON.stringify({ type: "module" }));
     source(fixture.root, "self-host.json", JSON.stringify({ bundle: "selfhost.bundle", ref: "refs/heads/self-host", exclude: ["selfhost.bundle"] }));
     source(fixture.root, "index.ts", "export const answer = 42;\n");
+    const acceptancePath = "test/prepare-merge-driver.test.ts";
+    source(fixture.root, acceptancePath, "// Original merge-driver acceptance.\n");
     const actions = ["github/codeql-action/init", "actions/setup-node", "actions/upload-artifact"];
     const workflow = "jobs:\n  test:\n    steps:\n" + actions.map((action) => `      - uses: ${action}@${"a".repeat(40)} # v7.0.0`).join("\n") + "\n";
     source(fixture.root, ".github/workflows/ci.yml", workflow);
     git(["init", "-q", "-b", "main"]);
     git(["config", "user.name", "Public Fixture"]);
     git(["config", "user.email", "public@example.test"]);
-    git(["add", "scripts", "package.json", "self-host.json", "index.ts", ".github/workflows/ci.yml"]);
+    git(["add", "scripts", "package.json", "self-host.json", "index.ts", acceptancePath, ".github/workflows/ci.yml"]);
     git(["commit", "-qm", "fixture source"]);
     passed(audit(["--write"]));
     git(["add", "selfhost.bundle"]);
@@ -281,6 +285,25 @@ test("the direct self-host entry point accepts committed Dependabot action bumps
       assert.equal(rejected.status, 1);
       assert.match(rejected.stderr, /content differs/);
     }
+    source(fixture.root, ".github/workflows/ci.yml", workflow);
+    source(fixture.root, acceptancePath, "// Accept Git's built-in text driver without local registration.\n");
+    git(["add", ".github/workflows/ci.yml", acceptancePath]);
+    git(["commit", "-qm", "update merge-driver acceptance"]);
+    const stale = audit();
+    assert.equal(stale.status, 1, stale.stderr);
+    assert.match(stale.stderr, /test\/prepare-merge-driver\.test\.ts: content differs/);
+    assert.deepEqual(readFileSync(join(fixture.root, "selfhost.bundle")), bundle);
+
+    passed(audit(["--write"]));
+    const refreshed = readFileSync(join(fixture.root, "selfhost.bundle"));
+    assert.notDeepEqual(refreshed, bundle);
+    const uncommitted = audit();
+    assert.equal(uncommitted.status, 1, uncommitted.stderr);
+    assert.match(uncommitted.stderr, /test\/prepare-merge-driver\.test\.ts: content differs/);
+    git(["add", "selfhost.bundle"]);
+    git(["commit", "-qm", "refresh acceptance snapshot"]);
+    passed(audit());
+    assert.deepEqual(readFileSync(join(fixture.root, "selfhost.bundle")), refreshed);
   } finally {
     fixture.cleanup();
   }
