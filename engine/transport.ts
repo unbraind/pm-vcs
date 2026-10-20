@@ -1,3 +1,4 @@
+import { assertTrustedChanges } from "./signature-policy.ts";
 import { historyOptions, type HistoryOptions } from "./partial.ts";
 import { PublicationLeases, filesystemPrincipal, type FileLease, type LeaseRequest, type LeaseProof, type ReceiverPrincipal } from "./publication-leases.ts";
 // The boundary between "what distribution means" and "how the bytes travel".
@@ -433,7 +434,10 @@ export class FileTransport implements Transport {
   private moveRefs(repository: Repository, updates: readonly PushUpdate[], proofs: LeaseProofs, principal: ReceiverPrincipal, metadata: ClosureMetadata): void {
     const leases = new PublicationLeases(repository.objects, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, principal);
     repository.refs.transaction(updates.map(/** Preserve the sender observation as the receiver CAS expectation. */ (update) => ({ name: update.ref, expected: update.expected, next: update.next })),
-      /** Check expiry at the publication linearization point, using only the receiver clock. */ () => leases.assertPublication(updates, proofs, metadata));
+      /** Check expiry at the publication linearization point, using only the receiver clock. */ () => {
+        assertTrustedChanges(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, updates.map(update => update.next));
+        leases.assertPublication(updates, proofs, metadata);
+      });
   }
 
   /**

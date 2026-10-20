@@ -1,3 +1,6 @@
+import { registerSigningCommands } from "./signing-commands.ts";
+import { verifyChangeSignature, type ChangeSignatureResult } from "./engine/signatures.ts";
+import { EMPTY_TRUST, readTrustedKeys } from "./engine/signature-policy.ts";
 import { annotatePath, type AnnotationRow } from "./engine/annotate.ts";
 import { historyOptions, type HistoryOptions } from "./engine/partial.ts";
 import { collectGarbage, type GcReport } from "./engine/gc.ts";
@@ -388,6 +391,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
   registerCompositionCommands(api);
   registerForgeCommands(api);
   registerBisectCommands(api);
+  registerSigningCommands(api);
   api.registerCommand({
     name: "vcs init",
     description:
@@ -1266,13 +1270,24 @@ export function registerVcsCommands(api: ExtensionApi): void {
     name: "vcs verify",
     description:
       "Re-read every object reachable from any ref and check it against its own id. A content-addressed store's one unacceptable failure is returning altered content silently, so this makes that detectable on demand.",
-    run(context: CommandHandlerContext): VcsEnvelope & { verified: number; corrupt: readonly string[] } {
+    flags: [{ long: "--signatures", value_type: "boolean", description: "Report every reachable change signature against current receiver policy" }],
+    run(context: CommandHandlerContext): VcsEnvelope & { verified: number; corrupt: readonly string[]; signatures?: readonly ChangeSignatureResult[] } {
       const repository = openRepository(context);
       const result = repository.verify();
       const failures = [...result.missing, ...result.corrupt];
       if (failures.length > 0) {
         throw new VcsError("corrupt_objects", `${failures.length} reachable objects did not verify: ${failures.join("; ")}.`,
           "Repair missing or corrupt history from a trusted peer; incomplete erasure requires authorized cleanup.");
+      }
+      if (context.options?.signatures === true) {
+        const policy = readTrustedKeys(repository.instanceLink?.controlDirectory ?? repository.controlDirectory) ?? EMPTY_TRUST;
+        const now = Date.now();
+        const signatures = repository.allReachable().map(id => verifyChangeSignature(id, readCommit(repository.objects, id), policy, now));
+        if (signatures.some(entry => entry.status !== "valid")) {
+          throw new VcsError("change_signatures_invalid", signatures.map(entry => `Change ${entry.changeId} at commit ${entry.commitId}: ${entry.status}`).join("; "),
+            "Trust the author key or explicitly re-sign changed content; revoked keys require a new key.");
+        }
+        return { ok: true, ...result, signatures };
       }
       return { ok: true, ...result };
 

@@ -1,3 +1,4 @@
+import { signChange } from "./signatures.ts";
 import { inspectClosure, type ClosureReport } from "./closure.ts";
 // The porcelain: init, stage, commit, branch, switch, merge, log, diff.
 //
@@ -13,7 +14,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // so `undo` never has to reconstruct one.
 
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { randomBytes, type KeyObject } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
@@ -133,6 +134,7 @@ import {
   planRevert,
   planSplit,
   planSquash,
+  planSign,
 } from "./rewrite.ts";
 
 import { CONTROL_DIRECTORY, INSTANCE_LINK_FILE, resolveInstanceLink } from "./instance-link.ts";
@@ -2506,6 +2508,18 @@ export class Repository {
     const head = this.refs.resolveHead();
     this.materialize(head === null ? null : readCommit(this.objects, head).tree);
     return head;
+  }
+
+  /** Explicitly attest a revision without accessing keys during creation, rewrite or publication. */
+  sign(revision: string, key: KeyObject, now: Date): ObjectId | null {
+    return this.objects.withWriteLock(/** Signing and descendant replay share the existing rewrite transaction. */ () => {
+      this.assertCleanWorktree();
+      const id = this.resolve(revision);
+      const original = readCommit(this.objects, id);
+      const attestation = signChange(id, original, key);
+      const plan = planSign(this.rewriteContext(original.committer), id, attestation, this.refSnapshots(), this.headSnapshot());
+      return this.applyRewrite(plan, now);
+    });
   }
 
   /**

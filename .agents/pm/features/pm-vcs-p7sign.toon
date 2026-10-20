@@ -2,15 +2,42 @@ id: pm-vcs-p7sign
 title: Sign changes with ed25519 and enforce trusted keys on publication
 description: "Sign change ids using ed25519, configure a trusted-key file and validate signatures at the publication boundary. Preserve signature validity across rewrites that retain change identity."
 type: Feature
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:46.220Z"
-updated_at: "2026-10-18T03:01:56.033Z"
+updated_at: "2026-10-20T07:22:38.119Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 estimated_minutes: 480
 acceptance_criteria: "verify --signatures checks trusted ed25519 signatures; configured serve and push refuse unsigned or untrusted changes before ref publication; malformed, revoked and tampered signatures fail closed; signing keys never enter history."
 parent: pm-vcs-phase7
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:55.791Z",codex-agent,"cli:update:dep",detected
+comments[3]{created_at,author,text}:
+  "2026-10-20T07:04:49.950Z",codex-agent,"Design: explicit sign command avoids implicit key access during commit/rewrite. Ed25519 signs a versioned domain-separated canonical payload binding stable change id, tree, author, message and sorted pm item links; parents and committer are excluded so ancestry-only rewrites preserve validity. Content-changing rewrites remove the attestation and require explicit signing. Receiver policy binds SHA-256 SPKI fingerprints to author email identities and has effective-time revocations. Administrative trust/revoke operations share the object-store write lease with push; policy is reloaded under ref locks immediately before the complete batch publishes. Both HTTP and filesystem publication use that boundary. Private key files must be external to the repository and errors never include key bytes."
+  "2026-10-20T07:16:46.490Z",codex-agent,"Implementation and focused adversarial suite are in place. Receiver checks only requested publication closure, including all ancestors, not unrelated uploaded objects; forged series publication also enforces policy. Effective-time revocations are evaluated after crypto at the transaction boundary. Focused suite passed 14/14 before the additional rebase scenario; actual rebase scenario passed 1/1. Full unchanged-threshold coverage is running. verify --signatures reports all rows in a nonzero error on failure because the existing pm host cannot return a structured report together with a nonzero exit (documented pm-cli #826 limitation). No dependency pins changed."
+  "2026-10-20T07:22:38.119Z",codex-agent,"Behavioral revert proof in isolated source copies: replacing only assertTrustedChanges with its pre-feature no-enforcement behavior made all 4 selected filesystem push, resumable publish, HTTP and forge refusal tests fail (0 pass, 4 fail). Replacing only retainedAttestation with no retention made both selected rewrite tests fail (0/2); unconditional retention also made both fail (0/2), catching stale content signatures. Unmodified focused source passed 15/15, plus linked-instance CLI coverage passed 2/2. New signature-policy and cryptographic modules and signing commands each measured 100% statements, branches, functions and lines in focused coverage. Final release gates remain pending. The linked-test timeout was raised to 600 seconds after the default 120-second run timed out on the shared host; no coverage threshold changed."
+files[15]{path,scope}:
+  engine/config.ts,project
+  engine/forge.ts,project
+  engine/http-protocol.ts,project
+  engine/model.ts,project
+  engine/repo.ts,project
+  engine/rewrite.ts,project
+  engine/serve.ts,project
+  engine/signature-policy.ts,project
+  engine/signatures.ts,project
+  engine/transport.ts,project
+  signing-commands.ts,project
+  test/helpers/signature-policy-worker.ts,project
+  test/signatures.test.ts,project
+  test/vcs-commands.test.ts,project
+  vcs-commands.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref},updated_by,updated_at}:
+  node --test test/signatures.test.ts,project,600,codex-agent,"2026-10-20T07:15:08.477Z",local_mutation,feat/ed25519-change-signatures,codex-agent,"2026-10-20T07:18:18.132Z"
+docs[2]{path,scope}:
+  docs/change-signatures.md,project
+  README.md,project
 body: ""

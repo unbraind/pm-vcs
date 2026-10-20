@@ -14,6 +14,8 @@ import { FIELD_STRATEGIES, type FieldStrategy, type MergePolicy } from "./record
 
 /** Settings that shape how a repository stores and merges content. */
 export interface RepositoryConfig {
+  /** Opt-in receiver policy stored only in the shared control directory. */
+  readonly trustedKeysFile?: "trusted-keys.json";
   /**
    * Glob patterns for paths whose content is a structured record.
    *
@@ -106,6 +108,9 @@ export function parseConfig(raw: unknown): RepositoryConfig {
     throw new ObjectStoreError("bad_config", "Repository config is not a JSON object.");
   }
   const source = raw as Record<string, unknown>;
+  if (source.trustedKeysFile !== undefined && source.trustedKeysFile !== "trusted-keys.json") {
+    throw new ObjectStoreError("bad_config", "Repository trustedKeysFile must be trusted-keys.json.");
+  }
   const recordPaths = source.recordPaths === undefined ? [] : source.recordPaths;
   if (!Array.isArray(recordPaths) || recordPaths.some((entry) => typeof entry !== "string")) {
     throw new ObjectStoreError("bad_config", "Repository config recordPaths must be an array of strings.");
@@ -137,6 +142,7 @@ export function parseConfig(raw: unknown): RepositoryConfig {
     );
   }
   return {
+    ...(source.trustedKeysFile === undefined ? {} : { trustedKeysFile: "trusted-keys.json" as const }),
     recordPaths: recordPaths as string[],
     recordPolicy: fallback === undefined
       ? { fields }

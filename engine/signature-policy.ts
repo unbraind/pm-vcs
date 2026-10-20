@@ -1,0 +1,99 @@
+/** Receiver-owned trust policy, serialized with publication by the shared store write lease. */
+import { createPublicKey } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { readConfig, writeConfig } from "./config.ts";
+import { writePrivateJson } from "./composition.ts";
+import { ObjectStoreError, type ObjectId, type ObjectStore } from "./objects.ts";
+import type { Commit } from "./model.ts";
+import { ChangeSignatureError, keyFingerprint, parsePublicKey, publicKeyText, verifyChangeSignature, type TrustedKeys } from "./signatures.ts";
+
+/** Fixed control-directory policy name; never resolved from an incoming bundle or remote advertisement. */
+export const TRUSTED_KEYS_FILE = "trusted-keys.json";
+/** Unconfigured verification trusts nobody; publication stays opt-in for legacy repositories. */
+export const EMPTY_TRUST: TrustedKeys = { version: 1, keys: [], revocations: [] };
+/** Validate every policy entry before granting trust; errors never echo file contents. */
+export function parseTrustedKeys(raw: unknown): TrustedKeys {
+  try {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid policy.");
+    const source = raw as Record<string, unknown>;
+    if (source.version !== 1 || !Array.isArray(source.keys) || !Array.isArray(source.revocations)) throw new Error("Invalid policy.");
+    const keys = source.keys as TrustedKeys["keys"];
+    const revocations = source.revocations as TrustedKeys["revocations"];
+    const seen = new Set<string>();
+    for (const entry of keys) {
+      if (entry === null || typeof entry !== "object" || typeof entry.identity !== "string" || entry.identity.length === 0
+        || /[\r\n]/.test(entry.identity) || typeof entry.publicKey !== "string") throw new Error("Invalid key entry.");
+      parsePublicKey(entry.publicKey);
+      const fingerprint = keyFingerprint(entry.publicKey);
+      if (seen.has(fingerprint)) throw new Error("Duplicate key.");
+      seen.add(fingerprint);
+    }
+    for (const entry of revocations) {
+      if (entry === null || typeof entry !== "object" || typeof entry.keyId !== "string" || !/^[0-9a-f]{64}$/.test(entry.keyId)
+        || !Number.isSafeInteger(entry.effectiveAt) || entry.effectiveAt < 0) throw new Error("Invalid revocation.");
+    }
+    return { version: 1, keys, revocations };
+  } catch { throw new ObjectStoreError("bad_signature_policy", "Trusted-key policy is malformed; publication refused."); }
+}
+/** Reload configuration and policy on every call, including publication through an already-open server. */
+export function readTrustedKeys(control: string): TrustedKeys | null {
+  if (readConfig(join(control, "config.json")).trustedKeysFile === undefined) return null;
+  try { return parseTrustedKeys(JSON.parse(readFileSync(join(control, TRUSTED_KEYS_FILE), "utf8"))); }
+  catch { throw new ObjectStoreError("bad_signature_policy", "Trusted-key policy is unavailable or malformed; publication refused."); }
+}
+/** Enforce every commit in the requested closure, immediately before the ref transaction writes anything. */
+export function assertTrustedChanges(control: string, commits: ReadonlyMap<ObjectId, Commit>, roots: readonly ObjectId[] = [...commits.keys()]): void {
+  const policy = readTrustedKeys(control);
+  if (policy === null) return;
+  const pending = [...roots];
+  const checked = new Map<ObjectId, ReturnType<typeof verifyChangeSignature>>();
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (checked.has(id)) continue;
+    // The caller supplies metadata from a complete, independently verified closure.
+    const commit = commits.get(id)!;
+    const result = verifyChangeSignature(id, commit, policy, -1);
+    if (result.status !== "valid") throw new ChangeSignatureError({ ...result, status: result.status });
+    checked.set(id, result);
+    pending.push(...commit.parents);
+  }
+  // Effective times are tested AFTER expensive crypto, at the publication point,
+  // so a scheduled revocation cannot expire unnoticed during a large batch.
+  const now = Date.now();
+  for (const result of checked.values()) {
+    if (policy.revocations.some(entry => entry.keyId === result.keyId && entry.effectiveAt <= now)) {
+      throw new ChangeSignatureError({ ...result, status: "revoked" });
+    }
+  }
+}
+/** Add an immutable fingerprint/identity binding, or append a revocation without deleting earlier effective times. */
+export function updateTrustedKeys(store: ObjectStore, control: string,
+  update: { publicKey: string; identity: string } | { keyId: string; effectiveAt: number }): string {
+  return store.withWriteLock(/** Administrative changes linearize against the same receiver lease as publication. */ () => {
+    const current = readTrustedKeys(control) ?? EMPTY_TRUST;
+    let next: TrustedKeys;
+    let keyId: string;
+    if ("publicKey" in update) {
+      let publicKey: string;
+      try {
+        const key = createPublicKey(update.publicKey);
+        if (key.asymmetricKeyType !== "ed25519") throw new Error("Wrong algorithm.");
+        publicKey = publicKeyText(key);
+      } catch { throw new ObjectStoreError("bad_signature_policy", "Trust requires an Ed25519 public key."); }
+      keyId = keyFingerprint(publicKey);
+      if (current.keys.some(entry => keyFingerprint(entry.publicKey) === keyId)) {
+        throw new ObjectStoreError("bad_signature_policy", "This fingerprint already has an identity binding; revoke it rather than replacing it.");
+      }
+      next = { ...current, keys: [...current.keys, { identity: update.identity, publicKey }] };
+    } else {
+      keyId = update.keyId;
+      next = { ...current, revocations: [...current.revocations, update] };
+    }
+    parseTrustedKeys(next);
+    writePrivateJson(join(control, TRUSTED_KEYS_FILE), next);
+    const configPath = join(control, "config.json");
+    writeConfig(configPath, { ...readConfig(configPath), trustedKeysFile: TRUSTED_KEYS_FILE });
+    return keyId;
+  });
+}

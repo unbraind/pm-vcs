@@ -1,3 +1,4 @@
+import { retainedAttestation } from "./signatures.ts";
 import { inheritedConflict, competingResolutions, carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
 import { manifestFragments } from "./manifest-pages.ts";
 // History rewriting, and the three-way tree merge rewriting shares with `merge`.
@@ -505,6 +506,21 @@ function firstParentTree(store: ObjectStore, commit: Commit): ObjectId | null {
   return commit.parents.length === 0 ? null : readCommit(store, commit.parents[0]).tree;
 }
 
+/** Preserve an attestation only while all of its signed fields remain byte-identical. */
+function writeRewrittenCommit(store: ObjectStore, id: ObjectId, original: Commit, replacement: Commit): ObjectId {
+  return writeCommit(store, { ...replacement, ...retainedAttestation(id, original, replacement) });
+}
+
+/** Plan explicit signing with the existing descendant replay and atomic ref movement machinery. */
+export function planSign(ctx: RewriteContext, revision: ObjectId, attestation: string,
+  refs: readonly RefSnapshot[], head: HeadSnapshot): RewritePlan {
+  const original = readCommit(ctx.store, revision);
+  const edits = new Map<ObjectId, EditBuilder>([[revision, parents => [writeCommit(ctx.store, {
+    ...original, parents, changeId: effectiveChangeId(revision, original), attestation,
+  })]]]);
+  return planReplay(ctx, edits, refs, head, "sign", `Signed change ${effectiveChangeId(revision, original)}.`);
+}
+
 /** Builds a replacement commit, recording the change identity a re-point keeps. */
 function repointDescendant(
   store: ObjectStore,
@@ -514,7 +530,7 @@ function repointDescendant(
   rewrittenParents: readonly ObjectId[],
   tree: ObjectId = original.tree,
 ): ObjectId {
-  return writeCommit(store, {
+  return writeRewrittenCommit(store, originalId, original, {
     tree,
     parents: rewrittenParents,
     author: original.author,
@@ -766,7 +782,7 @@ export function planDescribe(
   const original = readCommit(store, revision);
   const edits = new Map<ObjectId, EditBuilder>([
     [revision, (rewrittenParents) => {
-      const replacement = writeCommit(store, {
+      const replacement = writeRewrittenCommit(store, revision, original, {
         tree: original.tree,
         parents: rewrittenParents,
         author: original.author,
@@ -828,7 +844,7 @@ export function planRebase(
       const ourTree = readCommit(store, firstParent).tree;
       const { tree, conflicts } = mergeTrees(ctx, baseTree, ourTree, original.tree);
       if (conflicts.length > 0) throw new RewriteConflictError(conflicts);
-      const replacement = writeCommit(store, {
+      const replacement = writeRewrittenCommit(store, id, original, {
         tree,
         parents,
         author: original.author,
@@ -879,7 +895,7 @@ export function planSquash(
   const message = `${parentCommit.message.replace(/\n+$/, "")}\n\n${revisionCommit.message}`;
   const edits = new Map<ObjectId, EditBuilder>([
     [parentId, (rewrittenParents) => {
-      const survivor = writeCommit(store, {
+      const survivor = writeRewrittenCommit(store, parentId, parentCommit, {
         tree: revisionCommit.tree,
         parents: rewrittenParents,
         author: parentCommit.author,
@@ -986,7 +1002,7 @@ export function planSplit(
   }
   const edits = new Map<ObjectId, EditBuilder>([
     [revision, (rewrittenParents) => {
-      const firstId = writeCommit(store, {
+      const firstId = writeRewrittenCommit(store, revision, original, {
         tree: firstTree,
         parents: rewrittenParents,
         author: original.author,
