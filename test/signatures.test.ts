@@ -533,8 +533,10 @@ test("HTTP parsing discards receiver settings advertised by a legacy server", as
     return { ...advertised, config: { ...advertised.config, trustedKeysFile: TRUSTED_KEYS_FILE } };
   };
   const server = await startRepositoryServer({ root: repository.root, host: "127.0.0.1", port: 0 });
+  /** Restore the synchronous prototype seam after the HTTP request settles. */
+  const restore = (): void => { FileTransport.prototype.advertise = original; };
   try {
     const advertised = await new HttpTransport(`http://${server.host}:${server.port}`).advertise();
     assert.equal(advertised.config.trustedKeysFile, undefined);
-  } finally { FileTransport.prototype.advertise = original; await server.close(); }
+  } finally { restore(); await server.close(); }
 });

@@ -673,7 +673,7 @@ Everything below is tracked as an epic in this repository's own tracker, under
 ## Requirements
 
 - Node.js ≥ 22.18 (`engines`), tested on 22 and 26
-- `@unbrained/pm-cli` ≥ 2026.8.1 (peer dependency and host-bound SDK runtime)
+- `@unbrained/pm-cli` ≥ 2026.10.10 (peer dependency and host-bound SDK runtime)
 - Works under `npm`/`npx` and `bun`/`bunx`
 - No runtime dependencies beyond the Node standard library
 
