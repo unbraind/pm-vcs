@@ -104,8 +104,9 @@ export function assertTrustedChanges(control: string, commits: ReadonlyMap<Objec
   };
   recheckRevocations();
   // Publish no positive receipt until the entire requested closure has passed, including every side parent.
-  // Retain tips after their ancestors so histories larger than the bound keep useful recent boundaries.
-  for (const id of [...checked.keys()].reverse()) {
+  // Promote every requested tip after all ancestors, including independent histories in multi-ref batches.
+  for (const id of [...checked.keys()].reverse().concat(roots)) {
+    history.commits.delete(id);
     if (history.commits.size >= 4096) history.commits.delete(history.commits.values().next().value!);
     history.commits.add(id);
   }

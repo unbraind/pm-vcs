@@ -171,10 +171,14 @@ test("signature receipts bound retained commits and receivers; eviction only rep
       metadata.set(tip, commit);
     }
   });
-  assertTrustedChanges(repository.controlDirectory, metadata, [tip]);
+  const independentDraft = { ...signed, attestation: undefined, message: "independent requested root" };
+  const independent = { ...independentDraft, attestation: signChange(id, independentDraft, keys.privateKey) };
+  const independentId = writeCommit(repository.objects, independent);
+  metadata.set(independentId, independent);
+  assertTrustedChanges(repository.controlDirectory, metadata, [independentId, tip]);
   metadata.visits = 0;
-  assertTrustedChanges(repository.controlDirectory, metadata, [tip]);
-  assert.equal(metadata.visits, 0, "long histories retain the verified tip instead of repeatedly checking recent history");
+  assertTrustedChanges(repository.controlDirectory, metadata, [independentId, tip]);
+  assert.equal(metadata.visits, 0, "a multi-ref batch retains every requested tip ahead of a long independent ancestry");
   assertTrustedChanges(repository.controlDirectory, metadata, [id]);
   assert.equal(metadata.visits, 1, "an evicted old boundary is independently reverified");
   for (let index = 0; index < 16; index++) {
