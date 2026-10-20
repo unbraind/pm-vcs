@@ -135,6 +135,7 @@ pm vcs diff main feature
 | `pm vcs tag [name]` | List or create tags. |
 | `pm vcs undo` | Reverse a recorded operation, refs and working tree together. |
 | `pm vcs oplog` | Every operation, with the refs it moved and where from. |
+| `pm vcs bisect start <good> <bad> --item <id>` | Find a regression using recorded PM tests; `run`, `good`, `bad`, `skip`, `status`, `reset`, and `--json`. See [bisect](docs/bisect.md). |
 | `pm vcs annotate <path>` | Last-setter attribution per text range or structured field/list entry; `--full`, `--at`, and `--json`. |
 | `pm vcs export <file>` | Write refs and their history to a bundle. |
 | `pm vcs import <file>` | Import a bundle, verifying every object against its own id. |
@@ -665,7 +666,7 @@ Everything below is tracked as an epic in this repository's own tracker, under
 | **4** | pm-vcs versioning its own source, with a CI gate proving the tracked history matches the source tree byte for byte | [`pm-vcs-390t`](.agents/pm/epics/pm-vcs-390t.toon) |
 | **5** | The forge: a patch series as an object kind, review state as records, and a served repository | [`pm-vcs-5h6j`](.agents/pm/epics/pm-vcs-5h6j.toon) |
 | **6** | Scale: packed storage, a reachability index, shallow and partial history, and garbage collection bounded by the operation log | [`pm-vcs-b7cb`](.agents/pm/epics/pm-vcs-b7cb.toon) |
-| **7** | Agents never stop on a conflict: opt-in field/hunk conflict objects, tip resolution, ancestor propagation and annotation shipped; signing and bisect planned | [`pm-vcs-phase7`](.agents/pm/epics/pm-vcs-phase7.toon) |
+| **7** | Agents never stop on a conflict: opt-in field/hunk conflict objects, tip resolution, ancestor propagation and annotation and linked-test bisect shipped; signing planned | [`pm-vcs-phase7`](.agents/pm/epics/pm-vcs-phase7.toon) |
 
 ---
 

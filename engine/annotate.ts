@@ -14,6 +14,49 @@ export interface AnnotationOrigin {
   readonly boundary?: true;
 }
 
+/** Immutable PM history is optional; a history that cannot be read contributes no agent provenance. */
+function historyEvents(store: ObjectStore, id: ObjectId): readonly RecordDocument[] {
+  try { return store.readTyped(id, "blob").toString("utf8").split("\n").filter(Boolean).map((line) => decodeRecord(Buffer.from(line))); }
+  catch (error) { if (!(error instanceof ObjectStoreError)) throw error; return []; }
+}
+
+/**
+ * Resolves one change's own provenance without a file: author, explicitly linked PM items and recorded agent harness/model.
+ *
+ * Harness and model are read from the immutable PM history carried by the change's
+ * own tree, never from today's mutable tracker, so a historical change reports the
+ * agent that recorded it rather than whichever agent is asking now. A file's own
+ * item association is not included, because there is no file under consideration.
+ *
+ * @param store - Object store holding the change and its tree.
+ * @param commitId - The change whose provenance is resolved.
+ * @returns The change's author, linked items and recorded agent fields.
+ */
+export function changeProvenance(store: ObjectStore, commitId: ObjectId): Omit<AnnotationOrigin, "boundary"> {
+  return provenanceOf(new Annotator(store), commitId, []);
+}
+
+/** Resolve shared historical provenance through the annotator's bounded commit, tree and history caches. */
+function provenanceOf(reader: Annotator, commitId: ObjectId, extraItems: readonly string[]): Omit<AnnotationOrigin, "boundary"> {
+  const commit = reader.commit(commitId);
+  const items = [...new Set([...(commit.items ?? []), ...extraItems])];
+  let agentHarness: string | undefined; let agentModel: string | undefined;
+  for (const item of items) {
+    // PM item ids are path components, not arbitrary paths supplied by a commit.
+    if (!/^[a-zA-Z0-9_-]+$/.test(item)) continue;
+    const history = reader.locate(commit.tree, `.agents/pm/history/${item}.jsonl`);
+    if (history === undefined) continue;
+    for (const event of reader.history(history.entry.id)) {
+      if (event.author !== commit.author.name) continue;
+      agentHarness = typeof event.agent_harness === "string" ? event.agent_harness : undefined;
+      agentModel = typeof event.agent_model === "string" ? event.agent_model : undefined;
+    }
+    if (agentHarness !== undefined || agentModel !== undefined) break;
+  }
+  return { changeId: effectiveChangeId(commitId, commit), author: commit.author.name, items,
+    ...(agentHarness === undefined ? {} : { agentHarness }), ...(agentModel === undefined ? {} : { agentModel }) };
+}
+
 /** One text range or structured scalar/list entry with its last setter and unresolved alternatives. */
 export interface AnnotationRow extends AnnotationOrigin {
   readonly unit: string;
@@ -154,14 +197,10 @@ class Annotator {
     }
   }
 
-  /** Optional immutable PM history is unavailable after typed read/validation failure; cache that absence too. */
+  /** Cache optional history reads, including unavailable histories, for all units of one annotation walk. */
   history(id: ObjectId): readonly RecordDocument[] {
     let events = this.histories.get(id);
-    if (events !== undefined) return events;
-    events = [];
-    try { events = this.store.readTyped(id, "blob").toString("utf8").split("\n").filter(Boolean).map((line) => decodeRecord(Buffer.from(line))); }
-    catch (error) { if (!(error instanceof ObjectStoreError)) throw error; }
-    this.histories.set(id, events);
+    if (events === undefined) { events = historyEvents(this.store, id); this.histories.set(id, events); }
     return events;
   }
 
@@ -170,25 +209,10 @@ class Annotator {
     const key = `${id}:${file.path}`;
     const known = this.origins.get(key);
     if (known !== undefined) return known;
-    const commit = this.commit(id); this.content(file.entry);
+    this.commit(id); this.content(file.entry);
     const item = this.documents.get(file.entry.id)?.id;
-    const items = [...new Set([...(commit.items ?? []), ...(typeof item === "string" ? [item] : [])])];
-    let agentHarness: string | undefined; let agentModel: string | undefined;
-    for (const item of items) {
-      // PM item ids are path components, not arbitrary paths supplied by a commit.
-      if (!/^[a-zA-Z0-9_-]+$/.test(item)) continue;
-      const history = this.locate(commit.tree, `.agents/pm/history/${item}.jsonl`);
-      if (history === undefined) continue;
-      for (const event of this.history(history.entry.id)) {
-        if (event.author !== commit.author.name) continue;
-        agentHarness = typeof event.agent_harness === "string" ? event.agent_harness : undefined;
-        agentModel = typeof event.agent_model === "string" ? event.agent_model : undefined;
-      }
-      if (agentHarness !== undefined || agentModel !== undefined) break;
-    }
-    const origin: AnnotationOrigin = { changeId: effectiveChangeId(id, commit), author: commit.author.name, items,
-      ...(agentHarness === undefined ? {} : { agentHarness }), ...(agentModel === undefined ? {} : { agentModel }),
-      ...(this.shallow.has(id) ? { boundary: true } : {}) };
+    const provenance = provenanceOf(this, id, typeof item === "string" ? [item] : []);
+    const origin: AnnotationOrigin = { ...provenance, ...(this.shallow.has(id) ? { boundary: true } : {}) };
     this.origins.set(key, origin);
     return origin;
   }

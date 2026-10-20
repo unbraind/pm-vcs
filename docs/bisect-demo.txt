@@ -1,0 +1,41 @@
+ok: true
+bisect:
+  session: "bisect-789c3e1a5431"
+  item: "demo-hd85"
+  status: "done"
+  boundaries:
+    good:
+      commit: "ef910c30773e"
+    bad:
+      commit: "2ae319565e06"
+  original:
+    branch: "main"
+    commit: "2ae319565e06"
+  steps[6]{commit,changeId,outcome,by,at,author,detail}:
+    ef910c30773e,b86be00fd3f2,good,boundary,"2026-10-19T15:33:07.796Z",demo-agent,null
+    2ae319565e06,d546e9f6a7d6,bad,boundary,"2026-10-19T15:33:07.796Z",demo-agent,null
+    ec805a39a798,55ddefe0c164,good,run,"2026-10-19T15:33:14.833Z",demo-agent,null
+    88a1a24c0854,809e274834c5,bad,run,"2026-10-19T15:33:17.453Z",demo-agent,exit 1
+    02c6eafeab0b,803480c2e541,bad,run,"2026-10-19T15:33:19.979Z",demo-agent,exit 1
+    02db1392f4ab,987dc194a5b6,bad,run,"2026-10-19T15:33:23.022Z",demo-agent,exit 1
+  steps_encoding:
+    json_columns: []
+    absent[3]:
+      - [2]: 0,detail
+      - [2]: 1,detail
+      - [2]: 2,detail
+  stepsTaken: 6
+  stepsOmitted: 0
+  remaining: 0
+  verdict:
+    kind: "first_bad"
+    change: "987dc194a5b6"
+    commit: "02db1392f4ab"
+    message: "Public tracker snapshot 18: fad7e30c040dff33f789bd6c5176882b27825427"
+    author: "demo-agent <demo@example.invalid>"
+    at: "1970-01-01T00:00:01.017Z"
+    items[1]: demo-hd85
+    agentHarness: "codex"
+    agentModel: "gpt-6.1-sol"
+sessions[1]{session,item,status,good,bad,startedAt,startedBy,steps,verdict{kind,change}}:
+  bisect-789c3e1a5431,demo-hd85,done,ef910c30773e,2ae319565e06,"2026-10-19T15:33:07.794Z",demo-agent,6,first_bad,987dc194a5b6
