@@ -93,6 +93,7 @@ receipts may remain for retry/collection under existing retention rules.
 
 Publication retains process-local positive signature receipts for complete
 ancestry, bounded to 16 receivers and 4,096 commit boundaries per receiver.
+Insertion retains recent tips ahead of old ancestors, including for longer histories.
 Subsequent signature walks stop at those boundaries, after independently
 validating the requested object closure again. Uploaded or structurally valid
 objects alone never establish signature trust. Receipts are discarded whenever

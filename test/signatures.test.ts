@@ -174,7 +174,9 @@ test("signature receipts bound retained commits and receivers; eviction only rep
   assertTrustedChanges(repository.controlDirectory, metadata, [tip]);
   metadata.visits = 0;
   assertTrustedChanges(repository.controlDirectory, metadata, [tip]);
-  assert.equal(metadata.visits, 1, "an evicted tip is checked before stopping at its verified parent");
+  assert.equal(metadata.visits, 0, "long histories retain the verified tip instead of repeatedly checking recent history");
+  assertTrustedChanges(repository.controlDirectory, metadata, [id]);
+  assert.equal(metadata.visits, 1, "an evicted old boundary is independently reverified");
   for (let index = 0; index < 16; index++) {
     const receiver = Repository.init(join(dir.root, `receiver-${index}`));
     trust(receiver, keys.publicKey);
