@@ -6,11 +6,11 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-16T22:29:54.396Z"
-updated_at: "2026-10-20T08:45:35.421Z"
+updated_at: "2026-10-20T08:46:49.347Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
-comments[10]{created_at,author,text}:
+comments[11]{created_at,author,text}:
   "2026-10-16T22:30:26.588Z",codex-agent,"Compared failed CI jobs 116966419723, 116965719699 and 116965854973 with green main job 116965011838. The real failure is self-host source/bundle workflow byte mismatch. The missing CLI diagnostic occurs in a passing negative test on both green and red runs. Preserve complete archive validation and original workflow bytes; allow only full-SHA version-comment changes for trusted external actions during comparison, retaining action paths, all other YAML and file modes."
   "2026-10-16T22:33:12.967Z",codex-agent,"Behavioural revert proof: restoring strict byte equality by disabling only sameWorkflowExceptActionRevisions makes both new regressions fail with assertion failures, including the direct CLI test. With the fix restored, the self-host suite passes 61/61 and the isolated direct-entry regression passes 1/1. The archive remains unchanged during verification."
   "2026-10-17T09:28:07.702Z",codex-agent,"Independently fetched failed jobs 116966419723, 116965719699 and 116965854973 and green main job 116965011838. Confirmed workflow archive mismatches are the failing assertion; the intentional missing-CLI diagnostic occurs on both red and green jobs. Replaced the partial regex-only exception with YAML-node validation so script scalar text and action inputs remain exact. Added direct yaml development dependency at the already resolved version, with no dependency version bumps. Current main already carries the pinned SDK update; installation now succeeds."
@@ -21,6 +21,7 @@ comments[10]{created_at,author,text}:
   "2026-10-17T10:30:10.023Z",codex-agent,"Required clean-identity release commands passed on isolated runners at db5c824: npm run release:check 1563/1563 and bun run release:check 1563/1563, zero failures/skips/cancellations/todos; lines/statements/branches/functions 100 percent at unchanged per-file thresholds. Native TOON, real installed-CLI strace/stat-cache, committed self-host archive verification, lint, zero duplication, docstrings, production/identity audits, pack, changelog/date and attestation gates all pass. Evidence: https://github.com/unbraind/pm-vcs/actions/runs/39024335721/job/117372230598 and https://github.com/unbraind/pm-vcs/actions/runs/39024335721/job/117372230423 . Remove the temporary validation workflow, regenerate the archive for final tracker writes, and verify regular CI after the receipt commit. Actual PR 116/117/118 patches remain proven to pass without archive rewriting."
   "2026-10-20T08:44:49.393Z",codex-agent,"Reusing the self-host/Dependabot acceptance owner for PR #132 after searches for self-host and PR number. Job 118382016537 first fails operational entry points because test/prepare-merge-driver.test.ts differs between committed source and selfhost.bundle. Classification: our stale generated archive after source-test edits, not an upstream bug. pm-cli CHANGELOG 2026.10.14 GH-1460 intentionally uses built-in merge=text for extension assets (https://github.com/unbraind/pm-cli/blob/v2026.10.15/CHANGELOG.md); existing e3d3039 correctly adjusts custom-driver expectations but omitted archive regeneration. Merged the one newer origin/main commit, retained draft=false. Plan: preserve strict source comparison and manifest-only exclusions; extend the direct real-process regression through committed test change, rejected uncommitted refresh, and accepted committed refresh; stage tracker/test/attribute/changelog changes, write the text archive, prove reverting just the archive fails, and run both full gates in the foreground with isolated Git identity."
   "2026-10-20T08:45:30.277Z",codex-agent,"Red baseline independently reproduced after merging main: the isolated operational-entry test exits 1 naming the exact merge-driver acceptance source/bundle mismatch from CI. Extended direct-process regression passes 1/1: a committed acceptance-test edit is rejected; --write refreshes working bytes but verification still rejects until that archive is committed; after committing the refresh, verification passes and preserves bytes. Operational entry coverage now also checks the archive never changes during verification. No source/test exclusion or automatic repair was added."
+  "2026-10-20T08:46:47.122Z",codex-agent,"Archive-only revert proof: in a disposable committed copy of bb802be, restored only the pre-fix selfhost.bundle, committed that one artifact, and ran node --test --test-name-pattern=\"operational entry points\" test/exact-gates.test.ts with isolated HOME and Git configuration. Result: 0 pass / 1 AssertionError, exit 1, explicitly naming test/prepare-merge-driver.test.ts: content differs. All source/test functions remained fixed. The package worktree was never reverted. Restored committed archive: operational plus snapshot regression pass 2/2; verification leaves archive bytes unchanged. The synthetic snapshot regression and its linked pm run also pass 1/1. Next run both full release gates in foreground on committed code. Strict health has the separate pm-github host skew tracked by pm-vcs-5lre; no merge_receipts_pending was reported."
 files[8]{path,scope}:
   .gitattributes,project
   AGENTS.md,project
@@ -61,6 +62,7 @@ tests[4]:
       created_at: "2026-10-20T08:45:35.342Z"
       source_kind: local_mutation
       source_ref: dependabot/npm_and_yarn/pm-toolchain-ae58a87a51
-docs[1]{path,scope}:
+docs[2]{path,scope}:
+  CHANGELOG.md,project
   docs/action-revision-audit.md,project
 body: ""
