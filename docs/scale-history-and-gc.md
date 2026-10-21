@@ -51,6 +51,11 @@ Roots include every ref namespace, detached HEAD, both endpoints of every oplog
 transition, every current and retired shared instance's complete sparse index,
 pending merge parents/bases, review series, terminal erasure audits and durable
 upload receipts. Trees traverse all entries; manifests traverse pages and blobs.
+Legal `.tmp` ref names and directory components remain roots and appear in ref
+listings. Atomic ref writes use exclusive randomized names in the reserved
+`.lock` namespace, preventing collisions with legitimate refs. Legacy `.tmp`
+files containing addresses are retained conservatively; malformed `.tmp` refs
+refuse collection before deletion rather than being silently omitted.
 An active receiver FileId lease conservatively retains the entire store because
 unpublished arrivals need not yet have a tree attributing their FileId. Released
 or expired leases stop that additional retention. Corrupt metadata, unavailable

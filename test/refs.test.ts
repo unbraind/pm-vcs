@@ -119,7 +119,7 @@ test("read refuses a corrupted ref value", () => {
   );
 });
 
-test("list walks a prefix, excludes locks and temp files, and sorts by name", () => {
+test("list walks valid tmp refs, excludes reserved locks, and sorts by name", () => {
   const { refs, root } = freshRefs();
   refs.compareAndSwap(`${BRANCH_PREFIX}main`, null, id);
   refs.compareAndSwap(`${BRANCH_PREFIX}feature/a`, null, otherId);
@@ -131,13 +131,30 @@ test("list walks a prefix, excludes locks and temp files, and sorts by name", ()
     [`${BRANCH_PREFIX}feature/a`, `${BRANCH_PREFIX}main`],
   );
 
-  // A stray .lock or .tmp file under the ref tree must not appear in the list,
-  // nor trip it up.
+  // Temporary writes use the reserved .lock namespace; .tmp remains a legal ref.
   mkdirSync(join(root, ...BRANCH_PREFIX.split("/")), { recursive: true });
   writeFileSync(join(root, ...BRANCH_PREFIX.split("/"), "stray.lock"), `${id}\n`);
-  writeFileSync(join(root, ...BRANCH_PREFIX.split("/"), "stray.tmp"), `${id}\n`);
+  writeFileSync(join(root, ...BRANCH_PREFIX.split("/"), "stray.tmp.lock"), `${id}\n`);
+  mkdirSync(join(root, ...BRANCH_PREFIX.split("/"), "abandoned.lock"));
+  writeFileSync(join(root, ...BRANCH_PREFIX.split("/"), "abandoned.lock", "not-a-ref"), `${id}\n`);
+  refs.compareAndSwap(`${BRANCH_PREFIX}kept.tmp`, null, otherId);
   const again = refs.list(BRANCH_PREFIX);
-  assert.ok(!again.some((entry: RefEntry) => entry.name.endsWith(".lock") || entry.name.endsWith(".tmp")));
+  assert.ok(!again.some((entry: RefEntry) => entry.name.endsWith(".lock")));
+  assert.ok(again.some((entry: RefEntry) => entry.name === `${BRANCH_PREFIX}kept.tmp`));
+});
+
+test("atomic ref publication cannot overwrite a legitimate process-shaped tmp ref", () => {
+  const { refs } = freshRefs();
+  const name = `${BRANCH_PREFIX}published`;
+  const existing = `${name}.${process.pid}.tmp`;
+  refs.compareAndSwap(existing, null, otherId);
+  refs.compareAndSwap(name, null, id);
+  assert.equal(refs.read(existing), otherId);
+  assert.equal(refs.read(name), id);
+  assert.deepEqual(refs.list(BRANCH_PREFIX).map(entry => entry.name), [name, existing]);
+  const longName = `${BRANCH_PREFIX}${"x".repeat(230)}`;
+  refs.compareAndSwap(longName, null, id);
+  assert.equal(refs.read(longName), id);
 });
 
 test("readHead handles an unborn branch, a live branch and a detached head", () => {

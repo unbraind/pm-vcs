@@ -8,6 +8,7 @@
 // as the new tip, and the second write silently discards the first.
 
 import type { Dirent } from "node:fs";
+import { randomBytes } from "node:crypto";
 import {
   closeSync,
   fsyncSync,
@@ -105,11 +106,13 @@ function readTrimmed(path: string): string | null {
  *
  * @param path - Destination path.
  * @param contents - Text to write. A trailing newline is added.
+ * Temporary names are randomized and end in the reserved .lock suffix so a
+ * legitimate .tmp ref cannot be overwritten by an in-flight publication.
  */
 function writeAtomic(path: string, contents: string): void {
   mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.tmp`;
-  const handle = openSync(temporary, "w");
+  const temporary = join(dirname(path), `ref-${process.pid}-${randomBytes(6).toString("hex")}.lock`);
+  const handle = openSync(temporary, "wx");
   try {
     writeSync(handle, `${contents}\n`);
     fsyncSync(handle);
@@ -272,7 +275,7 @@ export class RefStore {
   list(prefix: string): RefEntry[] {
     const base = join(this.root, ...prefix.split("/").filter(Boolean));
     const found: RefEntry[] = [];
-    /** Recursively collect valid ref files while ignoring lock and temporary artifacts. */
+    /** Recursively collect valid refs while ignoring the reserved lock namespace. */
     const walk = (directory: string): void => {
       let entries: Dirent[];
       try {
@@ -281,12 +284,12 @@ export class RefStore {
         return;
       }
       for (const entry of entries) {
+        if (entry.name.endsWith(".lock")) continue;
         const path = join(directory, entry.name);
         if (entry.isDirectory()) {
           walk(path);
           continue;
         }
-        if (entry.name.endsWith(".lock") || entry.name.endsWith(".tmp")) continue;
         const value = readTrimmed(path);
         if (value === null || !isObjectId(value)) continue;
         const relative = path.slice(base.length + 1).split(sep).join(posix.sep);

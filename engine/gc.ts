@@ -43,7 +43,7 @@ function refRoots(path: string): ObjectId[] {
   if (!requireEntry(path, "Collection cannot follow a ref directory link.", "directory")) return [];
   const result: ObjectId[] = [];
   for (const entry of readdirSync(path, { withFileTypes: true })) {
-    if (entry.name.endsWith(".lock") || entry.name.endsWith(".tmp")) continue;
+    if (entry.name.endsWith(".lock")) continue;
     const target = join(path, entry.name);
     if (entry.isDirectory()) result.push(...refRoots(target));
     else {

@@ -179,12 +179,18 @@ test("shipped CLI stages commits and collects in a real tracker with no Git exec
   writeFileSync(join(repo.root, "binary"), randomBytes(1024 * 1024));
   invoke("vcs", "add", "binary"); invoke("vcs", "commit", "--message", "offline binary");
   assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "manifest");
+  invoke("vcs", "branch", "retained.tmp");
+  assert.ok(JSON.stringify(invoke("vcs", "branch")).includes("retained.tmp"));
   const status = invoke("vcs", "status"); assert.equal(status.ok, true);
+  const retained = repo.objects.write("blob", Buffer.from("reachable only through tmp refs"));
+  repo.refs.compareAndSwap("refs/metadata/checkpoint.tmp", null, retained);
+  repo.refs.compareAndSwap("refs/remotes/archive.tmp/main", null, retained);
   const garbage = repo.objects.write("blob", Buffer.from("offline unreachable"));
   const dry = invoke("vcs", "gc").gc as { candidateBytes: number; reclaimedBytes: number };
   assert.ok(dry.candidateBytes > 0); assert.equal(dry.reclaimedBytes, 0);
   const applied = invoke("vcs", "gc", "--apply").gc as { reclaimedBytes: number };
   assert.equal(applied.reclaimedBytes, dry.candidateBytes); assert.equal(repo.objects.has(garbage), false);
+  assert.ok(repo.objects.has(retained), "Git-free GC must retain valid tmp refs");
   assert.equal(existsSync(join(repo.root, ".git")), false);
 });
 

@@ -14,7 +14,7 @@ import extension from "../index.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { Repository } from "../engine/repo.ts";
 import { PublicationLeases } from "../engine/publication-leases.ts";
-import { writeFragmented } from "../engine/fragments.ts";
+import { readFragmentRange, writeFragmented } from "../engine/fragments.ts";
 import { writeSeries, type Signature } from "../engine/model.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
@@ -79,6 +79,28 @@ test("GC follows manifest pages and protects sparse private and retired instance
   hub.unlinkInstance("sparse");
   assert.equal(collectGarbage(instance, true).removed, 1);
   assert.ok(instance.objects.has(staged)); assert.ok(hub.objects.has(tip)); assert.ok(!hub.objects.has(garbage));
+});
+
+for (const ref of ["refs/metadata/checkpoint.tmp", "refs/remotes/archive.tmp/main"]) {
+  test(`GC retains valid tmp refs through ${ref}`, async () => {
+    const repo = await fresh(); const content = Buffer.from("reachable chunked checkpoint".repeat(20));
+    const stored = writeFragmented(repo.objects, content, 32);
+    repo.refs.compareAndSwap(ref, null, stored.manifestId);
+    assert.equal(repo.refs.read(ref), stored.manifestId);
+    assert.ok(repo.refs.list("refs/").some(entry => entry.name === ref));
+    const garbage = repo.objects.write("blob", Buffer.from("unreachable fixture bytes"));
+    assert.deepEqual(collectGarbage(repo).candidates, [garbage]);
+    assert.equal(collectGarbage(repo, true).removed, 1);
+    assert.equal(repo.refs.read(ref), stored.manifestId);
+    assert.deepEqual(readFragmentRange(repo.objects, stored.manifestId, 0, content.length), content);
+  });
+}
+
+test("GC refuses a corrupt tmp-named ref before deletion", async () => {
+  const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("held garbage"));
+  writeFileSync(join(repo.controlDirectory, "refs/heads/broken.tmp"), "partial ref bytes");
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots" });
+  assert.ok(repo.objects.has(garbage));
 });
 
 test("active leases retain even unpublished unattached payloads, expired and released leases permit collection", async () => {
@@ -157,7 +179,7 @@ test("collection retains detached HEAD transitions and pending merge roots witho
   const repo = await fresh(); const tip = commit(repo, "base");
   repo.switchTo(tip, new Date()); repo.switchTo("main", new Date());
   writeFileSync(join(repo.controlDirectory, "MERGE_STATE"), JSON.stringify({ ours: tip, theirs: tip, bases: [tip] }));
-  writeFileSync(join(repo.controlDirectory, "refs/heads/unused.tmp"), "broken temporary ref");
+  writeFileSync(join(repo.controlDirectory, "refs/heads/unused.tmp.lock"), "broken temporary ref");
   writeFileSync(join(repo.controlDirectory, "refs/heads/unused.lock"), "live marker");
   assert.equal(collectGarbage(repo).candidates.length, 0);
   const logs = readFileSync(join(repo.controlDirectory, "oplog.jsonl"), "utf8");
