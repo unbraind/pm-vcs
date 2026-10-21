@@ -1553,7 +1553,10 @@ export class Repository {
    * which is what keeps hints an accelerator instead of a second source of
    * truth.
    *
-   * @param read - Working-file reader; injectable for tests.
+   * Manifest-backed regular files are compared in bounded chunks against their
+   * recorded layout; neither dirty hints nor the stat cache can skip this read.
+   *
+   * @param read - Working-file reader for non-manifest entries; injectable for tests.
    * @returns How many entries were checked, what is genuinely dirty, and every
    *   hint the filesystem disagreed with.
    */
@@ -1571,6 +1574,12 @@ export class Repository {
         continue;
       }
       checked += 1;
+      if (this.objects.hasType(entry.id, "manifest")) {
+        const observed = readWorkingStat(this.root, entry.path);
+        if (observed.symbolicLink || (observed.executable ? "100755" : "100644") !== entry.mode
+          || !matchesFragmentedFile(this.objects, entry.id, absolute)) dirty.add(entry.path);
+        continue;
+      }
       const { content, executable } = read(this.root, entry.path);
       const mode = executable ? "100755" : "100644";
       const id = this.workingIdentifier(entry.path, content, entry.id);
@@ -1897,6 +1906,7 @@ export class Repository {
   private diffText(id: ObjectId | null): string {
     if (id === null) return "";
     const object = this.objects.read(id);
+    if (object.type === "manifest") return readFragmented(this.objects, id).toString("utf8");
     if (object.type !== "record") return object.payload.toString("utf8");
     const document = decodeRecord(object.payload);
     return `${Object.keys(document)

@@ -135,6 +135,9 @@ jobs:
       - name: Verify Bun can install the package graph
         run: bun install --no-save
 
+      - name: Run the full release gate with Bun
+        run: bun run release:check
+
   windows-acceptance-launcher:
     runs-on: windows-latest
     strategy:

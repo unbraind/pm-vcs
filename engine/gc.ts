@@ -40,15 +40,17 @@ function requireEntry(path: string, refusal: string, kind: "file" | "directory")
 
 /** Inspect all ref namespaces without the display API's tolerant omission of broken refs. */
 function refRoots(path: string): ObjectId[] {
-  if (!requireEntry(path, "Collection cannot follow a ref directory link.", "directory")) return [];
+  if (!requireEntry(path, `Collection cannot follow a ref directory link: ${path}.`, "directory")) return [];
   const result: ObjectId[] = [];
   for (const entry of readdirSync(path, { withFileTypes: true })) {
     if (entry.name.endsWith(".lock")) continue;
     const target = join(path, entry.name);
     if (entry.isDirectory()) result.push(...refRoots(target));
     else {
-      if (!entry.isFile()) throw new ObjectStoreError("unsafe_gc_roots", "Collection cannot follow a ref link.");
-      result.push(...addresses([readFileSync(target, "utf8").trim()]));
+      if (!entry.isFile()) throw new ObjectStoreError("unsafe_gc_roots", `Collection cannot follow a ref link: ${target}.`);
+      const id = readFileSync(target, "utf8").trim();
+      if (!isObjectId(id)) throw new ObjectStoreError("unsafe_gc_roots", `Collection root ${target} is not an object address.`);
+      result.push(id);
     }
   }
   return result;

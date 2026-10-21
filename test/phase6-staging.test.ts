@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { deflateSync, inflateSync } from "node:zlib";
@@ -14,6 +14,7 @@ import { manifestFragments } from "../engine/manifest-pages.ts";
 import { type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
 import { readWorkingStat } from "../engine/worktree.ts";
+import { readHints, writeHints } from "../engine/instances.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { installPackedExtension, withoutPmContext } from "../scripts/pm-environment.ts";
@@ -71,6 +72,55 @@ test("native staging streams CDC, retains renamed identities and traces PM items
   assert.ok(repo.status(forbidBuffer).unstaged.some(entry => entry.path === "renamed.bin"));
   repo.stage(["renamed.bin"], forbidBuffer);
   assert.notEqual(repo.readIndex().find(entry => entry.path === "renamed.bin")!.id, current.id);
+});
+
+for (const layout of ["native", "fixed"]) test(`manifest scan streams ${layout} content and corrects hints without losing mode or link changes`, async () => {
+  const { repo } = await fresh();
+  const bytes = Buffer.alloc(1_048_576, 42); const file = join(repo.root, "asset");
+  writeFileSync(file, bytes); chmodSync(file, 0o644); repo.stage(["asset"]);
+  if (layout === "fixed") {
+    const stored = writeFragmented(repo.objects, bytes, 8192);
+    repo.writeIndex([{ ...repo.readIndex()[0], id: stored.manifestId }]);
+  }
+  assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "manifest");
+  assert.equal(existsSync(join(repo.root, ".git")), false);
+  /** Manifest scans must never fall through to a whole-file working reader. */
+  const forbidBuffer = (): never => { throw new Error("whole-file scan materialization"); };
+  writeHints(repo.controlDirectory, ["asset"]);
+  assert.deepEqual(repo.scan(forbidBuffer), { checked: 1, dirty: [], corrections: [{ path: "asset", hinted: true, actual: false }] });
+  assert.deepEqual(readHints(repo.controlDirectory), []);
+  const edited = Buffer.from(bytes); edited[500_000] ^= 255; writeFileSync(file, edited);
+  assert.deepEqual(repo.scan(forbidBuffer), { checked: 1, dirty: ["asset"], corrections: [{ path: "asset", hinted: false, actual: true }] });
+  assert.deepEqual(readHints(repo.controlDirectory), ["asset"]);
+  writeFileSync(file, bytes); chmodSync(file, 0o755);
+  assert.deepEqual(repo.scan(forbidBuffer).dirty, ["asset"], "identical bytes with a changed executable bit stay dirty");
+  chmodSync(file, 0o644);
+  assert.deepEqual(repo.scan(forbidBuffer).dirty, []);
+  renameSync(file, join(repo.root, "saved")); symlinkSync("saved", file);
+  assert.deepEqual(repo.scan(forbidBuffer).dirty, ["asset"], "a symlink to identical content is not the staged regular file");
+  unlinkSync(file); renameSync(join(repo.root, "saved"), file);
+  assert.deepEqual(repo.scan(forbidBuffer).dirty, []);
+});
+
+test("manifest diff renders native file bytes through edits additions deletions and blob transitions", async () => {
+  const { repo } = await fresh(); const file = join(repo.root, "asset.txt");
+  const empty = repo.commit({ message: "empty base", author, allowEmpty: true }, new Date());
+  const before = `${"x".repeat(1_048_576)}\nanchor one\nanchor two\nanchor three\nbefore-review-marker\nsuffix\n`;
+  writeFileSync(file, before); repo.stage(["asset.txt"]);
+  const first = repo.commit({ message: "chunked text", author }, new Date());
+  assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "manifest");
+  writeFileSync(file, before.replace("before-review-marker", "after-review-marker")); repo.stage(["asset.txt"]);
+  const second = repo.commit({ message: "edit chunked text", author }, new Date());
+  const diff = repo.diff(first, second);
+  assert.match(diff, /^-before-review-marker$/m); assert.match(diff, /^\+after-review-marker$/m);
+  assert.match(diff, /^ anchor three$/m); assert.doesNotMatch(diff, /pm-vcs-manifest/);
+  assert.match(repo.diff(empty, first), /^\+before-review-marker$/m);
+  assert.match(repo.diff(first, empty), /^-before-review-marker$/m);
+  writeFileSync(file, "blob-final\n"); repo.stage(["asset.txt"]);
+  const third = repo.commit({ message: "small text", author }, new Date());
+  assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "blob");
+  const transition = repo.diff(second, third);
+  assert.match(transition, /^-after-review-marker$/m); assert.match(transition, /^\+blob-final$/m);
 });
 
 test("range reads skip unrelated blobs and compression never changes content addresses or GC byte accounting", async () => {

@@ -96,10 +96,11 @@ for (const ref of ["refs/metadata/checkpoint.tmp", "refs/remotes/archive.tmp/mai
   });
 }
 
-test("GC refuses a corrupt tmp-named ref before deletion", async () => {
+for (const contents of ["partial ref bytes", ""]) test(`GC refuses a corrupt tmp-named ref before deletion: ${JSON.stringify(contents)}`, async () => {
   const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("held garbage"));
-  writeFileSync(join(repo.controlDirectory, "refs/heads/broken.tmp"), "partial ref bytes");
-  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots" });
+  const target = join(repo.controlDirectory, "refs/heads/broken.tmp");
+  writeFileSync(target, contents);
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: `Collection root ${target} is not an object address.` });
   assert.ok(repo.objects.has(garbage));
 });
 
@@ -128,7 +129,8 @@ test("bad upload roots, refs, instance roots and lease layout fail before unlink
   }
   const refs = join(repo.controlDirectory, "refs"); mkdirSync(refs, { recursive: true });
   writeFileSync(join(refs, "bad"), "bad"); assert.throws(() => collectGarbage(repo, true)); rmSync(join(refs, "bad"));
-  symlinkSync(join(repo.controlDirectory, "HEAD"), join(refs, "bad")); assert.throws(() => collectGarbage(repo, true)); rmSync(join(refs, "bad"));
+  symlinkSync(join(repo.controlDirectory, "HEAD"), join(refs, "bad"));
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: `Collection cannot follow a ref link: ${join(refs, "bad")}.` }); rmSync(join(refs, "bad"));
   mkdirSync(join(repo.controlDirectory, "leases")); writeFileSync(join(repo.controlDirectory, "leases/bad"), "{}");
   assert.throws(() => collectGarbage(repo, true)); assert.ok(repo.objects.has(garbage));
 });
@@ -218,7 +220,7 @@ test("dangling links at collection roots fail closed", async () => {
   assert.throws(() => collectGarbage(repo, true), /real lease directory/); assert.ok(repo.objects.has(garbage));
   rmSync(leases);
   const refs = join(control, "refs"); rmSync(refs, { recursive: true }); symlinkSync(join(control, "absent-target"), refs, "dir");
-  assert.throws(() => collectGarbage(repo, true), /ref directory link/); assert.ok(repo.objects.has(garbage));
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: `Collection cannot follow a ref directory link: ${refs}.` }); assert.ok(repo.objects.has(garbage));
   rmSync(refs);
   mkdirSync(join(control, "refs", "heads"), { recursive: true });
   assert.deepEqual(collectGarbage(repo, true).candidates, [garbage]);
