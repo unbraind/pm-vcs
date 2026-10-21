@@ -26,7 +26,8 @@ Policy means **declared item policy**, not enforcement. Settings, schemas,
 history streams and arbitrary tracker objects remain opaque. Unknown item
 fields retain ordinary field provenance. Custom schemas unsupported by the
 pinned SDK conservatively remain opaque. Both present sides must be canonical
-SDK-valid records, with string body and item identity matching the tracker
+SDK-valid records, with strict built-in risk/dependency kinds, valid recorded
+timestamps, required project/global link scopes, string body and item identity matching the tracker
 filename. A malformed side makes the entire file delta opaque, so repairing an
 item never invents historical lifecycle facts. Unconfigured item blobs are also
 opaque. No view rewrites records or history. Unresolved fields keep ordinary
@@ -113,7 +114,7 @@ Measured on this 20-change public pm-vcs window: **147 items, 2,175 history
 events, 300 files, 4,381,779 bytes**. The query returned **799 statements in 40
 pages** at limit 20: 71 lifecycle, 17 dependency, 496 evidence, 16 policy, 173
 ordinary field and 26 opaque rows. Largest JSON page: **14,000 bytes**. Total
-query time across all pages: **5,066.08 ms** on the CPU-saturated validation host;
+query time across all pages: **3,932.03 ms** on the CPU-saturated validation host;
 this is an observation, not a performance guarantee. Tracker hashes remained
 exact; the target had no Git repository. The aggregate tracker digest was
 `9a6b751ed89486b87b7849fcebd688fbbb27d4544d8fc379c9a964caf5170fa7`.

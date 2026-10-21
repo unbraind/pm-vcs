@@ -1,6 +1,6 @@
 /** Read-only, explicitly selected tracker interpretations of immutable native changes. */
 import { createHash } from "node:crypto";
-import { parseItemDocument } from "@unbrained/pm-cli/sdk";
+import { parseItemDocument, isTimestampLiteral, RISK_VALUES, DEPENDENCY_KIND_VALUES } from "@unbrained/pm-cli/sdk";
 import { VcsError } from "../git.ts";
 import { changeProvenance, type AnnotationOrigin } from "./annotate.ts";
 import { readConflict } from "./conflicts.ts";
@@ -76,12 +76,15 @@ function compact(value: RecordValue): LensValue {
 }
 
 /** Require collection entries to have the recorded string coordinates needed by their semantic interpretation. */
-function entries(value: RecordValue | undefined, required: readonly string[], alternative: readonly string[] = []): boolean {
+function entries(value: RecordValue | undefined, required: readonly string[], alternative: readonly string[] = [], scoped = false, kinds: readonly string[] = []): boolean {
   return value === undefined || (Array.isArray(value) && value.every((entry) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
     const record = entry as RecordDocument;
     return required.every((key) => typeof record[key] === "string" && record[key] !== "")
-      && (alternative.length === 0 || alternative.some((key) => typeof record[key] === "string" && record[key] !== ""));
+      && (alternative.length === 0 || alternative.some((key) => typeof record[key] === "string" && record[key] !== ""))
+      && (!scoped || record.scope === "project" || record.scope === "global")
+      && ["created_at", "started_at", "finished_at", "recorded_at"].every((key) => record[key] === undefined || (typeof record[key] === "string" && isTimestampLiteral(record[key] as string)))
+      && (kinds.length === 0 || kinds.includes(record.kind as string));
   }));
 }
 
@@ -94,11 +97,13 @@ function semanticShape(document: RecordDocument): boolean {
     && typeof document.priority === "number" && Number.isInteger(document.priority) && document.priority >= 0 && document.priority <= 4
     && Array.isArray(document.tags) && document.tags.every((tag) => typeof tag === "string")
     && optional.every((key) => document[key] === undefined || typeof document[key] === "string")
+    && ["created_at", "updated_at", "closed_at", "completed_at"].every((key) => document[key] === undefined || isTimestampLiteral(document[key] as string))
+    && (document.risk === undefined || RISK_VALUES.includes(document.risk as typeof RISK_VALUES[number]))
     && (document.confidence === undefined || typeof document.confidence === "string" || typeof document.confidence === "number")
-    && entries(document.dependencies, ["id", "kind", "created_at"])
-    && entries(document.files, ["path"]) && entries(document.docs, ["path"])
-    && entries(document.tests, [], ["command", "path"])
-    && entries(document.test_runs, ["run_id", "kind", "status", "started_at", "finished_at", "recorded_at"])
+    && entries(document.dependencies, ["id", "kind", "created_at"], [], false, DEPENDENCY_KIND_VALUES)
+    && entries(document.files, ["path"], [], true) && entries(document.docs, ["path"], [], true)
+    && entries(document.tests, [], ["command", "path"], true)
+    && entries(document.test_runs, ["run_id", "kind", "status", "started_at", "finished_at", "recorded_at"], [], false, ["test", "test-all"])
     && ["comments", "notes", "learnings"].every((field) => entries(document[field], ["created_at", "author", "text"]));
 }
 

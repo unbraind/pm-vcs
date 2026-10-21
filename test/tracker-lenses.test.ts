@@ -46,7 +46,7 @@ function hashes(root: string, prefix = ""): Record<string, string> {
 
 test("SDK lenses opt in to real lifecycle dependency evidence and policy deltas with exact immutable citations", async () => {
   const { repo, client, item, path, first } = await fixture();
-  await client.update(item.id, { status: "in_progress", acceptanceCriteria: "Verify all citations", author: "fixture" });
+  await client.update(item.id, { status: "in_progress", risk: "high", acceptanceCriteria: "Verify all citations", author: "fixture" });
   await client.files(item.id, { add: ["engine/repo.ts"], author: "fixture" });
   const second = (await client.create({ type: "Task", title: "Dependency", author: "fixture" })).item;
   await client.update(item.id, { dep: [`id=${second.id},kind=blocked_by`], author: "fixture" });
@@ -85,7 +85,11 @@ test("malformed tracker records and unconfigured blobs stay opaque while ordinar
     { ...decodeRecord(repo.objects.readTyped(entry.id, "record")), dependencies: [{ id: "other", kind: 123 }] },
     { ...decodeRecord(repo.objects.readTyped(entry.id, "record")), id: "wrong" },
     ...[{ tests: [null] }, { tests: [[]] }, { tests: [{}] }, { tests: [{ command: "", path: "" }] }, { files: "bad" }, { confidence: {} },
-      { confidence: "not-confidence" }, { tags: [false] }, { status: "unknown-state" }, { pm_format_version: 999 }]
+      { confidence: "not-confidence" }, { risk: "invented" },
+      { files: [{ path: "a.ts", scope: 123 }] }, { files: [{ path: "a.ts" }] }, { files: [{ path: "a.ts", scope: "project", created_at: 123 }] },
+      { dependencies: [{ id: "other", kind: "blocked_by", created_at: "invalid" }] },
+      { dependencies: [{ id: "other", kind: "invented", created_at: "2026-10-21T00:00:00.000Z" }] },
+      { created_at: "invalid" }, { tags: [false] }, { status: "unknown-state" }, { pm_format_version: 999 }]
       .map(fields => ({ ...decodeRecord(repo.objects.readTyped(entry.id, "record")), ...fields }))]) {
     const tree = new Map(original); tree.set(path, { ...entry, id: repo.objects.write("record", encodeRecord(fields as RecordDocument)) });
     const next = writeCommit(repo.objects, { ...readCommit(repo.objects, first), tree: buildTree(repo.objects, tree), parents: [first] });
@@ -153,7 +157,7 @@ test("collection lenses preserve exact entry coordinates duplicate counts and un
   const { repo, first, path } = await fixture();
   const initial = readCommit(repo.objects, first); const tree = flattenTree(repo.objects, initial.tree); const entry = tree.get(path)!;
   const document = decodeRecord(repo.objects.readTyped(entry.id, "record"));
-  const file = { path: "one.ts", scope: "project" }; const other = { path: "two.ts", scope: "project" };
+  const file = { path: "one.ts", scope: "global" }; const other = { path: "two.ts", scope: "project" };
   /** Record canonical arrays without touching working tracker content. */
   const snapshot = (files: readonly RecordDocument[] | undefined, parent: string) => {
     tree.set(path, { ...entry, id: repo.objects.write("record", encodeRecord({ ...document, ...(files === undefined ? {} : { files }) })) });
