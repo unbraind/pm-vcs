@@ -7,14 +7,16 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:46.220Z"
-updated_at: "2026-10-21T00:03:53.416Z"
+updated_at: "2026-10-21T00:27:33.836Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 estimated_minutes: 480
 acceptance_criteria: "verify --signatures checks trusted ed25519 signatures; configured serve and push refuse unsigned or untrusted changes before ref publication; malformed, revoked and tampered signatures fail closed; signing keys never enter history."
 parent: pm-vcs-phase7
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:55.791Z",codex-agent,"cli:update:dep",detected
-comments[43]{created_at,author,text}:
+comments[46]{created_at,author,text}:
   "2026-10-20T07:04:49.950Z",codex-agent,"Design: explicit sign command avoids implicit key access during commit/rewrite. Ed25519 signs a versioned domain-separated canonical payload binding stable change id, tree, author, message and sorted pm item links; parents and committer are excluded so ancestry-only rewrites preserve validity. Content-changing rewrites remove the attestation and require explicit signing. Receiver policy binds SHA-256 SPKI fingerprints to author email identities and has effective-time revocations. Administrative trust/revoke operations share the object-store write lease with push; policy is reloaded under ref locks immediately before the complete batch publishes. Both HTTP and filesystem publication use that boundary. Private key files must be external to the repository and errors never include key bytes."
   "2026-10-20T07:16:46.490Z",codex-agent,"Implementation and focused adversarial suite are in place. Receiver checks only requested publication closure, including all ancestors, not unrelated uploaded objects; forged series publication also enforces policy. Effective-time revocations are evaluated after crypto at the transaction boundary. Focused suite passed 14/14 before the additional rebase scenario; actual rebase scenario passed 1/1. Full unchanged-threshold coverage is running. verify --signatures reports all rows in a nonzero error on failure because the existing pm host cannot return a structured report together with a nonzero exit (documented pm-cli #826 limitation). No dependency pins changed."
   "2026-10-20T07:22:38.119Z",codex-agent,"Behavioral revert proof in isolated source copies: replacing only assertTrustedChanges with its pre-feature no-enforcement behavior made all 4 selected filesystem push, resumable publish, HTTP and forge refusal tests fail (0 pass, 4 fail). Replacing only retainedAttestation with no retention made both selected rewrite tests fail (0/2); unconditional retention also made both fail (0/2), catching stale content signatures. Unmodified focused source passed 15/15, plus linked-instance CLI coverage passed 2/2. New signature-policy and cryptographic modules and signing commands each measured 100% statements, branches, functions and lines in focused coverage. Final release gates remain pending. The linked-test timeout was raised to 600 seconds after the default 120-second run timed out on the shared host; no coverage threshold changed."
@@ -58,11 +60,17 @@ comments[43]{created_at,author,text}:
   "2026-10-20T23:28:14.339Z",codex-agent,"Fixed PRRT_kwDOToJT7M6uj1r0 through node_modules/.bin/pm test pm-vcs-p7sign --update \"node --test test/signatures.test.ts test/publication-validation.test.ts test/vcs-commands.test.ts\" --set-json \"{\\\"timeout_seconds\\\":600}\". The pinned CLI changed only test entry 7 metadata and appended history; original provenance is retained. Regression assertion: read node_modules/.bin/pm test pm-vcs-p7sign --list --json, select the exact broad-suite command, assert.equal(entry.timeout_seconds,600). Original snapshot fails with undefined !== 600; fixed snapshot passes. Behavioral revert proof in a real non-Git scratch tracker: use that same pinned --update command with timeout_seconds:null, then run the identical assertion (exit 1); restore timeout_seconds:600 through the CLI and rerun (exit 0). All seven entries remain; all six signing suites now allow 600 seconds and the raw-coverage check retains 120 seconds. Complete PR self-review checked tracker commands, signing/publication/rewrite boundaries, docs and regression contracts; no other instance of the missing signing-suite timeout was found. No runtime or threshold changes; dist is rebuilt and ignored."
   "2026-10-20T23:28:29.350Z",codex-agent,"Pinned linked execution node_modules/.bin/pm test pm-vcs-p7sign --run --only-last --progress passed 64/64, zero failures/cancellations/skips/todos, exit 0. Runner explicitly reported timeout_ms=600000; elapsed_ms=44760. No retry was needed. The existing testing policy disables persisted test results (tracking_disabled), so this comment records the receipt. Separate pinned pm validate exits 0 with existing warnings; history remains an exact baseline prefix and new entries pass the local-path privacy check. Preparing the committed tracker/native archive snapshot for full npm and Bun release checks in independent checkouts with fresh homes and disabled global/system Git configuration."
   "2026-10-21T00:03:51.958Z",codex-agent,"Both complete release gates PASS on committed review fix fcf317b9e5d73dadaf756f96272d175e127943d5: npm run release:check exit 0 and bun run release:check exit 0. Each passed 1754/1754 tests with zero failures/cancellations/skips/todos. All 73 measured production TypeScript files individually meet 100 percent lines, statements, functions and branches; unchanged thresholds and source scope. Both runs used fresh disposable homes, disabled global/system Git configuration and independent build/coverage outputs. Native TOON, actual installed-CLI stat-cache/strace, independent committed self-host equality, zero-vulnerability production audit, Git identity audit, package dry run, changelog equality/date and publication attestation checks all passed. No host-load timeout or retry occurred. The pinned PM-linked broad suite passed 64/64 at timeout_ms=600000; timeout-only behavioral revert in a real non-Git tracker fails the identical metadata assertion, and restoration passes. Final complete review refresh still shows only PRRT_kwDOToJT7M6uj1r0, with complete comment pagination and no Outside diff range findings in the latest CodeRabbit review. No other same-class defect found; no runtime changes this round. Preparing a final evidence/claim-release commit with a regenerated archive; verify its committed equality, changelog, identities, validation, history prefix and privacy before push. Item remains in_progress for orchestrator verification; release the claim without closing."
-files[26]:
+  "2026-10-21T00:25:17.168Z",codex-agent,"Review round for PR #134 at head 1baf3f7: fetched every review thread and all comments (no pagination gaps). One unresolved thread PRRT_kwDOToJT7M6ukwoQ is valid: writeConfig reuses the owner-only metadata writer, narrowing config.json permissions. Latest CodeRabbit review has no outside-diff findings. Branch contains origin/main. Plan: generalize the atomic writer with explicit creation mode, retain private metadata mode 0600, cover config creation/replacement and receiver trust updates, prove regressions fail with changed behavior reverted, inspect the whole PR for related defects, then run unchanged npm and Bun release gates. No review replies or resolutions."
+  "2026-10-21T00:26:48.211Z",codex-agent,"PRRT_kwDOToJT7M6ukwoQ fixed in the native engine: writeAtomicJson retains the existing sibling temporary file, exclusive create, fsync, atomic rename and cleanup; writeConfig selects umask-filtered 0666 and writePrivateJson keeps 0600. Regression command: node --test --test-name-pattern=\"atomic config writes|receiver trust and revocation\" test/config.test.ts test/signatures.test.ts. Fixed: 4/4 pass, no skips. Behavioral revert proof: changed only writeConfig to select 0600 (the previous function behavior); 3/4 fail with actual 0600 versus required 0664 or 0640, including Repository.init and trust/revocation. Umask 0077 is the passing control. Restored fixed function: complete config/signature suites 48/48 pass, zero fail/skip/cancel/todo. Tests also assert private files stay 0600 on creation and replacement. Whole PR self-review covered shared metadata writers, trust advertisement/adoption, signing/rewrite paths and locked file/HTTP/forge publication; no additional instance of this permissions defect found. npm run check and npm run docstring pass at unchanged thresholds: 0 duplicate clones over 73 source files; 411 documented declarations."
+  "2026-10-21T00:27:33.818Z",codex-agent,"Pinned pm linked-test execution completed: node --test test/signatures.test.ts test/publication-validation.test.ts test/vcs-commands.test.ts via pm test --run --only-last --progress passed 65/65, zero fail/cancel/skip/todo, 24.179 seconds, timeout 600 seconds, no retry. The config/signature command already existed and pm test --add correctly deduplicated it; --only-last therefore selected the pre-existing broad command. Test evidence persistence is disabled by project policy, so this comment records the receipt. Independent pm validate is ok with existing advisories. pm health --strict-exit remains blocked solely by existing extension_host_pm_cli_version_skew (pinned host 2026.10.15 versus installed pm-github requirement 2026.10.20), already tracked by pm-vcs-5lre. History drift check is ok; no dependency bump or history rewrite performed."
+files[27]:
   - path: .agents/pm/features/pm-vcs-p7sign.toon
     scope: project
   - path: engine/closure.ts
     scope: project
+  - path: engine/composition.ts
+    scope: project
+    note: Atomic JSON writer exposes an explicit creation mode while private wrapper remains 0600
   - path: engine/config.ts
     scope: project
   - path: engine/forge.ts
@@ -173,7 +181,10 @@ tests[7]:
       source_ref: feat/ed25519-change-signatures
     updated_by: codex-agent
     updated_at: "2026-10-20T23:26:42.523Z"
-docs[2]{path,scope}:
-  docs/change-signatures.md,project
-  README.md,project
+docs[2]:
+  - path: docs/change-signatures.md
+    scope: project
+    note: Document config umask and private policy permissions
+  - path: README.md
+    scope: project
 body: ""

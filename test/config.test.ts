@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 
 import { DEFAULT_CONFIG, type RepositoryConfig, isRecordPath, matchesGlob, parseConfig, readConfig, writeConfig } from "../engine/config.ts";
+import { writePrivateJson } from "../engine/composition.ts";
 import { ObjectStoreError } from "../engine/objects.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
@@ -101,6 +102,27 @@ test("readConfig rejects a file that is not valid JSON", () => {
     () => readConfig(path),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "bad_config",
   );
+});
+
+for (const mask of [0o002, 0o027, 0o077]) test(`atomic config writes respect umask ${mask.toString(8)} while private metadata stays owner-only`, () => {
+  dir = makeTempDir();
+  const previousMask = process.umask(mask);
+  try {
+    const configPath = `${dir.root}/config.json`;
+    const privatePath = `${dir.root}/private.json`;
+    for (const recordPaths of [[], ["records/**"]]) {
+      const config = { ...DEFAULT_CONFIG, recordPaths };
+      writeConfig(configPath, config);
+      writePrivateJson(privatePath, { recordPaths });
+      assert.deepEqual(readConfig(configPath).recordPaths, recordPaths);
+      assert.deepEqual(JSON.parse(readFileSync(privatePath, "utf8")), { recordPaths });
+      if (process.platform !== "win32") {
+        assert.equal(statSync(configPath).mode & 0o777, 0o666 & ~mask);
+        assert.equal(statSync(privatePath).mode & 0o777, 0o600);
+      }
+      assert.deepEqual(readdirSync(dir.root).sort(), ["config.json", "private.json"]);
+    }
+  } finally { process.umask(previousMask); }
 });
 
 

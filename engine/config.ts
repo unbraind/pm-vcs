@@ -9,7 +9,7 @@
 
 import { lstatSync, readFileSync } from "node:fs";
 
-import { writePrivateJson } from "./composition.ts";
+import { writeAtomicJson } from "./composition.ts";
 
 import { ObjectStoreError } from "./objects.ts";
 import { FIELD_STRATEGIES, type FieldStrategy, type MergePolicy } from "./records.ts";
@@ -196,7 +196,7 @@ export function readConfig(path: string): RepositoryConfig {
  * @param config - The configuration to store.
  */
 export function writeConfig(path: string, config: RepositoryConfig): void {
-  writePrivateJson(path, config);
+  writeAtomicJson(path, config, 0o666);
 }
 
 /** Select only history-shaping settings for advertisements and remote configuration adoption. */

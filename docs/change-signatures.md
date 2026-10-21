@@ -117,6 +117,9 @@ Fetching preserves the receiver's existing configuration and trust file. A clone
 starts without enforcement until its own administrator enables it. Configuration
 and trust files use atomic sibling-file replacement with file fsync and supported
 directory fsync; readers observe complete previous or next snapshots.
+Config replacements use mode `0666` filtered by the process umask, retaining
+group access for shared repositories. Trusted-key policy and other private
+metadata continue to use owner-only mode `0600`.
 
 `pm vcs verify --signatures` performs ordinary object verification and reports
 each reachable commit's stable change ID and status. It returns a structured

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { fork } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, test } from "node:test";
@@ -292,6 +292,24 @@ test("trust cannot be replaced by a display alias and revocations remain effecti
   const trusted = readTrustedKeys(empty.controlDirectory);
   assert.notEqual(trusted, null, "trust updates must target the initialized repository's control directory");
   assert.equal(trusted!.keys[0]!.publicKey, publicKeyText(keys.publicKey));
+});
+
+test("receiver trust and revocation keep config group-readable and policy owner-only", () => {
+  const previousMask = process.umask(0o002);
+  try {
+    const { repository, keys } = fixture();
+    const configPath = join(repository.controlDirectory, "config.json");
+    if (process.platform !== "win32") assert.equal(statSync(configPath).mode & 0o777, 0o664);
+    const keyId = trust(repository, keys.publicKey);
+    for (const effectiveAt of [0, 100]) {
+      updateTrustedKeys(repository.objects, repository.controlDirectory, { keyId, effectiveAt });
+      if (process.platform !== "win32") {
+        assert.equal(statSync(configPath).mode & 0o777, 0o664);
+        assert.equal(statSync(join(repository.controlDirectory, TRUSTED_KEYS_FILE)).mode & 0o777, 0o600);
+      }
+      assert.equal(readTrustedKeys(repository.controlDirectory)!.revocations.at(-1)!.effectiveAt, effectiveAt);
+    }
+  } finally { process.umask(previousMask); }
 });
 
 test("policy validates every shape and key before granting trust", () => {

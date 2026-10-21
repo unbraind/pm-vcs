@@ -128,18 +128,23 @@ export function syncDirectory(path: string, required = true, platform: NodeJS.Pl
   try { fsyncSync(directory); } finally { closeSync(directory); }
 }
 
-/** Atomically replace private metadata with file fsync and supported directory fsync; Windows has no directory-flush guarantee. */
-export function writePrivateJson(path: string, value: unknown): void {
+/** Atomically replace JSON using a umask-filtered creation mode, file fsync and supported directory fsync. */
+export function writeAtomicJson(path: string, value: unknown, mode: number): void {
   mkdirSync(dirname(path), { recursive: true });
   if (!lstatSync(dirname(path)).isDirectory()) throw new ObjectStoreError("unsafe_composition_path", "Private metadata cannot follow a control-directory symlink.");
   const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    writeFileSync(temporary, JSON.stringify(value), { flag: "wx", mode: 0o600 });
+    writeFileSync(temporary, JSON.stringify(value), { flag: "wx", mode });
     const fd = openSync(temporary, "r");
     try { fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(temporary, path);
     syncDirectory(dirname(path), false);
   } finally { rmSync(temporary, { force: true }); }
+}
+
+/** Atomically replace owner-only metadata; Windows has no directory-flush guarantee. */
+export function writePrivateJson(path: string, value: unknown): void {
+  writeAtomicJson(path, value, 0o600);
 }
 
 /** Read and strictly validate all private overlay snapshots. */
