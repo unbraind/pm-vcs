@@ -1,0 +1,24 @@
+id: pm-vcs-tracker-selfhost
+title: Explain self-host refresh recovery for tracker-only PRs
+description: "PR #139 changes only tracker records and CHANGELOG.md but fails the committed self-host equality audit. Refresh its bundle without weakening verification. Recurring workflow proposal: when equality fails, print the exact recovery sequence: stage all intended tracker/source/docs changes explicitly, npm run changelog:full, stage CHANGELOG.md, npm run self-host:write, git add selfhost.bundle, commit, then npm run accept:self-host at HEAD. A future regression should prove a tracker-only commit fails with actionable guidance and passes after the committed refresh; verification must remain read-only."
+type: Issue
+status: in_progress
+priority: 2
+tags[3]: ci,contributor-workflow,self-host
+created_at: "2026-10-21T19:49:18.736Z"
+updated_at: "2026-10-21T19:49:47.411Z"
+assignee: codex-agent
+claim_principal: codex-agent
+author: codex-agent
+acceptance_criteria: "PR #139 has a refreshed committed snapshot, targeted local acceptance and full CI evidence; contributor diagnostic proposal remains tracked for separate implementation."
+comments[1]{created_at,author,text}:
+  "2026-10-21T19:49:29.300Z",codex-agent,"Orientation found no tracker-only recovery item; related closed pm-vcs-koq1 concerns external action pins and pm-vcs-m6j4 concerns an older refresh. PR branch contains origin/main (0 behind, 1 ahead). The existing operational-entry regression reproduced the CI failure: 0/1 passed, with tracker records, append-only histories and CHANGELOG.md differing. AGENTS.md and scripts/self-host.ts require staged intended files -> writer -> commit -> verify HEAD. Plan: retain strict equality and unchanged runtime source; record linked checks, finish tracker writes, regenerate changelog and bundle, commit as SteveBot, verify targeted test and self-host acceptance, push and use CI for the full gate as requested. No behavioral code changed; the red baseline is the artifact negative proof."
+files[1]{path,scope}:
+  selfhost.bundle,project
+tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "npm run accept:self-host",project,codex-agent,"2026-10-21T19:49:40.296Z",local_mutation,chore/reconcile-tracker-1021
+  "node --test --test-name-pattern=\"operational entry points enforce real audits through direct CLI processes\" test/exact-gates.test.ts",project,codex-agent,"2026-10-21T19:49:43.059Z",local_mutation,chore/reconcile-tracker-1021
+  node --test test/self-host.test.ts,project,codex-agent,"2026-10-21T19:49:47.274Z",local_mutation,chore/reconcile-tracker-1021
+docs[1]{path,scope}:
+  AGENTS.md,project
+body: ""
