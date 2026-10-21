@@ -30,7 +30,7 @@ SDK-valid records, with string body and item identity matching the tracker
 filename. A malformed side makes the entire file delta opaque, so repairing an
 item never invents historical lifecycle facts. Unconfigured item blobs are also
 opaque. No view rewrites records or history. Unresolved fields keep ordinary
-provenance; separate conflict rows cite the objects carrying conflict references.
+provenance; separate conflict rows cite the source commits and paths carrying conflict references.
 
 `before` and `after` name `{commit, object, path}`. Missing sides mean absence;
 `was: null` is a present null. `was`/`now` retain scalars up to 160 canonical UTF-8

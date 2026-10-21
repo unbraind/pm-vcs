@@ -276,8 +276,8 @@ are recorded as evidence on the item. See [the full bisect contract](docs/bisect
 
 ## Without git
 
-Native commits, refs, history, merges, bundles, transports, signing, annotation
-and bisect work in a plain-directory PM project without a git executable. Bisect
+Native commits, refs, history, merges, bundles, transports, signing, annotation,
+bisect and tracker change lenses work in a plain-directory PM project without a git executable. Bisect
 predicates must supply their own dependencies. The optional `vcs git` interoperability
 commands need a git repository and refuse with an actionable diagnostic otherwise.
 
@@ -852,10 +852,6 @@ never rewrite content or execute evidence. JSON (`--json`) and default TOON shar
 bounded pages and explicit omission receipts. See the [contract and SDK/CLI
 example](docs/tracker-lenses.md) for fields, refusals and continuation.
 
-## Without git
 
-Native snapshots, branches, history, annotate, conflicts, signatures, bisect and
-tracker change lenses work in a plain directory without Git. `pm vcs git`
-interoperability commands require a Git repository and explain that requirement
-when absent. Core history continues to own tracker event records; lenses only
-interpret immutable native VCS changes.
+Core history continues to own tracker event records; lenses interpret immutable
+native VCS changes.
