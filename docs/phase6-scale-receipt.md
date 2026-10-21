@@ -48,8 +48,9 @@ Native staging uses 64 KiB minimum / 1 MiB maximum CDC chunks with an 18-bit Gea
 mask. An initial capacity attempt using the existing fine-grained helper defaults
 was stopped after exposing excessive loose-object/fsync overhead; its partial
 data was removed. Those helper defaults remain compatible and unchanged. Packs,
-streaming native checkout/merge, abandoned upload expiry and explicit retirement
-of forge/oplog roots remain separate tracked work.
+streaming native checkout/merge, explicit intent for ambiguous edited moves,
+abandoned upload expiry and retirement of forge/oplog roots remain separate
+tracked work.
 
 Regression evidence includes bounded-reader refusals, same-inode rename plus
 edit, copy provenance, unchanged compression identities, single-overlap range

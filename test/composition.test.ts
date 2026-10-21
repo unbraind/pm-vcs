@@ -1606,8 +1606,12 @@ for (const linked of [false, true]) test(`renewal erasure recovery authorizes be
 });
 
 test("renewal export discovers manifests with bounded prefixes and hashes all serialized bytes", /** Native byte counts and damaged real leaves distinguish discovery hints from serialization integrity. */ async () => {
-  const { repo, parent } = await fixture(); commit(repo, "export.bin", randomBytes(4 * 1024 * 1024));
-  const id = repo.readIndex().find(entry => entry.path === "export.bin")!.id; const path = objectPath(repo, id);
+  const { repo, parent } = await fixture();
+  // Imported legacy large blobs remain valid even though ordinary add now uses CDC.
+  const id = repo.objects.write("blob", randomBytes(4 * 1024 * 1024));
+  repo.writeIndex([...repo.readIndex(), { path: "export.bin", id, mode: "100644", fileId: "e".repeat(32) }]);
+  repo.commit({ message: "legacy large blob", author: signature }, new Date(1000));
+  const path = objectPath(repo, id);
   const compressed = readFileSync(path);
   const repoUrl = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
   const bundleUrl = pathToFileURL(join(process.cwd(), "engine/bundle.ts")).href;
