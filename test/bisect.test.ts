@@ -1580,7 +1580,7 @@ test("installed bisect runs linked and explicit predicates without git and resum
     const bin = join(fixture.root, "tools");
     mkdirSync(bin);
     copyFileSync(process.execPath, join(bin, process.platform === "win32" ? "node.exe" : "node"));
-    const environment = { ...withoutPmContext(process.env), PATH: bin, GIT_CEILING_DIRECTORIES: dirname(fixture.root), PM_AUTHOR: "bisector" };
+    const environment = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bin, GIT_CEILING_DIRECTORIES: dirname(fixture.root), PM_AUTHOR: "bisector" };
     /** Execute the shipped CLI with only Node available on PATH. */
     const invoke = (args: readonly string[], repaired = false): BisectReport => {
       const output = execFileSync(process.execPath, [pmExecutable, "vcs", "bisect", ...args, "--json", "--full"], {
@@ -1612,4 +1612,28 @@ test("installed bisect runs linked and explicit predicates without git and resum
     assert.ok(evidence.some((comment) => comment.startsWith("pm-vcs bisect step ") && comment.includes('"retry":true')));
     assert.ok(evidence.some((comment) => comment.startsWith("pm-vcs bisect done ") && comment.includes(culprit)));
   }
+});
+
+test("explicit bisect commands preserve metadata-like commas as literal command text", async () => {
+  const fixture = await setup();
+  const item = (await fixture.client.create({ type: "Task", title: "Literal command diagnosis", author: "agent-a" })).item.id;
+  const path = "probe.js,scope=global";
+  const command = `node ${path}`;
+  writeFileSync(join(fixture.root, path), PROBE);
+  edit(fixture, "state.txt", "ok", "initial state");
+  const good = commitFiles(fixture, [path], "literal probe");
+  edit(fixture, "state.txt", "ok later", "interior");
+  const culprit = edit(fixture, "state.txt", "broken", "culprit");
+  const bad = edit(fixture, "state.txt", "broken tip", "bad");
+  const started = await fixture.bisect(["start", good, bad], { item, command });
+  assert.equal(started.errorMessage, undefined);
+  const linked = await runTest(item, { list: true }, { path: fixture.pmRoot });
+  assert.equal(linked.tests.length, 1);
+  assert.equal(linked.tests[0].command, command);
+  assert.equal(linked.tests[0].scope, "project");
+  const ran = (await fixture.bisect(["run"])).result as { bisect: BisectReport };
+  assert.equal(ran.bisect.status, "done");
+  assert.equal(ran.bisect.verdict?.kind, "first_bad");
+  assert.equal(ran.bisect.verdict?.commit, culprit);
+  assert.equal(headCommit(fixture), bad);
 });

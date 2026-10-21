@@ -561,7 +561,7 @@ export function registerBisectCommands(api: ExtensionApi): void {
             status: "active",
           }, goodId, badId, { author, now });
           bisectCandidates(repository.objects, goodId, badId);
-          if (command !== undefined) await runTest(item, { add: [`command=${command}`] }, { author, path: context.pm_root });
+          if (command !== undefined) await runTest(item, { addJson: [JSON.stringify({ command })] }, { author, path: context.pm_root });
           writeBisectSession(repository, session);
           await recordMilestone(context, session, "start");
           return { ok: true, bisect: await reportOf(context, repository, session, budget) };
