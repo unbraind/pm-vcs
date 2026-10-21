@@ -10,7 +10,7 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension from "../index.ts";
 import builtExtension from "../dist/index.js";
-import { classifyRuns, runCandidateTest, type BisectReport } from "../bisect-commands.ts";
+import { bisectTestSourceRef, classifyRuns, runCandidateTest, type BisectReport } from "../bisect-commands.ts";
 import { bisectCandidates, bisectRemaining, bisectStepLimit, decodeBisectSession, bisectVerdict, bisectVerdicts, markBisectOutcome, readBisectSession, runBisect, selectBisectCandidate, writeBisectSession, withBisectLease, type BisectStep } from "../engine/bisect.ts";
 import { effectiveChangeId, readCommit, writeCommit, type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
@@ -1566,11 +1566,22 @@ test("bisect validates step bounds and explicit predicates before changing state
 });
 
 test("installed bisect runs linked and explicit predicates without git and resumes after interruption", async () => {
-  for (const explicit of [false, true]) {
+  const savedHead = process.env.GITHUB_HEAD_REF;
+  const savedRef = process.env.GITHUB_REF_NAME;
+  delete process.env.GITHUB_HEAD_REF;
+  delete process.env.GITHUB_REF_NAME;
+  try {
+  for (const mode of ["linked", "explicit", "git-linked"]) {
+    const explicit = mode === "explicit";
+    const git = mode === "git-linked";
     const fixture = await setup();
     const item = (await fixture.client.create({ type: "Task", title: "Plain directory diagnosis", author: "agent-a" })).item.id;
-    if (!explicit) await runTest(item, { add: ["command=node probe.js"] }, { author: "agent-a", path: fixture.pmRoot });
-    writeFileSync(join(fixture.root, "probe.js"), PROBE);
+    if (git) execFileSync("git", ["init", "-q", "-b", "fixture-main", fixture.root]);
+    if (!explicit) await runTest(item, { addJson: [JSON.stringify({ command: "node probe.js", ...(git ? { env_set: { GITHUB_HEAD_REF: "configured-for-test" } } : {}) })] }, { author: "agent-a", path: fixture.pmRoot });
+    const environmentCheck = git
+      ? 'if (process.env.GITHUB_HEAD_REF !== "configured-for-test") throw new Error("linked environment changed");\n'
+      : 'if ("GITHUB_HEAD_REF" in process.env) throw new Error("SDK context leaked into predicate");\n';
+    writeFileSync(join(fixture.root, "probe.js"), environmentCheck + PROBE);
     edit(fixture, "state.txt", "ok", "initial");
     const good = commitFiles(fixture, ["probe.js"], "probe");
     for (let index = 0; index < 4; index++) edit(fixture, "state.txt", `hang ${index}`, `interior ${index}`);
@@ -1580,7 +1591,10 @@ test("installed bisect runs linked and explicit predicates without git and resum
     const bin = join(fixture.root, "tools");
     mkdirSync(bin);
     copyFileSync(process.execPath, join(bin, process.platform === "win32" ? "node.exe" : "node"));
-    const environment = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bin, GIT_CEILING_DIRECTORIES: dirname(fixture.root), PM_AUTHOR: "bisector" };
+    const environment = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bin,
+      GIT_CEILING_DIRECTORIES: dirname(fixture.root), PM_AUTHOR: "bisector",
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${new URL("./helpers/forbid-git.ts", import.meta.url).href}`,
+    };
     /** Execute the shipped CLI with only Node available on PATH. */
     const invoke = (args: readonly string[], repaired = false): BisectReport => {
       const output = execFileSync(process.execPath, [pmExecutable, "vcs", "bisect", ...args, "--json", "--full"], {
@@ -1589,7 +1603,7 @@ test("installed bisect runs linked and explicit predicates without git and resum
       });
       return (JSON.parse(output) as { bisect: BisectReport }).bisect;
     };
-    assert.equal(existsSync(join(fixture.root, ".git")), false);
+    assert.equal(existsSync(join(fixture.root, ".git")), git);
     const help = execFileSync(process.execPath, [pmExecutable, "vcs", "bisect", "--help"], { cwd: fixture.root, encoding: "utf8", env: environment });
     assert.match(help, /--max-steps/);
     assert.match(help, /--command/);
@@ -1607,10 +1621,14 @@ test("installed bisect runs linked and explicit predicates without git and resum
     assert.equal(resumed.verdict?.commit, culprit);
     assert.equal(resumed.verdict?.change, changeOf(fixture, culprit));
     assert.equal(headCommit(fixture), bad);
-    assert.equal(existsSync(join(fixture.root, ".git")), false);
+    assert.equal(existsSync(join(fixture.root, ".git")), git);
     const evidence = await comments(fixture, item);
     assert.ok(evidence.some((comment) => comment.startsWith("pm-vcs bisect step ") && comment.includes('"retry":true')));
     assert.ok(evidence.some((comment) => comment.startsWith("pm-vcs bisect done ") && comment.includes(culprit)));
+  }
+  } finally {
+    if (savedHead === undefined) delete process.env.GITHUB_HEAD_REF; else process.env.GITHUB_HEAD_REF = savedHead;
+    if (savedRef === undefined) delete process.env.GITHUB_REF_NAME; else process.env.GITHUB_REF_NAME = savedRef;
   }
 });
 
@@ -1636,4 +1654,132 @@ test("explicit bisect commands preserve metadata-like commas as literal command 
   assert.equal(ran.bisect.verdict?.kind, "first_bad");
   assert.equal(ran.bisect.verdict?.commit, culprit);
   assert.equal(headCommit(fixture), bad);
+});
+
+test("bisect SDK source refs use hosted context or read real Git metadata without a process", async () => {
+  const fixture = await setup();
+  const keys = ["GITHUB_HEAD_REF", "GITHUB_REF_NAME", "GIT_CEILING_DIRECTORIES"] as const;
+  const saved = keys.map((key) => process.env[key]);
+  for (const key of keys) delete process.env[key];
+  try {
+    const native = `pm-vcs:${fixture.repository.identity()}`;
+    assert.equal(bisectTestSourceRef(fixture.repository), native);
+    process.env.GITHUB_HEAD_REF = " hosted-branch ";
+    assert.equal(bisectTestSourceRef(fixture.repository), "hosted-branch");
+    process.env.GITHUB_HEAD_REF = "";
+    process.env.GITHUB_REF_NAME = "hosted-tag";
+    assert.equal(bisectTestSourceRef(fixture.repository), "hosted-tag");
+    process.env.GITHUB_REF_NAME = "merge";
+    assert.equal(bisectTestSourceRef(fixture.repository), native);
+    delete process.env.GITHUB_REF_NAME;
+    execFileSync("git", ["init", "-q", "-b", "fixture-main", fixture.root]);
+    assert.equal(bisectTestSourceRef(fixture.repository), "fixture-main");
+    const nested = Repository.init(join(fixture.root, "nested"));
+    assert.equal(bisectTestSourceRef(nested), "fixture-main");
+    process.env.GIT_CEILING_DIRECTORIES = fixture.root;
+    assert.equal(bisectTestSourceRef(nested), `pm-vcs:${nested.identity()}`);
+    delete process.env.GIT_CEILING_DIRECTORIES;
+    execFileSync("git", ["-C", fixture.root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-q", "-m", "fixture"]);
+    const linked = join(fixture.root, "linked-git");
+    execFileSync("git", ["-C", fixture.root, "worktree", "add", "-q", "-b", "fixture-linked", linked]);
+    const linkedNative = Repository.init(linked);
+    assert.equal(bisectTestSourceRef(linkedNative), "fixture-linked");
+    writeFileSync(join(linked, ".git"), "invalid pointer\n");
+    assert.equal(bisectTestSourceRef(linkedNative), `pm-vcs:${linkedNative.identity()}`);
+    writeFileSync(join(fixture.root, ".git", "HEAD"), "a".repeat(40) + "\n");
+    assert.equal(bisectTestSourceRef(fixture.repository), native);
+    rmSync(join(fixture.root, ".git", "HEAD"));
+    assert.equal(bisectTestSourceRef(fixture.repository), native);
+  } finally {
+    for (const [index, key] of keys.entries()) {
+      if (saved[index] === undefined) delete process.env[key]; else process.env[key] = saved[index];
+    }
+  }
+});
+
+test("bisect SDK workers restore absent and configured hosted variables without changing linked directives", async () => {
+  const fixture = await setup();
+  const item = (await fixture.client.create({ type: "Task", title: "Worker environment", author: "agent-a" })).item.id;
+  const saved = process.env.GITHUB_HEAD_REF;
+  const savedRef = process.env.GITHUB_REF_NAME;
+  delete process.env.GITHUB_HEAD_REF;
+  delete process.env.GITHUB_REF_NAME;
+  try {
+    writeFileSync(join(fixture.root, "environment.js"), 'const expected = process.argv[2]; if (expected === "absent" ? "GITHUB_HEAD_REF" in process.env : process.env.GITHUB_HEAD_REF !== expected) process.exit(7);');
+    await runTest(item, { addJson: [
+      JSON.stringify({ command: "node environment.js absent" }),
+      JSON.stringify({ command: "node environment.js declared", env_set: { GITHUB_HEAD_REF: "declared" } }),
+    ] }, { author: "agent-a", path: fixture.pmRoot });
+    const ran = await runCandidateTest(item, "agent-a", fixture.pmRoot, fixture.root, fixture.repository.controlDirectory, undefined, `pm-vcs:${fixture.repository.identity()}`);
+    assert.deepEqual(ran, { outcome: "good" });
+    await runTest(item, { addJson: [JSON.stringify({ command: 'node environment.js ""' }), JSON.stringify({ command: "node environment.js hosted-source" })] }, { author: "agent-a", path: fixture.pmRoot });
+    process.env.GITHUB_HEAD_REF = "";
+    assert.deepEqual(await runCandidateTest(item, "agent-a", fixture.pmRoot, fixture.root, fixture.repository.controlDirectory, 'node environment.js ""', `pm-vcs:${fixture.repository.identity()}`), { outcome: "good" });
+    process.env.GITHUB_HEAD_REF = "hosted-source";
+    assert.deepEqual(await runCandidateTest(item, "agent-a", fixture.pmRoot, fixture.root, fixture.repository.controlDirectory, "node environment.js hosted-source", "hosted-source"), { outcome: "good" });
+  } finally {
+    if (saved === undefined) delete process.env.GITHUB_HEAD_REF; else process.env.GITHUB_HEAD_REF = saved;
+    if (savedRef === undefined) delete process.env.GITHUB_REF_NAME; else process.env.GITHUB_REF_NAME = savedRef;
+  }
+});
+
+test("bisect explicit registration refuses an existing SDK worker receipt without starting a session", async () => {
+  const fixture = await setup();
+  const item = (await fixture.client.create({ type: "Task", title: "Registration ownership", author: "agent-a" })).item.id;
+  const good = edit(fixture, "state.txt", "ok", "good");
+  const bad = edit(fixture, "state.txt", "broken", "bad");
+  const receipt = join(fixture.repository.controlDirectory, "BISECT_WORKER");
+  writeFileSync(receipt, String(process.pid));
+  const refused = await fixture.bisect(["start", good, bad], { item, command: "node --version" });
+  assert.match(refused.errorMessage ?? "", /Another bisect command or test worker/);
+  assert.equal(storedSession(fixture), null);
+  assert.equal(readFileSync(receipt, "utf8"), String(process.pid));
+  assert.equal((await runTest(item, { list: true }, { path: fixture.pmRoot })).tests.length, 0);
+});
+
+test("bisect explicit registration survives a real early worker exit and can be retried", async () => {
+  const fixture = await setup();
+  const item = (await fixture.client.create({ type: "Task", title: "Registration failure", author: "agent-a" })).item.id;
+  const good = edit(fixture, "state.txt", "ok", "good");
+  const bad = edit(fixture, "state.txt", "broken", "bad");
+  const options = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = "--import=data:text/javascript,process.exit(42)";
+  try {
+    const refused = await fixture.bisect(["start", good, bad], { item, command: "node --version" });
+    assert.match(refused.errorMessage ?? "", /explicit bisect test could not be recorded/);
+    assert.equal(storedSession(fixture), null);
+    assert.equal(existsSync(join(fixture.repository.controlDirectory, "BISECT_WORKER")), false);
+    assert.equal((await runTest(item, { list: true }, { path: fixture.pmRoot })).tests.length, 0);
+  } finally {
+    if (options === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = options;
+  }
+  assert.equal((await fixture.bisect(["start", good, bad], { item, command: "node --version" })).errorMessage, undefined);
+});
+
+test("bisect SDK process policy blocks Git and preserves real callback promise and spawn behavior", () => {
+  const script = `
+    import assert from "node:assert/strict";
+    import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
+    import { promisify } from "node:util";
+    for (const method of [execFile, execFileSync, spawn, spawnSync]) {
+      assert.throws(() => method("git", ["status"]), {code:"ENOTSUP"});
+      assert.throws(() => method("git.exe", ["status"]), {code:"ENOTSUP"});
+    }
+    assert.throws(() => execFile(null), {code:"ERR_INVALID_ARG_TYPE"});
+    await assert.rejects(async () => promisify(execFile)("git", ["status"]), {code:"ENOTSUP"});
+    const program = 'process.stdout.write("out");process.stderr.write("err")';
+    const callback = await new Promise((resolve, reject) => execFile(process.execPath, ["-e",program], (error, stdout, stderr) => error ? reject(error) : resolve({stdout,stderr})));
+    assert.deepEqual(callback,{stdout:"out",stderr:"err"});
+    assert.deepEqual(await promisify(execFile)(process.execPath,["-e",program]),{stdout:"out",stderr:"err"});
+    assert.equal(execFileSync(process.execPath,["-e",program],{encoding:"utf8",stdio:["ignore","pipe","ignore"]}),"out");
+    assert.equal(spawnSync(process.execPath,["-e",program],{encoding:"utf8"}).stdout,"out");
+    const child = spawn(process.execPath,["-e",program]);
+    let output = "";
+    child.stdout.on("data", chunk => output += chunk);
+    await new Promise((resolve,reject) => {child.on("error",reject);child.on("close",resolve);});
+    assert.equal(output,"out");
+    console.log("worker policy passed");
+  `;
+  const result = execFileSync(process.execPath, ["--import", new URL("../bisect-sdk-policy.ts", import.meta.url).href, "--input-type=module", "-e", script], { encoding: "utf8", timeout: 30_000 });
+  assert.match(result, /worker policy passed/);
 });

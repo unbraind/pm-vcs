@@ -148,6 +148,17 @@ The predicate itself must also be runnable there: a command that explicitly
 requires git still needs its own prerequisite. Candidate execution and milestone
 recording do not require a git repository.
 
+The pinned PM SDK normally probes a Git branch for linked-test trust. Bisect
+supplies that SDK input only inside its worker: hosted source refs take priority,
+existing Git HEAD metadata is read directly when available, and plain projects
+use `pm-vcs:<native-repository-identity>`. No Git executable is invoked. The
+SDK worker rejects optional Git process requests before process creation, including
+the SDK's sandbox-initialization probes, allowing its normal no-git fallback. The
+predicate keeps its original hosted-ref environment, including absent or empty
+values and explicit linked-test environment directives. Foreign source-ref tests
+still require normal PM trust acknowledgement; this does not enable untrusted
+execution.
+
 ## Public-data demonstration
 
 `test/bisect-demo.ts` imports 34 committed public `pm-csv` tracker snapshots into
