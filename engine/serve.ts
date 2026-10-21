@@ -1,3 +1,4 @@
+import { ChangeSignatureError } from "./signatures.ts";
 import { createHash } from "node:crypto";
 import { PublicationLeaseError, parseLeaseProofs, parseLeaseRequest, type ReceiverPrincipal } from "./publication-leases.ts";
 // Serving a repository over HTTP: the same transport, on a socket.
@@ -572,7 +573,7 @@ async function handleServedRequest(
           // A body past the bound is refused with the status that names it, so a
           // client sizing its retries can distinguish "send less" from "send right".
           status: error.code === "body_too_large" ? BODY_TOO_LARGE_STATUS : BAD_REQUEST_STATUS,
-          body: encodeErrorBody(error.code, error.message, error instanceof PublicationLeaseError ? error : undefined),
+          body: encodeErrorBody(error.code, error.message, error instanceof PublicationLeaseError || error instanceof ChangeSignatureError ? error : undefined),
           contentType: JSON_CONTENT_TYPE,
         }
         : {

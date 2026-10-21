@@ -673,9 +673,9 @@ Everything below is tracked as an epic in this repository's own tracker, under
 ## Requirements
 
 - Node.js ≥ 22.18 (`engines`), tested on 22 and 26
-- `@unbrained/pm-cli` ≥ 2026.8.1 (peer dependency and host-bound SDK runtime)
+- `@unbrained/pm-cli` ≥ 2026.10.10 (manifest and peer dependency floor for host-bound SDK and guarded tracker formats)
 - Works under `npm`/`npx` and `bun`/`bunx`
-- No runtime dependencies beyond the Node standard library
+- No runtime dependencies beyond the Node standard library and the host-provided pm SDK
 
 
 ## Development
@@ -761,3 +761,52 @@ attribution through stable file identities. Unresolved alternatives retain their
 multiple origins; shallow or missing ancestry is explicit. See the
 [annotation contract](ARCHITECTURE.md#phase-7-annotation-contract) and
 [tracker item](.agents/pm/features/pm-vcs-p7annotate.toon).
+
+## Signing changes in agent teams
+
+Give every agent identity its own Ed25519 key pair. Keep private keys in an
+external secret directory (`AGENT_KEYS` below), outside every working tree,
+and share only public keys with the orchestrator. Generate keys with Node's
+standard library, for example in that external directory:
+
+```sh
+node --input-type=module -e 'import {generateKeyPairSync} from "node:crypto"; import {writeFileSync} from "node:fs"; const k=generateKeyPairSync("ed25519"); writeFileSync("agent-a.pem",k.privateKey.export({type:"pkcs8",format:"pem"}),{mode:0o600}); writeFileSync("agent-a.pub.pem",k.publicKey.export({type:"spki",format:"pem"}));'
+```
+
+The orchestrator verifies the public-key fingerprint through an independent
+channel and trusts it **on the receiving repository**, bound to the email in
+the agent's stored author identity:
+
+```sh
+pm vcs trust-key agent-a@example.invalid "$AGENT_KEYS/agent-a.pub.pem"
+```
+
+That enables enforcement in repo config and writes the receiver-owned trusted-key
+file. Each agent commits under its own author identity, then explicitly signs:
+
+```sh
+pm --author 'Agent A <agent-a@example.invalid>' vcs commit --message 'Implement the change'
+pm vcs sign HEAD --key "$AGENT_KEYS/agent-a.pem"
+pm vcs verify --signatures
+pm vcs push origin
+```
+
+Existing FileId publication leases are still required. Sign each reachable
+historical change when enabling policy on an existing repository. Signing an
+ancestor replays descendants while preserving their identities and unchanged
+attestations. An ancestry-only rewrite retains validity; changed signed content
+becomes unsigned and must be signed again. Use `pm vcs undo` to undo signing.
+
+To stop trusting an agent key, the orchestrator runs on the receiver:
+
+```sh
+pm vcs revoke-key <fingerprint> --effective-at 2026-11-01T00:00:00Z
+```
+
+Omit `--effective-at` for immediate revocation. Revocation and publication share
+one writer lock. Revoked historical signatures also refuse publication: trust a
+replacement public key and explicitly re-sign the affected reachable versions.
+Both filesystem and served HTTP receivers refuse the whole ref batch for
+unsigned, untrusted, revoked, malformed or tampered changes. See the
+[payload, policy and threat model](docs/change-signatures.md) and
+[pm item](.agents/pm/features/pm-vcs-p7sign.toon).

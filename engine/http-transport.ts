@@ -15,7 +15,7 @@ import { randomBytes } from "node:crypto";
 import { FORGE_READ_ENDPOINT, FORGE_WRITE_ENDPOINT, type ForgeRequest } from "./forge.ts";
 import { decodeRecord, type RecordDocument } from "./model.ts";
 
-import { parseConfig, type RepositoryConfig } from "./config.ts";
+import { parseConfig, sharedConfig, type RepositoryConfig } from "./config.ts";
 
 import { type ObjectId, isObjectId, ObjectStoreError } from "./objects.ts";
 import type { Advertisement, PushReceipt, PushUpdate, TransferObject, Transport } from "./transport.ts";
@@ -235,7 +235,7 @@ export class HttpTransport implements Transport {
         `${this.url} advertised itself with a shape this build cannot read. Check the remote's URL, or whether the server is a served repository.`,
       );
     }
-    // Clone stores the advertised config verbatim, so it is normalized and
+    // Only history-shaping settings may travel with a peer, so config is normalized and
     // validated here exactly as a config read from disk would be: `{}` gains
     // its defaults, and a malformed field is refused before anything is cloned.
     // The parser's message is not forwarded: it can quote the rejected value,
@@ -243,7 +243,7 @@ export class HttpTransport implements Transport {
     // successful response, which bypasses the error-body scrubbing.
     let normalized: RepositoryConfig;
     try {
-      normalized = parseConfig(config);
+      normalized = sharedConfig(parseConfig(config));
     } catch {
       throw new ObjectStoreError(
         "unreachable_remote",

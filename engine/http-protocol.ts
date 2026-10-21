@@ -1,3 +1,4 @@
+import { ChangeSignatureError } from "./signatures.ts";
 import { historyOptions, type HistoryOptions } from "./partial.ts";
 import { PublicationLeaseError, type LeaseProof } from "./publication-leases.ts";
 // The wire vocabulary shared by the served repository and the HTTP client.
@@ -134,8 +135,8 @@ export const INTERNAL_ERROR_STATUS = 500;
  * @param message - The message the client will re-raise it with.
  * @returns The response bytes.
  */
-export function encodeErrorBody(code: string, message: string, lease?: PublicationLeaseError): Buffer {
-  return Buffer.from(`${JSON.stringify({ error: { code, message, ...(lease === undefined ? {} : { fileId: lease.fileId, holder: lease.holder, expiry: lease.expiry, reason: lease.reason }) } })}\n`, "utf8");
+export function encodeErrorBody(code: string, message: string, lease?: PublicationLeaseError | ChangeSignatureError): Buffer {
+  return Buffer.from(`${JSON.stringify({ error: { code, message, ...(lease === undefined ? {} : lease instanceof ChangeSignatureError ? { changeId: lease.changeId, commitId: lease.commitId, reason: lease.reason } : { fileId: lease.fileId, holder: lease.holder, expiry: lease.expiry, reason: lease.reason }) } })}\n`, "utf8");
 }
 
 /**
@@ -615,6 +616,12 @@ export function assertWireSuccess(status: number, payload: Buffer, url: string):
   const wireError = decodeErrorBody(payload);
   if (wireError !== null) {
     const record = decodeWireObject(payload)?.error as Record<string, unknown>;
+    if (wireError.code === "change_signature_refused" && typeof record.changeId === "string" && isObjectId(record.changeId)
+      && typeof record.commitId === "string" && isObjectId(record.commitId)
+      && ["unsigned", "untrusted", "revoked", "malformed", "tampered"].includes(String(record.reason))) {
+      throw new ChangeSignatureError({ changeId: record.changeId, commitId: record.commitId,
+        status: record.reason as ChangeSignatureError["reason"] });
+    }
     if (["missing", "expired", "wrong_principal", "out_of_scope", "fenced"].includes(String(record.reason))
       && typeof record.fileId === "string" && (record.holder === null || typeof record.holder === "string")
       && (record.expiry === null || typeof record.expiry === "number")) {

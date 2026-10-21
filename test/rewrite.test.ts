@@ -679,6 +679,39 @@ test("a rewrite of a detached HEAD moves HEAD itself, recorded for undo", () => 
   assert.equal(repo.refs.resolveHead(), tip);
 });
 
+for (const operation of ["describe", "rebase", "squash", "split"] as const) test(`${operation} replays descendants carried only by detached HEAD`, () => {
+  const { root } = freshDir();
+  const repo = Repository.init(root);
+  const base = commitFile(repo, "base.txt", "base", "base", new Date(0));
+  repo.switchTo(base, new Date(1));
+  writeFileSync(join(root, "x.txt"), "x");
+  writeFileSync(join(root, "y.txt"), "y");
+  repo.stage(["x.txt", "y.txt"]);
+  const ancestor = repo.commit({ message: "ancestor\n", author }, new Date(2));
+  const tip = commitFile(repo, "child.txt", "child", "child", new Date(3));
+  const before = readCommit(repo.objects, tip);
+  if (operation === "describe") repo.describe(ancestor, "described\n", committer, new Date(4));
+  else if (operation === "rebase") repo.rebase(ancestor, base, committer, new Date(4));
+  else if (operation === "squash") repo.squash(ancestor, committer, new Date(4));
+  else repo.split(ancestor, ["x.txt"], committer, new Date(4));
+  const head = repo.refs.readHead();
+  assert.equal(head.kind, "detached");
+  assert.notEqual(head.target, tip);
+  const after = readCommit(repo.objects, head.target!);
+  assert.equal(after.tree, before.tree);
+  assert.deepEqual(after.author, before.author);
+  assert.equal(after.message, before.message);
+  assert.deepEqual(after.committer, committer);
+  assert.equal(effectiveChangeId(head.target!, after), effectiveChangeId(tip, before));
+  const history = repo.log("HEAD");
+  assert.equal(history.length, operation === "split" ? 4 : operation === "squash" ? 2 : 3);
+  if (operation === "describe") assert.equal(history[1].commit.message, "described\n");
+  assert.equal(readFileSync(join(root, "child.txt"), "utf8"), "child");
+  repo.undo(null, new Date(5));
+  assert.equal(repo.refs.resolveHead(), tip);
+  assert.equal(repo.refs.read("refs/heads/main"), base);
+});
+
 test("a change id stays stable across a describe and a rebase of the same change", () => {
   // The point of change ids: one stable identity for a change that has been
   // described and then rebased. Each rewrite changes the commit id but not the

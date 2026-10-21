@@ -71,18 +71,19 @@ const COMMANDS = [
   "vcs describe", "vcs rebase", "vcs squash", "vcs split",
   "vcs cherry-pick", "vcs revert", "vcs reset", "vcs restore", "vcs show",
   "vcs annotate", "vcs trace", "vcs items", "vcs files", "vcs changes",
+  "vcs sign", "vcs trust-key", "vcs revoke-key",
   "vcs instance", "vcs view", "vcs scan", "vcs bisect",
   "vcs git preflight", "vcs git preview", "vcs git items",
 ];
 
-test("activation registers all 43 commands with no sibling dropped", async () => {
+test("activation registers all 46 commands with no sibling dropped", async () => {
   const harness = await activate();
   // A registration rejected by the loader aborts at that command and silently
   // drops every later sibling, so asserting each one's contract is the invariant.
   for (const command of COMMANDS) {
     harness.assertCommandContract({ command });
   }
-  assert.equal(COMMANDS.length, 43);
+  assert.equal(COMMANDS.length, 46);
 });
 
 test("native commands validate PM associations and resolve linked file changes", async () => {

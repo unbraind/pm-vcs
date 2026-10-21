@@ -1,3 +1,4 @@
+import { assertTrustedChanges } from "./signature-policy.ts";
 /** Native forge catalogs and review history, rooted in ordinary refs and objects. */
 import { exportBundle, importBundleObjects } from "./bundle.ts";
 import { requireClosure } from "./closure.ts";
@@ -131,7 +132,11 @@ function publishSeries(repository: Repository, request: ForgeRequest, principal:
   const updates = [{ name: ref, expected: previous, next: request.series! }, { name: reviewRef, expected: oldReview, next: review },
     { name: archive, expected: repository.refs.read(archive), next: request.series! }];
   repository.refs.transaction(updates,
-    /** Check every patch root, including side histories, at the catalog publication point. */ () => leases.assertPublication(leaseUpdates, request.proofs!, metadata));
+    /** Check every patch root, including side histories, at the catalog publication point. */ () => {
+      const recheckRevocations = assertTrustedChanges(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, roots);
+      leases.assertPublication(leaseUpdates, request.proofs!, metadata);
+      recheckRevocations();
+    });
   repository.operations.append("forge-series", "Published native proposal and pending review.", updates.map(update => ({ ref: update.name, before: update.expected, after: update.next })), new Date());
   return { id: request.series!, revision: review };
 }
