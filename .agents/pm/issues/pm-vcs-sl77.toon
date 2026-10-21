@@ -2,19 +2,22 @@ id: pm-vcs-sl77
 title: Honor disabled HTTP Date headers when serving with native Bun
 description: "Separate native Bun compatibility finding from PR #91 path catalogue validation. Bun 1.3.5 emits an automatic Date header despite response.sendDate=false in engine/serve.ts; Node omits it. Two identical denial responses across a one-second refresh wait therefore differ only in Date. Status and denial body are identical, and no repository existence disclosure was observed. Investigate a portable omission or a bounded stable header policy and add a cross-second raw socket regression without altering the path catalogue."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-05T09:04:49.913Z"
-updated_at: "2026-10-16T00:48:29.886Z"
+updated_at: "2026-10-21T19:05:52.986Z"
+closed_at: "2026-10-21T19:05:47.823Z"
+completed_at: "2026-10-21T19:05:47.823Z"
 author: codex-sol
 parent: pm-vcs-5h6j
 repro_steps: "Run a native Bun server with response.sendDate=false; send the same denied POST twice more than one second apart; compare raw response headers. engine/serve.ts follows this pattern, and the new directory-replacement socket fixture reproduced differing Date values."
-expected_result: The requested suppression of automatic Date headers is honored under both supported runtimes.
-actual_result: Node omits Date; native Bun 1.3.5 emits a changing Date header.
+resolution: Delivered by the audit-linked mainline implementation.
+expected_result: Honor disabled HTTP Date headers when serving with native Bun.
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/config.ts, test/composition-consumer.test.ts remain present."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-ttc0,related,"2026-10-05T09:04:49.913Z",codex-sol,"cli:create:dep",detected
-comments[10]{created_at,author,text}:
+comments[11]{created_at,author,text}:
   "2026-10-15T19:28:41.305Z",codex-agent,"Bun 1.3.5 raw-socket probes confirm sendDate=false and removeHeader(date) still emit a changing automatic Date. An empty explicit date suppresses generation but is not a valid HTTP date. Evaluating a single fixed valid sentinel Date plus no-store policy for portable, bounded denial headers."
   "2026-10-15T19:32:42.965Z",codex-agent,"Design: a single fixed valid sentinel Date (Unix epoch) plus Cache-Control: no-store on fixed denials under both runtimes. Header state is constant and independent of wall time, process lifetime and repository. Behavioral revert proof: reverting only handleServedRequest to origin/main makes the two native-runtime socket cases fail (0 pass, 2 fail): Node loses the documented sentinel and Bun wire bytes change across 1.15 seconds. Fixed socket cases both pass. No catalogue routing change is part of this fix."
   "2026-10-15T19:35:13.203Z",codex-agent,Linked pm test execution passed 2/2 with native Node and Bun worker processes and raw TCP response equality. Project test-result tracking is disabled; results are recorded in this comment.
@@ -25,6 +28,7 @@ comments[10]{created_at,author,text}:
   "2026-10-15T22:18:12.473Z",codex-agent,"Linked PM denial-wire verification passed 1/1 command, executing both Node and native Bun cases (2/2 tests). Project test-result tracking is disabled, so this comment records the results."
   "2026-10-16T00:29:21.512Z",codex-agent,"Both full release gates passed at a124253: 1554/1554 tests each, zero failures or skips and 100% statements/branches/functions/lines over 65 sources. The first full Node-only npm test had 1549 passed, 1 failed and 4 expected Bun skips. Its sole failure was the unchanged served-forge fixture's real 60000 ms lease expiring before final push after 86 seconds. The focused Node-only case passed. Follow-up pm-vcs-forgeleaseexpiry tracks fixture timing; retrying the exact full Node-only command without source edits or changed thresholds."
   "2026-10-16T00:48:08.061Z",codex-agent,"Final Node-only acceptance: env PATH=\"$NVM_BIN:/usr/bin:/bin\" npm test passed unchanged on full retry: 1554 total, 1550 passed, 0 failed/cancelled/todo, 4 explicit Bun-only skips (built consumer, packed consumer, denial-wire worker, globally installed served CLI). The always-run Node cases passed. The unchanged served-forge case passed in 57.810 seconds; its initial lease-expiry failure remains recorded in pm-vcs-forgeleaseexpiry. Both release gates had 1554/1554 passed and zero skips, proving the native Bun paths execute when available."
+  "2026-10-21T19:05:18.072Z",codex-agent,"Tracker reconciliation authorized for the audited verdict FIXED-STALE. Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/config.ts, test/composition-consumer.test.ts remain present. Honor disabled HTTP Date headers when serving with native Bun. [PR #114](https://github.com/unbraind/pm-vcs/pull/114) (1efdf4b) disambiguates parent object-fetch endpoints, suppresses HTTP Date under Bun when requested, and fails closed on unreadable existing configuration; real transport regressions are committed. Scope: tracker state only; no new runtime certification or deployment claim."
 files[5]{path,scope}:
   engine/serve.ts,project
   selfhost.bundle,project
@@ -50,4 +54,5 @@ tests[2]:
 docs[2]{path,scope}:
   .github/workflows/ci.yml,project
   README.md,project
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/config.ts, test/composition-consumer.test.ts remain present. Audit delivery: Honor disabled HTTP Date headers when serving with native Bun. [PR #114](https://github.com/unbraind/pm-vcs/pull/114) (1efdf4b) disambiguates parent object-fetch endpoints, suppresses HTTP Date under Bun when requested, and fails closed on unreadable existing configuration; real transport regressions are committed."
 body: ""

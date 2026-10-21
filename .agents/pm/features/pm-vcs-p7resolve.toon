@@ -2,18 +2,23 @@ id: pm-vcs-p7resolve
 title: Resolve conflicts and propagate resolutions through automatic descendant rebase
 description: Extend explicit tip resolution to selected ancestor changes and automatically replay every descendant with stable change ids and FileIds. Tip resolution is included in the first slice; ancestor propagation follows here.
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:41.313Z"
-updated_at: "2026-10-19T05:22:39.839Z"
+updated_at: "2026-10-21T18:55:35.344Z"
+closed_at: "2026-10-21T18:55:29.652Z"
+completed_at: "2026-10-21T18:55:29.652Z"
 author: codex-agent
 estimated_minutes: 720
 acceptance_criteria: "resolve supports path, field and ours/theirs/base/value; ancestor resolution replays descendants across branches/tags atomically; unrelated edits survive and stable change ids persist; new conflicts remain recorded with complete sides and verification passes."
 parent: pm-vcs-phase7
+resolution: Delivered by the audit-linked mainline implementation.
+expected_result: Resolve conflicts and propagate resolutions through automatic descendant rebase.
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 7609e6c61980 remains in main ancestry; engine/annotate.ts, test/edges.test.ts remain present."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:51.150Z",codex-agent,"cli:update:dep",detected
-comments[29]{created_at,author,text}:
+comments[30]{created_at,author,text}:
   "2026-10-18T03:24:21.600Z",codex-agent,"Deferred scope: resolve an ancestor change and automatically rebase all descendants while preserving stable change ids, file identities, unrelated edits and unresolved alternatives. Include repeated and overlapping disagreements in conflict-aware replay, across sibling branches and tags. The first slice resolves at HEAD only and does not claim propagation."
   "2026-10-18T18:18:22.654Z",codex-agent,"Plan: extend resolve with --at for an explicit ancestor and automatically select the originating conflict change when its units are inherited at HEAD. Replay all reachable branch/tag descendants with durable conflicts, stable change identities and one undoable ref transaction. Preserve descendant edits as new disagreements with their own projection. Verify concurrent resolutions in linked worktrees and a real three-author PM tracker. Release policy and dependency pins remain unchanged."
   "2026-10-18T18:19:29.081Z",codex-agent,"Selection decision: preserve the established default resolving change at HEAD; add --at <change> for an explicit conflicted ancestor. The earlier automatic-origin idea is superseded so resolving a descendant does not unexpectedly rewrite older work. --at selects the original change, inserts a resolving change, and rebases its descendants across refs in one operation."
@@ -43,6 +48,7 @@ comments[29]{created_at,author,text}:
   "2026-10-19T04:59:23.220Z",codex-agent,"Round 4 PRRT_kwDOToJT7M6tyfB6 fixed: engine/repo.ts supplies the invoking merge/rebase/cherry-pick/revert operation to RewriteContext; engine/rewrite.ts keeps typed resolution_conflict and atomic refusal, names pm vcs merge with its supported --record-conflicts, and names each replay operation with reconcile-first/retry guidance. These replay commands have no --continue in the actual schema. Four regressions each cover fields and text; every emitted flag is checked against the real SDK-registered command contract, plus a flag-free planner-only fallback. Reverting only the new remedy block: 0/4, exit 1 (unsupported --record-conflicts on each replay; missing explicit merge command). Restored: 4/4. Linked resolve acceptance: 32/32, no skips/cancellations."
   "2026-10-19T04:59:24.430Z",codex-agent,"Sweep evidence: inspected every engine runtime flag spelling using rg plus TypeScript AST error-constructor inventory, including indirect transport recovery strings and served error envelopes. All nine remedy flags exist on their explicitly named recovery command: authority --regenerate-legacy; merge --record-conflicts/--continue/--abort; branch --remotes; push --force; serve --auth/--root; resolve --value. Actual SDK command contracts verify all six groups. Additional ambiguity fixed at engine/serve.ts:235: read-only write refusals reach push clients, so the --auth remedy now explicitly names the operator command pm vcs serve. A real HTTP test checks push/upload/publish response messages and HttpTransport propagation against the registered serve flags. Restore only the previous error-envelope message: 0/1 exit 1; fixed: 1/1. Linked PM tests run both commands successfully (32/32 and 1/1). No further mismatch found; ARCHITECTURE.md records operation-specific recovery. Latest registry CLI is 2026.10.19; repository pin remains unchanged."
   "2026-10-19T05:22:38.494Z",codex-agent,"Round 4 final local gates at source 14e671761eefc7412fea0a10320f0ea82a303555: npm run release:check AND bun run release:check both pass 1667/1667 with zero fail/skip/cancel/TODO. Fresh HOME, disabled global/system Git identity and independent full-history clones. All 67 production files have c8 --all --100 --per-file at 100% statements/branches/functions/lines: 23462 statements/lines, 804 functions, npm 7354/7354 branches and Bun 7356/7356. ESLint zero warnings; jscpd zero pairs/0% on 23458 lines; docstrings 67 files/365 declarations. Native TOON, real installed-CLI stat-cache strace, committed self-host, production and identity audits, package dry-run, changelog, release-date and attestation gates all pass. New operation and HTTP regressions pass in both full gates. Exact revert commands: node --test --test-name-pattern=\"^competing resolution .* refusal\" test/resolution-propagation.test.ts (only remedy block reverted: 0/4 exit 1; fixed 4/4); node --test --test-name-pattern=\"^an unauthenticated server\" test/serve.test.ts (only read-only error-envelope message reverted: 0/1 exit 1; fixed 1/1). Linked acceptance is 32/32 plus 1/1. Fresh no-local clone strict health with required merge drivers passes with existing advisories. No short-option remedy mismatch found. Final validation receipt changes only this tracker pair and regenerated archive; runtime/tests/docs/dependencies/workflows are identical to the gated source. Claim released without closing; pushed-head CI results will be linked on PR 125. No new PM CLI/SDK defect."
+  "2026-10-21T18:54:54.067Z",codex-agent,"Tracker reconciliation authorized for the audited verdict FIXED-STALE. Re-verified unchanged main 27e1d84671fa: delivery 7609e6c61980 remains in main ancestry; engine/annotate.ts, test/edges.test.ts remain present. Resolve conflicts and propagate resolutions through automatic descendant rebase. [PR #125](https://github.com/unbraind/pm-vcs/pull/125) (7609e6c) resolves ancestor conflict choices and propagates them through descendant native rebases. Scope: tracker state only; no new runtime certification or deployment claim."
 files[10]{path,scope}:
   engine/annotate.ts,project
   engine/conflicts.ts,project
@@ -73,4 +79,5 @@ tests[2]:
 docs[2]{path,scope}:
   ARCHITECTURE.md,project
   README.md,project
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 7609e6c61980 remains in main ancestry; engine/annotate.ts, test/edges.test.ts remain present. Audit delivery: Resolve conflicts and propagate resolutions through automatic descendant rebase. [PR #125](https://github.com/unbraind/pm-vcs/pull/125) (7609e6c) resolves ancestor conflict choices and propagates them through descendant native rebases."
 body: ""

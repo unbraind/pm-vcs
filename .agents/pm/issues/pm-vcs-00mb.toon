@@ -2,13 +2,18 @@ id: pm-vcs-00mb
 title: Fail closed when repository configuration exists but cannot be read
 description: "Discovered during served-repository adversarial testing: engine/config.ts readConfig catches every readFileSync error and returns DEFAULT_CONFIG. A repository whose .pmvcs/config.json has been replaced by a directory therefore advertises an empty record configuration rather than refusing. Distinguish absence from unreadable or invalid filesystem shape, preserve older repositories without a config file, and add FileTransport and HTTP parity tests. This is a pre-existing configuration-reader behavior; the HTTP feature records it as a separate follow-up."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-05T07:00:24.104Z"
-updated_at: "2026-10-16T00:48:25.277Z"
+updated_at: "2026-10-21T19:08:20.842Z"
+closed_at: "2026-10-21T19:08:14.506Z"
+completed_at: "2026-10-21T19:08:14.506Z"
 author: codex-sol
-comments[13]{created_at,author,text}:
+resolution: Delivered by the audit-linked mainline implementation.
+expected_result: Fail closed when repository configuration exists but cannot be read.
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/config.ts, test/composition-consumer.test.ts remain present."
+comments[14]{created_at,author,text}:
   "2026-10-15T19:28:39.394Z",codex-agent,"Plan: only ENOENT yields DEFAULT_CONFIG; wrap unreadable, JSON and schema failures in bad_config with the config path. Exercise real filesystem failures through FileTransport and HTTP, including legacy absent config."
   "2026-10-15T19:32:39.063Z",codex-agent,"Behavioral revert proof: replacing only readConfig with origin/main makes node --test --test-name-pattern=\"config failures refuse\" test/serve.test.ts fail (0 pass, 1 fail): directory config yields no exception. Fixed implementation passes and checks real directory, EACCES, malformed JSON, schema-invalid and ENOTDIR failures with bad_config and path; FileTransport and HTTP refuse; missing config works with a fresh server catalogue."
   "2026-10-15T19:35:10.945Z",codex-agent,"Linked pm test execution passed 1/1. Project test-result tracking is disabled, so the runner returned evidence_recording.recorded=false; recording the verified result here without changing project policy."
@@ -22,6 +27,7 @@ comments[13]{created_at,author,text}:
   "2026-10-15T22:18:10.398Z",codex-agent,"Linked PM verification: 3/3 commands passed (8/8 config refusal cases, 1/1 invalid remote path, 1/1 legacy absence). Project test-result tracking is disabled, so outcomes are recorded here without changing that setting. Typecheck, lint and duplication checks passed; duplication remains 0% across 65 sources. Preparing the committed self-host snapshot before full gates."
   "2026-10-16T00:29:23.576Z",codex-agent,"Full release validation at a124253 passed under npm and Bun: 1554/1554 tests per gate, no failed/cancelled/skipped/todo tests, all 65 sources at 100% in every coverage dimension. Original readConfig-only revert baselines were 7f36d58 for the dangling-symlink refusal and 0666250 for deterministic directory refusal. The initial Node-only full run found an unrelated lease-expiry fixture issue, tracked separately as pm-vcs-forgeleaseexpiry."
   "2026-10-16T00:48:13.068Z",codex-agent,"Review round 1 is verified: dangling symlink target removal raises bad_config in readConfig and FileTransport; HTTP keeps its fixed catalogue-alias denial. Deterministic directory refusal always runs; chmod runs only after an actual denied-read probe, otherwise it skips with an explicit reason. Both readConfig-only behavioral revert proofs failed 0/1 as expected, and the restored config/legacy matrix passed 9/9. Full npm and Bun release gates passed 1554/1554 each at a124253, all 65 sources at 100% statements/branches/functions/lines. Node-only npm test passed unchanged on retry with 1550 passed and 4 expected Bun-only skips. Final receipt changes only PM evidence and its regenerated self-host snapshot."
+  "2026-10-21T19:07:34.650Z",codex-agent,"Tracker reconciliation authorized for the audited verdict FIXED-STALE. Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/config.ts, test/composition-consumer.test.ts remain present. Fail closed when repository configuration exists but cannot be read. [PR #114](https://github.com/unbraind/pm-vcs/pull/114) (1efdf4b) disambiguates parent object-fetch endpoints, suppresses HTTP Date under Bun when requested, and fails closed on unreadable existing configuration; real transport regressions are committed. Scope: tracker state only; no new runtime certification or deployment claim."
 files[7]{path,scope}:
   engine/config.ts,project
   engine/served-repositories.ts,project
@@ -71,4 +77,5 @@ tests[5]:
 docs[2]{path,scope}:
   docs/served-forge.md,project
   README.md,project
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/config.ts, test/composition-consumer.test.ts remain present. Audit delivery: Fail closed when repository configuration exists but cannot be read. [PR #114](https://github.com/unbraind/pm-vcs/pull/114) (1efdf4b) disambiguates parent object-fetch endpoints, suppresses HTTP Date under Bun when requested, and fails closed on unreadable existing configuration; real transport regressions are committed."
 body: ""
