@@ -1,8 +1,8 @@
 /** Linked-test-driven bisect sessions over real temporary repositories and trackers. */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { after, afterEach, test } from "node:test";
 
 import { PmClient, runTest, type TestRunResult } from "@unbrained/pm-cli/sdk";
@@ -11,7 +11,7 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import builtExtension from "../dist/index.js";
 import { classifyRuns, runCandidateTest, type BisectReport } from "../bisect-commands.ts";
-import { bisectCandidates, bisectRemaining, decodeBisectSession, bisectVerdict, bisectVerdicts, markBisectOutcome, readBisectSession, runBisect, selectBisectCandidate, writeBisectSession, withBisectLease, type BisectStep } from "../engine/bisect.ts";
+import { bisectCandidates, bisectRemaining, bisectStepLimit, decodeBisectSession, bisectVerdict, bisectVerdicts, markBisectOutcome, readBisectSession, runBisect, selectBisectCandidate, writeBisectSession, withBisectLease, type BisectStep } from "../engine/bisect.ts";
 import { effectiveChangeId, readCommit, writeCommit, type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
 import { ObjectStoreError } from "../engine/objects.ts";
@@ -1472,4 +1472,144 @@ test("reports compact every object id by default and --full preserves complete i
   const next = (await fixture.bisect(["status"], { full: false })).result as Output;
   assert.equal(next.bisect.next!.commit, middle.slice(0, 12));
   assert.equal(next.bisect.next!.changeId.length, 12);
+});
+
+test("explicit bisect commands select only their linked test and resume at a persisted step limit", async () => {
+  const fixture = await setup();
+  const item = (await fixture.client.create({ type: "Task", title: "Bounded explicit diagnosis", author: "agent-a" })).item.id;
+  await runTest(item, { add: ['command=node -e "process.exit(1)"'] }, { author: "agent-a", path: fixture.pmRoot });
+  writeFileSync(join(fixture.root, "probe.js"), PROBE);
+  edit(fixture, "state.txt", "ok", "initial state");
+  const good = commitFiles(fixture, ["probe.js"], "probe");
+  const commits = [good];
+  for (let index = 1; index < 32; index++) commits.push(edit(fixture, "state.txt", index >= 20 ? `broken ${index}` : `ok ${index}`, `revision ${index}`));
+  const bad = commits.at(-1)!;
+  const started = await fixture.bisect(["start", good, bad], { item, command: "node probe.js", maxSteps: 1 });
+  assert.equal(started.errorMessage, undefined);
+  assert.equal(storedSession(fixture)?.command, "node probe.js");
+  const linked = await runTest(item, { list: true }, { path: fixture.pmRoot });
+  assert.deepEqual(linked.tests.map((entry) => entry.command), ['node -e "process.exit(1)"', "node probe.js"]);
+  const run = (await fixture.bisect(["run"])).result as { bisect: BisectReport };
+  assert.equal(run.bisect.halted, "step_limit");
+  assert.equal(run.bisect.status, "active");
+  assert.equal(run.bisect.maxSteps, 1);
+  assert.equal(run.bisect.command, "node probe.js");
+  assert.equal(run.bisect.steps.filter((step) => step.by === "run").length, 1);
+  const first = storedSession(fixture)!.steps.at(-1)!;
+  assert.equal(first.outcome, "good", "the unrelated failing linked test must not run");
+  assert.equal(first.commit, run.bisect.steps.at(-1)!.commit);
+  const again = (await fixture.bisect(["run"])).result as { bisect: BisectReport };
+  assert.equal(again.bisect.halted, "step_limit");
+  assert.equal(again.bisect.steps.filter((step) => step.by === "run").length, 2);
+  const finished = (await fixture.bisect(["run"], { maxSteps: 128 })).result as { bisect: BisectReport };
+  assert.equal(finished.bisect.status, "done");
+  assert.equal(finished.bisect.halted, undefined);
+  assert.equal(finished.bisect.verdict?.kind, "first_bad");
+  assert.equal(finished.bisect.verdict?.commit, commits[20]);
+  assert.equal(finished.bisect.verdict?.change, changeOf(fixture, commits[20]));
+  assert.equal(storedSession(fixture)?.maxSteps, 128);
+  assert.equal(storedSession(fixture)!.steps.filter((step) => step.commit === first.commit).length, 1);
+  assert.equal(headCommit(fixture), bad);
+  const evidence = await comments(fixture, item);
+  assert.ok(evidence.some((comment) => comment.startsWith("pm-vcs bisect halted ") && comment.includes('"halted":"step_limit"')));
+  assert.ok(evidence.some((comment) => comment.startsWith("pm-vcs bisect done ") && comment.includes(commits[20])));
+});
+
+test("bounded all-skip bisect retains every unresolved candidate and never claims a first bad change", async () => {
+  const fixture = await setup();
+  const item = (await fixture.client.create({ type: "Task", title: "All skipped diagnosis", author: "agent-a" })).item.id;
+  const good = edit(fixture, "state.txt", "ok", "good");
+  const skipped = [];
+  for (let index = 0; index < 4; index++) skipped.push(edit(fixture, "state.txt", `unbuildable ${index}`, `skip ${index}`));
+  const bad = edit(fixture, "state.txt", "broken", "declared bad");
+  await fixture.bisect(["start", good, bad], { item, command: 'node -e "process.exit(125)"', maxSteps: 1 });
+  for (let index = 0; index < skipped.length; index++) {
+    const ran = (await fixture.bisect(["run"])).result as { bisect: BisectReport };
+    assert.equal(ran.bisect.steps.filter((step) => step.by === "run").length, index + 1);
+    assert.equal(ran.bisect.status, index === skipped.length - 1 ? "done" : "active");
+  }
+  const final = storedSession(fixture)!;
+  assert.equal(final.verdict?.kind, "ambiguous");
+  assert.equal(final.verdict?.commit, bad);
+  assert.deepEqual(new Set(final.verdict?.unresolved.map((step) => step.commit)), new Set(skipped));
+  assert.ok(final.verdict!.unresolved.every((step) => step.outcome === "skip" && step.detail === "exit 125"));
+  assert.equal(headCommit(fixture), bad);
+});
+
+test("bisect validates step bounds and explicit predicates before changing state", async () => {
+  const fixture = await setup();
+  const item = (await fixture.client.create({ type: "Task", title: "Validate bounded diagnosis", author: "agent-a" })).item.id;
+  const good = edit(fixture, "state.txt", "ok", "good");
+  edit(fixture, "state.txt", "ok later", "interior");
+  const bad = edit(fixture, "state.txt", "broken", "bad");
+  for (const limit of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity]) {
+    assert.throws(() => bisectStepLimit(limit), /positive safe integer/);
+    const refused = await fixture.bisect(["start", good, bad], { item, command: "node --version", maxSteps: limit });
+    assert.match(refused.errorMessage ?? "", /positive safe integer/);
+    assert.equal(storedSession(fixture), null);
+  }
+  const empty = await fixture.bisect(["start", good, bad], { item, command: " " });
+  assert.match(empty.errorMessage ?? "", /nonempty --command/);
+  const invalid = await fixture.bisect(["start", bad, good], { item, command: "node --version" });
+  assert.match(invalid.errorMessage ?? "", /No changes/);
+  assert.equal((await runTest(item, { list: true }, { path: fixture.pmRoot })).tests.length, 0);
+  assert.equal((await fixture.bisect(["start", good, bad], { item, command: "node --version" })).errorMessage, undefined);
+  assert.equal(storedSession(fixture)?.maxSteps, 128);
+  const changed = await fixture.bisect(["run"], { command: "node -e process.exit(1)" });
+  assert.match(changed.errorMessage ?? "", /only by bisect start/);
+  await runTest(item, { remove: ["command=node --version"] }, { author: "agent-a", path: fixture.pmRoot });
+  const missing = await fixture.bisect(["run"]);
+  assert.equal(missing.errorMessage, undefined);
+  const state = storedSession(fixture)!;
+  assert.equal(state.verdict?.kind, "ambiguous");
+  assert.match(state.steps.find((step) => step.by === "run")?.detail ?? "", /no longer linked/);
+});
+
+test("installed bisect runs linked and explicit predicates without git and resumes after interruption", async () => {
+  for (const explicit of [false, true]) {
+    const fixture = await setup();
+    const item = (await fixture.client.create({ type: "Task", title: "Plain directory diagnosis", author: "agent-a" })).item.id;
+    if (!explicit) await runTest(item, { add: ["command=node probe.js"] }, { author: "agent-a", path: fixture.pmRoot });
+    writeFileSync(join(fixture.root, "probe.js"), PROBE);
+    edit(fixture, "state.txt", "ok", "initial");
+    const good = commitFiles(fixture, ["probe.js"], "probe");
+    for (let index = 0; index < 4; index++) edit(fixture, "state.txt", `hang ${index}`, `interior ${index}`);
+    const culprit = edit(fixture, "state.txt", "broken", "culprit");
+    const bad = edit(fixture, "state.txt", "broken tip", "bad");
+    installPackedExtension(fixture.root);
+    const bin = join(fixture.root, "tools");
+    mkdirSync(bin);
+    copyFileSync(process.execPath, join(bin, process.platform === "win32" ? "node.exe" : "node"));
+    const environment = { ...withoutPmContext(process.env), PATH: bin, GIT_CEILING_DIRECTORIES: dirname(fixture.root), PM_AUTHOR: "bisector" };
+    /** Execute the shipped CLI with only Node available on PATH. */
+    const invoke = (args: readonly string[], repaired = false): BisectReport => {
+      const output = execFileSync(process.execPath, [pmExecutable, "vcs", "bisect", ...args, "--json", "--full"], {
+        cwd: fixture.root, encoding: "utf8", timeout: 300_000,
+        env: { ...environment, ...(repaired ? { BISECT_REPAIRED: "1" } : {}) },
+      });
+      return (JSON.parse(output) as { bisect: BisectReport }).bisect;
+    };
+    assert.equal(existsSync(join(fixture.root, ".git")), false);
+    const help = execFileSync(process.execPath, [pmExecutable, "vcs", "bisect", "--help"], { cwd: fixture.root, encoding: "utf8", env: environment });
+    assert.match(help, /--max-steps/);
+    assert.match(help, /--command/);
+    const start = invoke(["start", good, bad, "--item", item, "--max-steps", "2", ...(explicit ? ["--command", "node probe.js"] : [])]);
+    assert.equal(start.maxSteps, 2);
+    assert.equal(start.command, explicit ? "node probe.js" : undefined);
+    const halted = invoke(["run"]);
+    assert.equal(halted.halted, "interrupted");
+    assert.equal(halted.status, "active");
+    assert.ok(halted.steps.some((step) => step.retry));
+    assert.equal(invoke(["status"]).session, start.session);
+    const resumed = invoke(["run", "--max-steps", "128"], true);
+    assert.equal(resumed.status, "done");
+    assert.equal(resumed.verdict?.kind, "first_bad");
+    assert.equal(resumed.verdict?.commit, culprit);
+    assert.equal(resumed.verdict?.change, changeOf(fixture, culprit));
+    assert.equal(headCommit(fixture), bad);
+    assert.equal(existsSync(join(fixture.root, ".git")), false);
+    const evidence = await comments(fixture, item);
+    assert.ok(evidence.some((comment) => comment.startsWith("pm-vcs bisect step ") && comment.includes('"retry":true')));
+    assert.ok(evidence.some((comment) => comment.startsWith("pm-vcs bisect done ") && comment.includes(culprit)));
+  }
 });

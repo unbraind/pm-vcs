@@ -135,7 +135,7 @@ pm vcs diff main feature
 | `pm vcs tag [name]` | List or create tags. |
 | `pm vcs undo` | Reverse a recorded operation, refs and working tree together. |
 | `pm vcs oplog` | Every operation, with the refs it moved and where from. |
-| `pm vcs bisect start <good> <bad> --item <id>` | Find a regression using recorded PM tests; `run`, `good`, `bad`, `skip`, `status`, `reset`, and `--json`. See [bisect](docs/bisect.md). |
+| `pm vcs bisect start <good> <bad> --item <id>` | Find a regression using linked PM tests or `--command`; bound each `run` with `--max-steps`. Includes `good`, `bad`, `skip`, `status`, `reset`, and `--json`. See [bisect](docs/bisect.md). |
 | `pm vcs annotate <path>` | Last-setter attribution per text range or structured field/list entry; `--full`, `--at`, and `--json`. |
 | `pm vcs export <file>` | Write refs and their history to a bundle. |
 | `pm vcs import <file>` | Import a bundle, verifying every object against its own id. |
@@ -250,6 +250,36 @@ being git. These three are the only commands that touch git:
 | `pm vcs git items <range>` | Which pm items did this commit range create, modify and close? |
 
 ---
+
+## Find the first bad change
+
+Bisect walks the native change graph, including merged branches. Link a reproducer
+to an item or record one directly when starting:
+
+```sh
+pm test project-regression --add command="npm test"
+pm vcs bisect start good-release main --item project-regression --max-steps 8
+# Alternatively: add --command "npm test" to record and select that command.
+pm vcs bisect run
+pm vcs bisect status --json --full
+pm vcs bisect run --max-steps 32
+pm vcs bisect reset
+```
+
+Each candidate runs in an isolated native checkout. The original files and HEAD
+stay in place. Runs pause at the saved step limit (default 128) and resume with
+`run` after a limit, interruption or process death. Exit 125 skips an untestable
+candidate; manual `skip` is also available. The final report names the first bad
+stable change and its provenance, or reports ambiguity when unresolved candidates
+could contain the regression. Start, per-change results, halts and the verdict
+are recorded as evidence on the item. See [the full bisect contract](docs/bisect.md).
+
+## Without git
+
+Native commits, refs, history, merges, bundles, transports, signing, annotation
+and bisect work in a plain-directory PM project without a git executable. Bisect
+predicates must supply their own dependencies. The optional `vcs git` interoperability
+commands need a git repository and refuse with an actionable diagnostic otherwise.
 
 ## The part that matters: per-field merge
 

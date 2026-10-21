@@ -10,6 +10,7 @@ import { changeProvenance } from "./engine/annotate.ts";
 import {
   bisectCandidates,
   bisectRemaining,
+  bisectStepLimit,
   bisectVerdict,
   bisectVerdicts,
   clearBisectSession,
@@ -35,6 +36,7 @@ import type { Repository } from "./engine/repo.ts";
 import { flattenTree } from "./engine/worktree.ts";
 import { VcsError } from "./git.ts";
 import {
+  runTest,
   type CommandHandlerContext,
   type ExtensionApi,
   type ItemMetadata,
@@ -75,6 +77,8 @@ interface BisectSessionListing {
 interface BisectReport {
   readonly session: string;
   readonly item: string;
+  readonly command?: string;
+  readonly maxSteps: number;
   readonly status: BisectSession["status"];
   readonly halted?: string;
   readonly boundaries: { readonly good: { readonly revision?: string; readonly commit: string }; readonly bad: { readonly revision?: string; readonly commit: string } };
@@ -262,6 +266,8 @@ async function reportOf(context: CommandHandlerContext, repository: Repository, 
   const report: BisectReport = {
     session: session.id,
     item: session.item,
+    ...(session.command === undefined ? {} : { command: session.command }),
+    maxSteps: bisectStepLimit(session.maxSteps),
     status: session.status,
     ...(session.halted === undefined ? {} : { halted: session.halted }),
     boundaries: {
@@ -414,12 +420,12 @@ function classifyRuns(runs: readonly TestRunResult[]): BisectRunOutcome {
 }
 
 /** Run the recorded SDK test in a child with independent workspace coordinates. @internal */
-export async function runCandidateTest(item: string, author: string, pmRoot: string, workspace: string, control: string): Promise<BisectRunOutcome> {
+export async function runCandidateTest(item: string, author: string, pmRoot: string, workspace: string, control: string, command?: string): Promise<BisectRunOutcome> {
   const runner = fileURLToPath(new URL(`./bisect-test-runner${extname(fileURLToPath(import.meta.url))}`, import.meta.url));
   try {
     const output = await new Promise<string>((resolve, reject) => {
       const receipt = join(control, "BISECT_WORKER");
-      const child = spawn(process.execPath, [runner, item, author, pmRoot, receipt], {
+      const child = spawn(process.execPath, [runner, item, author, pmRoot, receipt, ...(command === undefined ? [] : [command])], {
         cwd: workspace, stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, PM_SOURCE_WORKSPACE_ROOT: workspace },
       });
@@ -461,7 +467,7 @@ export function registerBisectCommands(api: ExtensionApi): void {
   api.registerCommand({
     name: "vcs bisect",
     description:
-      "Find the first failing stable change between a good and a bad boundary by running the linked PM test recorded on an item. Outcomes are keyed by stable change identity, so rebased or amended changes reuse recorded results; untestable, skipped and conflicted candidates are reported, never counted as good or bad. The original working state is restored after success, failure, interruption and crash-resume.",
+      "Find the first failing stable change in the native change graph using linked PM tests or start --command <command> (recorded on --item). Run pauses at --max-steps (default 128); run again to resume after a limit or interruption. Exit 125 skips a candidate. Stable change identities preserve results across rewrites; skipped and untestable ancestors produce an ambiguous verdict. Each result and verdict is PM evidence. Works without git and keeps the original working state in place.",
     arguments: [
       { name: "action", description: "start, good, bad, skip, run, status or reset", required: true },
       { name: "revision", description: "Marked revision for good/bad/skip; the good boundary for start", required: false },
@@ -471,6 +477,8 @@ export function registerBisectCommands(api: ExtensionApi): void {
       { long: "--full", description: "Print complete commit and change ids instead of 12-character ids", value_type: "boolean" },
       { long: "--budget", value_name: "tokens", description: "Approximate candidate-log token budget (default 1600, minimum 256); verdict metadata is always retained", value_type: "number" },
       { long: "--item", value_name: "pm-item", description: "PM item whose recorded linked test drives the bisect (required for start; filters status)", value_type: "string" },
+      { long: "--command", value_name: "command", description: "For start: record this command as a linked test on --item and run only that test", value_type: "string" },
+      { long: "--max-steps", value_name: "count", description: "Positive candidate limit per run (default 128); start saves it and run can override it for subsequent runs", value_type: "number" },
     ],
     async run(context: CommandHandlerContext): Promise<{ ok: boolean; bisect?: BisectReport; sessions?: readonly BisectSessionListing[]; reset?: { session: string; restored: BisectSession["original"]; warning?: string } }> {
       const repository = openRepository(context);
@@ -479,6 +487,12 @@ export function registerBisectCommands(api: ExtensionApi): void {
       const now = (): Date => new Date();
       const budget = Number(context.options.budget ?? 1600);
       if (!Number.isSafeInteger(budget) || budget < 256) throw new VcsError("invalid_bisect_budget", "The bisect report budget must be an integer of at least 256 tokens.", "Pass --budget 1600 or a larger value for a longer candidate log.");
+      const requestedSteps = context.options.maxSteps;
+      if (requestedSteps !== undefined) bisectStepLimit(requestedSteps);
+      const command = optionalString(context.options, "command");
+      if (context.options.command !== undefined && (action !== "start" || command === undefined)) {
+        throw new VcsError("invalid_bisect_command", "A nonempty --command is accepted only by bisect start.", "Reset and start a new session to change the predicate.");
+      }
 
 
       const execute = async () => {
@@ -523,7 +537,7 @@ export function registerBisectCommands(api: ExtensionApi): void {
           }
           const read = await pmClient(context).get(item, { full: true });
           // Full SDK reads include the linked arrays, even when no tests are recorded.
-          if (read.linked!.tests.length === 0) {
+          if (command === undefined && read.linked!.tests.length === 0) {
             throw new VcsError(
               "no_linked_test",
               `The item ${item} records no linked test.`,
@@ -536,6 +550,8 @@ export function registerBisectCommands(api: ExtensionApi): void {
             version: 1,
             id: `bisect-${randomBytes(6).toString("hex")}`,
             item,
+            ...(command === undefined ? {} : { command }),
+            maxSteps: bisectStepLimit(requestedSteps),
             good,
             bad,
             original: { branch: head.kind === "branch" ? head.ref.slice(BRANCH_PREFIX.length) : null, commit: head.target },
@@ -545,6 +561,7 @@ export function registerBisectCommands(api: ExtensionApi): void {
             status: "active",
           }, goodId, badId, { author, now });
           bisectCandidates(repository.objects, goodId, badId);
+          if (command !== undefined) await runTest(item, { add: [`command=${command}`] }, { author, path: context.pm_root });
           writeBisectSession(repository, session);
           await recordMilestone(context, session, "start");
           return { ok: true, bisect: await reportOf(context, repository, session, budget) };
@@ -585,7 +602,8 @@ export function registerBisectCommands(api: ExtensionApi): void {
               "Inspect it with `pm vcs bisect status`, or abandon it with `pm vcs bisect reset`.",
             );
           }
-          const driven = await runBisect(repository, session, (_candidate, workspace) => runCandidateTest(session.item, author, context.pm_root, workspace, repository.controlDirectory),
+          const bounded = requestedSteps === undefined ? session : { ...session, maxSteps: bisectStepLimit(requestedSteps) };
+          const driven = await runBisect(repository, bounded, (_candidate, workspace) => runCandidateTest(session.item, author, context.pm_root, workspace, repository.controlDirectory, session.command),
             { author, now, progress: (state) => recordMilestone(context, state, "step") });
           await recordMilestone(context, driven.session, driven.session.status === "done" ? "done" : "halted");
           return { ok: true, bisect: await reportOf(context, repository, driven.session, budget) };
