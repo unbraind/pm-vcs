@@ -158,6 +158,9 @@ predicate keeps its original hosted-ref environment, including absent or empty
 values and explicit linked-test environment directives. Foreign source-ref tests
 still require normal PM trust acknowledgement; this does not enable untrusted
 execution.
+All selected linked commands execute in one SDK batch for each candidate, retaining
+the SDK's shared PM and workspace sandbox between those commands. Each new
+candidate receives a fresh batch sandbox.
 
 ## Public-data demonstration
 

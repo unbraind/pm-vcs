@@ -1783,3 +1783,22 @@ test("bisect SDK process policy blocks Git and preserves real callback promise a
   const result = execFileSync(process.execPath, ["--import", new URL("../bisect-sdk-policy.ts", import.meta.url).href, "--input-type=module", "-e", script], { encoding: "utf8", timeout: 30_000 });
   assert.match(result, /worker policy passed/);
 });
+
+test("bisect SDK linked commands share one PM sandbox per candidate without a false bad change", async () => {
+  const fixture = await setup();
+  const item = (await fixture.client.create({ type: "Task", title: "Shared batch context", author: "agent-a" })).item.id;
+  writeFileSync(join(fixture.root, "prepare.js"), 'require("node:fs").writeFileSync(require("node:path").join(process.env.PM_PATH,"shared-probe"),"ready");');
+  writeFileSync(join(fixture.root, "check.js"), 'const fs=require("node:fs");if(fs.readFileSync(require("node:path").join(process.env.PM_PATH,"shared-probe"),"utf8")!=="ready")throw new Error("missing preparation");process.exit(fs.readFileSync("state.txt","utf8").startsWith("broken")?1:0);');
+  await runTest(item, { addJson: [JSON.stringify({ command: "node prepare.js" }), JSON.stringify({ command: "node check.js" })] }, { author: "agent-a", path: fixture.pmRoot });
+  edit(fixture, "state.txt", "ok", "initial");
+  const good = commitFiles(fixture, ["prepare.js", "check.js"], "batch predicate");
+  const passing = edit(fixture, "state.txt", "ok later", "passing candidate");
+  const culprit = edit(fixture, "state.txt", "broken", "culprit");
+  const bad = edit(fixture, "state.txt", "broken tip", "bad");
+  assert.equal((await fixture.bisect(["start", good, bad], { item })).errorMessage, undefined);
+  const result = (await fixture.bisect(["run"])).result as { bisect: BisectReport };
+  assert.equal(result.bisect.verdict?.kind, "first_bad");
+  assert.equal(result.bisect.verdict?.commit, culprit);
+  assert.ok(result.bisect.steps.some((step) => step.commit === passing && step.outcome === "good"));
+  assert.equal(headCommit(fixture), bad);
+});
