@@ -1,0 +1,32 @@
+id: pm-vcs-tracker-lenses
+title: Explain native changes through tracker lifecycle dependency evidence and policy lenses
+description: Opt-in read-only projections over immutable native VCS changes alongside ordinary field and text provenance. Core history retains ownership of tracker records.
+type: Feature
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-10-21T21:35:13.973Z"
+updated_at: "2026-10-21T21:50:16.672Z"
+author: codex-agent
+acceptance_criteria: "Malformed tracker objects remain opaque; views never rewrite content; every semantic statement cites the original object/change.; Typed SDK and CLI with bounded TOON/JSON, typed refusals and remedies, README and example, non-git public tracker validation, targeted regressions and CI npm plus Bun release gates."
+comments[6]{created_at,author,text}:
+  "2026-10-21T21:35:19.901Z",codex-agent,"Overlap check against current CLI 2026.10.21 and package main 27e1d84: core history owns tracker event streams and lifecycle mutations; pm-context assembles present context, pm-graph projects graph queries, pm-memory owns memory workflows, pm-changelog produces release notes. None explains one immutable native change as tracker field deltas. Reuse annotatePath/changeProvenance, native conflict IDs, signature policy and bisect rather than duplicating them. New query compares selected change to first parent, never invokes Git or writes content. Open reconciliation PR items are excluded from this work. Dependencies remain pinned."
+  "2026-10-21T21:44:03.043Z",codex-agent,"Implemented explainChange SDK and vcs explain with opt-in labels, first-parent semantics, exact immutable commit/object/path citations, scalar/digest summaries and explicit pagination. Canonical SDK parsing plus typed collection coordinates prevent malformed tracker interpretations. Unresolved fields retain ordinary provenance; native conflict metadata is reused. No Git subprocess or mutable tracker read on the query path. Targeted SDK, CLI harness, installed TOON/JSON, malformed, shallow, conflict, deletion and byte-preservation checks are passing. CI now runs the unchanged npm and Bun release:check gates for both Node matrix versions; local full suites remain delegated to CI because host CPU is saturated."
+  "2026-10-21T21:47:33.879Z",codex-agent,"Behavioral revert proof on production TypeScript: disable only the semantic label selection, then node --test --test-name-pattern=\"^SDK lenses\" test/tracker-lenses.test.ts fails 0/1; bypass only the malformed-tracker opacity guard, then node --test --test-name-pattern=\"^malformed tracker\" test/tracker-lenses.test.ts fails 0/1. Both functions are restored. Tests import source directly, so a dist rebuild is not needed for either revert. Collection projections now expose exact entry indices and bounded target/path/command/log coordinates; duplicates retain their counts and order-only edits do not invent membership changes."
+  "2026-10-21T21:48:26.634Z",codex-agent,"Public-data read-only acceptance: public pm-vcs snapshots ab9e92eb4911..27e1d84671fa copied into a fresh SDK tracker without Git. Source tip contains 147 items, 2175 history events, 300 files and 4381779 bytes. Query returned 799 statements in 40 pages at limit 20: lifecycle 68, dependency 17, evidence 496, policy 16, field 176, opaque 26. Maximum JSON page 14000 bytes; total repeated-page query time 9967.47 ms on the saturated host. Tracker digest stayed exact: 9a6b751ed89486b87b7849fcebd688fbbb27d4544d8fc379c9a964caf5170fa7. Opaque includes history/configuration and makes no corruption claim. Reproduction helper and exact public refs are documented; no source data or temporary paths are committed."
+  "2026-10-21T21:49:23.874Z",codex-agent,"Local validation: npm run typecheck, npm run build, npm run build:test, npm run lint, npm run docstring and npm run duplicates pass. Linked pm test run passed 1/1 commands and 7/7 behavioral tests with zero failed/skipped/canceled/todo. Test-result persistence is disabled by existing project policy, so receipt is retained here. The source-level collection-order refactor removes unreachable duplicate presentation branches without changing behavior. New-module targeted coverage and final CI full gates are checked separately; no coverage threshold is changed."
+  "2026-10-21T21:50:16.672Z",codex-agent,"Final-source receipt: targeted new-module coverage is 100% statements/branches/functions/lines with all 7/7 tests passing. Closed-at timestamps are included in lifecycle. The repeated public-window measurement remains 799 statements, 40 pages and maximum 14000 JSON bytes, now classified as lifecycle 71, dependency 17, evidence 496, policy 16, field 173, opaque 26. Latest query time is 5066.08 ms; timing is observational. The documented public-data receipt uses these final-source counts. No reconciliation item or historical stream was modified."
+files[7]{path,scope}:
+  .github/workflows/ci.yml,project
+  engine/tracker-lenses.ts,project
+  index.ts,project
+  test/helpers/validate-tracker-lenses.ts,project
+  test/tracker-lenses.test.ts,project
+  test/vcs-commands.test.ts,project
+  vcs-commands.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/tracker-lenses.test.ts,project,codex-agent,"2026-10-21T21:43:56.997Z",local_mutation,feat/tracker-semantic-lenses
+docs[2]{path,scope}:
+  docs/tracker-lenses.md,project
+  README.md,project
+body: ""

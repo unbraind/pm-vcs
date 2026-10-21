@@ -23,6 +23,7 @@
 //     registration at that command and silently drops every later sibling.
 
 import { guardCredentialOutput } from "./credential-output.ts";
+export { explainChange, TRACKER_LENSES, type TrackerLens, type ExplainChangeOptions, type ExplainedChange, type ChangeStatement, type ChangeCitation, type LensValue } from "./engine/tracker-lenses.ts";
 import type {
   CommandHandlerContext,
   ExtensionApi,
