@@ -431,7 +431,7 @@ export function readWorkingStat(
 }
 
 /** Whether two observations carry the same filesystem identity fields. */
-function sameFileIdentity(left: IndexStat, right: IndexStat): boolean {
+export function sameFileIdentity(left: IndexStat, right: IndexStat): boolean {
   return left.size === right.size
     && left.mtimeNs === right.mtimeNs
     && left.ctimeNs === right.ctimeNs
@@ -631,6 +631,8 @@ export function pruneEmptyDirectories(root: string, directory: string, controlDi
  *   metadata says nothing changed. Dirty hints may only ever ADD paths here:
  *   a hint can force extra verification, never suppress it, which is what
  *   keeps a lying hint from hiding a real change.
+ * @param matchesFile - Optional bounded comparison for manifest-backed regular files;
+ *   undefined selects the ordinary working-file reader.
  * @returns What is staged, what is not, and what is untracked.
  */
 export function computeStatus(
@@ -645,6 +647,7 @@ export function computeStatus(
   onVerified?: (path: string, stat: IndexStat) => void,
   forceContent: ReadonlySet<string> = new Set(),
   excluded: ReadonlySet<string> = new Set(),
+  matchesFile?: (entry: IndexEntry) => boolean | undefined,
 ): StatusReport {
   const committed = flattenTree(store, headTree);
   const staged = new Map(index.map((entry) => [entry.path, entry]));
@@ -677,8 +680,20 @@ export function computeStatus(
     const observed = readWorkingStat(root, entry.path);
     const expectedMode = observed.executable ? "100755" : "100644";
     if (expectedMode === entry.mode && sameIndexStat(entry.stat, observed.stat) && !forceContent.has(entry.path)) continue;
-    const { content, executable, stat } = read(root, entry.path);
-    if ((executable ? "100755" : "100644") !== entry.mode || identify(entry.path, content) !== entry.id) {
+    const matches = observed.symbolicLink ? undefined : matchesFile?.(entry);
+    let equal: boolean;
+    let stat: IndexStat | undefined;
+    let mode = expectedMode;
+    if (matches === undefined) {
+      const working = read(root, entry.path);
+      equal = identify(entry.path, working.content) === entry.id;
+      mode = working.executable ? "100755" : "100644";
+      stat = working.stat;
+    } else {
+      equal = matches;
+      if (sameFileIdentity(observed.stat, readWorkingStat(root, entry.path).stat)) stat = observed.stat;
+    }
+    if (mode !== entry.mode || !equal) {
       unstagedChanges.push({ path: entry.path, kind: "modified" });
     } else if (stat !== undefined && isCacheableStat(stat)) {
       onVerified?.(entry.path, stat);

@@ -6,6 +6,47 @@ the same interprocess object-store transaction used by push, staging, erasure,
 lease changes and shared-instance writes, then removes only its unreachable
 physical objects. It never trims refs or the operation log.
 
+Reports also include `candidateBytes`, the compressed physical object bytes in
+the plan, and `reclaimedBytes`, which is zero for a dry run and counts unlinked
+bytes for a completed apply. Recognized temporary copies count separately even
+when their addresses coincide. These are file lengths, rather than filesystem
+allocation or a promise that snapshots and open descriptors released disk blocks.
+
+## Ordinary large files
+
+`pm vcs add` streams regular, non-record files at least 1 MiB into default CDC
+manifests with a 64 KiB minimum, 1 MiB maximum and 18-bit Gear mask. These coarser
+staging parameters reduce loose-object and fsync overhead; the existing fine-grained
+CDC helper defaults stay unchanged. It first computes the uncompressed representation identity, then
+publishes chunks under the existing store transaction. The descriptor-based
+passes retain bounded buffers; a changed identity or filesystem observation
+refuses index publication. Unreferenced chunks left by a refused add are GC
+candidates. Files below the threshold and configured structured records keep
+their existing blob and record semantics. Symlinks keep their target-text semantics.
+
+FileIds remain independent of content addresses. Rename plus edit on the same
+filesystem retains identity; an unambiguous unchanged-content move can also be
+recognized across filesystems. Copies get a new FileId and `copiedFrom` provenance.
+An edited move across filesystems with no preserved identity remains ambiguous.
+`pm vcs trace` reports the resulting FileId, stable ChangeId and PM item associations.
+
+Status compares manifest-backed working files by streaming their bytes through
+the exact recorded fragment boundaries, including fixed and historical layouts.
+It never needs the complete file or stored blob payloads in memory. Range reads
+use `readFragmentRange` and visit only overlapping manifest subtrees and blobs.
+Chunk addresses hash uncompressed framed bytes, so changing the zlib level leaves
+all identities unchanged. Native checkout and merge still have materializing paths;
+streaming those paths and pack compaction are separate follow-up work.
+
+Run `npm run benchmark:phase6` for the reproducible 200,000,000-byte
+generated binary plus a copy of this package's real PM tracker. The benchmark
+commits both, renames the binary and replaces 1% in its middle, verifies 21
+4 KiB ranges against descriptor reads, and reports compressed store bytes,
+chunk/byte reuse, timings and GC receipts. It retains both committed generations
+and reclaims an explicitly unreferenced 1 MiB payload. All copied and generated
+data stays in one temporary directory removed in `finally`. Release tests exercise
+the same complete workflow on a small fixture; the full capacity run is explicit.
+
 Roots include every ref namespace, detached HEAD, both endpoints of every oplog
 transition, every current and retired shared instance's complete sparse index,
 pending merge parents/bases, review series, terminal erasure audits and durable

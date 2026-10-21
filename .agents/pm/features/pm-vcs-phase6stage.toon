@@ -1,0 +1,31 @@
+id: pm-vcs-phase6stage
+title: Stream ordinary large-file staging into native CDC manifests
+description: "Connect vcs add to bounded CDC for non-record regular files at least 1 MiB, preserve FileIds across moves and PM attribution, keep status bounded for manifest-backed files, and publish reproducible scale and GC byte receipts."
+type: Feature
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-10-21T14:41:01.521Z"
+updated_at: "2026-10-21T15:14:51.994Z"
+author: codex-agent
+acceptance_criteria: Native add and status handle large binary files without whole-file buffers; rename plus edit retains FileId and PM change trace; compression-independent identities and range verification pass; GC reports physical candidate and reclaimed bytes; report a 200 MB binary and real tracker copy measurement.
+parent: pm-vcs-b7cb
+comments[2]{created_at,author,text}:
+  "2026-10-21T14:58:04.824Z",codex-agent,"Behavioural revert proof: restoring only stageLocked makes native staging streams CDC fail because no binary is staged; restoring only computeStatus fails on the forbidden whole-file reader; restoring only collectGarbage fails the physical-byte receipt assertions. Each mutation was tested in an isolated source copy. Initial 200 MB measurement exposed excessive fsynced loose-object overhead with fine-grained CDC, so ordinary large staging now uses 64 KiB minimum, 1 MiB maximum and an 18-bit Gear mask while existing helper defaults remain unchanged. The partial benchmark scratch copy was removed before remeasurement."
+  "2026-10-21T15:14:12.255Z",codex-agent,"Real scale receipt: 200000000 generated binary bytes plus 306 real public tracker files committed natively. Baseline store 201271356 compressed object bytes; after a rename and 2000000-byte middle replacement, store 203550572 (+2279216). Reused 604/611 edited chunks (98.8543%), 98.8683% by bytes. Twenty-one verified warm-cache 4 KiB reads: median 13.6759 ms, p95 52.9613 ms under shared-host load. GC dry-run/apply both 1048920 bytes; both committed generations retained and reachable objects verified. All benchmark data removed. Linked PM test command passed 5/5 with no failures/skips using --timeout 900; the default 120-second attempt timed out. Type checking, lint, duplication (0%) and docstrings pass. Full npm/Bun release gates follow artifact regeneration."
+files[9]{path,scope}:
+  docs/phase6-scale-receipt.md,project
+  engine/fragments.ts,project
+  engine/gc.ts,project
+  engine/objects.ts,project
+  engine/repo.ts,project
+  engine/worktree.ts,project
+  package.json,project
+  scripts/phase6-benchmark.ts,project
+  test/phase6-staging.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/phase6-staging.test.ts,project,codex-agent,"2026-10-21T14:48:50.521Z",local_mutation,feat/phase6-chunked-storage
+docs[2]{path,scope}:
+  docs/phase6-scale-receipt.md,project
+  docs/scale-history-and-gc.md,project
+body: ""

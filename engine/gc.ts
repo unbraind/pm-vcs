@@ -14,6 +14,10 @@ export interface GcReport {
   readonly retained: number;
   readonly candidates: readonly ObjectId[];
   readonly removed: number;
+  /** Compressed physical bytes planned for removal, including recognized temporary copies. */
+  readonly candidateBytes: number;
+  /** Compressed physical bytes actually unlinked by a completed apply. */
+  readonly reclaimedBytes: number;
   /** Active file leases conservatively retain unpublished, unattributed arrivals too. */
   readonly activeLeases: number;
 }
@@ -116,10 +120,10 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
         if (lease !== null && lease.active && lease.expiry > Date.now()) activeLeases++;
       }
     }
-    const inventory: { id: ObjectId; path: string }[] = [];
+    const inventory: { id: ObjectId; path: string; bytes: number }[] = [];
     // Complete the physical preflight before unlinking even the first candidate.
     for (const item of store.walkInventory()) {
-      inventory.push({ id: item.id, path: item.path });
+      inventory.push({ id: item.id, path: item.path, bytes: lstatSync(item.path).size });
 
     }
     const partial = store.partialState();
@@ -141,10 +145,11 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
       else if (object.type === "series") { const series = decodeSeries(object.payload); pending.push(series.base, ...series.patches.map(/** Review series keep all patch commits. */ (patch) => patch.commit)); }
     }
     const candidates = inventory.filter(/** Physical copies of a retained address remain retained. */ (item) => !retained.has(item.id));
+    const candidateBytes = candidates.reduce(/** Count physical bytes rather than logical uncompressed payloads. */ (sum, item) => sum + item.bytes, 0);
     if (apply) {
       for (const candidate of candidates) unlinkSync(candidate.path);
       store.releaseUploadRoots(visited);
     }
-    return { applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed: apply ? candidates.length : 0, activeLeases };
+    return { applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed: apply ? candidates.length : 0, candidateBytes, reclaimedBytes: apply ? candidateBytes : 0, activeLeases };
   });
 }

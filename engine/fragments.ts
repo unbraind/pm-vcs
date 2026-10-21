@@ -26,6 +26,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 
 import {
   hashObject,
@@ -39,6 +40,34 @@ import { ManifestWriter, manifestFragments, manifestHeader } from "./manifest-pa
 
 /** Default fragment size: 1 MiB. Large enough to amortise per-fragment overhead, small enough to bound memory. */
 export const DEFAULT_FRAGMENT_SIZE = 1 << 20;
+
+/** Ordinary regular files at least 1 MiB use bounded default CDC storage. */
+export const CDC_STAGING_THRESHOLD = 1 << 20;
+
+/** Coarser native staging chunks bound loose-object overhead: 64 KiB minimum, 1 MiB maximum, 18-bit Gear mask. */
+export const STAGING_CDC_PARAMS: CdcParams = { minChunkSize: 65_536, maxChunkSize: 1_048_576, mask: 0x3ffff };
+
+/** Compare a working descriptor to any manifest layout using bounded raw-byte hashing, without reading blob payloads. */
+export function matchesFragmentedFile(store: ObjectStore, id: ObjectId, sourcePath: string): boolean {
+  const manifest = manifestHeader(store, id);
+  const fd = openSync(sourcePath, "r");
+  try {
+    if (fstatSync(fd).size !== manifest.totalLength) return false;
+    const buffer = Buffer.allocUnsafe(65_536);
+    for (const { fragment } of manifestFragments(store, id, 0, manifest.totalLength, manifest)) {
+      const digest = createHash("sha256").update(`blob ${fragment.length}\0`);
+      let remaining = fragment.length;
+      while (remaining > 0) {
+        const count = readSync(fd, buffer, 0, Math.min(remaining, buffer.length), null);
+        if (count === 0) return false;
+        digest.update(buffer.subarray(0, count));
+        remaining -= count;
+      }
+      if (digest.digest("hex") !== fragment.id) return false;
+    }
+    return true;
+  } finally { closeSync(fd); }
+}
 
 /**
  * Validates that a fragment size is a positive integer.
@@ -591,51 +620,71 @@ export function writeCdcFragmentsFromFd(
     );
   }
   return store.withWriteLock(/** Hold one lease across the rolling read and every content-defined fragment. */ () => {
-    const { minChunkSize, maxChunkSize, mask } = params;
-    const readSize = Math.min(8192, maxChunkSize);
-    const readBuf = Buffer.allocUnsafe(readSize);
-    const chunkBuf = Buffer.allocUnsafe(maxChunkSize);
     const fragments: FragmentEntry[] = [];
-    /** Publish the current CDC chunk and immediately retire its metadata. */
-    const emit = (length: number): void => {
-      const entry = { id: store.write("blob", chunkBuf.subarray(0, length), fileId), length };
+    streamCdcChunks(fd, totalLength, params, sourcePath, /** Publish a bounded chunk before retiring its metadata. */ (chunk) => {
+      const entry = { id: store.write("blob", chunk, fileId), length: chunk.length };
       if (accept === undefined) fragments.push(entry);
       else accept(entry);
-    };
-    let chunkLen = 0;
-    let hash = 0;
-    let remaining = totalLength;
-
-    while (remaining > 0) {
-      const toRead = Math.min(readSize, remaining);
-      let filled = 0;
-      while (filled < toRead) {
-        const bytesRead = readSync(fd, readBuf, filled, toRead - filled, null);
-        if (bytesRead === 0) {
-          throw new ObjectStoreError(
-            "short_read",
-            `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
-          );
-        }
-        filled += bytesRead;
-      }
-
-      for (let i = 0; i < filled; i++) {
-        chunkBuf[chunkLen] = readBuf[i]!;
-        chunkLen++;
-        hash = ((hash << 1) + GEAR_TABLE[readBuf[i]!]!) | 0;
-        if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
-          emit(chunkLen);
-          chunkLen = 0;
-          hash = 0;
-        }
-      }
-      remaining -= filled;
-    }
-
-    if (chunkLen > 0) emit(chunkLen);
+    });
     return fragments;
   });
+}
+
+/** Consume descriptor bytes in bounded CDC chunks shared by pure identification and publication. */
+function streamCdcChunks(fd: number, totalLength: number, params: CdcParams, sourcePath: string, consume: (chunk: Buffer) => void): void {
+  const { minChunkSize, maxChunkSize, mask } = params;
+  const readSize = Math.min(8192, maxChunkSize);
+  const readBuf = Buffer.allocUnsafe(readSize);
+  const chunkBuf = Buffer.allocUnsafe(maxChunkSize);
+  /** Publish the current CDC chunk and immediately retire its metadata. */
+  const emit = (length: number): void => {
+    consume(chunkBuf.subarray(0, length));
+  };
+  let chunkLen = 0;
+  let hash = 0;
+  let remaining = totalLength;
+
+  while (remaining > 0) {
+    const toRead = Math.min(readSize, remaining);
+    let filled = 0;
+    while (filled < toRead) {
+      const bytesRead = readSync(fd, readBuf, filled, toRead - filled, null);
+      if (bytesRead === 0) {
+        throw new ObjectStoreError(
+          "short_read",
+          `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
+        );
+      }
+      filled += bytesRead;
+    }
+
+    for (let i = 0; i < filled; i++) {
+      chunkBuf[chunkLen] = readBuf[i]!;
+      chunkLen++;
+      hash = ((hash << 1) + GEAR_TABLE[readBuf[i]!]!) | 0;
+      if (chunkLen >= maxChunkSize || (chunkLen >= minChunkSize && (hash & mask) === 0)) {
+        emit(chunkLen);
+        chunkLen = 0;
+        hash = 0;
+      }
+    }
+    remaining -= filled;
+  }
+
+  if (chunkLen > 0) emit(chunkLen);
+}
+
+/** Name a file's CDC representation without allocating its contents or publishing objects. */
+export function cdcFragmentedFileContentId(sourcePath: string, params: CdcParams = DEFAULT_CDC_PARAMS): ObjectId {
+  assertCdcParams(params, "invalid_cdc_params");
+  const fd = openSync(sourcePath, "r");
+  try {
+    const writer = new ManifestWriter(undefined, undefined, "cdc");
+    streamCdcChunks(fd, fstatSync(fd).size, params, sourcePath, /** Hash uncompressed bytes independently of the storage codec. */ (chunk) => {
+      writer.add({ id: hashObject("blob", chunk), length: chunk.length });
+    });
+    return writer.finish().manifestId;
+  } finally { closeSync(fd); }
 }
 
 /**
