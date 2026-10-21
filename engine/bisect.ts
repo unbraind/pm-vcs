@@ -58,6 +58,10 @@ export interface BisectSession {
   readonly id: string;
   /** PM item whose recorded linked test drives the walk. */
   readonly item: string;
+  /** Explicit command recorded on the item; otherwise all linked tests drive the walk. */
+  readonly command?: string;
+  /** Maximum candidates per run invocation; older sessions default to 128. */
+  readonly maxSteps?: number;
   /** Boundary revisions as typed, re-resolved on every run so a moved branch is followed. */
   readonly good: string;
   readonly bad: string;
@@ -110,6 +114,15 @@ export interface BisectRunResult {
 }
 
 const STATE_FILE = "BISECT_STATE";
+
+/** Validate the positive candidate budget shared by CLI and engine callers. */
+export function bisectStepLimit(value: unknown = 128): number {
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new ObjectStoreError("invalid_bisect_steps", "The bisect step limit must be a positive safe integer; pass --max-steps 128.");
+  }
+  return limit;
+}
 
 /** Absolute path of this worktree's private bisect session state. */
 function statePath(repository: Repository): string {
@@ -433,6 +446,7 @@ export async function runBisect(
   runner: BisectRunner,
   options: BisectRunOptions,
 ): Promise<BisectRunResult> {
+  const maxSteps = bisectStepLimit(session.maxSteps);
   recoverBisectWorker(repository);
   const good = repository.resolve(session.good);
   const bad = repository.resolve(session.bad);
@@ -446,6 +460,7 @@ export async function runBisect(
   let signalled = false;
   const onSignal = (): void => { signalled = true; };
   process.on("SIGINT", onSignal);
+  let attempts = 0;
   try {
     for (;;) {
       const verdicts = bisectVerdicts(current.steps);
@@ -459,6 +474,11 @@ export async function runBisect(
         current = { ...current, status: "done", verdict: bisectVerdict(repository.objects, candidates, verdicts) };
         break;
       }
+      if (attempts >= maxSteps) {
+        current = { ...current, halted: "step_limit" };
+        break;
+      }
+      attempts++;
       current = { ...current, pending: selected };
       writeBisectSession(repository, current);
       const workspaceRoot = join(repository.controlDirectory, "BISECT_WORKSPACE");

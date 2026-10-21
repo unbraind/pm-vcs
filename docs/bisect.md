@@ -11,9 +11,21 @@ pm vcs bisect status --json
 pm vcs bisect reset
 ```
 
+Or supply an explicit command, keeping the same item as the evidence destination:
+
+```sh
+pm vcs bisect start good-release main --item project-regression --command "npm test" --max-steps 8
+pm vcs bisect run
+pm vcs bisect run --max-steps 32
+```
+
 `run` executes the commands recorded on the item using the PM SDK's real
 `pm test <item> --run` operation, including its trust, timeout and context rules.
-There is no shell-command argument to bisect. The linked commands must be able to
+`start --command` records that command as a linked test on the item and selects
+only that exact command for the session, even when other tests are linked. The
+command remains on the item after reset. Changing the predicate requires a new
+session; if the selected test is removed, its probes become explicitly untestable.
+The linked commands must be able to
 run from a clean materialization of a candidate; install/build dependencies in
 the recorded command when needed. Absolute paths in linked commands can still
 refer to external resources, just as they can in `pm test`.
@@ -29,8 +41,8 @@ repository. Those intentional history additions remain after the walk.
 
 | Command | Effect |
 | --- | --- |
-| `bisect start <good> <bad> --item <id>` | Validate ancestry, recorded tests, clean tracked tree and absence of private layers; save boundaries and original checkout identity. |
-| `bisect run` | Continue the session using the recorded linked tests. |
+| `bisect start <good> <bad> --item <id> [--command <command>] [--max-steps <count>]` | Validate ancestry, predicate, clean tracked tree and absence of private layers; save boundaries, predicate, step limit and original checkout identity. |
+| `bisect run [--max-steps <count>]` | Continue the session; an override becomes the saved limit for subsequent runs. |
 | `bisect good [revision]` | Record a manual passing outcome; defaults to the walk's next candidate. |
 | `bisect bad [revision]` | Record a manual failing outcome; defaults to the walk's next candidate. |
 | `bisect skip [revision]` | Record a manual skip; defaults to the walk's next candidate. |
@@ -59,6 +71,14 @@ always retained and can exceed that target. `stepsTaken` and `stepsOmitted` make
 truncation explicit; durable state and PM history retain the complete log. The
 pinned host does not accept universal read-output controls on this mixed mutation
 command.
+
+Each `run` attempts at most `maxSteps` candidates (default 128, a positive safe
+integer). Skips, conflicts and untestable materializations count toward this
+limit. If work remains, it saves `status: active` and `halted: step_limit`, records
+a halt milestone on the item, and exits successfully with a resumable report.
+Run again to continue; earlier verdicts are retained. Completing on the last
+allowed step reports the conclusion immediately. This candidate count does not
+replace the linked test's own timeout.
 
 ## Outcomes and assumptions
 
@@ -93,6 +113,8 @@ could contain the regression, the result is `ambiguous`, with the earliest
 known-bad change and the unresolved observations. It never labels those
 observations good. A manual correction that eliminates all known bad observations
 can produce `no_bad_change`.
+If every interior candidate skips, the result is `ambiguous`, naming the declared
+bad boundary and every unresolved candidate rather than claiming a first bad change.
 
 Verdicts are keyed by stable change identity. Rebase/amend/describe can rewrite
 commit ids without rerunning judged changes; current ancestry is used when
@@ -117,6 +139,28 @@ to PM history on the linked item. `status` lists both sessions without replacing
 either agent's private state. PM ownership policy still applies to item writes.
 SIGKILL cannot run cleanup: its private candidate directory is removed on the
 next run or reset, while the original checkout remains available throughout.
+
+## Without git
+
+All bisect operations use pm-vcs's own object store, refs and change graph. They
+work in a plain directory with a PM tracker and no git executable on `PATH`.
+The predicate itself must also be runnable there: a command that explicitly
+requires git still needs its own prerequisite. Candidate execution and milestone
+recording do not require a git repository.
+
+The pinned PM SDK normally probes a Git branch for linked-test trust. Bisect
+supplies that SDK input only inside its worker: hosted source refs take priority,
+existing Git HEAD metadata is read directly when available, and plain projects
+use `pm-vcs:<native-repository-identity>`. No Git executable is invoked. The
+SDK worker rejects optional Git process requests before process creation, including
+the SDK's sandbox-initialization probes, allowing its normal no-git fallback. The
+predicate keeps its original hosted-ref environment, including absent or empty
+values and explicit linked-test environment directives. Foreign source-ref tests
+still require normal PM trust acknowledgement; this does not enable untrusted
+execution.
+All selected linked commands execute in one SDK batch for each candidate, retaining
+the SDK's shared PM and workspace sandbox between those commands. Each new
+candidate receives a fresh batch sandbox.
 
 ## Public-data demonstration
 

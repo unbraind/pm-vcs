@@ -1,7 +1,7 @@
 /** Native CLI operations for linked-test-driven bisect sessions. */
 import { spawn } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 
@@ -10,6 +10,7 @@ import { changeProvenance } from "./engine/annotate.ts";
 import {
   bisectCandidates,
   bisectRemaining,
+  bisectStepLimit,
   bisectVerdict,
   bisectVerdicts,
   clearBisectSession,
@@ -23,6 +24,7 @@ import {
   type BisectVerdict,
   markBisectOutcome,
   readBisectSession,
+  recoverBisectWorker,
   runBisect,
   selectBisectCandidate,
   writeBisectSession,
@@ -75,6 +77,8 @@ interface BisectSessionListing {
 interface BisectReport {
   readonly session: string;
   readonly item: string;
+  readonly command?: string;
+  readonly maxSteps: number;
   readonly status: BisectSession["status"];
   readonly halted?: string;
   readonly boundaries: { readonly good: { readonly revision?: string; readonly commit: string }; readonly bad: { readonly revision?: string; readonly commit: string } };
@@ -106,6 +110,33 @@ interface BisectVerdictReport {
 function invocationAuthor(context: CommandHandlerContext): string {
   const declared = context.global?.author?.trim();
   return declared !== undefined && declared.length > 0 ? declared : "pm-vcs";
+}
+
+/** Resolve SDK trust provenance from hosted refs or files, without executing git. @internal */
+export function bisectTestSourceRef(repository: Repository): string {
+  const hosted = process.env.GITHUB_HEAD_REF?.trim() || process.env.GITHUB_REF_NAME?.trim();
+  if (hosted && hosted !== "merge") return hosted;
+  const native = `pm-vcs:${repository.identity()}`;
+  const ceilings = process.env.GIT_CEILING_DIRECTORIES?.split(delimiter).map((path) => resolve(path)) ?? [];
+  let directory = repository.root;
+  for (;;) {
+    try {
+      const marker = join(directory, ".git");
+      let gitDirectory = marker;
+      if (!lstatSync(marker).isDirectory()) {
+        const pointer = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(readFileSync(marker, "utf8"));
+        if (pointer === null) return native;
+        gitDirectory = resolve(directory, pointer[1]);
+      }
+      const head = /^ref: refs\/heads\/([^\r\n]+)\r?\n?$/.exec(readFileSync(join(gitDirectory, "HEAD"), "utf8"));
+      return head?.[1] ?? native;
+    } catch {
+      // Missing or unreadable optional Git metadata cannot establish trust.
+    }
+    const parent = dirname(directory);
+    if (parent === directory || ceilings.includes(parent)) return native;
+    directory = parent;
+  }
 }
 
 /**
@@ -262,6 +293,8 @@ async function reportOf(context: CommandHandlerContext, repository: Repository, 
   const report: BisectReport = {
     session: session.id,
     item: session.item,
+    ...(session.command === undefined ? {} : { command: session.command }),
+    maxSteps: bisectStepLimit(session.maxSteps),
     status: session.status,
     ...(session.halted === undefined ? {} : { halted: session.halted }),
     boundaries: {
@@ -414,17 +447,20 @@ function classifyRuns(runs: readonly TestRunResult[]): BisectRunOutcome {
 }
 
 /** Run the recorded SDK test in a child with independent workspace coordinates. @internal */
-export async function runCandidateTest(item: string, author: string, pmRoot: string, workspace: string, control: string): Promise<BisectRunOutcome> {
+export async function runCandidateTest(item: string, author: string, pmRoot: string, workspace: string, control: string, command?: string, sourceRef?: string, recordOnly = false): Promise<BisectRunOutcome> {
   const runner = fileURLToPath(new URL(`./bisect-test-runner${extname(fileURLToPath(import.meta.url))}`, import.meta.url));
+  const policy = new URL(`./bisect-sdk-policy${extname(fileURLToPath(import.meta.url))}`, import.meta.url).href;
   try {
     const output = await new Promise<string>((resolve, reject) => {
       const receipt = join(control, "BISECT_WORKER");
-      const child = spawn(process.execPath, [runner, item, author, pmRoot, receipt], {
+      const request = { command, recordOnly, bridge: sourceRef !== undefined, githubHead: process.env.GITHUB_HEAD_REF ?? null };
+      const child = spawn(process.execPath, ["--import", policy, runner, item, author, pmRoot, receipt, JSON.stringify(request)], {
         cwd: workspace, stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, PM_SOURCE_WORKSPACE_ROOT: workspace },
+        env: { ...process.env, PM_SOURCE_WORKSPACE_ROOT: workspace, ...(sourceRef === undefined ? {} : { GITHUB_HEAD_REF: sourceRef }) },
       });
       let output = "";
       let errors = "";
+      let ownsReceipt = false;
       child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
       child.stderr.on("data", (chunk: Buffer) => { errors += chunk.toString(); });
       // An early worker exit can close stdin before authorization is written.
@@ -432,7 +468,7 @@ export async function runCandidateTest(item: string, author: string, pmRoot: str
       child.stdin.on("error", () => {});
       child.on("error", reject);
       child.on("close", (code) => {
-        rmSync(receipt, { force: true });
+        if (ownsReceipt) rmSync(receipt, { force: true });
         if (code === 0) resolve(output);
         else reject(new Error(`Linked PM test runner exited ${code}: ${errors.trim()}`));
       });
@@ -440,13 +476,15 @@ export async function runCandidateTest(item: string, author: string, pmRoot: str
       // owner receipt closes stdin without authorization, so it cannot race resume.
       try {
         writeFileSync(receipt, String(child.pid), { flag: "wx", mode: 0o600 });
+        ownsReceipt = true;
         child.stdin.end("run");
       } catch (error) {
         child.kill();
         reject(error);
       }
     });
-    return classifyRuns(JSON.parse(output) as TestRunResult[]);
+    const runs = JSON.parse(output) as TestRunResult[];
+    return recordOnly ? { outcome: "good" } : classifyRuns(runs);
   } catch (error) {
     return { outcome: "untestable", detail: String(error) };
   }
@@ -461,7 +499,7 @@ export function registerBisectCommands(api: ExtensionApi): void {
   api.registerCommand({
     name: "vcs bisect",
     description:
-      "Find the first failing stable change between a good and a bad boundary by running the linked PM test recorded on an item. Outcomes are keyed by stable change identity, so rebased or amended changes reuse recorded results; untestable, skipped and conflicted candidates are reported, never counted as good or bad. The original working state is restored after success, failure, interruption and crash-resume.",
+      "Find the first failing stable change in the native change graph using linked PM tests or start --command <command> (recorded on --item). Run pauses at --max-steps (default 128); run again to resume after a limit or interruption. Exit 125 skips a candidate. Stable change identities preserve results across rewrites; skipped and untestable ancestors produce an ambiguous verdict. Each result and verdict is PM evidence. Works without git and keeps the original working state in place.",
     arguments: [
       { name: "action", description: "start, good, bad, skip, run, status or reset", required: true },
       { name: "revision", description: "Marked revision for good/bad/skip; the good boundary for start", required: false },
@@ -471,6 +509,8 @@ export function registerBisectCommands(api: ExtensionApi): void {
       { long: "--full", description: "Print complete commit and change ids instead of 12-character ids", value_type: "boolean" },
       { long: "--budget", value_name: "tokens", description: "Approximate candidate-log token budget (default 1600, minimum 256); verdict metadata is always retained", value_type: "number" },
       { long: "--item", value_name: "pm-item", description: "PM item whose recorded linked test drives the bisect (required for start; filters status)", value_type: "string" },
+      { long: "--command", value_name: "command", description: "For start: record this command as a linked test on --item and run only that test", value_type: "string" },
+      { long: "--max-steps", value_name: "count", description: "Positive candidate limit per run (default 128); start saves it and run can override it for subsequent runs", value_type: "number" },
     ],
     async run(context: CommandHandlerContext): Promise<{ ok: boolean; bisect?: BisectReport; sessions?: readonly BisectSessionListing[]; reset?: { session: string; restored: BisectSession["original"]; warning?: string } }> {
       const repository = openRepository(context);
@@ -479,6 +519,12 @@ export function registerBisectCommands(api: ExtensionApi): void {
       const now = (): Date => new Date();
       const budget = Number(context.options.budget ?? 1600);
       if (!Number.isSafeInteger(budget) || budget < 256) throw new VcsError("invalid_bisect_budget", "The bisect report budget must be an integer of at least 256 tokens.", "Pass --budget 1600 or a larger value for a longer candidate log.");
+      const requestedSteps = context.options.maxSteps;
+      if (requestedSteps !== undefined) bisectStepLimit(requestedSteps);
+      const command = optionalString(context.options, "command");
+      if (context.options.command !== undefined && (action !== "start" || command === undefined)) {
+        throw new VcsError("invalid_bisect_command", "A nonempty --command is accepted only by bisect start.", "Reset and start a new session to change the predicate.");
+      }
 
 
       const execute = async () => {
@@ -491,6 +537,7 @@ export function registerBisectCommands(api: ExtensionApi): void {
               "Finish it with `pm vcs bisect run` or `pm vcs bisect status`, or abandon it with `pm vcs bisect reset`.",
             );
           }
+          recoverBisectWorker(repository);
           if (repository.layers().length > 0) {
             throw new VcsError(
               "layer_bisect_conflict",
@@ -523,7 +570,7 @@ export function registerBisectCommands(api: ExtensionApi): void {
           }
           const read = await pmClient(context).get(item, { full: true });
           // Full SDK reads include the linked arrays, even when no tests are recorded.
-          if (read.linked!.tests.length === 0) {
+          if (command === undefined && read.linked!.tests.length === 0) {
             throw new VcsError(
               "no_linked_test",
               `The item ${item} records no linked test.`,
@@ -536,6 +583,8 @@ export function registerBisectCommands(api: ExtensionApi): void {
             version: 1,
             id: `bisect-${randomBytes(6).toString("hex")}`,
             item,
+            ...(command === undefined ? {} : { command }),
+            maxSteps: bisectStepLimit(requestedSteps),
             good,
             bad,
             original: { branch: head.kind === "branch" ? head.ref.slice(BRANCH_PREFIX.length) : null, commit: head.target },
@@ -545,6 +594,10 @@ export function registerBisectCommands(api: ExtensionApi): void {
             status: "active",
           }, goodId, badId, { author, now });
           bisectCandidates(repository.objects, goodId, badId);
+          if (command !== undefined) {
+            const recorded = await runCandidateTest(item, author, context.pm_root, repository.root, repository.controlDirectory, command, bisectTestSourceRef(repository), true);
+            if (recorded.outcome !== "good") throw new VcsError("bisect_test_registration", "The explicit bisect test could not be recorded.", String(recorded.detail));
+          }
           writeBisectSession(repository, session);
           await recordMilestone(context, session, "start");
           return { ok: true, bisect: await reportOf(context, repository, session, budget) };
@@ -585,7 +638,9 @@ export function registerBisectCommands(api: ExtensionApi): void {
               "Inspect it with `pm vcs bisect status`, or abandon it with `pm vcs bisect reset`.",
             );
           }
-          const driven = await runBisect(repository, session, (_candidate, workspace) => runCandidateTest(session.item, author, context.pm_root, workspace, repository.controlDirectory),
+          const bounded = requestedSteps === undefined ? session : { ...session, maxSteps: bisectStepLimit(requestedSteps) };
+          const sourceRef = bisectTestSourceRef(repository);
+          const driven = await runBisect(repository, bounded, (_candidate, workspace) => runCandidateTest(session.item, author, context.pm_root, workspace, repository.controlDirectory, session.command, sourceRef),
             { author, now, progress: (state) => recordMilestone(context, state, "step") });
           await recordMilestone(context, driven.session, driven.session.status === "done" ? "done" : "halted");
           return { ok: true, bisect: await reportOf(context, repository, driven.session, budget) };
