@@ -7,7 +7,7 @@ status: closed
 priority: 1
 tags: []
 created_at: "2026-10-18T03:01:39.215Z"
-updated_at: "2026-10-21T18:47:09.438Z"
+updated_at: "2026-10-22T11:57:15.685Z"
 closed_at: "2026-10-21T18:47:01.157Z"
 completed_at: "2026-10-21T18:47:01.157Z"
 author: codex-agent
@@ -16,7 +16,7 @@ acceptance_criteria: "Conflict units preserve base/ours/theirs and independent e
 parent: pm-vcs-phase7
 resolution: Delivered by the audit-linked mainline implementation.
 expected_result: First-class conflict objects stored in changes.
-actual_result: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089 remains in main ancestry; engine/attribution.ts, test/composition.test.ts remain present."
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089 remains in main ancestry; engine/conflicts.ts, test/first-class-conflicts.test.ts remain present."
 comments[27]{created_at,author,text}:
   "2026-10-18T03:02:09.086Z",codex-agent,"Plan: preserve legacy merge behavior by default and under --fail-on-conflict. Add explicit --record-conflicts so automation opts in without changing existing callers. Store per-unit conflict addresses on tree/index entries beside a readable ours projection, never marker text. Ship tip resolve in this slice; ancestor resolution and automatic descendant propagation remain child pm-vcs-p7resolve. No release workflows will change."
   "2026-10-18T03:08:24.490Z",codex-agent,"Implemented canonical field/hunk conflict objects, versioned tree/index references, explicit merge recording, tip resolve, conflict reporting and lifecycle traversal. Verification is in progress against real PM trackers, two linked working trees and bounded transfers. Ancestor propagation remains deferred to pm-vcs-p7resolve. Pinned pm is 2026.10.13; current published pm is 2026.10.17; the pin is unchanged."
@@ -120,5 +120,5 @@ tests[6]:
     updated_at: "2026-10-18T09:53:07.882Z"
 docs[1]{path,scope}:
   ARCHITECTURE.md,project
-close_reason: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089 remains in main ancestry; engine/attribution.ts, test/composition.test.ts remain present. Audit delivery: First-class conflict objects stored in changes. [PR #122](https://github.com/unbraind/pm-vcs/pull/122) (f928320) records first-class field/text conflict objects and makes refused switch preflight preserve raw index/HEAD/refs/private bytes. Corresponding behavioral regressions are committed."
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089 remains in main ancestry; engine/conflicts.ts, test/first-class-conflicts.test.ts remain present. Audit delivery: First-class conflict objects stored in changes. [PR #122](https://github.com/unbraind/pm-vcs/pull/122) (f928320) records first-class field/text conflict objects and makes refused switch preflight preserve raw index/HEAD/refs/private bytes. Corresponding behavioral regressions are committed."
 body: ""

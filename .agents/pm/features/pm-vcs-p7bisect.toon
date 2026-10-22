@@ -7,7 +7,7 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:48.622Z"
-updated_at: "2026-10-21T18:50:31.311Z"
+updated_at: "2026-10-22T11:57:00.963Z"
 closed_at: "2026-10-21T18:50:25.096Z"
 completed_at: "2026-10-21T18:50:25.096Z"
 author: codex-agent
@@ -16,7 +16,7 @@ acceptance_criteria: Good/bad boundaries identify the first failing stable chang
 parent: pm-vcs-phase7
 resolution: Delivered by the audit-linked mainline implementation.
 expected_result: Bisect stable changes using a linked pm test command.
-actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 3fb4ecd29e10, 27e1d84671fa remains in main ancestry; engine/annotate.ts, test/attribution.test.ts remain present."
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 3fb4ecd29e10, 27e1d84671fa remains in main ancestry; engine/bisect.ts, test/bisect.test.ts remain present."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:58.591Z",codex-agent,"cli:update:dep",detected
 comments[50]{created_at,author,text}:
@@ -169,5 +169,5 @@ docs[3]{path,scope}:
   docs/bisect-demo.txt,project
   docs/bisect.md,project
   README.md,project
-close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 3fb4ecd29e10, 27e1d84671fa remains in main ancestry; engine/annotate.ts, test/attribution.test.ts remain present. Audit delivery: Bisect stable changes using a linked pm test command. PRs #131/#136 (3fb4ecd/27e1d84) deliver linked-test bisect and shallow-boundary report preservation with explicit omission receipts."
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 3fb4ecd29e10, 27e1d84671fa remains in main ancestry; engine/bisect.ts, test/bisect.test.ts remain present. Audit delivery: Bisect stable changes using a linked pm test command. PRs #131/#136 (3fb4ecd/27e1d84) deliver linked-test bisect and shallow-boundary report preservation with explicit omission receipts."
 body: ""

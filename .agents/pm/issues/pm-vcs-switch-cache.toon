@@ -6,7 +6,7 @@ status: closed
 priority: 1
 tags: []
 created_at: "2026-10-18T10:20:47.215Z"
-updated_at: "2026-10-21T18:48:52.827Z"
+updated_at: "2026-10-22T11:57:19.145Z"
 closed_at: "2026-10-21T18:48:48.508Z"
 completed_at: "2026-10-21T18:48:48.508Z"
 author: codex-agent
@@ -14,7 +14,7 @@ acceptance_criteria: "Real switch refusal preserves raw index, HEAD, refs, opera
 parent: pm-vcs-p7objects
 resolution: Delivered by the audit-linked mainline implementation.
 expected_result: Preflight status refresh mutates index before refused operations.
-actual_result: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089 remains in main ancestry; engine/attribution.ts, test/composition.test.ts remain present."
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089 remains in main ancestry; engine/repo.ts, test/composition.test.ts, test/first-class-conflicts.test.ts remain present."
 comments[3]{created_at,author,text}:
   "2026-10-18T10:27:17.271Z",codex-agent,"Fixed the shared cause: status accepts an optional refreshCache flag (default true); all eight internal mutation-preflight callers disable cache publication. Normal public status still warms verified observations. Real cold-index regressions age filesystem entries beyond RACY_WINDOW_NS, then prove switch/reset/undo/attached-rewrite/detached-rewrite and overlapping text refusal retain raw index, refs, HEAD, operation log and private bytes. Tracker-linked command node --test --test-name-pattern=\"renewed private layer refuses|collapsed text\" test/composition.test.ts test/first-class-conflicts.test.ts passes 7/7; public cache-warming regression passes 1/1. Behavioral revert: remove only refreshCache from the cache-publication condition, leaving all callers/tests fixed. Layer suite yields 3 pass/3 fail (switch and both rewrites mutate index); collapsed-text refusal yields 0/1 pass with the same raw-index mutation. Restored protection; typecheck, lint, zero duplication and docstrings pass. Initial single-operation preflight ordering was discarded because it left rewrite and conflict-resolution refusals exposed."
   "2026-10-18T10:55:58.739Z",codex-agent,"Acceptance on d9bdd93faf676c92b64ae6fd8d35a4544a212555: npm run release:check and bun run release:check both exit 0 under fresh HOME/global/system Git identity isolation, using full history and release tags. Each passes 1612/1612 tests, with zero failure/skip/cancel/TODO. All 66 source files retain 100% statements, branches, functions and lines at unchanged thresholds. Read-only preflight and ordinary public cache-warming regressions pass; the guard-only behavioral revert remains recorded here. Claim will be released, status remains in_progress for orchestrator verification. Final receipt-head health and exact-head CI links will be recorded in PR #122 and its checks page: https://github.com/unbraind/pm-vcs/pull/122/checks ."
@@ -28,5 +28,5 @@ tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
   "node --test --test-name-pattern=\"renewed private layer refuses|collapsed text\" test/composition.test.ts test/first-class-conflicts.test.ts",project,600,codex-agent,"2026-10-18T10:26:31.772Z",local_mutation,feat/phase7-first-class-conflicts
 docs[1]{path,scope}:
   ARCHITECTURE.md,project
-close_reason: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089 remains in main ancestry; engine/attribution.ts, test/composition.test.ts remain present. Audit delivery: Preflight status refresh mutates index before refused operations. [PR #122](https://github.com/unbraind/pm-vcs/pull/122) (f928320) records first-class field/text conflict objects and makes refused switch preflight preserve raw index/HEAD/refs/private bytes. Corresponding behavioral regressions are committed."
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089 remains in main ancestry; engine/repo.ts, test/composition.test.ts, test/first-class-conflicts.test.ts remain present. Audit delivery: Preflight status refresh mutates index before refused operations. [PR #122](https://github.com/unbraind/pm-vcs/pull/122) (f928320) records first-class field/text conflict objects and makes refused switch preflight preserve raw index/HEAD/refs/private bytes. Corresponding behavioral regressions are committed."
 body: ""

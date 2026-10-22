@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-10-05T09:04:49.913Z"
-updated_at: "2026-10-21T19:05:52.986Z"
+updated_at: "2026-10-22T11:57:36.190Z"
 closed_at: "2026-10-21T19:05:47.823Z"
 completed_at: "2026-10-21T19:05:47.823Z"
 author: codex-sol
@@ -14,7 +14,7 @@ parent: pm-vcs-5h6j
 repro_steps: "Run a native Bun server with response.sendDate=false; send the same denied POST twice more than one second apart; compare raw response headers. engine/serve.ts follows this pattern, and the new directory-replacement socket fixture reproduced differing Date values."
 resolution: Delivered by the audit-linked mainline implementation.
 expected_result: Honor disabled HTTP Date headers when serving with native Bun.
-actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/config.ts, test/composition-consumer.test.ts remain present."
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/serve.ts, test/serve.test.ts remain present."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-ttc0,related,"2026-10-05T09:04:49.913Z",codex-sol,"cli:create:dep",detected
 comments[11]{created_at,author,text}:
@@ -54,5 +54,5 @@ tests[2]:
 docs[2]{path,scope}:
   .github/workflows/ci.yml,project
   README.md,project
-close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/config.ts, test/composition-consumer.test.ts remain present. Audit delivery: Honor disabled HTTP Date headers when serving with native Bun. [PR #114](https://github.com/unbraind/pm-vcs/pull/114) (1efdf4b) disambiguates parent object-fetch endpoints, suppresses HTTP Date under Bun when requested, and fails closed on unreadable existing configuration; real transport regressions are committed."
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 1efdf4b3ca0d remains in main ancestry; engine/serve.ts, test/serve.test.ts remain present. Audit delivery: Honor disabled HTTP Date headers when serving with native Bun. [PR #114](https://github.com/unbraind/pm-vcs/pull/114) (1efdf4b) disambiguates parent object-fetch endpoints, suppresses HTTP Date under Bun when requested, and fails closed on unreadable existing configuration; real transport regressions are committed."
 body: ""

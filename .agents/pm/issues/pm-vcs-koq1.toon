@@ -6,13 +6,13 @@ status: closed
 priority: 1
 tags: []
 created_at: "2026-10-16T22:29:54.396Z"
-updated_at: "2026-10-21T18:44:48.331Z"
+updated_at: "2026-10-22T11:57:30.152Z"
 closed_at: "2026-10-21T18:44:41.716Z"
 completed_at: "2026-10-21T18:44:41.716Z"
 author: codex-agent
 resolution: Delivered by the audit-linked mainline implementation.
 expected_result: Allow action-only Dependabot bumps through the committed self-host audit.
-actual_result: "Re-verified unchanged main 27e1d84671fa: delivery ec61c6d8f174 remains in main ancestry; package.json, test/exact-gates.test.ts remain present."
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery ec61c6d8f174 remains in main ancestry; scripts/self-host.ts, test/self-host.test.ts remain present."
 comments[15]{created_at,author,text}:
   "2026-10-16T22:30:26.588Z",codex-agent,"Compared failed CI jobs 116966419723, 116965719699 and 116965854973 with green main job 116965011838. The real failure is self-host source/bundle workflow byte mismatch. The missing CLI diagnostic occurs in a passing negative test on both green and red runs. Preserve complete archive validation and original workflow bytes; allow only full-SHA version-comment changes for trusted external actions during comparison, retaining action paths, all other YAML and file modes."
   "2026-10-16T22:33:12.967Z",codex-agent,"Behavioural revert proof: restoring strict byte equality by disabling only sameWorkflowExceptActionRevisions makes both new regressions fail with assertion failures, including the direct CLI test. With the fix restored, the self-host suite passes 61/61 and the isolated direct-entry regression passes 1/1. The archive remains unchanged during verification."
@@ -79,5 +79,5 @@ tests[5]:
 docs[2]{path,scope}:
   CHANGELOG.md,project
   docs/action-revision-audit.md,project
-close_reason: "Re-verified unchanged main 27e1d84671fa: delivery ec61c6d8f174 remains in main ancestry; package.json, test/exact-gates.test.ts remain present. Audit delivery: Allow action-only Dependabot bumps through the committed self-host audit. [PR #121](https://github.com/unbraind/pm-vcs/pull/121) (ec61c6d) permits only immutable action revision bumps under the committed self-host audit; other workflow bytes remain exact."
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery ec61c6d8f174 remains in main ancestry; scripts/self-host.ts, test/self-host.test.ts remain present. Audit delivery: Allow action-only Dependabot bumps through the committed self-host audit. [PR #121](https://github.com/unbraind/pm-vcs/pull/121) (ec61c6d) permits only immutable action revision bumps under the committed self-host audit; other workflow bytes remain exact."
 body: ""

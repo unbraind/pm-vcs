@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-10-19T22:37:30.807Z"
-updated_at: "2026-10-21T18:53:51.735Z"
+updated_at: "2026-10-22T11:57:05.731Z"
 closed_at: "2026-10-21T18:53:45.721Z"
 completed_at: "2026-10-21T18:53:45.721Z"
 author: codex-agent
@@ -16,7 +16,7 @@ parent: pm-vcs-p7bisect
 repro_steps: "Create an empty-tree ancestor A, good G with parent A, side S with parent A, and merge M with parents G and S. Clone M with depth 2 so A is absent and G/S are shallow. Initialize a real tracker and linked test in the clone. Start bisect G M, mark S bad, then request status."
 resolution: Delivered by the audit-linked mainline implementation.
 expected_result: Preserve bisect reports when the culprit is a shallow boundary.
-actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 3fb4ecd29e10, 27e1d84671fa remains in main ancestry; engine/annotate.ts, test/attribution.test.ts remain present."
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 3fb4ecd29e10, 27e1d84671fa remains in main ancestry; engine/bisect.ts, test/bisect.test.ts remain present."
 component: bisect
 comments[3]{created_at,author,text}:
   "2026-10-19T23:25:30.095Z",codex-agent,"Fixed in PR 131 review round: real depth-two merge clone verifies missing ancestor, manual bad plus status, automatic run plus status, explicit association deduplication/order, honest itemsBoundary=shallow, no hydration, restored HEAD and reset. Focused regression passes; reverting only linkedItems fails on missing parent. Related traceFile shallow-parent read fixed with an independent passing/reverting regression. Item remains in progress for orchestrator verification."
@@ -29,5 +29,5 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-name-pattern='shallow culprit' test/bisect.test.ts,project,codex-agent,"2026-10-20T00:08:27.444Z",local_mutation,feat/vcs-bisect-linked-test
 docs[1]{path,scope}:
   docs/bisect.md,project
-close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 3fb4ecd29e10, 27e1d84671fa remains in main ancestry; engine/annotate.ts, test/attribution.test.ts remain present. Audit delivery: Preserve bisect reports when the culprit is a shallow boundary. PRs #131/#136 (3fb4ecd/27e1d84) deliver linked-test bisect and shallow-boundary report preservation with explicit omission receipts."
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 3fb4ecd29e10, 27e1d84671fa remains in main ancestry; engine/bisect.ts, test/bisect.test.ts remain present. Audit delivery: Preserve bisect reports when the culprit is a shallow boundary. PRs #131/#136 (3fb4ecd/27e1d84) deliver linked-test bisect and shallow-boundary report preservation with explicit omission receipts."
 body: ""

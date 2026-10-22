@@ -6,18 +6,62 @@ status: in_progress
 priority: 2
 tags[3]: ci,contributor-workflow,self-host
 created_at: "2026-10-21T19:49:18.736Z"
-updated_at: "2026-10-21T19:52:01.887Z"
+updated_at: "2026-10-22T12:04:48.376Z"
 author: codex-agent
 acceptance_criteria: "PR #139 has a refreshed committed snapshot, targeted local acceptance and full CI evidence; contributor diagnostic proposal remains tracked for separate implementation."
-comments[2]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-10-21T19:49:29.300Z",codex-agent,"Orientation found no tracker-only recovery item; related closed pm-vcs-koq1 concerns external action pins and pm-vcs-m6j4 concerns an older refresh. PR branch contains origin/main (0 behind, 1 ahead). The existing operational-entry regression reproduced the CI failure: 0/1 passed, with tracker records, append-only histories and CHANGELOG.md differing. AGENTS.md and scripts/self-host.ts require staged intended files -> writer -> commit -> verify HEAD. Plan: retain strict equality and unchanged runtime source; record linked checks, finish tracker writes, regenerate changelog and bundle, commit as SteveBot, verify targeted test and self-host acceptance, push and use CI for the full gate as requested. No behavioral code changed; the red baseline is the artifact negative proof."
   "2026-10-21T19:51:57.150Z",codex-agent,"Committed snapshot 5cc231b passed all 3 linked commands via pm test --run --progress: npm run accept:self-host exit 0; node --test --test-name-pattern=\"operational entry points enforce real audits through direct CLI processes\" test/exact-gates.test.ts 1/1 passed; node --test test/self-host.test.ts 62/62 passed. Zero failures, cancellations, skips or todos. The unrefreshed PR baseline failed that same operational-entry test 0/1, proving the artifact correction matters. npm ci and npm run build passed; changelog generation/check passed. Existing history streams are append-only and new tracker fields contain no absolute local paths. Linked result persistence is disabled by existing policy (tracking_disabled), so receipts are recorded in this comment. Release the claim and retain in_progress for orchestrator verification; contributor diagnostic remains a separate implementation proposal. Final receipt bytes require one last staged bundle refresh, followed by HEAD acceptance and focused checks, then push and full CI. Full local npm/Bun release gates are intentionally delegated to CI under the task instruction."
-files[1]{path,scope}:
+  "2026-10-22T11:51:37.253Z",codex-agent,"PR 139 continuation: prior PR 140 and 138 worktrees are clean, fully pushed, and their items remain in_progress with claims released; no finished work is repeated. Pulled PR 139 remote head 7d4fc753bb6d375aef3fb4ccc27d836e42bfbebf; current main 27e1d84671fa8c139f7dd00b9e41a7b407319ec7 is already included, so no merge is needed. Both unresolved review threads were read with every comment, and the latest CodeRabbit review has no outside-diff findings. Both findings are valid. Restore bcgs to blocked rather than weaken its exact-head certification acceptance or remove its unresolved dispatch104 dependency. Correct bisect and shallow-report current evidence and close reasons to cite engine/bisect.ts and test/bisect.test.ts. Whole-diff review also found generic copied source/test pairs in other reconciliation summaries; verify each against main and replace with direct implementation/regression evidence. Preserve append-only histories and historical comments, never close items, and regenerate the required archive only after all tracker changes are staged."
+  "2026-10-22T12:02:12.481Z",codex-agent,"Tracker-only evidence proof: 15 corrected records now pass 15/15 checks; the immutable pre-fix PR head 7d4fc753bb6d375aef3fb4ccc27d836e42bfbebf fails the same 15/15 checks. Main 27e1d84671fa8c139f7dd00b9e41a7b407319ec7 retains all 36 audited evidence paths and passes 21 delivery-ancestry checks; the dated bcgs delivery d7e8657758ce was separately verified in main ancestry. Current bcgs status is blocked, its single existing dispatch104 dependency and full acceptance criteria are preserved, and the status transition removed stale closure timestamps/reason/resolution. The linked three-case metadata guard passes 3/3 through pm test --run --only-last --progress; setting PM_VCS_EVIDENCE_REV to the immutable old head fails 0/3. That control reads historical blobs without modifying records. Both bisect items now cite engine/bisect.ts and test/bisect.test.ts in actual_result and close_reason. The same whole-diff audit corrected generic evidence for forge/review, phase-7 specifications, conflicts/preflight, propagation, signatures, served fixture lease lifetime, action-pin audit, dependency manifests, configuration refusals, Bun Date suppression and fetch routing. Historical comments and every existing history event remain unchanged; no runtime behavior or new certification is claimed."
+  "2026-10-22T12:04:45.579Z",codex-agent,"Final PR 139 receipt before archive refresh: required tracker-only gates pass 3/3 (npm ci, npm run changelog:check after regeneration, pm health --check-only --strict-exit). npm ci reported zero vulnerabilities; strict health retains only existing stale-item and legacy provenance advisories. Linked metadata evidence guard passes 3/3 with zero failures/skips/cancellations, while the immutable old-head control fails 0/3. The broader record audit passes 15/15 versus old-head 0/15, with 36 retained mainline evidence paths and 21 ancestry checks. All 14 existing delivered-record statuses and closure timestamps are preserved; bcgs alone returns to blocked with its original acceptance criteria and single unresolved dispatch104 dependency. No reused annotation/attribution pair remains in current actual_result or close_reason fields. All 19 history files changed by the PR preserve their mainline bytes as an exact prefix; historical comments remain unchanged. Runtime source matches main. This round uses the requested tracker-only gate scope and does not repeat completed runtime certification. Final committed self-host acceptance and the published PR body will identify the pushed receipt head. Claim released for orchestrator verification; no item was closed and no review thread was replied to or resolved."
+files[16]{path,scope}:
   selfhost.bundle,project
-tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
-  "npm run accept:self-host",project,codex-agent,"2026-10-21T19:49:40.296Z",local_mutation,chore/reconcile-tracker-1021
-  "node --test --test-name-pattern=\"operational entry points enforce real audits through direct CLI processes\" test/exact-gates.test.ts",project,codex-agent,"2026-10-21T19:49:43.059Z",local_mutation,chore/reconcile-tracker-1021
-  node --test test/self-host.test.ts,project,codex-agent,"2026-10-21T19:49:47.274Z",local_mutation,chore/reconcile-tracker-1021
+  .agents/pm/chores/pm-vcs-bcgs.toon,project
+  .agents/pm/features/pm-vcs-p7bisect.toon,project
+  .agents/pm/issues/pm-vcs-bisect-shallow-report.toon,project
+  .agents/pm/epics/pm-vcs-5h6j.toon,project
+  .agents/pm/epics/pm-vcs-phase7.toon,project
+  .agents/pm/features/pm-vcs-p7objects.toon,project
+  .agents/pm/issues/pm-vcs-switch-cache.toon,project
+  .agents/pm/features/pm-vcs-p7resolve.toon,project
+  .agents/pm/features/pm-vcs-p7sign.toon,project
+  .agents/pm/issues/pm-vcs-forgeleaseexpiry.toon,project
+  .agents/pm/issues/pm-vcs-koq1.toon,project
+  .agents/pm/issues/pm-vcs-qfku.toon,project
+  .agents/pm/issues/pm-vcs-00mb.toon,project
+  .agents/pm/issues/pm-vcs-sl77.toon,project
+  .agents/pm/issues/pm-vcs-w3yi.toon,project
+tests[4]:
+  - command: "npm run accept:self-host"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-21T19:49:40.296Z"
+      source_kind: local_mutation
+      source_ref: chore/reconcile-tracker-1021
+  - command: "node --test --test-name-pattern=\"operational entry points enforce real audits through direct CLI processes\" test/exact-gates.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-21T19:49:43.059Z"
+      source_kind: local_mutation
+      source_ref: chore/reconcile-tracker-1021
+  - command: node --test test/self-host.test.ts
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-21T19:49:47.274Z"
+      source_kind: local_mutation
+      source_ref: chore/reconcile-tracker-1021
+  - command: "node --input-type=module -e 'import assert from '\"'\"'node:assert/strict'\"'\"';import {readFileSync} from '\"'\"'node:fs'\"'\"';import {execFileSync} from '\"'\"'node:child_process'\"'\"';import {test} from '\"'\"'node:test'\"'\"';import {parseItemDocument} from '\"'\"'@unbrained/pm-cli/sdk'\"'\"';const read=p=>parseItemDocument(process.env.PM_VCS_EVIDENCE_REV?execFileSync('\"'\"'git'\"'\"',['\"'\"'show'\"'\"',process.env.PM_VCS_EVIDENCE_REV+'\"'\"':'\"'\"'+p],{encoding:'\"'\"'utf8'\"'\"'}):readFileSync(p,'\"'\"'utf8'\"'\"'),{format:'\"'\"'toon'\"'\"',requireSupportedFormat:true}).metadata;test('\"'\"'certification keeps its unresolved acceptance and blocker'\"'\"',()=>{const i=read('\"'\"'.agents/pm/chores/pm-vcs-bcgs.toon'\"'\"');assert.equal(i.status,'\"'\"'blocked'\"'\"');assert.equal(i.blocked_by,'\"'\"'pm-vcs-dispatch104'\"'\"');assert.equal(read('\"'\"'.agents/pm/issues/pm-vcs-dispatch104.toon'\"'\"').status,'\"'\"'open'\"'\"');assert.ok(i.dependencies.some(d=>d.id===i.blocked_by&&d.kind==='\"'\"'blocked_by'\"'\"'));assert.ok(i.acceptance_criteria.includes('\"'\"'exact candidate head'\"'\"'));assert.equal(i.closed_at,undefined);assert.equal(i.completed_at,undefined);assert.equal(i.close_reason,undefined);});for(const p of ['\"'\"'.agents/pm/features/pm-vcs-p7bisect.toon'\"'\"','\"'\"'.agents/pm/issues/pm-vcs-bisect-shallow-report.toon'\"'\"'])test(p+'\"'\"' cites bisect evidence'\"'\"',()=>{const i=read(p);for(const f of ['\"'\"'actual_result'\"'\"','\"'\"'close_reason'\"'\"']){assert.ok(i[f].includes('\"'\"'engine/bisect.ts'\"'\"'));assert.ok(i[f].includes('\"'\"'test/bisect.test.ts'\"'\"'));assert.ok(!i[f].includes('\"'\"'engine/annotate.ts, test/attribution.test.ts'\"'\"'));}});'"
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-22T12:00:02.197Z"
+      source_kind: local_mutation
+      source_ref: chore/reconcile-tracker-1021
 docs[1]{path,scope}:
   AGENTS.md,project
 body: ""

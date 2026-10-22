@@ -2,19 +2,17 @@ id: pm-vcs-bcgs
 title: Certify pm-vcs on PM CLI/SDK 2026.10.4 and consolidate pending dependency updates
 description: "Certify exact PM CLI/SDK, pm-ops and pm-changelog 2026.10.4 with consolidated Dependabot updates and unchanged host floor 2026.8.1. Fix dependency-refresh GITHUB_TOKEN PR CI dispatch with behavioral tests and unchanged required job names. Copy canonical launcher, install managed pm-github for read-only preview/strict CI health, verify full unchanged release gate and packed real-tracker npm/native-Bun commands. Regenerate selfhost.bundle together with every source/PM mutation; no publication, merge or closure."
 type: Chore
-status: closed
+status: blocked
 priority: 2
 tags: []
 created_at: "2026-09-26T14:12:57.090Z"
-updated_at: "2026-10-21T19:15:03.796Z"
-closed_at: "2026-10-21T19:14:58.041Z"
-completed_at: "2026-10-21T19:14:58.041Z"
+updated_at: "2026-10-22T11:56:54.171Z"
 author: "harness:codex"
 estimated_minutes: 120
 acceptance_criteria: "Installed repository-local PM CLI/SDK, pm-changelog and pm-ops equal published 2026.10.4; the committed selfhost.bundle tip tree matches the committed source and full release:check passes at the exact candidate head; packed npm/Bun functional VCS acceptance and strict tracker health pass; review, all-source coverage, and full forge/scale limits are stated independently."
-resolution: Delivered by the audit-linked mainline implementation.
-expected_result: Certify pm-vcs on PM CLI/SDK 2026.10.4 and consolidate pending dependency updates.
-actual_result: "Re-verified unchanged main 27e1d84671fa: delivery d7e8657758ce remains in main ancestry; .github/workflows/ci.yml, test/dependency-refresh-workflow.test.ts remain present."
+blocked_by: pm-vcs-dispatch104
+blocked_reason: Exact-head certification remains unmet and pm-vcs-dispatch104 is still open; historical delivery ancestry does not establish required PR-check satisfaction or current acceptance.
+actual_result: "Re-checked main 27e1d84671fa8c139f7dd00b9e41a7b407319ec7: dated delivery d7e8657758ce remains in ancestry and its workflow regressions remain present. Current toolchain pins have advanced beyond the dated 2026.10.4 receipt. The original acceptance criteria and unresolved pm-vcs-dispatch104 dependency remain in force; this item is blocked, not currently certified."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-dispatch104,blocked_by,"2026-10-04T12:35:57.173Z",codex-sol,"cli:update:blocked_by",detected
 comments[11]{created_at,author,text}:
@@ -93,5 +91,4 @@ docs[4]:
   - path: docs/certification-2026.10.4.md
     scope: project
     note: Exact gates and real tracker VCS dogfood receipts
-close_reason: "Re-verified unchanged main 27e1d84671fa: delivery d7e8657758ce remains in main ancestry; .github/workflows/ci.yml, test/dependency-refresh-workflow.test.ts remain present. Audit delivery: Certify pm-vcs on PM CLI/SDK 2026.10.4 and consolidate pending dependency updates. [PR #89](https://github.com/unbraind/pm-vcs/pull/89) (d7e8657) delivers the dated certification; package.json/lockfile subsequently advance the toolchain. A dated receipt is not current exact-head acceptance."
 body: ""

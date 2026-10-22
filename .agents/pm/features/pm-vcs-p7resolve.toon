@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:41.313Z"
-updated_at: "2026-10-21T18:55:35.344Z"
+updated_at: "2026-10-22T11:57:22.208Z"
 closed_at: "2026-10-21T18:55:29.652Z"
 completed_at: "2026-10-21T18:55:29.652Z"
 author: codex-agent
@@ -15,7 +15,7 @@ acceptance_criteria: "resolve supports path, field and ours/theirs/base/value; a
 parent: pm-vcs-phase7
 resolution: Delivered by the audit-linked mainline implementation.
 expected_result: Resolve conflicts and propagate resolutions through automatic descendant rebase.
-actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 7609e6c61980 remains in main ancestry; engine/annotate.ts, test/edges.test.ts remain present."
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 7609e6c61980 remains in main ancestry; engine/repo.ts, engine/rewrite.ts, test/resolution-propagation.test.ts remain present."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-p7objects,blocked_by,"2026-10-18T03:01:51.150Z",codex-agent,"cli:update:dep",detected
 comments[30]{created_at,author,text}:
@@ -79,5 +79,5 @@ tests[2]:
 docs[2]{path,scope}:
   ARCHITECTURE.md,project
   README.md,project
-close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 7609e6c61980 remains in main ancestry; engine/annotate.ts, test/edges.test.ts remain present. Audit delivery: Resolve conflicts and propagate resolutions through automatic descendant rebase. [PR #125](https://github.com/unbraind/pm-vcs/pull/125) (7609e6c) resolves ancestor conflict choices and propagates them through descendant native rebases."
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 7609e6c61980 remains in main ancestry; engine/repo.ts, engine/rewrite.ts, test/resolution-propagation.test.ts remain present. Audit delivery: Resolve conflicts and propagate resolutions through automatic descendant rebase. [PR #125](https://github.com/unbraind/pm-vcs/pull/125) (7609e6c) resolves ancestor conflict choices and propagates them through descendant native rebases."
 body: ""
