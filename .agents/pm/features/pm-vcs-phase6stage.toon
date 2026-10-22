@@ -7,11 +7,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:41:01.521Z"
-updated_at: "2026-10-22T14:48:50.088Z"
+updated_at: "2026-10-22T17:15:27.053Z"
 author: codex-agent
 acceptance_criteria: Native add and status handle large binary files without whole-file buffers; rename plus edit retains FileId and PM change trace; compression-independent identities and range verification pass; GC reports physical candidate and reclaimed bytes; report a 200 MB binary and real tracker copy measurement.
 parent: pm-vcs-b7cb
-comments[13]{created_at,author,text}:
+comments[17]{created_at,author,text}:
   "2026-10-21T14:58:04.824Z",codex-agent,"Behavioural revert proof: restoring only stageLocked makes native staging streams CDC fail because no binary is staged; restoring only computeStatus fails on the forbidden whole-file reader; restoring only collectGarbage fails the physical-byte receipt assertions. Each mutation was tested in an isolated source copy. Initial 200 MB measurement exposed excessive fsynced loose-object overhead with fine-grained CDC, so ordinary large staging now uses 64 KiB minimum, 1 MiB maximum and an 18-bit Gear mask while existing helper defaults remain unchanged. The partial benchmark scratch copy was removed before remeasurement."
   "2026-10-21T15:14:12.255Z",codex-agent,"Real scale receipt: 200000000 generated binary bytes plus 306 real public tracker files committed natively. Baseline store 201271356 compressed object bytes; after a rename and 2000000-byte middle replacement, store 203550572 (+2279216). Reused 604/611 edited chunks (98.8543%), 98.8683% by bytes. Twenty-one verified warm-cache 4 KiB reads: median 13.6759 ms, p95 52.9613 ms under shared-host load. GC dry-run/apply both 1048920 bytes; both committed generations retained and reachable objects verified. All benchmark data removed. Linked PM test command passed 5/5 with no failures/skips using --timeout 900; the default 120-second attempt timed out. Type checking, lint, duplication (0%) and docstrings pass. Full npm/Bun release gates follow artifact regeneration."
   "2026-10-21T15:46:37.929Z",codex-agent,"CI on both Node 22 and 26 measured 100/100/100/100 coverage but found two regression-fixture failures: the production inventory expected 74 files instead of 75, and the bounded export test accidentally staged a CDC manifest where it intended a legacy 4 MiB blob. Updated the inventory explicitly and construct that legacy blob in the real object store, preserving the exact compressed-size-plus-64-byte strace assertion. The superseded local release run was stopped before retesting; full gates will run again at the corrected head."
@@ -25,9 +25,14 @@ comments[13]{created_at,author,text}:
   "2026-10-22T14:43:08.390Z",codex-agent,"New review round: reviewing PRRT_kwDOToJT7M6vOcns. Verify the drift regression with a cacheable positive control, then demonstrate failure with only the second identity guard removed. The prior staging implementation and measurements remain retained; no new scale implementation is planned."
   "2026-10-22T14:45:54.956Z",codex-agent,"Both test-gap findings are valid. The drift test now waits beyond exported RACY_WINDOW_NS, proves a stable streamed status refresh changes the index, restores the uncached index bytes, and confirms the drift hook runs before asserting byte-for-byte index preservation. Independent control: with only computeStatus's post-comparison sameFileIdentity guard removed, the original test passes 1/1 while the strengthened test fails 0/1. Restoring the production guard passes 1/1; both selected restored regressions pass 2/2. Exact command: node --test --test-name-pattern='^manifest working comparisons' test/phase6-staging.test.ts. Tests import source, so no rebuild is needed for the proof. All temporary production/test reversions were restored before archive generation. Whole-PR test review found no additional nondiscriminating cache control or nested-lock assertion."
   "2026-10-22T14:48:46.776Z",codex-agent,"Round-two linked validation passes via pinned pm test pm-vcs-phase6stage --run --only-index 1 --progress: 9/9 tests, zero failures/skips/cancellations. The related ref/GC linked command passes 37/37. Selected native Bun regressions pass 2/2 (19 unrelated cases filtered), including the aged positive control. npm ci has zero vulnerabilities; build, build:test, typecheck, lint, docstrings and 0% duplication checks pass. Runtime source and prior capacity measurements are unchanged. Complete final-head CI will run every npm release-check command and bun run release:check at unchanged 100% per-file thresholds: https://github.com/unbraind/pm-vcs/pull/138/checks. No earlier-head receipt is substituted for these required checks. Releasing the claim for CI and orchestrator verification; the item stays in_progress."
-files[15]{path,scope}:
+  "2026-10-22T17:08:57.777Z",codex-agent,"New review round: PRRT_kwDOToJT7M6vSX_O is valid. Ordinary large text now stages as manifests, but annotation currently accepts only blobs/records. Merged origin/main first (e3f9107), regenerated the archive, retained the full npm/Bun/lens CI gates without duplicating the Bun release run, and updated the explicit combined production inventory to 76 sources without changing thresholds. Post-merge strict health passes with no pending merge receipts. Plan: verified manifest content for annotation, historical lineage across storage transitions, related PM-history provenance review, independent revert proofs and exact-head full gates."
+  "2026-10-22T17:13:32.840Z",codex-agent,"Implemented verified manifest reads in Annotator.content while retaining record/blob handling and unsupported errors for links/structural kinds. Regression covers native >1 MiB text, blob-to-manifest-to-blob lineage, rename, grouped/full rows, immutable CLI revision selection, missing/corrupt fragment refusals and no Git repository. Self-review found the same blob-only assumption in historyEvents: large real SDK history JSONL loses recorded harness/model metadata. Fixed it and added a real SDK tracker test, retaining optional-history typed-failure omission and unexpected I/O propagation. Existing unsupported-kind tests now use a structural tree object; empty manifests correctly annotate as empty. Merge/rewrite already verify manifest leaves and preserve a whole side with an explicit content conflict, while show/diff/status/range paths already read logical content."
+  "2026-10-22T17:13:33.523Z",codex-agent,"Independent function-only revert proofs: restoring only Annotator.content to its merged-baseline implementation makes node --test --test-name-pattern='^manifest text annotation' test/annotate.test.ts fail 0/1 (unsupported_annotation). Restoring only historyEvents makes node --test --test-name-pattern='^fragmented PM history' test/annotate.test.ts fail 0/1 because recorded agent metadata disappears. Both functions were restored; selected regressions then pass 2/2 with zero failures/skips/cancellations. Tests import source directly, so neither proof requires a dist rebuild. All proof reversions were restored before archive generation. Static checks pass at unchanged 0% duplication and complete 76-source scope. Documentation now states annotation assembles logical payloads in memory and does not inherit bounded status/range guarantees."
+  "2026-10-22T17:15:26.130Z",codex-agent,"Final local checks for the annotation review: pinned pm test pm-vcs-phase6stage --run --only-last --progress passes the full annotation file 25/25 with zero failures/skips/cancellations. New selected tests also pass under native Bun 2/2 (23 unrelated cases filtered). Build and build:test pass. Merged workflow regressions pass 5/5. Typecheck, lint, docstrings and 0% duplication pass at unchanged thresholds with all 76 combined production sources included. npm ci succeeds with zero vulnerabilities. Both independent function-only failing-revert/passing-restoration proofs are above. Final-head CI must pass literal npm run release:check and bun run release:check, plus the explicit Bun lens suite, at https://github.com/unbraind/pm-vcs/pull/138/checks. Releasing the claim for CI and orchestrator verification; item remains in_progress."
+files[17]{path,scope}:
   .github/workflows/ci.yml,project
   docs/phase6-scale-receipt.md,project
+  engine/annotate.ts,project
   engine/fragments.ts,project
   engine/gc.ts,project
   engine/objects.ts,project
@@ -36,12 +41,13 @@ files[15]{path,scope}:
   engine/worktree.ts,project
   package.json,project
   scripts/phase6-benchmark.ts,project
+  test/annotate.test.ts,project
   test/composition.test.ts,project
   test/gc.test.ts,project
   test/phase6-staging.test.ts,project
   test/raw-coverage.test.ts,project
   test/refs.test.ts,project
-tests[3]:
+tests[4]:
   - command: node --test test/phase6-staging.test.ts
     scope: project
     timeout_seconds: 900
@@ -68,7 +74,16 @@ tests[3]:
       created_at: "2026-10-21T21:17:27.775Z"
       source_kind: local_mutation
       source_ref: feat/phase6-chunked-storage
-docs[2]{path,scope}:
+  - command: node --test test/annotate.test.ts
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-22T17:13:32.127Z"
+      source_kind: local_mutation
+      source_ref: feat/phase6-chunked-storage
+docs[3]{path,scope}:
+  ARCHITECTURE.md,project
   docs/phase6-scale-receipt.md,project
   docs/scale-history-and-gc.md,project
 body: ""

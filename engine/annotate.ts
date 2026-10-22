@@ -3,6 +3,7 @@ import { canonicalRecordValue, decodeRecord, effectiveChangeId, readCommit, read
 import { type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
 import { diffLines, splitLines } from "./diff.ts";
 import { readConflict, type ConflictUnit } from "./conflicts.ts";
+import { readFragmented } from "./fragments.ts";
 
 /** Native change provenance; absent agent fields mean that no matching PM event recorded them. */
 export interface AnnotationOrigin {
@@ -16,7 +17,12 @@ export interface AnnotationOrigin {
 
 /** Immutable PM history is optional; a history that cannot be read contributes no agent provenance. */
 function historyEvents(store: ObjectStore, id: ObjectId): readonly RecordDocument[] {
-  try { return store.readTyped(id, "blob").toString("utf8").split("\n").filter(Boolean).map((line) => decodeRecord(Buffer.from(line))); }
+  try {
+    const object = store.read(id);
+    if (object.type !== "blob" && object.type !== "manifest") return [];
+    const payload = object.type === "manifest" ? readFragmented(store, id) : object.payload;
+    return payload.toString("utf8").split("\n").filter(Boolean).map((line) => decodeRecord(Buffer.from(line)));
+  }
   catch (error) { if (!(error instanceof ObjectStoreError)) throw error; return []; }
 }
 
@@ -179,7 +185,10 @@ class Annotator {
       const object = this.store.read(entry.id);
       if (object.type === "record") {
         const document = decodeRecord(object.payload); this.documents.set(entry.id, document); units = recordUnits(document);
-      } else if (object.type === "blob") units = splitLines(object.payload.toString("utf8")).map((value, index) => ({ key: String(index), group: "lines", index, value }));
+      } else if (object.type === "blob" || object.type === "manifest") {
+        const payload = object.type === "manifest" ? readFragmented(this.store, entry.id) : object.payload;
+        units = splitLines(payload.toString("utf8")).map((value, index) => ({ key: String(index), group: "lines", index, value }));
+      }
       else throw new ObjectStoreError("unsupported_annotation", "Annotation requires a text blob or structured record.");
       this.units.set(entry.id, units);
     }

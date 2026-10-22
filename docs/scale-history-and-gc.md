@@ -38,6 +38,11 @@ Chunk addresses hash uncompressed framed bytes, so changing the zlib level leave
 all identities unchanged. Native checkout and merge still have materializing paths;
 streaming those paths and pack compaction are separate follow-up work.
 
+Annotation reads verified logical text from blob and manifest storage, following
+setters across storage transitions and renames. Fragmented PM histories retain
+recorded agent provenance. Annotation assembles each selected text or history
+payload in memory; it does not inherit the bounded-memory status contract.
+
 Run `npm run benchmark:phase6` for the reproducible 200,000,000-byte
 generated binary plus a copy of this package's real PM tracker. The benchmark
 commits both, renames the binary and replaces 1% in its middle, verifies 21
