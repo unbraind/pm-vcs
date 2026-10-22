@@ -1,14 +1,15 @@
 /** Immutable attribution through ordinary PM records, branch merges, renames and bounded histories. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { encodeConflict, fieldSide, readConflict } from "../engine/conflicts.ts";
-import { annotatePath } from "../engine/annotate.ts";
+import { annotatePath, type AnnotationRow } from "../engine/annotate.ts";
+import { manifestFragments } from "../engine/manifest-pages.ts";
 import { Repository } from "../engine/repo.ts";
 import { effectiveChangeId, encodeManifest, encodeRecord, readCommit, writeCommit, type Signature } from "../engine/model.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
@@ -50,6 +51,68 @@ test("text annotation follows actual setters, groups adjacent lines, handles emp
   assert.equal(current.errorMessage, undefined);
   const latest = (current.result as { annotations: { text: string; changeId: string }[] }).annotations;
   assert.ok(latest.some((row) => row.text === "changed" && row.changeId === change(repo, next)));
+});
+
+test("manifest text annotation preserves setters through blob transitions renames and selected CLI revisions", async () => {
+  const root = temp(); const client = new PmClient({ cwd: root, pmRoot: join(root, ".agents/pm"), noExtensions: true });
+  await client.init("manifestannotation", { defaults: true, author: "fixture" });
+  const repo = Repository.init(root); const path = "large.txt"; const moved = "renamed.txt";
+  const first = edit(repo, path, "shared\nbefore\n");
+  const large = edit(repo, path, `shared\n${"x".repeat(1_048_576)}\nbefore\n`);
+  assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "manifest");
+  renameSync(join(root, path), join(root, moved));
+  const changed = edit(repo, moved, `shared\n${"x".repeat(1_048_576)}\nafter\n`, { ...author, name: "editor" });
+  const rows = annotatePath(repo.objects, changed, moved, true);
+  assert.deepEqual(rows.map(row => row.changeId), [change(repo, first), change(repo, large), change(repo, changed)]);
+  assert.deepEqual(rows.map(row => row.text), ["shared", "x".repeat(1_048_576), "after"]);
+  const grouped = annotatePath(repo.objects, large, path);
+  assert.deepEqual(grouped.map(row => [row.start, row.end, row.changeId]), [[1, 1, change(repo, first)], [2, 2, change(repo, large)], [3, 3, change(repo, first)]]);
+  const small = edit(repo, moved, "shared\nafter\n");
+  assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "blob");
+  assert.deepEqual(annotatePath(repo.objects, small, moved, true).map(row => row.changeId), [change(repo, first), change(repo, changed)]);
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const result = await harness.runCommand({ command: "vcs annotate", args: [path], options: { at: large, full: true }, pmRoot: join(root, ".agents/pm") });
+  assert.equal(result.errorMessage, undefined, String(result.errorMessage));
+  assert.deepEqual((result.result as { annotations: AnnotationRow[] }).annotations.map(row => row.changeId), [change(repo, first), change(repo, large), change(repo, first)]);
+  assert.equal(existsSync(join(root, ".git")), false);
+  assert.equal(readFileSync(join(root, moved), "utf8"), "shared\nafter\n");
+  const manifest = flattenTree(repo.objects, readCommit(repo.objects, large).tree).get(path)!.id;
+  const fragment = [...manifestFragments(repo.objects, manifest)][0].fragment.id;
+  const location = join(repo.controlDirectory, "objects", fragment.slice(0, 2), fragment.slice(2));
+  const compressed = readFileSync(location);
+  rmSync(location); assert.throws(() => annotatePath(repo.objects, large, path), { code: "object_not_found" });
+  writeFileSync(location, "corrupt fragment"); assert.throws(() => annotatePath(repo.objects, large, path), { code: "corrupt_object" });
+  writeFileSync(location, compressed);
+});
+
+test("fragmented PM history retains recorded agent provenance during annotation", async () => {
+  const root = temp(); const client = new PmClient({ cwd: root, pmRoot: join(root, ".agents/pm"), noExtensions: true });
+  await client.init("manifesthistory", { defaults: true, author: "fixture" });
+  const item = (await client.create({ type: "Task", title: "Large immutable history", author: "fixture" })).item.id;
+  await client.update(item, { description: "x".repeat(1_048_576), author: "fixture" });
+  execFileSync(process.execPath, [pmExecutable, "--no-extensions", "--json", "update", item, "--description", "Captured provenance"],
+    { cwd: root, env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "fixture", CODEX_CI: "1", CODEX_MODEL: "fixture-model", PM_AGENT_MODEL: "fixture-model", PM_AGENT_PROBES: "0" } });
+  const repo = Repository.init(root, "main", { recordPaths: ["**/*.toon"], recordPolicy: {} });
+  repo.stage([]); const snapshot = repo.commit({ message: "fragmented tracker history", author }, now);
+  const history = flattenTree(repo.objects, readCommit(repo.objects, snapshot).tree).get(`.agents/pm/history/${item}.jsonl`)!;
+  assert.equal(repo.objects.read(history.id).type, "manifest");
+  edit(repo, "text.txt", "first\nretained\n", author, [item]);
+  const tip = edit(repo, "text.txt", "second\nretained\n", author, [item]);
+  await client.update(item, { title: "Changed mutable tracker", author: "other" });
+  const rows = annotatePath(repo.objects, tip, "text.txt", true);
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every(row => row.agentHarness === "codex" && row.agentModel === "fixture-model" && row.items.includes(item)));
+  assert.equal(existsSync(join(root, ".git")), false);
+  const fragment = [...manifestFragments(repo.objects, history.id)][0].fragment.id;
+  const location = join(repo.controlDirectory, "objects", fragment.slice(0, 2), fragment.slice(2));
+  const compressed = readFileSync(location);
+  for (const fault of ["missing", "corrupt"]) {
+    if (fault === "missing") rmSync(location); else writeFileSync(location, "corrupt history fragment");
+    assert.ok(annotatePath(repo.objects, tip, "text.txt", true).every(row => row.agentHarness === undefined && row.agentModel === undefined));
+  }
+  rmSync(location); mkdirSync(location);
+  assert.throws(() => annotatePath(repo.objects, tip, "text.txt"), { code: "EISDIR" });
+  rmSync(location, { recursive: true }); writeFileSync(location, compressed);
 });
 
 test("structured annotation attributes scalar leaves and list entries across insertion, reorder, duplicates and punctuation", () => {
@@ -229,7 +292,7 @@ test("absent fields and empty disputed text ranges still report their alternativ
   }
 });
 
-test("nested renames traverse identity metadata and manifest payloads refuse typed annotation", () => {
+test("nested renames traverse identity metadata and empty manifest annotations stay empty", () => {
   const repo = Repository.init(temp()); mkdirSync(join(repo.root, "nested"));
   const first = edit(repo, "nested/old.txt", "retained\n");
   renameSync(join(repo.root, "nested/old.txt"), join(repo.root, "moved.txt")); repo.stage([]); repo.commit({ message: "move out of directory", author }, now);
@@ -237,7 +300,7 @@ test("nested renames traverse identity metadata and manifest payloads refuse typ
   const payload = repo.objects.write("manifest", encodeManifest({ mode: "fixed", totalLength: 0, fragments: [] }));
   const tree = buildTree(repo.objects, new Map([["large.bin", { id: payload, mode: "100644", fileId: "a".repeat(32) }]]));
   const commit = writeCommit(repo.objects, { tree, parents: [], author, committer: author, message: "fragmented file" });
-  assert.throws(() => annotatePath(repo.objects, commit, "large.bin"), (error: unknown) => error instanceof Error && "code" in error && error.code === "unsupported_annotation");
+  assert.deepEqual(annotatePath(repo.objects, commit, "large.bin"), []);
 });
 
 test("empty conflict alternatives exhaust shared ancestry without attributing missing history", () => {
@@ -380,9 +443,9 @@ test("unattached text alternatives stay unavailable and copied hunk ancestry kee
 test("supported annotations stop at unsupported ancestry while selected kinds and historical corruption still refuse", () => {
   for (const record of [false, true]) {
     const repo = Repository.init(temp()); const path = record ? "item.toon" : "text.txt"; const fileId = "a".repeat(32);
-    const manifest = repo.objects.write("manifest", encodeManifest({ mode: "fixed", totalLength: 0, fragments: [] }));
-    const old = writeCommit(repo.objects, { tree: buildTree(repo.objects, new Map([[path, { id: manifest, fileId, mode: "100644" }]])),
-      parents: [], author, committer: author, message: "fragmented predecessor" });
+    const unsupported = buildTree(repo.objects, new Map());
+    const old = writeCommit(repo.objects, { tree: buildTree(repo.objects, new Map([[path, { id: unsupported, fileId, mode: "100644" }]])),
+      parents: [], author, committer: author, message: "structural predecessor" });
     const side = (value: string) => record ? fieldSide(repo.objects, value) : repo.objects.write("blob", Buffer.from(value));
     const sides = { base: side("base"), ours: side("ours"), theirs: side("theirs") };
     const dispute = repo.objects.write("conflict", encodeConflict(record ? { kind: "field", field: "status", ...sides }
@@ -391,12 +454,12 @@ test("supported annotations stop at unsupported ancestry while selected kinds an
     const tip = writeCommit(repo.objects, { tree: buildTree(repo.objects, new Map([[path, { id: payload, fileId, mode: "100644", conflicts: [dispute] }]])),
       parents: [old], author, committer: author, message: "supported successor" });
     let reads = 0; const read = repo.objects.read.bind(repo.objects);
-    repo.objects.read = (id) => { if (id === manifest) reads++; return read(id); };
+    repo.objects.read = (id) => { if (id === unsupported) reads++; return read(id); };
     const rows = annotatePath(repo.objects, tip, path);
     assert.equal(rows[0].changeId, tip); assert.ok(rows[0].alternatives!.every((side) => side.unavailable === true));
     assert.equal(reads, 1); repo.objects.read = read;
     assert.throws(() => annotatePath(repo.objects, old, path), { code: "unsupported_annotation" });
-    const location = join(repo.controlDirectory, "objects", manifest.slice(0, 2), manifest.slice(2));
+    const location = join(repo.controlDirectory, "objects", unsupported.slice(0, 2), unsupported.slice(2));
     writeFileSync(location, "corrupt compressed ancestor");
     assert.throws(() => annotatePath(repo.objects, tip, path), { code: "corrupt_object" });
     rmSync(location); mkdirSync(location);

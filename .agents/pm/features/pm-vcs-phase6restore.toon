@@ -1,0 +1,13 @@
+id: pm-vcs-phase6restore
+title: Stream native checkout and merge of manifest-backed binary files
+description: "Ordinary add and manifest status now stream, while native checkout and merge still materialize complete payloads through workingContent and worktree mutation plans. Extend bounded file-descriptor restore into transactional native mutations, preserving rollback and conflict semantics."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-21T14:49:44.224Z"
+updated_at: "2026-10-21T14:49:44.224Z"
+author: codex-agent
+acceptance_criteria: Check out and merge large manifest-backed files under a fixed memory ceiling; preserve atomic refusal and erasure guards; verify in a plain-directory PM tracker.
+parent: pm-vcs-b7cb
+body: ""

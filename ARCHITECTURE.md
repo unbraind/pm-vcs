@@ -770,6 +770,16 @@ own ID). Recorded harness/model fields come from the owning snapshot's matching
 PM history events. Missing provenance stays absent; current mutable tracker
 state does not participate. Typed read/validation failure in optional history leaves
 agent provenance absent and caches that absence; unexpected I/O errors propagate.
+Blob and manifest storage share the same text and PM-history interpretation.
+Manifest reads verify the fragment addresses and lengths before interpreting bytes.
+Three-way merge unions append-only PM events and runs diff3 on logical text across
+blob/manifest transitions. Merge materializes these payloads and writes a blob result;
+unchanged staging preserves that recorded address even above the CDC threshold.
+Manifest merging first verifies all fragments and classifies UTF8 with bounded reads,
+including code points split between fragments. Invalid/truncated UTF8 or NUL bytes
+retain byte-preserving binary conflicts without whole-manifest concatenation.
+Annotation materializes selected logical text and history payloads in memory;
+the bounded staging, status and range-read contracts do not apply to annotation.
 Multiple reachable versions of a stable change ID
 require selecting a commit or ref explicitly.
 
@@ -781,7 +791,7 @@ cannot supply its origin. Repeated and multi-line alternatives retain separate
 setters after prefix insertion/deletion, renames and copies. A side without
 matching ancestry remains unavailable. Absent fields and zero-line hunks still emit a row. Shallow
 boundaries are marked explicitly and missing side ancestry is reported as
-unavailable rather than inventing an author. Fragmented files and links refuse
+unavailable rather than inventing an author. Links and structural object kinds refuse
 with a typed unsupported-annotation error. Unsupported payload kinds encountered
 in ancestry stop that lineage branch instead of aborting a supported selected file.
 Those boundaries are cached; historical corruption and unexpected I/O still refuse.

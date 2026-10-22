@@ -38,7 +38,7 @@ import { type ObjectId, type PayloadState, ObjectStore, ObjectStoreError, hashOb
 
 import { assertCompositionPath, assertSafeFilePath, authorize, configureAuthority, decodeLink, encodeLink, pathsOverlap, readLayers, writePrivateJson, type AuthorityChangeAuthorization, type LocalLayer, type RepositoryLink } from "./composition.ts";
 import { eraseFile, type ErasureReceipt } from "./erasure.ts";
-import { readFragmented } from "./fragments.ts";
+import { CDC_STAGING_THRESHOLD, STAGING_CDC_PARAMS, blobFileContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmented, writeCdcFragmentedFile } from "./fragments.ts";
 
 
 import type { StoredObject } from "./objects.ts";
@@ -94,6 +94,7 @@ import {
   readWorkingFile,
   readWorkingStat,
   sameIndexStat,
+  sameFileIdentity,
 } from "./worktree.ts";
 
 import { WorktreeMutation } from "./worktree-mutation.ts";
@@ -694,15 +695,23 @@ export class Repository {
             : "Control state and filesystem aliases cannot be re-included; otherwise adjust .pmvcsignore or stage an allowed path."),
         );
       }
+      // Store I/O faults must escape staging, never masquerade as working-file deletion.
+      const previous = index.get(path);
+      const isLink = previous !== undefined && this.objects.hasType(previous.id, "link");
       let content: Buffer;
       let executable: boolean;
       let stat: IndexEntry["stat"];
+      let chunked = false;
+      let regular = false;
       try {
         const observed = readWorkingStat(this.root, path);
         const existing = index.get(path);
         const observedMode = observed.executable ? "100755" : "100644";
         if (existing?.fileId !== undefined && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
-        ({ content, executable, stat } = read(this.root, path));
+        regular = !observed.symbolicLink;
+        chunked = regular && observed.stat.size >= BigInt(CDC_STAGING_THRESHOLD) && !isRecordPath(path, this.config) && !isLink;
+        if (chunked) { content = Buffer.alloc(0); executable = observed.executable; stat = observed.stat; }
+        else ({ content, executable, stat } = read(this.root, path));
       } catch {
         // A sparse entry's path is intentionally absent: its file was never in
         // this working tree's view, so the miss is not a staged deletion.
@@ -712,10 +721,12 @@ export class Repository {
         if (existing !== undefined && existing.sparse !== true && index.delete(path)) changed.push(path);
         continue;
       }
-      const previous = index.get(path);
-      const isLink = previous !== undefined && this.objects.state(previous.id).kind === "present" && this.objects.read(previous.id).type === "link";
-      const id = isLink ? hashObject("link", encodeLink(decodeLink(content)))
-        : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(parseWorkingRecord(path, content))) : hashObject("blob", content);
+      const absolute = join(this.root, ...path.split("/"));
+      const retainedId = regular && previous !== undefined && !isLink && !isRecordPath(path, this.config) && (this.objects.hasType(previous.id, "blob")
+        ? chunked && blobFileContentId(absolute) === previous.id
+        : this.objects.hasType(previous.id, "manifest") && matchesFragmentedFile(this.objects, previous.id, absolute)) ? previous.id : undefined;
+      const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : isLink ? hashObject("link", encodeLink(decodeLink(content)))
+        : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(parseWorkingRecord(path, content))) : hashObject("blob", content));
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
       let fileId = existing === undefined ? undefined : existing.fileId ?? migratedFileId(existing);
@@ -744,7 +755,12 @@ export class Repository {
           fileId = randomBytes(16).toString("hex");
         }
       }
-      if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
+      if (chunked || retainedId !== undefined) {
+        const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
+        if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
+          throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
+        }
+      } else if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
       else this.stageContent(path, content, fileId);
       const conflicts = conflictSource === undefined ? undefined : carryConflicts(this.objects, conflictSource.conflicts, conflictSource.id, id, fileId);
       index.set(path, { path, id, mode, fileId, ...(conflicts === undefined ? {} : { conflicts }), ...(copiedFrom === undefined ? {} : { copiedFrom }),
@@ -828,6 +844,10 @@ export class Repository {
       // linear scan per hint made the filter quadratic in hints x entries.
       new Set(readHints(this.controlDirectory).filter((path) => indexedPaths.has(path))),
       excluded,
+      /** Compare manifest-backed files against their exact historical chunk boundaries. */ (entry) => {
+        if (!this.objects.hasType(entry.id, "manifest")) return undefined;
+        return matchesFragmentedFile(this.objects, entry.id, join(this.root, ...entry.path.split("/")));
+      },
     );
     if (refreshCache && refreshed.size > 0) {
       this.replaceIndex(snapshot.entries.map((entry) => {
@@ -1538,7 +1558,10 @@ export class Repository {
    * which is what keeps hints an accelerator instead of a second source of
    * truth.
    *
-   * @param read - Working-file reader; injectable for tests.
+   * Manifest-backed regular files are compared in bounded chunks against their
+   * recorded layout; neither dirty hints nor the stat cache can skip this read.
+   *
+   * @param read - Working-file reader for non-manifest entries; injectable for tests.
    * @returns How many entries were checked, what is genuinely dirty, and every
    *   hint the filesystem disagreed with.
    */
@@ -1556,6 +1579,12 @@ export class Repository {
         continue;
       }
       checked += 1;
+      if (this.objects.hasType(entry.id, "manifest")) {
+        const observed = readWorkingStat(this.root, entry.path);
+        if (observed.symbolicLink || (observed.executable ? "100755" : "100644") !== entry.mode
+          || !matchesFragmentedFile(this.objects, entry.id, absolute)) dirty.add(entry.path);
+        continue;
+      }
       const { content, executable } = read(this.root, entry.path);
       const mode = executable ? "100755" : "100644";
       const id = this.workingIdentifier(entry.path, content, entry.id);
@@ -1882,6 +1911,7 @@ export class Repository {
   private diffText(id: ObjectId | null): string {
     if (id === null) return "";
     const object = this.objects.read(id);
+    if (object.type === "manifest") return readFragmented(this.objects, id).toString("utf8");
     if (object.type !== "record") return object.payload.toString("utf8");
     const document = decodeRecord(object.payload);
     return `${Object.keys(document)

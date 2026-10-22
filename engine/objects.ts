@@ -313,12 +313,12 @@ export class ObjectStore {
     const temporary = `${destination}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
     const handle = openSync(temporary, "wx");
     try {
-      writeSync(handle, compressed);
-      fsyncSync(handle);
-    } finally {
-      closeSync(handle);
-    }
-    try {
+      try {
+        writeSync(handle, compressed);
+        fsyncSync(handle);
+      } finally {
+        closeSync(handle);
+      }
       renameSync(temporary, destination);
     } catch (error) {
       rmSync(temporary, { force: true });
@@ -382,11 +382,16 @@ export class ObjectStore {
    * operational I/O failures remain visible. Ordinary recognizable unrelated objects avoid full payload reads.
    */
   readIfType(id: ObjectId, type: ObjectType, alternatives: readonly ObjectType[] = []): StoredObject | undefined {
+    return this.hasType(id, type, alternatives) ? this.read(id) : undefined;
+  }
+
+  /** Hint at an object's kind using bounded prefix decoding; never a substitute for verified object reads. */
+  hasType(id: ObjectId, type: ObjectType, alternatives: readonly ObjectType[] = []): boolean {
     this.assertId(id);
-    if (this.denial(id) !== undefined) return undefined;
+    if (this.denial(id) !== undefined) return false;
     let fd: number;
     try { fd = openSync(this.pathFor(id), "r"); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;
     }
     let matching = false;
@@ -396,7 +401,7 @@ export class ObjectStore {
       for (;;) {
         if (length === bytes.length) throw new ObjectStoreError("object_prefix_limit", `Object ${id} has no recognizable header within the compressed prefix budget.`);
         const count = readSync(fd, bytes, length, Math.min(64, bytes.length - length), null);
-        if (count === 0) return undefined;
+        if (count === 0) return false;
         length += count;
         let end = length;
         let prefix: Buffer;
@@ -405,7 +410,7 @@ export class ObjectStore {
             prefix = inflateSync(bytes.subarray(0, end), { finishFlush: zlibConstants.Z_SYNC_FLUSH, maxOutputLength: 4096, chunkSize: 4096 });
             break;
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ERR_BUFFER_TOO_LARGE") return undefined;
+            if ((error as NodeJS.ErrnoException).code !== "ERR_BUFFER_TOO_LARGE") return false;
             // Back off input, never increase the output budget for a highly compressible payload.
             end -= 1;
           }
@@ -415,10 +420,10 @@ export class ObjectStore {
           break;
         }
         // Any valid frame header fits in 32 bytes: longest kind, a space, at most 16 decimal length digits and NUL.
-        if (prefix.length >= 32) return undefined;
+        if (prefix.length >= 32) return false;
       }
     } finally { closeSync(fd); }
-    return matching ? this.read(id) : undefined;
+    return matching;
   }
 
   /** Read a verified small object with bounded compressed input and inflation; larger payloads select streaming compatibility. */

@@ -6,7 +6,7 @@ import { decodeCommit, decodeManifest, decodeSeries, decodeTree } from "./model.
 import { ObjectStoreError, isObjectId, readControlJson, type ObjectId } from "./objects.ts";
 import { requireInstances } from "./instances.ts";
 import { PublicationLeases } from "./publication-leases.ts";
-import { Repository } from "./repo.ts";
+import { CONTROL_DIRECTORY, Repository } from "./repo.ts";
 
 /** Exact sweep receipt: candidate addresses are informational until an explicit apply. */
 export interface GcReport {
@@ -14,6 +14,10 @@ export interface GcReport {
   readonly retained: number;
   readonly candidates: readonly ObjectId[];
   readonly removed: number;
+  /** Compressed physical bytes planned for removal, including recognized temporary copies. */
+  readonly candidateBytes: number;
+  /** Compressed physical bytes actually unlinked by a completed apply. */
+  readonly reclaimedBytes: number;
   /** Active file leases conservatively retain unpublished, unattributed arrivals too. */
   readonly activeLeases: number;
 }
@@ -35,16 +39,20 @@ function requireEntry(path: string, refusal: string, kind: "file" | "directory")
 }
 
 /** Inspect all ref namespaces without the display API's tolerant omission of broken refs. */
-function refRoots(path: string): ObjectId[] {
-  if (!requireEntry(path, "Collection cannot follow a ref directory link.", "directory")) return [];
+function refRoots(path: string, root: string): ObjectId[] {
+  const display = `${CONTROL_DIRECTORY}/${relative(root, path).split(sep).join("/")}`;
+  if (!requireEntry(path, `Collection cannot follow a ref directory link: ${display}.`, "directory")) return [];
   const result: ObjectId[] = [];
   for (const entry of readdirSync(path, { withFileTypes: true })) {
-    if (entry.name.endsWith(".lock") || entry.name.endsWith(".tmp")) continue;
+    if (entry.name.endsWith(".lock")) continue;
     const target = join(path, entry.name);
-    if (entry.isDirectory()) result.push(...refRoots(target));
+    const name = `${CONTROL_DIRECTORY}/${relative(root, target).split(sep).join("/")}`;
+    if (entry.isDirectory()) result.push(...refRoots(target, root));
     else {
-      if (!entry.isFile()) throw new ObjectStoreError("unsafe_gc_roots", "Collection cannot follow a ref link.");
-      result.push(...addresses([readFileSync(target, "utf8").trim()]));
+      if (!entry.isFile()) throw new ObjectStoreError("unsafe_gc_roots", `Collection cannot follow a ref link: ${name}.`);
+      const id = readFileSync(target, "utf8").trim();
+      if (!isObjectId(id)) throw new ObjectStoreError("unsafe_gc_roots", `Collection root ${name} is not an object address.`);
+      result.push(id);
     }
   }
   return result;
@@ -92,7 +100,7 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
   return repository.objects.withWriteLock(/** Never reuse a stale plan across a publication or a retry. */ () => {
     const store = repository.objects;
     const shared = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
-    const roots = new Set(refRoots(join(shared, "refs")));
+    const roots = new Set(refRoots(join(shared, "refs"), shared));
     for (const instance of storageInstances(repository)) {
       const head = instance.refs.resolveHead();
       if (head !== null) roots.add(head);
@@ -116,10 +124,10 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
         if (lease !== null && lease.active && lease.expiry > Date.now()) activeLeases++;
       }
     }
-    const inventory: { id: ObjectId; path: string }[] = [];
+    const inventory: { id: ObjectId; path: string; bytes: number }[] = [];
     // Complete the physical preflight before unlinking even the first candidate.
     for (const item of store.walkInventory()) {
-      inventory.push({ id: item.id, path: item.path });
+      inventory.push({ id: item.id, path: item.path, bytes: lstatSync(item.path).size });
 
     }
     const partial = store.partialState();
@@ -141,10 +149,11 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
       else if (object.type === "series") { const series = decodeSeries(object.payload); pending.push(series.base, ...series.patches.map(/** Review series keep all patch commits. */ (patch) => patch.commit)); }
     }
     const candidates = inventory.filter(/** Physical copies of a retained address remain retained. */ (item) => !retained.has(item.id));
+    const candidateBytes = candidates.reduce(/** Count physical bytes rather than logical uncompressed payloads. */ (sum, item) => sum + item.bytes, 0);
     if (apply) {
       for (const candidate of candidates) unlinkSync(candidate.path);
       store.releaseUploadRoots(visited);
     }
-    return { applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed: apply ? candidates.length : 0, activeLeases };
+    return { applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed: apply ? candidates.length : 0, candidateBytes, reclaimedBytes: apply ? candidateBytes : 0, activeLeases };
   });
 }

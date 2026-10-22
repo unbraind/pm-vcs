@@ -14,7 +14,7 @@ import extension from "../index.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { Repository } from "../engine/repo.ts";
 import { PublicationLeases } from "../engine/publication-leases.ts";
-import { writeFragmented } from "../engine/fragments.ts";
+import { readFragmentRange, writeFragmented } from "../engine/fragments.ts";
 import { writeSeries, type Signature } from "../engine/model.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
@@ -81,6 +81,29 @@ test("GC follows manifest pages and protects sparse private and retired instance
   assert.ok(instance.objects.has(staged)); assert.ok(hub.objects.has(tip)); assert.ok(!hub.objects.has(garbage));
 });
 
+for (const ref of ["refs/metadata/checkpoint.tmp", "refs/remotes/archive.tmp/main"]) {
+  test(`GC retains valid tmp refs through ${ref}`, async () => {
+    const repo = await fresh(); const content = Buffer.from("reachable chunked checkpoint".repeat(20));
+    const stored = writeFragmented(repo.objects, content, 32);
+    repo.refs.compareAndSwap(ref, null, stored.manifestId);
+    assert.equal(repo.refs.read(ref), stored.manifestId);
+    assert.ok(repo.refs.list("refs/").some(entry => entry.name === ref));
+    const garbage = repo.objects.write("blob", Buffer.from("unreachable fixture bytes"));
+    assert.deepEqual(collectGarbage(repo).candidates, [garbage]);
+    assert.equal(collectGarbage(repo, true).removed, 1);
+    assert.equal(repo.refs.read(ref), stored.manifestId);
+    assert.deepEqual(readFragmentRange(repo.objects, stored.manifestId, 0, content.length), content);
+  });
+}
+
+for (const contents of ["partial ref bytes", ""]) test(`GC refuses a corrupt tmp-named ref before deletion: ${JSON.stringify(contents)}`, async () => {
+  const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("held garbage"));
+  const target = join(repo.controlDirectory, "refs/heads/broken.tmp");
+  writeFileSync(target, contents);
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: "Collection root .pmvcs/refs/heads/broken.tmp is not an object address." });
+  assert.ok(repo.objects.has(garbage));
+});
+
 test("active leases retain even unpublished unattached payloads, expired and released leases permit collection", async () => {
   const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("lease payload"));
   const leases = new PublicationLeases(repo.objects, repo.controlDirectory);
@@ -106,7 +129,8 @@ test("bad upload roots, refs, instance roots and lease layout fail before unlink
   }
   const refs = join(repo.controlDirectory, "refs"); mkdirSync(refs, { recursive: true });
   writeFileSync(join(refs, "bad"), "bad"); assert.throws(() => collectGarbage(repo, true)); rmSync(join(refs, "bad"));
-  symlinkSync(join(repo.controlDirectory, "HEAD"), join(refs, "bad")); assert.throws(() => collectGarbage(repo, true)); rmSync(join(refs, "bad"));
+  symlinkSync(join(repo.controlDirectory, "HEAD"), join(refs, "bad"));
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: "Collection cannot follow a ref link: .pmvcs/refs/bad." }); rmSync(join(refs, "bad"));
   mkdirSync(join(repo.controlDirectory, "leases")); writeFileSync(join(repo.controlDirectory, "leases/bad"), "{}");
   assert.throws(() => collectGarbage(repo, true)); assert.ok(repo.objects.has(garbage));
 });
@@ -157,7 +181,7 @@ test("collection retains detached HEAD transitions and pending merge roots witho
   const repo = await fresh(); const tip = commit(repo, "base");
   repo.switchTo(tip, new Date()); repo.switchTo("main", new Date());
   writeFileSync(join(repo.controlDirectory, "MERGE_STATE"), JSON.stringify({ ours: tip, theirs: tip, bases: [tip] }));
-  writeFileSync(join(repo.controlDirectory, "refs/heads/unused.tmp"), "broken temporary ref");
+  writeFileSync(join(repo.controlDirectory, "refs/heads/unused.tmp.lock"), "broken temporary ref");
   writeFileSync(join(repo.controlDirectory, "refs/heads/unused.lock"), "live marker");
   assert.equal(collectGarbage(repo).candidates.length, 0);
   const logs = readFileSync(join(repo.controlDirectory, "oplog.jsonl"), "utf8");
@@ -196,10 +220,31 @@ test("dangling links at collection roots fail closed", async () => {
   assert.throws(() => collectGarbage(repo, true), /real lease directory/); assert.ok(repo.objects.has(garbage));
   rmSync(leases);
   const refs = join(control, "refs"); rmSync(refs, { recursive: true }); symlinkSync(join(control, "absent-target"), refs, "dir");
-  assert.throws(() => collectGarbage(repo, true), /ref directory link/); assert.ok(repo.objects.has(garbage));
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: "Collection cannot follow a ref directory link: .pmvcs/refs." }); assert.ok(repo.objects.has(garbage));
   rmSync(refs);
   mkdirSync(join(control, "refs", "heads"), { recursive: true });
   assert.deepEqual(collectGarbage(repo, true).candidates, [garbage]);
+});
+
+for (const fault of ["address", "file-link", "directory-link", "root-link"] as const) test(`GC refusal reports only repository-relative ref paths for ${fault}`, async () => {
+  const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("retained on refusal"));
+  const refs = join(repo.controlDirectory, "refs");
+  const target = join(refs, "heads", "nested.tmp");
+  let message: string;
+  if (fault === "root-link") {
+    rmSync(refs, { recursive: true }); symlinkSync(repo.controlDirectory, refs, "dir");
+    message = "Collection cannot follow a ref directory link: .pmvcs/refs.";
+  } else {
+    if (fault === "address") writeFileSync(target, "truncated legacy or legal ref");
+    else symlinkSync(fault === "file-link" ? join(repo.controlDirectory, "HEAD") : repo.controlDirectory, target, fault === "file-link" ? "file" : "dir");
+    message = fault === "address" ? "Collection root .pmvcs/refs/heads/nested.tmp is not an object address."
+      : "Collection cannot follow a ref link: .pmvcs/refs/heads/nested.tmp.";
+  }
+  assert.throws(() => collectGarbage(repo, true), (error: unknown) => {
+    assert.ok(error instanceof Error && "code" in error && error.code === "unsafe_gc_roots");
+    assert.equal(error.message, message); assert.ok(!error.message.includes(repo.root)); return true;
+  });
+  assert.ok(repo.objects.has(garbage));
 });
 
 test("a hidden instance registry fails closed before any sweep can delete staged work", async () => {

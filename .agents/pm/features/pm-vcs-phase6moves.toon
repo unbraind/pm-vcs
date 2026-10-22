@@ -1,0 +1,13 @@
+id: pm-vcs-phase6moves
+title: Preserve explicit FileId intent for ambiguous edited moves
+description: "Same-inode rename plus edit and unambiguous unchanged-content moves retain FileIds today. An edited move across filesystems can lose both inode and content evidence, so guessing can conflate independent files. Add an explicit native move or identity-mapping operation with collision and erasure guards."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-21T15:48:35.100Z"
+updated_at: "2026-10-21T15:48:35.100Z"
+author: codex-agent
+acceptance_criteria: An explicitly declared edited move retains its FileId and PM ChangeId trace across filesystems; independent copies keep new identities; ambiguous inference never silently picks an unrelated source.
+parent: pm-vcs-b7cb
+body: ""
