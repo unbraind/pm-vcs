@@ -87,6 +87,8 @@ for (const layout of ["blob", "fixed", "native", "small-fixed"] as const) test(`
     : layout === "native" ? initial.id : writeFragmented(repo.objects, bytes, 8192, initial.fileId).manifestId;
   repo.writeIndex([{ ...initial, id }]);
   const baseline = repo.commit({ message: "recorded representation", author }, new Date());
+  // Force byte comparison rather than a stat-cache no-op.
+  repo.writeIndex(repo.readIndex().map(entry => ({ ...entry, stat: undefined })));
   /** Re-adding a large legacy blob must hash bounded reads rather than materialize working bytes. */
   const read = layout === "small-fixed" ? undefined : (): never => { throw new Error("whole-file staging read"); };
   assert.deepEqual(repo.stage(["asset"], read), []);
@@ -116,6 +118,19 @@ test("legacy blob file hashing uses bounded reads and refuses a truncated descri
   context.mock.method(fs, "readSync", () => 0); syncBuiltinESMExports();
   try { assert.throws(() => blobFileContentId(file), { code: "short_read" }); }
   finally { context.mock.restoreAll(); syncBuiltinESMExports(); }
+});
+
+for (const target of ["identical-target", "absent-target"]) test(`symlink staging preserves target text after a manifest for ${target}`, async () => {
+  const { repo } = await fresh(); const file = join(repo.root, "asset"); const bytes = Buffer.alloc(1_048_577, 42);
+  writeFileSync(file, bytes); repo.stage(["asset"]);
+  const before = repo.readIndex()[0]; assert.equal(repo.objects.read(before.id).type, "manifest");
+  repo.commit({ message: "regular manifest", author }, new Date());
+  writeFileSync(join(repo.root, "identical-target"), bytes);
+  unlinkSync(file); symlinkSync(target, file);
+  assert.deepEqual(repo.stage(["asset"]), ["asset"]);
+  const entry = repo.readIndex()[0]; assert.notEqual(entry.id, before.id); assert.equal(entry.fileId, before.fileId);
+  assert.deepEqual(repo.objects.readTyped(entry.id, "blob"), Buffer.from(target));
+  assert.equal(existsSync(join(repo.root, ".git")), false);
 });
 
 test("manifest history merge unions both real appended SDK events above one MiB", async () => {

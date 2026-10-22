@@ -23,7 +23,7 @@ passes retain bounded buffers; a changed identity or filesystem observation
 refuses index publication. Unreferenced chunks left by a refused add are GC
 candidates. Files below the threshold and configured structured records keep
 their existing blob and record semantics. Symlinks keep their target-text semantics.
-Re-adding unchanged content preserves its recorded blob or manifest address,
+Re-adding unchanged regular-file content preserves its recorded blob or manifest address,
 including legacy large blobs and alternate fragment layouts. Comparisons stream
 working bytes; changing storage defaults alone does not create a staged edit.
 

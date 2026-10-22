@@ -702,12 +702,14 @@ export class Repository {
       let executable: boolean;
       let stat: IndexEntry["stat"];
       let chunked = false;
+      let regular = false;
       try {
         const observed = readWorkingStat(this.root, path);
         const existing = index.get(path);
         const observedMode = observed.executable ? "100755" : "100644";
         if (existing?.fileId !== undefined && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
-        chunked = !observed.symbolicLink && observed.stat.size >= BigInt(CDC_STAGING_THRESHOLD) && !isRecordPath(path, this.config) && !isLink;
+        regular = !observed.symbolicLink;
+        chunked = regular && observed.stat.size >= BigInt(CDC_STAGING_THRESHOLD) && !isRecordPath(path, this.config) && !isLink;
         if (chunked) { content = Buffer.alloc(0); executable = observed.executable; stat = observed.stat; }
         else ({ content, executable, stat } = read(this.root, path));
       } catch {
@@ -720,7 +722,7 @@ export class Repository {
         continue;
       }
       const absolute = join(this.root, ...path.split("/"));
-      const retainedId = previous !== undefined && !isLink && !isRecordPath(path, this.config) && (this.objects.hasType(previous.id, "blob")
+      const retainedId = regular && previous !== undefined && !isLink && !isRecordPath(path, this.config) && (this.objects.hasType(previous.id, "blob")
         ? chunked && blobFileContentId(absolute) === previous.id
         : this.objects.hasType(previous.id, "manifest") && matchesFragmentedFile(this.objects, previous.id, absolute)) ? previous.id : undefined;
       const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : isLink ? hashObject("link", encodeLink(decodeLink(content)))
