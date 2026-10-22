@@ -139,7 +139,7 @@ test("list walks valid tmp refs, excludes reserved locks, and sorts by name", ()
   writeFileSync(join(root, ...BRANCH_PREFIX.split("/"), "abandoned.lock", "not-a-ref"), `${id}\n`);
   refs.compareAndSwap(`${BRANCH_PREFIX}kept.tmp`, null, otherId);
   const again = refs.list(BRANCH_PREFIX);
-  assert.ok(!again.some((entry: RefEntry) => entry.name.endsWith(".lock")));
+  assert.ok(!again.some((entry: RefEntry) => entry.name.split("/").some(segment => segment.endsWith(".lock"))));
   assert.ok(again.some((entry: RefEntry) => entry.name === `${BRANCH_PREFIX}kept.tmp`));
 });
 

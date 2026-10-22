@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { deflateSync, inflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { traceFile } from "../engine/attribution.ts";
@@ -13,7 +14,7 @@ import { collectGarbage } from "../engine/gc.ts";
 import { manifestFragments } from "../engine/manifest-pages.ts";
 import { type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
-import { readWorkingStat } from "../engine/worktree.ts";
+import { RACY_WINDOW_NS, readWorkingStat } from "../engine/worktree.ts";
 import { readHints, writeHints } from "../engine/instances.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
@@ -202,15 +203,24 @@ test("manifest working comparisons support fixed layouts and refuse short reads 
   const native = readWorkingStat(repo.root, "asset");
   repo.writeIndex([{ ...entry, stat: { ...native.stat, observedAtNs: native.stat.observedAtNs - 3_000_000_000n } }]);
   assert.deepEqual(repo.status().unstaged, []);
+  // Prove that a stable streamed comparison can refresh this index before
+  // introducing drift; a recent, non-cacheable observation cannot test the guard.
+  await delay(Number(RACY_WINDOW_NS / 1_000_000n) + 100);
+  const indexPath = join(repo.controlDirectory, "index");
+  const uncached = readFileSync(indexPath);
+  assert.deepEqual(repo.status().unstaged, []);
+  assert.notDeepEqual(readFileSync(indexPath), uncached, "control: a stable aged observation refreshes the stat cache");
+  writeFileSync(indexPath, uncached);
   let touched = false;
   repo.objects.readBoundedTyped = (id, type, limit) => {
     const payload = bounded(id, type, limit);
     if (!touched && id === entry.id) { touched = true; writeFileSync(file, bytes); }
     return payload;
   };
-  const snapshot = readFileSync(join(repo.controlDirectory, "index"));
+  const snapshot = readFileSync(indexPath);
   assert.deepEqual(repo.status().unstaged, []);
-  assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), snapshot, "a drifting streamed observation never populates the stat cache");
+  assert.ok(touched, "the streamed comparison must exercise the drift hook");
+  assert.deepEqual(readFileSync(indexPath), snapshot, "a drifting streamed observation never populates the stat cache");
   repo.objects.readBoundedTyped = bounded;
   renameSync(file, join(repo.root, "saved")); symlinkSync("saved", file);
   assert.deepEqual(repo.status().unstaged, [{ path: "asset", kind: "modified" }]);
