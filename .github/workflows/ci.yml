@@ -74,23 +74,13 @@ jobs:
           # still exiting successfully.
           ./node_modules/.bin/pm health --check-only --strict-exit --require-merge-drivers
 
-      - name: Type check
-        run: npm run typecheck
+      - name: Full npm release gate
+        run: npm run release:check
 
-      - name: Enforce source policy
-        run: npm run lint
-
-      - name: Reject duplicated production code
-        run: npm run duplicates
-
-      - name: Verify production API documentation
-        run: npm run docstring
-
-      - name: Build
-        run: npm run build
-
-      - name: Test with coverage gate
-        run: npm run coverage
+      - name: Full Bun release gate
+        run: |
+          bun run release:check
+          bun test --timeout 120000 ./test/tracker-lenses.test.ts
 
       # The gate prints percentages but not which branch was missed, and a
       # coverage result that reproduces only on a runner is otherwise undebuggable
@@ -105,38 +95,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Prove materialized files become metadata-only
-        run: npm run accept:stat-cache
-
-      - name: Prove native PM TOON behavior through the installed CLI
-        run: npm run accept:native-toon
-
-      - name: Prove the self-host bundle matches the committed source
-        run: npm run accept:self-host
-
-      - name: Production dependency audit
-        run: npm run audit:prod
-
-      - name: Audit commit identities against the approved list
-        run: npm run audit:identities
-
-      - name: Verify npm package contents
-        run: npm run pack:dry-run
-
-      - name: Verify generated changelog
-        run: npm run changelog:check
-
-      - name: Verify the changelog date is derived from the version
-        run: npm run verify:release-changelog-date
-
-      - name: Verify every publish invocation is attested
-        run: npm run verify:release-publish-attestation
-
       - name: Verify Bun can install the package graph
         run: bun install --no-save
-
-      - name: Run the full release gate with Bun
-        run: bun run release:check
 
   windows-acceptance-launcher:
     runs-on: windows-latest
