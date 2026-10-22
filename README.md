@@ -276,8 +276,8 @@ are recorded as evidence on the item. See [the full bisect contract](docs/bisect
 
 ## Without git
 
-Native commits, refs, history, merges, bundles, transports, signing, annotation
-and bisect work in a plain-directory PM project without a git executable. Bisect
+Native commits, refs, history, merges, bundles, transports, signing, annotation,
+bisect and tracker change lenses work in a plain-directory PM project without a git executable. Bisect
 predicates must supply their own dependencies. The optional `vcs git` interoperability
 commands need a git repository and refuse with an actionable diagnostic otherwise.
 
@@ -840,3 +840,18 @@ Both filesystem and served HTTP receivers refuse the whole ref batch for
 unsigned, untrusted, revoked, malformed or tampered changes. See the
 [payload, policy and threat model](docs/change-signatures.md) and
 [pm item](.agents/pm/features/pm-vcs-p7sign.toon).
+
+## Tracker-semantic change lenses
+
+`pm vcs explain HEAD --lenses lifecycle,dependency,evidence,policy --limit 20`
+explains a native change against its first parent with exact immutable object
+citations. Lenses are opt in; the default shows ordinary field/text provenance.
+Canonical SDK-valid items receive lifecycle, dependency, recorded evidence and
+declared item policy labels. Malformed tracker objects stay opaque. These views
+never rewrite content or execute evidence. JSON (`--json`) and default TOON share
+bounded pages and explicit omission receipts. See the [contract and SDK/CLI
+example](docs/tracker-lenses.md) for fields, refusals and continuation.
+
+
+Core history continues to own tracker event records; lenses interpret immutable
+native VCS changes.

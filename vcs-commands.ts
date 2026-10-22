@@ -2,6 +2,7 @@ import { registerSigningCommands } from "./signing-commands.ts";
 import { verifyChangeSignature, type ChangeSignatureResult } from "./engine/signatures.ts";
 import { EMPTY_TRUST, readTrustedKeys } from "./engine/signature-policy.ts";
 import { annotatePath, type AnnotationRow } from "./engine/annotate.ts";
+import { explainChange, type ExplainedChange, type TrackerLens } from "./engine/tracker-lenses.ts";
 import { historyOptions, type HistoryOptions } from "./engine/partial.ts";
 import { collectGarbage, type GcReport } from "./engine/gc.ts";
 import { changeRemoteLease } from "./engine/lease-workflows.ts";
@@ -501,6 +502,27 @@ export function registerVcsCommands(api: ExtensionApi): void {
         items,
       }, now);
       return { ok: true, commit, items };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs explain",
+    description: "Explain an immutable native change with opt-in tracker lenses and exact object citations (no Git required).",
+    arguments: [{ name: "change", description: "Native revision (default HEAD)", required: false }],
+    flags: [
+      { long: "--lenses", value_name: "names", description: "Comma-separated lifecycle,dependency,evidence,policy; default ordinary provenance", value_type: "string" },
+      { long: "--limit", value_name: "count", description: "Statements per page, 1..100 (default 20)", value_type: "string" },
+      { long: "--offset", value_name: "count", description: "Nonnegative statement offset (default 0)", value_type: "string" },
+    ],
+    run(context: CommandHandlerContext): VcsEnvelope & ExplainedChange {
+      const repository = openRepository(context);
+      const revision = repository.resolve(context.args[0]?.trim() || "HEAD");
+      const offset = optionalString(context.options, "offset") ?? "0";
+      if (!/^(0|[1-9][0-9]*)$/.test(offset)) throw new VcsError("invalid_lens_page", "Invalid statement offset.", "Pass --offset with a nonnegative safe integer.");
+      return { ok: true, ...explainChange(repository.objects, revision, {
+        lenses: commaSeparated(context.options, "lenses") as TrackerLens[],
+        limit: positiveInteger(context.options, "limit", 20), offset: Number(offset),
+      }) };
     },
   });
 
