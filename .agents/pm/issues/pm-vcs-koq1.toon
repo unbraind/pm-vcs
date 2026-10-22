@@ -2,13 +2,18 @@ id: pm-vcs-koq1
 title: Allow action-only Dependabot bumps through the committed self-host audit
 description: "CI jobs for PRs 116, 117 and 118 fail because workflow action revision changes make selfhost.bundle stale. Preserve the archive integrity audit and all other workflow bytes while allowing validated action revision changes; prove direct entry points and committed-source rejection with regressions."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags: []
 created_at: "2026-10-16T22:29:54.396Z"
-updated_at: "2026-10-20T09:36:13.587Z"
+updated_at: "2026-10-22T11:57:30.152Z"
+closed_at: "2026-10-21T18:44:41.716Z"
+completed_at: "2026-10-21T18:44:41.716Z"
 author: codex-agent
-comments[14]{created_at,author,text}:
+resolution: Delivered by the audit-linked mainline implementation.
+expected_result: Allow action-only Dependabot bumps through the committed self-host audit.
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery ec61c6d8f174 remains in main ancestry; scripts/self-host.ts, test/self-host.test.ts remain present."
+comments[15]{created_at,author,text}:
   "2026-10-16T22:30:26.588Z",codex-agent,"Compared failed CI jobs 116966419723, 116965719699 and 116965854973 with green main job 116965011838. The real failure is self-host source/bundle workflow byte mismatch. The missing CLI diagnostic occurs in a passing negative test on both green and red runs. Preserve complete archive validation and original workflow bytes; allow only full-SHA version-comment changes for trusted external actions during comparison, retaining action paths, all other YAML and file modes."
   "2026-10-16T22:33:12.967Z",codex-agent,"Behavioural revert proof: restoring strict byte equality by disabling only sameWorkflowExceptActionRevisions makes both new regressions fail with assertion failures, including the direct CLI test. With the fix restored, the self-host suite passes 61/61 and the isolated direct-entry regression passes 1/1. The archive remains unchanged during verification."
   "2026-10-17T09:28:07.702Z",codex-agent,"Independently fetched failed jobs 116966419723, 116965719699 and 116965854973 and green main job 116965011838. Confirmed workflow archive mismatches are the failing assertion; the intentional missing-CLI diagnostic occurs on both red and green jobs. Replaced the partial regex-only exception with YAML-node validation so script scalar text and action inputs remain exact. Added direct yaml development dependency at the already resolved version, with no dependency version bumps. Current main already carries the pinned SDK update; installation now succeeds."
@@ -23,6 +28,7 @@ comments[14]{created_at,author,text}:
   "2026-10-20T09:11:41.241Z",codex-agent,"Full foreground clean-identity npm run release:check passed at de9794b on Node 24.19.0/npm 11.17.0: 1711 tests passed; zero failures, cancellations, skips or todos; all measured per-file lines/statements/branches/functions 100 percent at unchanged thresholds. Native TOON, actual installed-CLI strace/stat-cache, committed self-host byte equality, lint, zero duplication, docstrings, production/identity audits, pack, changelog/date and attestation stages all passed. Exact invocation: env HOME=<temporary-home> GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 npm run release:check. Next run the full Bun gate in the foreground. No implementation changes since the archive-only negative proof."
   "2026-10-20T09:33:46.604Z",codex-agent,"Full foreground clean-identity bun run release:check passed at 68a6fd5 (Bun 1.3.5), unchanged implementation from the successful npm gate: 1711/1711 tests, zero failures/cancellations/skips/todos, all measured per-file lines/statements/branches/functions 100 percent at unchanged thresholds. Native TOON, real installed-CLI strace/stat-cache, committed self-host byte equality, production/identity audits, pack, changelog/date and attestation also passed. Exact invocation: env HOME=<temporary-home> GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 bun run release:check. Final changes only record these receipts and release the claim; regenerate the text archive for those tracker bytes, then verify final committed self-host and focused regressions. Leave this item in_progress for orchestrator verification; pm-vcs-5lre remains the separate open host/extension health follow-up. No new PM CLI/SDK defect identified; linked test result recording is disabled by existing policy, so results are captured in comments."
   "2026-10-20T09:36:13.587Z",codex-agent,"Final no-merge safeguard: PR #132 had an existing GitHub auto-merge request, and its auto-merge workflow completed successfully after the push. Disabled that request to honor the explicit review hold; verified OPEN, draft=false, merged=false and autoMergeRequest=null. Record this decision in the tracker and matching archive; after the receipt push, disable auto-merge again once that specific enable-auto-merge workflow completes, preserving normal CI."
+  "2026-10-21T18:41:25.049Z",codex-agent,"Tracker reconciliation authorized for the audited verdict FIXED-STALE. Re-verified unchanged main 27e1d84671fa: delivery ec61c6d8f174 remains in main ancestry; package.json, test/exact-gates.test.ts remain present. Allow action-only Dependabot bumps through the committed self-host audit. [PR #121](https://github.com/unbraind/pm-vcs/pull/121) (ec61c6d) permits only immutable action revision bumps under the committed self-host audit; other workflow bytes remain exact. Scope: tracker state only; no new runtime certification or deployment claim."
 files[8]{path,scope}:
   .gitattributes,project
   AGENTS.md,project
@@ -32,7 +38,7 @@ files[8]{path,scope}:
   selfhost.bundle,project
   test/exact-gates.test.ts,project
   test/self-host.test.ts,project
-tests[4]:
+tests[5]:
   - command: node --test test/self-host.test.ts test/exact-gates.test.ts
     scope: project
     provenance:
@@ -63,7 +69,15 @@ tests[4]:
       created_at: "2026-10-20T08:45:35.342Z"
       source_kind: local_mutation
       source_ref: dependabot/npm_and_yarn/pm-toolchain-ae58a87a51
+  - command: git merge-base --is-ancestor ec61c6d8f174ec54728497270e18b57124c3e63e HEAD
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-21T18:43:12.145Z"
+      source_kind: local_mutation
+      source_ref: chore/reconcile-tracker-1021
 docs[2]{path,scope}:
   CHANGELOG.md,project
   docs/action-revision-audit.md,project
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery ec61c6d8f174 remains in main ancestry; scripts/self-host.ts, test/self-host.test.ts remain present. Audit delivery: Allow action-only Dependabot bumps through the committed self-host audit. [PR #121](https://github.com/unbraind/pm-vcs/pull/121) (ec61c6d) permits only immutable action revision bumps under the committed self-host audit; other workflow bytes remain exact."
 body: ""

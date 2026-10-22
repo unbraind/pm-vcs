@@ -2,17 +2,24 @@ id: pm-vcs-phase7
 title: "Phase 7: agents never stop on a conflict"
 description: "Conflicts become durable change data so concurrent agents can commit and continue. Five features cover conflict storage, resolution propagation, attribution, signing and bisect. Release remains disabled pending owner approval."
 type: Epic
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-18T03:01:36.214Z"
-updated_at: "2026-10-18T03:43:46.883Z"
+updated_at: "2026-10-22T11:57:12.173Z"
+closed_at: "2026-10-21T19:00:17.471Z"
+completed_at: "2026-10-21T19:00:17.471Z"
 author: codex-agent
 estimated_minutes: 3240
 acceptance_criteria: "Five estimated features have acceptance criteria and dependency edges, with shipped versus deferred scope documented."
 parent: pm-vcs-tr2a
-comments[1]{created_at,author,text}:
+resolution: Delivered by the audit-linked mainline implementation.
+expected_result: "Phase 7: agents never stop on a conflict."
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089, 7609e6c61980, 24f6a937d084, 3fb4ecd29e10, cc423e01534d, 27e1d84671fa remains in main ancestry; .agents/pm/features/pm-vcs-p7objects.toon, .agents/pm/features/pm-vcs-p7resolve.toon, .agents/pm/features/pm-vcs-p7annotate.toon, .agents/pm/features/pm-vcs-p7bisect.toon, .agents/pm/features/pm-vcs-p7sign.toon remain present."
+comments[2]{created_at,author,text}:
   "2026-10-18T03:43:41.572Z",codex-agent,"Phase 7 is specified as five estimated Feature children with acceptance criteria and blocked_by edges verified through pm deps. This slice includes canonical per-field/per-hunk conflict storage, explicit recording mode, readable projections, flat conflict reporting, lifecycle/transport closure and HEAD resolution. Ancestor selection and automatic descendant propagation remain pm-vcs-p7resolve; annotation, signing and bisect remain planned. Existing default/fail-on-conflict behavior and release workflows are preserved. All items remain open for orchestrator verification."
+  "2026-10-21T18:59:45.353Z",codex-agent,"Tracker reconciliation authorized for the audited verdict FIXED-STALE. Re-verified unchanged main 27e1d84671fa: delivery f92832011089, 7609e6c61980, 24f6a937d084, 3fb4ecd29e10, cc423e01534d, 27e1d84671fa remains in main ancestry; engine/attribution.ts, test/composition.test.ts remain present. Phase 7: agents never stop on a conflict. The epic's acceptance is specification of five estimated/dependent features; those are now specified and delivered by #122/#125/#126/#131/#134/#136. Native pm-vcs history does not depend on Git and is not prohibited Git merge-driver work. Scope: tracker state only; no new runtime certification or deployment claim."
 docs[1]{path,scope}:
   README.md,project
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery f92832011089, 7609e6c61980, 24f6a937d084, 3fb4ecd29e10, cc423e01534d, 27e1d84671fa remains in main ancestry; .agents/pm/features/pm-vcs-p7objects.toon, .agents/pm/features/pm-vcs-p7resolve.toon, .agents/pm/features/pm-vcs-p7annotate.toon, .agents/pm/features/pm-vcs-p7bisect.toon, .agents/pm/features/pm-vcs-p7sign.toon remain present. Audit delivery: Phase 7: agents never stop on a conflict. The epic's acceptance is specification of five estimated/dependent features; those are now specified and delivered by #122/#125/#126/#131/#134/#136. Native pm-vcs history does not depend on Git and is not prohibited Git merge-driver work."
 body: ""

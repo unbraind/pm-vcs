@@ -2,17 +2,23 @@ id: pm-vcs-qfku
 title: Remove vulnerable optional glob dependencies from the fleet duplication gate
 description: "The pinned pm-ops 2026.10.6 duplication module imports its optional fast-glob 3.3.3 peer. Enabling the canonical gate installs braces 3.0.3 via micromatch; npm audit reports GHSA-vfj7-8cjw-p6xm with four high-severity development dependency entries (braces, micromatch, fast-glob, pm-ops). Production audit remains separate. pm-ops PR #163 proposes built-in fs.glob and jscpd 5 only; consume an approved published replacement in a dependency refresh, then regenerate the self-host bundle and rerun all release gates. Do not downgrade pm-ops or rewrite histories."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags[3]: dependencies,duplication,security
 created_at: "2026-10-14T07:01:22.274Z"
-updated_at: "2026-10-15T09:47:27.964Z"
+updated_at: "2026-10-22T11:57:32.024Z"
+closed_at: "2026-10-21T19:11:54.264Z"
+completed_at: "2026-10-21T19:11:54.264Z"
 author: codex-agent
 release: Unreleased
-comments[3]{created_at,author,text}:
+resolution: Delivered by the audit-linked mainline implementation.
+expected_result: Remove vulnerable optional glob dependencies from the fleet duplication gate.
+actual_result: "Re-verified unchanged main 27e1d84671fa: delivery 066625091bcc remains in main ancestry; package.json, package-lock.json remain present."
+comments[4]{created_at,author,text}:
   "2026-10-15T07:42:28.024Z",codex-agent,"Batch 3 addresses this existing dependency issue in the same PR as rollout Chore pm-vcs-3dxi. Use the published pm-ops 2026.10.14 implementation and remove the unused direct fast-glob peer; retain the pinned CLI, coverage inventory, thresholds and append-only histories. Regenerate the committed self-host bundle before HEAD verification."
   "2026-10-15T07:49:19.022Z",codex-agent,"Dependency remediation verified: exact pm-ops 2026.10.14 and removal of the unused fast-glob peer eliminate braces, fast-glob and micromatch from both full and production-only npm ls trees. Full npm audit --ignore-scripts now reports zero vulnerabilities versus the four high development findings at baseline. No SDK pin changed. Awaiting committed-head npm/Bun gates and self-host acceptance."
   "2026-10-15T09:47:25.240Z",codex-agent,"Verified complete rollout gates on source 90ba1c0: isolated npm and Bun release:check each pass 1536/1536, zero failures/skips, all 65 sources at unchanged per-file 100% statements/lines/branches/functions. Canonical published prepare launcher is aligned with pm-ops 2026.10.14 and its artifact guard is regression-tested. Both full and production-only npm ls braces fast-glob micromatch trees are empty; full npm audit was zero findings after the dependency change and both production audits pass. Native, installed-CLI, packed Node/Bun and self-host acceptances pass. Release this issue in progress for orchestrator verification; do not close it here."
+  "2026-10-21T19:11:25.058Z",codex-agent,"Tracker reconciliation authorized for the audited verdict FIXED-STALE. Re-verified unchanged main 27e1d84671fa: delivery 066625091bcc remains in main ancestry; .github/workflows/pm-github-sync.yml, test/prepare-merge-driver.test.ts remain present. Remove vulnerable optional glob dependencies from the fleet duplication gate. [PR #113](https://github.com/unbraind/pm-vcs/pull/113) (0666250) drops the optional vulnerable glob chain; fresh npm audit exits 0 with zero findings. Scope: tracker state only; no new runtime certification or deployment claim."
 files[2]{path,scope,note}:
   package-lock.json,project,Remove fast-glob micromatch and braces
   package.json,project,Published pm-ops fix and unused peer removal
@@ -20,4 +26,5 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   npm run duplicates,project,codex-agent,"2026-10-15T07:49:11.890Z",local_mutation,chore/gated-issue-sync-and-braces-free-gates
 docs[1]{path,scope,note}:
   README.md,project,Document removal of optional fast-glob peer
+close_reason: "Re-verified unchanged main 27e1d84671fa: delivery 066625091bcc remains in main ancestry; package.json, package-lock.json remain present. Audit delivery: Remove vulnerable optional glob dependencies from the fleet duplication gate. [PR #113](https://github.com/unbraind/pm-vcs/pull/113) (0666250) drops the optional vulnerable glob chain; fresh npm audit exits 0 with zero findings."
 body: ""
