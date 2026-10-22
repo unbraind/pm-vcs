@@ -112,7 +112,7 @@ test("Bun witness skips when either optional tool is unavailable", () => {
       const tool = join(bin, available);
       writeFileSync(tool, `#!${process.execPath}\nprocess.exit(process.argv[2] === "--version" ? 0 : 17);\n`);
       chmodSync(tool, 0o755);
-      const env = { ...process.env, ...discardChildCoverage(), PATH: bin };
+      const env: NodeJS.ProcessEnv = { ...process.env, ...discardChildCoverage(), PATH: bin };
       delete env.NODE_TEST_CONTEXT;
       const result = spawnSync(process.execPath, [
         "--test", "--test-reporter=tap",
