@@ -127,7 +127,7 @@ function documentAt(store: ObjectStore, entry: FileEntry | undefined): RecordDoc
   try { return decodeRecord(object.payload); } catch { return undefined; }
 }
 
-/** Project recorded collection additions/removals by exact value, retaining duplicates and ignoring order-only edits. */
+/** Project recorded collection additions and removals by exact value, pairing identical entries from the front and ignoring order-only edits. */
 function collectionStatements(source: ChangeStatement, was: RecordValue | undefined, now: RecordValue | undefined): ChangeStatement[] {
   const before = (was ?? []) as readonly RecordValue[]; const after = (now ?? []) as readonly RecordValue[];
   const unused = new Set(after.map((_, index) => index)); const rows: ChangeStatement[] = [];
@@ -141,7 +141,8 @@ function collectionStatements(source: ChangeStatement, was: RecordValue | undefi
     Object.entries(value as RecordDocument).filter(([key]) => ["id", "kind", "path", "command", "created_at", "text", "run_id"].includes(key))
       .map(([key, value]) => [key, compact(value)]));
   for (const [index, value] of before.entries()) {
-    const equal = matches.get(canonicalRecordValue(value))?.pop();
+    // Earliest remaining after-index. Consuming from the back reports an appended duplicate as entryAfter 0.
+    const equal = matches.get(canonicalRecordValue(value))?.shift();
     if (equal !== undefined) unused.delete(equal);
     else rows.push({ ...source, entryBefore: index, was: compact(value), coordinate: coordinate(value) });
   }

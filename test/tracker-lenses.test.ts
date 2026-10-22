@@ -174,7 +174,13 @@ test("collection lenses preserve exact entry coordinates duplicate counts and un
   const reordered = snapshot([other, file], two);
   assert.equal(explainChange(repo.objects, reordered, { lenses: ["evidence"] }).statements[0].lens, "field");
   const duplicate = snapshot([file, file], one);
-  assert.equal(explainChange(repo.objects, duplicate, { lenses: ["evidence"] }).statements.filter(row => row.entryAfter !== undefined).length, 1);
+  const duplicated = explainChange(repo.objects, duplicate, { lenses: ["evidence"] }).statements.filter(row => row.entryAfter !== undefined);
+  assert.equal(duplicated.length, 1); assert.equal(duplicated[0].entryAfter, 1); assert.equal(duplicated[0].entryBefore, undefined);
+  assert.equal(duplicated[0].coordinate!.path, "one.ts");
+  const trimmed = snapshot([file], duplicate);
+  const removedDuplicate = explainChange(repo.objects, trimmed, { lenses: ["evidence"] }).statements.filter(row => row.entryBefore !== undefined);
+  assert.equal(removedDuplicate.length, 1); assert.equal(removedDuplicate[0].entryBefore, 1); assert.equal(removedDuplicate[0].entryAfter, undefined);
+  assert.equal(removedDuplicate[0].coordinate!.path, "one.ts");
 });
 
 test("typed refusals explain invalid controls and shallow ancestry instead of inventing lifecycle facts", async () => {

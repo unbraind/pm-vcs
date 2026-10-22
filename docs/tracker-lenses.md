@@ -38,7 +38,9 @@ provenance; separate conflict rows cite the source commits and paths carrying co
 bytes; larger values and collections become `{sha256, bytes}` of their canonical
 record value. Dependency and evidence collections emit recorded entry additions
 and removals with entryBefore/entryAfter indices and compact coordinate fields
-(target id/kind, path, command or log timestamp/text). Matching retains exact
+(target id/kind, path, command or log timestamp/text). Identical values pair
+from the front, so an appended duplicate reports the trailing entryAfter and a
+removed duplicate reports the trailing entryBefore. Matching retains exact
 duplicate counts; order-only edits retain ordinary field provenance. Resolve the
 cited object, field and entry index to inspect the original value.
 File rows preserve mode/identity-only changes. Renames appear as path deletion
