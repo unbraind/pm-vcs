@@ -40,12 +40,15 @@ use `readFragmentRange` and visit only overlapping manifest subtrees and blobs.
 Chunk addresses hash uncompressed framed bytes, so changing the zlib level leaves
 all identities unchanged. Native checkout and merge still have materializing paths;
 streaming those paths and pack compaction are separate follow-up work.
-Text merge interprets verified manifest payloads exactly like blobs: append-only
+Text merge interprets verified textual manifest payloads exactly like blobs: append-only
 PM histories union both sides' appended events, and ordinary text uses diff3.
 Blob/manifest transitions do not create semantic conflicts. These merges assemble
 the logical payloads in memory and store their result as a blob, including real
 diff3 markers when text conflicts. Incompatible record/link transitions retain
 their existing explicit-conflict behavior.
+Before materialization, bounded reads verify every fragment and classify UTF8
+across fragment boundaries. Invalid or truncated UTF8 and NUL bytes retain a
+complete-side binary conflict, without concatenating the manifest payloads.
 
 Annotation reads verified logical text from blob and manifest storage, following
 setters across storage transitions and renames. Fragmented PM histories retain

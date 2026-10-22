@@ -1,5 +1,6 @@
 import { retainedAttestation } from "./signatures.ts";
 import { inheritedConflict, competingResolutions, carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
+import { manifestFragments } from "./manifest-pages.ts";
 // History rewriting, and the three-way tree merge rewriting shares with `merge`.
 //
 // Two responsibilities live here because they are one mechanism seen twice. A
@@ -25,6 +26,7 @@ import { inheritedConflict, competingResolutions, carryConflicts, encodeConflict
 // operation routes through.
 
 import { createHash } from "node:crypto";
+import { isUtf8 } from "node:buffer";
 
 import {
   type Commit,
@@ -40,7 +42,7 @@ import {
   readCommit,
   writeCommit,
 } from "./model.ts";
-import { type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
+import { hashObject, type ObjectId, type ObjectStore, ObjectStoreError, type StoredObject } from "./objects.ts";
 import {
   type ConflictLabels,
   type ContentMergeResult,
@@ -50,7 +52,7 @@ import {
 import { mergeAppendOnlyLog, mergeRecords } from "./records.ts";
 import { type RepositoryConfig, isRecordPath, matchesGlob } from "./config.ts";
 import { buildTree, flattenTree } from "./worktree.ts";
-import { readFragmented } from "./fragments.ts";
+import { readFragmentBlob, readFragmented } from "./fragments.ts";
 
 /** One path that could not be merged automatically. */
 export interface MergeConflict {
@@ -139,10 +141,11 @@ export class RewriteConflictError extends Error {
  * Merges one attributed payload path; competing repository links refuse atomically.
  *
  * Intentional absence or incompatible kinds preserve our complete object and return a
- * content conflict for explicit resolution. Verified manifests share blob semantics:
+ * content conflict for explicit resolution. Verified text manifests share blob semantics:
  * native PM append-only histories union their events; other text and rewritten
  * history prefixes take diff3. These merges materialize the logical payloads and
- * store the result as a blob. Record objects take the per-field path. The
+ * store the result as a blob. Binary manifests remain byte-preserving conflicts
+ * after bounded validation. Record objects take the per-field path. The
  * distinction is made on the stored object's type rather than on the path's
  * extension, so what a file is called never decides how it merges.
  *
@@ -167,11 +170,26 @@ export function mergePath(
   return ctx.store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
     // Only a durable denial means intentional absence. Verify every surviving
     // frame and hash before returning a conflict; missing or damaged bytes refuse.
-    /** Interpret verified logical file bytes independently of their storage layout. */
+    let fragmented = false;
+    let binary = false;
+    /** Verify every fragment and classify UTF8 across boundaries before materializing text. */
     const read = (id: ObjectId | null) => {
       if (id === null || ctx.store.denial(id) !== undefined) return null;
       const object = ctx.store.read(id);
-      return object.type === "manifest" ? { type: "blob" as const, payload: readFragmented(ctx.store, id) } : object;
+      if (object.type === "blob") binary ||= !isUtf8(object.payload) || object.payload.includes(0);
+      if (object.type !== "manifest") return object;
+      fragmented = true;
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      let text = true;
+      for (const { fragment } of manifestFragments(ctx.store, hashObject("manifest", object.payload))) {
+        const payload = readFragmentBlob(ctx.store, fragment);
+        if (!text) continue;
+        if (payload.includes(0)) { text = false; continue; }
+        try { decoder.decode(payload, { stream: true }); } catch { text = false; }
+      }
+      if (text) { try { decoder.decode(); } catch { text = false; } }
+      binary ||= !text;
+      return object;
     };
     const ourObject = read(ourId);
     const theirObject = read(theirId);
@@ -187,19 +205,26 @@ export function mergePath(
     if (ourObject === null || theirObject === null || (baseId !== null && baseObject === null)) {
       return { id: ourId, conflict: { path, reason: "content" } };
     }
-    const records = ourObject.type === "record" && theirObject.type === "record";
+    if (fragmented && binary) return { id: ourId, conflict: { path, reason: "content" } };
+    /** Materialize text only after every input has passed binary and integrity checks. */
+    const materialize = (object: StoredObject) => object.type === "manifest"
+      ? { type: "blob" as const, payload: readFragmented(ctx.store, hashObject("manifest", object.payload)) } : object;
+    const ourPayload = materialize(ourObject);
+    const theirPayload = materialize(theirObject);
+    const basePayload = baseObject === null ? null : materialize(baseObject);
+    const records = ourPayload.type === "record" && theirPayload.type === "record";
     // Only semantic kind transitions require explicit resolution; storage
     // transitions between blobs and manifests retain the same text interpretation.
-    if (ourObject.type !== theirObject.type
-      || (baseObject !== null && baseObject.type !== ourObject.type)) {
+    if (ourPayload.type !== theirPayload.type
+      || (basePayload !== null && basePayload.type !== ourPayload.type)) {
       return { id: ourId, conflict: { path, reason: "content" } };
     }
     if (records) {
-      const baseDocument = baseObject === null ? {} : decodeRecord(baseObject.payload);
+      const baseDocument = basePayload === null ? {} : decodeRecord(basePayload.payload);
       const result = mergeRecords(
         baseDocument,
-        decodeRecord(ourObject.payload),
-        decodeRecord(theirObject.payload),
+        decodeRecord(ourPayload.payload),
+        decodeRecord(theirPayload.payload),
         ctx.config.recordPolicy,
       );
       return {
@@ -213,9 +238,9 @@ export function mergePath(
           : { path, reason: "record", fields: result.conflicts.map((conflict) => conflict.field), ...(ctx.recordConflicts === true ? { recorded: true as const } : {}) },
       };
     }
-    const baseText = baseObject === null ? "" : baseObject.payload.toString("utf8");
-    const ourText = ourObject.payload.toString("utf8");
-    const theirText = theirObject.payload.toString("utf8");
+    const baseText = basePayload === null ? "" : basePayload.payload.toString("utf8");
+    const ourText = ourPayload.payload.toString("utf8");
+    const theirText = theirPayload.payload.toString("utf8");
     // Native PM histories use base-relative multiset union of byte-exact events.
     // A rewritten prefix keeps ordinary conflict handling rather than hiding edits.
     const keepsBaseLines = (text: string): boolean => text.startsWith(baseText)

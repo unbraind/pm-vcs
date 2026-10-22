@@ -7,11 +7,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:41:01.521Z"
-updated_at: "2026-10-22T20:35:51.111Z"
+updated_at: "2026-10-22T21:07:05.308Z"
 author: codex-agent
 acceptance_criteria: Native add and status handle large binary files without whole-file buffers; rename plus edit retains FileId and PM change trace; compression-independent identities and range verification pass; GC reports physical candidate and reclaimed bytes; report a 200 MB binary and real tracker copy measurement.
 parent: pm-vcs-b7cb
-comments[20]{created_at,author,text}:
+comments[22]{created_at,author,text}:
   "2026-10-21T14:58:04.824Z",codex-agent,"Behavioural revert proof: restoring only stageLocked makes native staging streams CDC fail because no binary is staged; restoring only computeStatus fails on the forbidden whole-file reader; restoring only collectGarbage fails the physical-byte receipt assertions. Each mutation was tested in an isolated source copy. Initial 200 MB measurement exposed excessive fsynced loose-object overhead with fine-grained CDC, so ordinary large staging now uses 64 KiB minimum, 1 MiB maximum and an 18-bit Gear mask while existing helper defaults remain unchanged. The partial benchmark scratch copy was removed before remeasurement."
   "2026-10-21T15:14:12.255Z",codex-agent,"Real scale receipt: 200000000 generated binary bytes plus 306 real public tracker files committed natively. Baseline store 201271356 compressed object bytes; after a rename and 2000000-byte middle replacement, store 203550572 (+2279216). Reused 604/611 edited chunks (98.8543%), 98.8683% by bytes. Twenty-one verified warm-cache 4 KiB reads: median 13.6759 ms, p95 52.9613 ms under shared-host load. GC dry-run/apply both 1048920 bytes; both committed generations retained and reachable objects verified. All benchmark data removed. Linked PM test command passed 5/5 with no failures/skips using --timeout 900; the default 120-second attempt timed out. Type checking, lint, duplication (0%) and docstrings pass. Full npm/Bun release gates follow artifact regeneration."
   "2026-10-21T15:46:37.929Z",codex-agent,"CI on both Node 22 and 26 measured 100/100/100/100 coverage but found two regression-fixture failures: the production inventory expected 74 files instead of 75, and the bounded export test accidentally staged a CDC manifest where it intended a legacy 4 MiB blob. Updated the inventory explicitly and construct that legacy blob in the real object store, preserving the exact compressed-size-plus-64-byte strace assertion. The superseded local release run was stopped before retesting; full gates will run again at the corrected head."
@@ -32,7 +32,9 @@ comments[20]{created_at,author,text}:
   "2026-10-22T20:25:08.821Z",codex-agent,"Orchestrator follow-up: merged main 6ca9427 after tracker reconciliation landed; generated archive was the only merge conflict and was rebuilt. Current remote review has zero unresolved threads; latest CodeRabbit review body is empty, with no new outside-diff finding. The orchestrator blocking finding is valid: mergePath verifies manifest leaves but then refuses logical text and append-only histories. Plan: normalize verified manifest payloads into the existing blob text/history merge path; preserve incompatible record/link behavior, add real over-threshold history-union and diff3 regressions, and correct the earlier self-review claim. Preserve unchanged legacy blob and alternate-manifest staged IDs with bounded comparisons, and make GC refusal paths repository-relative. Each correction gets a function-only failing revert proof. Legacy crash temporary names are indistinguishable from legal refs; track an explicit migration/recovery follow-up without deleting or hiding legal refs. Full npm and Bun release gates and committed archive acceptance will run at unchanged thresholds."
   "2026-10-22T20:34:01.283Z",codex-agent,"Independent behavioral revert proofs against merge baseline 495f07f: restoring only mergePath (and its baseline import dependencies) makes node --test --test-name-pattern=\"^manifest history merge|^manifest text merge\" test/phase6-staging.test.ts fail 0/2, both because a genuine over-threshold merge incorrectly reports clean=false. The history test uses a real SDK-created history above 1 MiB and one real SDK event appended on each branch; the text test diff3-merges independent first/last-line edits above 1 MiB. Restoring only stageLocked makes node --test --test-name-pattern=\"^unchanged staging preserves (blob|fixed|small-fixed)\" test/phase6-staging.test.ts fail 0/3 on spurious staging changes. Restoring only refRoots makes node --test --test-name-pattern=\"^GC refusal reports\" test/gc.test.ts fail 0/4 on absolute path disclosures. All source was restored in finally blocks; no mutant is retained. The restored combined linked regression command passes 18/18 with zero failures/skips/cancellations; native Bun storage/merge cases pass 6/6 (10 unrelated cases filtered). Build:test, typecheck, lint, docstrings and 0 percent duplication pass with all 76 production sources retained. Corrected the existing manifest-conflict expectations to require actual diff3 markers and both alternatives, while retaining keep-ours checks for incompatible record kinds. Legacy ref-temporary migration is tracked separately as pm-vcs-legacyreftmp; no automatic ambiguous-ref deletion or hiding is introduced."
   "2026-10-22T20:35:48.172Z",codex-agent,"Final local receipt before committed archive refresh: linked regressions pass 18/18 and selected native Bun tests pass 6/6 (10 unrelated cases filtered), with all independent failing reverts and passing restorations recorded above. Strict health passes 8/8 checks, retains only two existing advisories, and reports no pending merge receipts. npm ci has zero vulnerabilities; test build, typecheck, lint, docstrings and 0 percent duplication pass. The complete measured production scope remains 76 sources at unchanged 100 percent per-file thresholds. Logical manifest merges now materialize and re-store a blob; this limitation is documented and unchanged-content add preserves that result address. The legacy crash-temporary migration follow-up remains open as pm-vcs-legacyreftmp. Full literal npm run release:check and bun run release:check will execute on the pushed head through the existing Node 22/26 CI matrix; the final PR receipt will publish verified counts and the exact head rather than substitute prior-head evidence. Releasing the claim for CI and orchestrator verification; no item is closed, review thread modified, PR merged or release performed."
-files[18]{path,scope}:
+  "2026-10-22T20:59:27.010Z",codex-agent,"Full Node 22 CI at 99f2730 ran 1815 tests: 1814 passed and one existing binary-fragment merge contract failed; per-file coverage still measured 100 percent across all 76 sources. This is a real unintended binary behavior change, not a host-load timeout. Preserve the existing bounded binary validation regression rather than weaken it. Add bounded streaming UTF8 classification (including chunk-boundary code points and NUL detection), verify every input fragment before any concatenation, retain binary manifests as complete-side conflicts, and materialize only mutually textual inputs for history union/diff3. New tests cover split UTF8, truncated encodings and NUL data, plus mixed binary blobs/text manifests. Cancelled the superseded local and CI runs before rerunning corrected gates. Existing staged-ID and GC function-only proofs remain valid because those functions did not change."
+  "2026-10-22T21:06:58.356Z",codex-agent,"Corrected binary/text merge receipt: the original bounded fragment-validation test is byte-for-byte unchanged and passes with all five missing/corrupt/length/type/manifest-total controls (6/6 via linked test index 6). New portable UTF8 classification and over-threshold history/text merges pass 7/7 via linked test --only-last, and native Bun passes the same 7/7 with 14 unrelated cases filtered. A cross-file native trial encountered the existing Node mock teardown API; new classification cases now use the portable plain-directory fixture. Refreshed function-only proof: restoring mergePath to 495f07f, without changing imports or any other function, fails 0/3 using node --test --test-name-pattern=\"^manifest history merge|^manifest text merge|^manifest text classification merges\" test/phase6-staging.test.ts. Restoring mergePath alone to superseded 99f2730 fails the untouched binary validation guard 0/1 using node --test --test-name-pattern=\"^fragmented merge verifies\" test/erasure-fragment-repairs.test.ts. Restore final source: the combined eight text/classification/binary-guard cases pass 8/8 with zero failures/skips/cancellations. Staged-ID 0/3 and GC-relative-path 0/4 proofs remain unchanged and valid. Build:test, source policy, 0 percent duplication and docstrings pass with 76 production files; thresholds are unchanged. Final full npm/Bun gates must be rerun on the new pushed head, since 99f2730 failed a real binary-contract test; neither the failed CI nor the superseded local run is counted as passing evidence. Final counts and exact-head links will be published in the PR receipt. Releasing the claim before the staged archive refresh; no item is closed and review threads remain untouched."
+files[19]{path,scope}:
   .github/workflows/ci.yml,project
   docs/phase6-scale-receipt.md,project
   engine/annotate.ts,project
@@ -47,11 +49,12 @@ files[18]{path,scope}:
   scripts/phase6-benchmark.ts,project
   test/annotate.test.ts,project
   test/composition.test.ts,project
+  test/erasure-fragment-repairs.test.ts,project
   test/gc.test.ts,project
   test/phase6-staging.test.ts,project
   test/raw-coverage.test.ts,project
   test/refs.test.ts,project
-tests[5]:
+tests[7]:
   - command: node --test test/phase6-staging.test.ts
     scope: project
     timeout_seconds: 900
@@ -92,6 +95,22 @@ tests[5]:
     provenance:
       author: codex-agent
       created_at: "2026-10-22T20:32:10.572Z"
+      source_kind: local_mutation
+      source_ref: feat/phase6-chunked-storage
+  - command: "node --test --test-name-pattern=\"^fragmented merge|^manifest text classification\" test/erasure-fragment-repairs.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-22T20:59:39.096Z"
+      source_kind: local_mutation
+      source_ref: feat/phase6-chunked-storage
+  - command: "node --test --test-name-pattern=\"^manifest history merge|^manifest text merge|^manifest text classification\" test/phase6-staging.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-22T21:02:53.945Z"
       source_kind: local_mutation
       source_ref: feat/phase6-chunked-storage
 docs[3]{path,scope}:

@@ -775,6 +775,9 @@ Manifest reads verify the fragment addresses and lengths before interpreting byt
 Three-way merge unions append-only PM events and runs diff3 on logical text across
 blob/manifest transitions. Merge materializes these payloads and writes a blob result;
 unchanged staging preserves that recorded address even above the CDC threshold.
+Manifest merging first verifies all fragments and classifies UTF8 with bounded reads,
+including code points split between fragments. Invalid/truncated UTF8 or NUL bytes
+retain byte-preserving binary conflicts without whole-manifest concatenation.
 Annotation materializes selected logical text and history payloads in memory;
 the bounded staging, status and range-read contracts do not apply to annotation.
 Multiple reachable versions of a stable change ID

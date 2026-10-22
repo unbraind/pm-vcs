@@ -10,12 +10,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { deflateSync, inflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { traceFile } from "../engine/attribution.ts";
-import { STAGING_CDC_PARAMS, blobFileContentId, cdcFragmentedContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmentRange, writeFragmented } from "../engine/fragments.ts";
+import { STAGING_CDC_PARAMS, blobFileContentId, cdcFragmentedContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmentRange, readFragmented, writeFragmented } from "../engine/fragments.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { hashObject } from "../engine/objects.ts";
 import { manifestFragments } from "../engine/manifest-pages.ts";
 import { type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
+import { mergePath } from "../engine/rewrite.ts";
 import { RACY_WINDOW_NS, readWorkingStat } from "../engine/worktree.ts";
 import { readHints, writeHints } from "../engine/instances.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -348,4 +349,24 @@ test("scale benchmark commits a real tracker copy and reports measured chunk reu
   const small = benchmarkPhase6(join(packageRoot, ".agents/pm"), 1_048_577);
   assert.ok(small.trackerFiles > 0); assert.ok(small.reusedByteRatio > 0);
   assert.ok(small.gcReclaimedBytes > 0); assert.equal(small.gcCandidateBytes, small.gcReclaimedBytes);
+});
+
+test("manifest text classification merges UTF8 split across real fragments", async () => {
+  const { repo } = await fresh();
+  const text = ["first\né😀 middle\nlast\n", "ours\né😀 middle\nlast\n", "first\né😀 middle\ntheirs\n"];
+  const ids = text.map(value => writeFragmented(repo.objects, Buffer.from(value), 1).manifestId);
+  const result = mergePath({ store: repo.objects, config: repo.config, committer: author }, "text", ids[0], ids[1]!, ids[2]!);
+  assert.equal(result.conflict, undefined);
+  assert.equal(repo.objects.readTyped(result.id, "blob").toString("utf8"), "ours\né😀 middle\ntheirs\n");
+});
+
+for (const kind of ["truncated-manifest", "nul-manifest", "invalid-blob", "nul-blob"] as const) test(`manifest text classification preserves binary bytes for ${kind}`, async () => {
+  const { repo } = await fresh();
+  const bytes = kind === "truncated-manifest" ? Buffer.from([0xe2, 0x82]) : kind === "invalid-blob" ? Buffer.from([0xff]) : Buffer.from("binary\0payload");
+  const ours = kind.endsWith("manifest") ? writeFragmented(repo.objects, bytes, 1).manifestId : repo.objects.write("blob", bytes);
+  const theirs = writeFragmented(repo.objects, Buffer.from("their text\n"), 4).manifestId;
+  const base = repo.objects.write("blob", Buffer.from("base\n"));
+  const result = mergePath({ store: repo.objects, config: repo.config, committer: author }, "file", base, ours, theirs);
+  assert.deepEqual(result, { id: ours, conflict: { path: "file", reason: "content" } });
+  assert.deepEqual(kind.endsWith("manifest") ? readFragmented(repo.objects, result.id) : repo.objects.readTyped(result.id, "blob"), bytes);
 });
