@@ -516,7 +516,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
     ],
     run(context: CommandHandlerContext): VcsEnvelope & ExplainedChange {
       const repository = openRepository(context);
-      const revision = repository.resolve(context.args[0] ?? "HEAD");
+      const revision = repository.resolve(context.args[0]?.trim() || "HEAD");
       const offset = optionalString(context.options, "offset") ?? "0";
       if (!/^(0|[1-9][0-9]*)$/.test(offset)) throw new VcsError("invalid_lens_page", "Invalid statement offset.", "Pass --offset with a nonnegative safe integer.");
       return { ok: true, ...explainChange(repository.objects, revision, {

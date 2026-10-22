@@ -4,6 +4,14 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { discardChildCoverage } from "./helpers/sandbox.ts";
+
+/** Check optional witness tools without making them prerequisites for Node tests. */
+function commandAvailable(command: string): boolean {
+  const result = spawnSync(command, ["--version"], { stdio: "ignore" });
+  return result.error === undefined && result.status === 0;
+}
 
 /** Execute the actual PR-creation shell block with disposable Git/GitHub doubles. */
 function runCreationStep(failPr: boolean): { status: number | null; calls: string[][]; stderr: string } {
@@ -69,7 +77,9 @@ test("manual CI dispatch preserves all four required check names", () => {
   assert.deepEqual(names, ["test (22)", "test (26)", "windows-acceptance-launcher (22)", "windows-acceptance-launcher (26)"]);
 });
 
-test("Bun CI gate executes tracker lens tests in the Bun runtime", () => {
+test("Bun CI gate executes tracker lens tests in the Bun runtime", {
+  skip: !commandAvailable("bash") || !commandAvailable("bun"),
+}, () => {
   const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const tail = ci.slice(ci.indexOf("      - name: Full Bun release gate"));
   const step = tail.slice(0, tail.indexOf("\n\n"));
@@ -88,5 +98,29 @@ test("runtime witness", () => { assert.ok(process.versions.bun); writeFileSync("
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(join(root, "gate-ran"), "utf8"), "yes");
     assert.ok(readFileSync(join(root, "bun-ran"), "utf8"), "workflow must execute tests under Bun");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Bun witness skips when either optional tool is unavailable", () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-optional-tools-"));
+  try {
+    for (const available of ["bash", "bun"]) {
+      const bin = join(root, available);
+      mkdirSync(bin);
+      // A version-only executable proves discovery succeeds for one tool while
+      // the isolated PATH makes the other unavailable. Executing the gate fails.
+      const tool = join(bin, available);
+      writeFileSync(tool, `#!${process.execPath}\nprocess.exit(process.argv[2] === "--version" ? 0 : 17);\n`);
+      chmodSync(tool, 0o755);
+      const env = { ...process.env, ...discardChildCoverage(), PATH: bin };
+      delete env.NODE_TEST_CONTEXT;
+      const result = spawnSync(process.execPath, [
+        "--test", "--test-reporter=tap",
+        "--test-name-pattern=^Bun CI gate executes tracker lens tests in the Bun runtime$",
+        fileURLToPath(import.meta.url),
+      ], { encoding: "utf8", env, timeout: 120_000 });
+      assert.equal(result.status, 0, `${available} only: ${result.stderr}\n${result.stdout}`);
+      assert.match(result.stdout, /ok \d+ - Bun CI gate executes tracker lens tests in the Bun runtime[^\n]*# SKIP/u);
+    }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

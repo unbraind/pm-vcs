@@ -206,6 +206,17 @@ test("CLI harness accepts default and explicit native revisions and rejects inva
   assert.equal(repo.resolve("HEAD"), first);
 });
 
+test("CLI explain treats blank revisions as HEAD and trims explicit revisions", async () => {
+  const { root, first } = await fixture();
+  assert.equal(existsSync(join(root, ".git")), false);
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  for (const args of [[], [""], ["  \t "], [`  ${first}  `]]) {
+    const result = await harness.runCommand({ command: "vcs explain", args, pmRoot: join(root, ".agents/pm") });
+    assert.equal(result.errorMessage, undefined, String(result.errorMessage));
+    assert.equal((result.result as { commit: string }).commit, first);
+  }
+});
+
 test("real CLI loads the built extension and emits bounded JSON and TOON with no Git executable", async () => {
   const { root, first } = await fixture(); const bins = temp();
   // Use the absolute Node executable and an empty PATH, prohibiting all Git subprocess discovery.
