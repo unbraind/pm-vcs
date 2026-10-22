@@ -47,6 +47,23 @@ export const CDC_STAGING_THRESHOLD = 1 << 20;
 /** Coarser native staging chunks bound loose-object overhead: 64 KiB minimum, 1 MiB maximum, 18-bit Gear mask. */
 export const STAGING_CDC_PARAMS: CdcParams = { minChunkSize: 65_536, maxChunkSize: 1_048_576, mask: 0x3ffff };
 
+/** Hash a file as one legacy blob using bounded reads, refusing a truncated descriptor. */
+export function blobFileContentId(sourcePath: string): ObjectId {
+  const fd = openSync(sourcePath, "r");
+  try {
+    let remaining = fstatSync(fd).size;
+    const digest = createHash("sha256").update(`blob ${remaining}\0`);
+    const buffer = Buffer.allocUnsafe(65_536);
+    while (remaining > 0) {
+      const count = readSync(fd, buffer, 0, Math.min(remaining, buffer.length), null);
+      if (count === 0) throw new ObjectStoreError("short_read", "Working file was truncated during blob comparison; retry add.");
+      digest.update(buffer.subarray(0, count));
+      remaining -= count;
+    }
+    return digest.digest("hex");
+  } finally { closeSync(fd); }
+}
+
 /** Compare a working descriptor to any manifest layout using bounded raw-byte hashing, without reading blob payloads. */
 export function matchesFragmentedFile(store: ObjectStore, id: ObjectId, sourcePath: string): boolean {
   const manifest = manifestHeader(store, id);

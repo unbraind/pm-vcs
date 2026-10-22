@@ -6,7 +6,7 @@ import { decodeCommit, decodeManifest, decodeSeries, decodeTree } from "./model.
 import { ObjectStoreError, isObjectId, readControlJson, type ObjectId } from "./objects.ts";
 import { requireInstances } from "./instances.ts";
 import { PublicationLeases } from "./publication-leases.ts";
-import { Repository } from "./repo.ts";
+import { CONTROL_DIRECTORY, Repository } from "./repo.ts";
 
 /** Exact sweep receipt: candidate addresses are informational until an explicit apply. */
 export interface GcReport {
@@ -39,17 +39,19 @@ function requireEntry(path: string, refusal: string, kind: "file" | "directory")
 }
 
 /** Inspect all ref namespaces without the display API's tolerant omission of broken refs. */
-function refRoots(path: string): ObjectId[] {
-  if (!requireEntry(path, `Collection cannot follow a ref directory link: ${path}.`, "directory")) return [];
+function refRoots(path: string, root: string): ObjectId[] {
+  const display = `${CONTROL_DIRECTORY}/${relative(root, path).split(sep).join("/")}`;
+  if (!requireEntry(path, `Collection cannot follow a ref directory link: ${display}.`, "directory")) return [];
   const result: ObjectId[] = [];
   for (const entry of readdirSync(path, { withFileTypes: true })) {
     if (entry.name.endsWith(".lock")) continue;
     const target = join(path, entry.name);
-    if (entry.isDirectory()) result.push(...refRoots(target));
+    const name = `${CONTROL_DIRECTORY}/${relative(root, target).split(sep).join("/")}`;
+    if (entry.isDirectory()) result.push(...refRoots(target, root));
     else {
-      if (!entry.isFile()) throw new ObjectStoreError("unsafe_gc_roots", `Collection cannot follow a ref link: ${target}.`);
+      if (!entry.isFile()) throw new ObjectStoreError("unsafe_gc_roots", `Collection cannot follow a ref link: ${name}.`);
       const id = readFileSync(target, "utf8").trim();
-      if (!isObjectId(id)) throw new ObjectStoreError("unsafe_gc_roots", `Collection root ${target} is not an object address.`);
+      if (!isObjectId(id)) throw new ObjectStoreError("unsafe_gc_roots", `Collection root ${name} is not an object address.`);
       result.push(id);
     }
   }
@@ -98,7 +100,7 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
   return repository.objects.withWriteLock(/** Never reuse a stale plan across a publication or a retry. */ () => {
     const store = repository.objects;
     const shared = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
-    const roots = new Set(refRoots(join(shared, "refs")));
+    const roots = new Set(refRoots(join(shared, "refs"), shared));
     for (const instance of storageInstances(repository)) {
       const head = instance.refs.resolveHead();
       if (head !== null) roots.add(head);

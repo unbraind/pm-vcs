@@ -772,6 +772,9 @@ state does not participate. Typed read/validation failure in optional history le
 agent provenance absent and caches that absence; unexpected I/O errors propagate.
 Blob and manifest storage share the same text and PM-history interpretation.
 Manifest reads verify the fragment addresses and lengths before interpreting bytes.
+Three-way merge unions append-only PM events and runs diff3 on logical text across
+blob/manifest transitions. Merge materializes these payloads and writes a blob result;
+unchanged staging preserves that recorded address even above the CDC threshold.
 Annotation materializes selected logical text and history payloads in memory;
 the bounded staging, status and range-read contracts do not apply to annotation.
 Multiple reachable versions of a stable change ID

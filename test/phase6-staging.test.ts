@@ -2,15 +2,17 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import fs, { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { deflateSync, inflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { traceFile } from "../engine/attribution.ts";
-import { STAGING_CDC_PARAMS, cdcFragmentedContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmentRange, writeFragmented } from "../engine/fragments.ts";
+import { STAGING_CDC_PARAMS, blobFileContentId, cdcFragmentedContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmentRange, writeFragmented } from "../engine/fragments.ts";
 import { collectGarbage } from "../engine/gc.ts";
+import { hashObject } from "../engine/objects.ts";
 import { manifestFragments } from "../engine/manifest-pages.ts";
 import { type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
@@ -73,6 +75,94 @@ test("native staging streams CDC, retains renamed identities and traces PM items
   assert.ok(repo.status(forbidBuffer).unstaged.some(entry => entry.path === "renamed.bin"));
   repo.stage(["renamed.bin"], forbidBuffer);
   assert.notEqual(repo.readIndex().find(entry => entry.path === "renamed.bin")!.id, current.id);
+});
+
+for (const layout of ["blob", "fixed", "native", "small-fixed"] as const) test(`unchanged staging preserves ${layout} representation and identity`, async () => {
+  const { repo } = await fresh();
+  const bytes = Buffer.alloc(layout === "small-fixed" ? 64 : 1_048_577, 42);
+  const file = join(repo.root, "asset"); writeFileSync(file, bytes);
+  repo.stage(["asset"]); const initial = repo.readIndex()[0];
+  const id = layout === "blob" ? repo.objects.write("blob", bytes, initial.fileId)
+    : layout === "native" ? initial.id : writeFragmented(repo.objects, bytes, 8192, initial.fileId).manifestId;
+  repo.writeIndex([{ ...initial, id }]);
+  const baseline = repo.commit({ message: "recorded representation", author }, new Date());
+  /** Re-adding a large legacy blob must hash bounded reads rather than materialize working bytes. */
+  const read = layout === "small-fixed" ? undefined : (): never => { throw new Error("whole-file staging read"); };
+  assert.deepEqual(repo.stage(["asset"], read), []);
+  assert.equal(repo.readIndex()[0].id, id); assert.equal(repo.readIndex()[0].fileId, initial.fileId);
+  assert.deepEqual(repo.status().staged, []); assert.equal(repo.diff(baseline, "HEAD"), "");
+  chmodSync(file, 0o755); assert.deepEqual(repo.stage(["asset"], read), ["asset"]);
+  assert.equal(repo.readIndex()[0].id, id); assert.equal(repo.readIndex()[0].mode, "100755");
+  chmodSync(file, 0o644); repo.stage(["asset"], read);
+  repo.createBranch("other", "HEAD", new Date()); repo.switchTo("other", new Date());
+  const edited = Buffer.from(bytes); edited[0] ^= 255; writeFileSync(file, edited);
+  assert.deepEqual(repo.stage(["asset"], read), ["asset"]);
+  assert.notEqual(repo.readIndex()[0].id, id);
+  const tip = repo.commit({ message: "concurrent edit", author }, new Date());
+  repo.switchTo("main", new Date());
+  assert.equal(repo.refs.resolveHead(), baseline);
+  assert.deepEqual(repo.stage(["asset"], read), []);
+  const merged = repo.merge("other", { message: "unchanged side", author }, new Date());
+  assert.equal(merged.clean, true); assert.equal(merged.head, tip);
+  assert.deepEqual(readFileSync(file), edited); assert.equal(existsSync(join(repo.root, ".git")), false);
+});
+
+test("legacy blob file hashing uses bounded reads and refuses a truncated descriptor", (context) => {
+  const directory = makeTempDir(); directories.push(directory); const file = join(directory.root, "asset");
+  writeFileSync(file, ""); assert.equal(blobFileContentId(file), hashObject("blob", Buffer.alloc(0)));
+  const bytes = randomBytes(131_073); writeFileSync(file, bytes);
+  assert.equal(blobFileContentId(file), hashObject("blob", bytes));
+  context.mock.method(fs, "readSync", () => 0); syncBuiltinESMExports();
+  try { assert.throws(() => blobFileContentId(file), { code: "short_read" }); }
+  finally { context.mock.restoreAll(); syncBuiltinESMExports(); }
+});
+
+test("manifest history merge unions both real appended SDK events above one MiB", async () => {
+  const { repo, client } = await fresh();
+  const item = (await client.create({ type: "Task", title: "Large history", description: "x".repeat(1_048_576), author: "fixture" })).item.id;
+  const path = `.agents/pm/history/${item}.jsonl`; const file = join(repo.root, path);
+  const itemPath = join(repo.root, ".agents/pm/tasks", `${item}.toon`);
+  const originalItem = readFileSync(itemPath); const prefix = readFileSync(file, "utf8");
+  assert.ok(Buffer.byteLength(prefix) > 1_048_576);
+  repo.stage([path]); assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "manifest");
+  repo.commit({ message: "large history base", author }, new Date()); repo.createBranch("other", "HEAD", new Date());
+  await client.update(item, { title: "Agent A appended", author: "agent-a" });
+  const ours = readFileSync(file, "utf8").slice(prefix.length);
+  assert.equal(ours.trimEnd().split("\n").length, 1);
+  repo.stage([path]); assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "manifest");
+  repo.commit({ message: "agent a", author }, new Date()); repo.switchTo("other", new Date());
+  writeFileSync(itemPath, originalItem);
+  await client.update(item, { title: "Agent B appended", author: "agent-b" });
+  const theirs = readFileSync(file, "utf8").slice(prefix.length);
+  assert.equal(theirs.trimEnd().split("\n").length, 1); assert.notEqual(ours, theirs);
+  repo.stage([path]); assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "manifest");
+  repo.commit({ message: "agent b", author }, new Date()); repo.switchTo("main", new Date());
+  const merged = repo.merge("other", { message: "union both appended events", author }, new Date());
+  assert.equal(merged.clean, true); assert.deepEqual(merged.conflicts, []);
+  const text = readFileSync(file, "utf8"); assert.ok(text.startsWith(prefix));
+  const appended = text.slice(prefix.length).trimEnd().split("\n");
+  assert.equal(appended.length, 2); assert.deepEqual(new Set(appended), new Set([ours.trimEnd(), theirs.trimEnd()]));
+  assert.equal(repo.readMergeState(), null); assert.equal(existsSync(join(repo.root, ".git")), false);
+});
+
+test("manifest text merge diff3 combines independent edits above one MiB", async () => {
+  const { repo } = await fresh(); const path = "large.lock"; const file = join(repo.root, path);
+  const padding = "p".repeat(1_048_576); const base = `first\n${padding}\nlast\n`;
+  writeFileSync(file, base); repo.stage([path]);
+  const original = repo.readIndex()[0]; assert.equal(repo.objects.read(original.id).type, "manifest");
+  repo.commit({ message: "large text base", author }, new Date()); repo.createBranch("other", "HEAD", new Date());
+  writeFileSync(file, `first\n${padding}\nours\n`); repo.stage([path]);
+  assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "manifest");
+  repo.commit({ message: "last line", author }, new Date()); repo.switchTo("other", new Date());
+  writeFileSync(file, `theirs\n${padding}\nlast\n`); repo.stage([path]);
+  assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "manifest");
+  repo.commit({ message: "first line", author }, new Date()); repo.switchTo("main", new Date());
+  const merged = repo.merge("other", { message: "diff3 large text", author }, new Date());
+  assert.equal(merged.clean, true); assert.deepEqual(merged.conflicts, []);
+  assert.equal(readFileSync(file, "utf8"), `theirs\n${padding}\nours\n`);
+  assert.equal(repo.readIndex()[0].fileId, original.fileId);
+  assert.deepEqual(repo.stage([path]), [], "re-adding the merged blob preserves its recorded address");
+  assert.equal(repo.readMergeState(), null); assert.equal(existsSync(join(repo.root, ".git")), false);
 });
 
 for (const layout of ["native", "fixed"]) test(`manifest scan streams ${layout} content and corrects hints without losing mode or link changes`, async () => {

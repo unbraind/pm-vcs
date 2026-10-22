@@ -1,0 +1,16 @@
+id: pm-vcs-legacyreftmp
+title: Recover legacy ref publication crash temporaries without hiding legal refs
+description: "The former ref writer used destination plus process-id plus .tmp before rename. A crash can leave a complete phantom ref or a truncated ref that conservatively blocks GC. Those names are also legal durable refs, so filename-only automatic skipping or deletion would lose roots. PR 138 prevents new collisions with exclusive .lock temporaries; explicit migration and recovery for existing ambiguous files remains separate."
+type: Issue
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-22T20:30:26.002Z"
+updated_at: "2026-10-22T20:32:16.693Z"
+author: codex-agent
+acceptance_criteria: Provide an explicit inspect-first recovery or migration flow with complete and truncated old-writer fixtures; preserve legitimate process-shaped .tmp refs and their reachable objects; never delete or hide ambiguous roots automatically; messages and receipts expose only repository-relative paths.
+parent: pm-vcs-b7cb
+files[2]{path,scope}:
+  engine/gc.ts,project
+  engine/refs.ts,project
+body: ""

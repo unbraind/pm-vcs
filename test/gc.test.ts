@@ -100,7 +100,7 @@ for (const contents of ["partial ref bytes", ""]) test(`GC refuses a corrupt tmp
   const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("held garbage"));
   const target = join(repo.controlDirectory, "refs/heads/broken.tmp");
   writeFileSync(target, contents);
-  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: `Collection root ${target} is not an object address.` });
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: "Collection root .pmvcs/refs/heads/broken.tmp is not an object address." });
   assert.ok(repo.objects.has(garbage));
 });
 
@@ -130,7 +130,7 @@ test("bad upload roots, refs, instance roots and lease layout fail before unlink
   const refs = join(repo.controlDirectory, "refs"); mkdirSync(refs, { recursive: true });
   writeFileSync(join(refs, "bad"), "bad"); assert.throws(() => collectGarbage(repo, true)); rmSync(join(refs, "bad"));
   symlinkSync(join(repo.controlDirectory, "HEAD"), join(refs, "bad"));
-  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: `Collection cannot follow a ref link: ${join(refs, "bad")}.` }); rmSync(join(refs, "bad"));
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: "Collection cannot follow a ref link: .pmvcs/refs/bad." }); rmSync(join(refs, "bad"));
   mkdirSync(join(repo.controlDirectory, "leases")); writeFileSync(join(repo.controlDirectory, "leases/bad"), "{}");
   assert.throws(() => collectGarbage(repo, true)); assert.ok(repo.objects.has(garbage));
 });
@@ -220,10 +220,31 @@ test("dangling links at collection roots fail closed", async () => {
   assert.throws(() => collectGarbage(repo, true), /real lease directory/); assert.ok(repo.objects.has(garbage));
   rmSync(leases);
   const refs = join(control, "refs"); rmSync(refs, { recursive: true }); symlinkSync(join(control, "absent-target"), refs, "dir");
-  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: `Collection cannot follow a ref directory link: ${refs}.` }); assert.ok(repo.objects.has(garbage));
+  assert.throws(() => collectGarbage(repo, true), { code: "unsafe_gc_roots", message: "Collection cannot follow a ref directory link: .pmvcs/refs." }); assert.ok(repo.objects.has(garbage));
   rmSync(refs);
   mkdirSync(join(control, "refs", "heads"), { recursive: true });
   assert.deepEqual(collectGarbage(repo, true).candidates, [garbage]);
+});
+
+for (const fault of ["address", "file-link", "directory-link", "root-link"] as const) test(`GC refusal reports only repository-relative ref paths for ${fault}`, async () => {
+  const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("retained on refusal"));
+  const refs = join(repo.controlDirectory, "refs");
+  const target = join(refs, "heads", "nested.tmp");
+  let message: string;
+  if (fault === "root-link") {
+    rmSync(refs, { recursive: true }); symlinkSync(repo.controlDirectory, refs, "dir");
+    message = "Collection cannot follow a ref directory link: .pmvcs/refs.";
+  } else {
+    if (fault === "address") writeFileSync(target, "truncated legacy or legal ref");
+    else symlinkSync(fault === "file-link" ? join(repo.controlDirectory, "HEAD") : repo.controlDirectory, target, fault === "file-link" ? "file" : "dir");
+    message = fault === "address" ? "Collection root .pmvcs/refs/heads/nested.tmp is not an object address."
+      : "Collection cannot follow a ref link: .pmvcs/refs/heads/nested.tmp.";
+  }
+  assert.throws(() => collectGarbage(repo, true), (error: unknown) => {
+    assert.ok(error instanceof Error && "code" in error && error.code === "unsafe_gc_roots");
+    assert.equal(error.message, message); assert.ok(!error.message.includes(repo.root)); return true;
+  });
+  assert.ok(repo.objects.has(garbage));
 });
 
 test("a hidden instance registry fails closed before any sweep can delete staged work", async () => {

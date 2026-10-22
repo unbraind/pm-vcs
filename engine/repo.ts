@@ -38,7 +38,7 @@ import { type ObjectId, type PayloadState, ObjectStore, ObjectStoreError, hashOb
 
 import { assertCompositionPath, assertSafeFilePath, authorize, configureAuthority, decodeLink, encodeLink, pathsOverlap, readLayers, writePrivateJson, type AuthorityChangeAuthorization, type LocalLayer, type RepositoryLink } from "./composition.ts";
 import { eraseFile, type ErasureReceipt } from "./erasure.ts";
-import { CDC_STAGING_THRESHOLD, STAGING_CDC_PARAMS, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmented, writeCdcFragmentedFile } from "./fragments.ts";
+import { CDC_STAGING_THRESHOLD, STAGING_CDC_PARAMS, blobFileContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmented, writeCdcFragmentedFile } from "./fragments.ts";
 
 
 import type { StoredObject } from "./objects.ts";
@@ -720,8 +720,11 @@ export class Repository {
         continue;
       }
       const absolute = join(this.root, ...path.split("/"));
-      const id = chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : isLink ? hashObject("link", encodeLink(decodeLink(content)))
-        : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(parseWorkingRecord(path, content))) : hashObject("blob", content);
+      const retainedId = previous !== undefined && !isLink && !isRecordPath(path, this.config) && (this.objects.hasType(previous.id, "blob")
+        ? chunked && blobFileContentId(absolute) === previous.id
+        : this.objects.hasType(previous.id, "manifest") && matchesFragmentedFile(this.objects, previous.id, absolute)) ? previous.id : undefined;
+      const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : isLink ? hashObject("link", encodeLink(decodeLink(content)))
+        : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(parseWorkingRecord(path, content))) : hashObject("blob", content));
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
       let fileId = existing === undefined ? undefined : existing.fileId ?? migratedFileId(existing);
@@ -750,8 +753,8 @@ export class Repository {
           fileId = randomBytes(16).toString("hex");
         }
       }
-      if (chunked) {
-        const written = writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
+      if (chunked || retainedId !== undefined) {
+        const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
         if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
           throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
         }

@@ -1271,7 +1271,7 @@ for (const kinds of [
   [null, "manifest", "blob"], ["manifest", "blob", "blob"],
   ["record", "record", "blob"], ["blob", "record", "record"], [null, "blob", "record"],
 ] as const) {
-  test(`renewed merge preserves file objects across ${kinds.join("/")} conflicts`, /** Real tree merges must never merge manifest metadata or throw for file-kind disagreement. */ async () => {
+  test(`renewed merge preserves logical payloads across ${kinds.join("/")} conflicts`, /** Manifest text produces real diff3 markers; incompatible semantic kinds preserve our complete side. */ async () => {
     const { repo } = await fixture();
     const fileId = "c".repeat(32);
     const ids = kinds.map((kind, i) => kind === null ? null : kind === "manifest"
@@ -1283,11 +1283,21 @@ for (const kinds of [
     assert.ok(result);
     assert.deepEqual(result.conflicts, [{ path: "file", reason: "content" }]);
     const entry = flattenTree(repo.objects, result.tree).get("file")!;
-    assert.equal(entry.id, ids[1]); assert.equal(entry.fileId, fileId);
+    const recordKinds = kinds.some(kind => kind === "record");
+    assert.equal(entry.fileId, fileId);
+    if (recordKinds) assert.equal(entry.id, ids[1]);
+    else assert.notEqual(entry.id, ids[1], "text conflicts contain alternatives rather than silently keeping ours");
     repo.materialize(result.tree);
     const object = repo.objects.read(entry.id);
     if (object.type === "manifest") assert.deepEqual(readFileSync(join(repo.root, "file")), readFragmented(repo.objects, entry.id));
-    else if (object.type === "blob") assert.deepEqual(readFileSync(join(repo.root, "file")), object.payload);
+    else if (object.type === "blob") {
+      assert.deepEqual(readFileSync(join(repo.root, "file")), object.payload);
+      if (!recordKinds) {
+        assert.match(object.payload.toString("utf8"), /^<<<<<<< ours$/m);
+        assert.match(object.payload.toString("utf8"), /^>>>>>>> theirs$/m);
+        assert.match(object.payload.toString("utf8"), /side 1/); assert.match(object.payload.toString("utf8"), /side 2/);
+      }
+    }
     else assert.deepEqual(JSON.parse(readFileSync(join(repo.root, "file"), "utf8")), decodeRecord(object.payload));
   });
 }

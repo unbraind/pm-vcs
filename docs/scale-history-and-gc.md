@@ -23,6 +23,9 @@ passes retain bounded buffers; a changed identity or filesystem observation
 refuses index publication. Unreferenced chunks left by a refused add are GC
 candidates. Files below the threshold and configured structured records keep
 their existing blob and record semantics. Symlinks keep their target-text semantics.
+Re-adding unchanged content preserves its recorded blob or manifest address,
+including legacy large blobs and alternate fragment layouts. Comparisons stream
+working bytes; changing storage defaults alone does not create a staged edit.
 
 FileIds remain independent of content addresses. Rename plus edit on the same
 filesystem retains identity; an unambiguous unchanged-content move can also be
@@ -37,6 +40,12 @@ use `readFragmentRange` and visit only overlapping manifest subtrees and blobs.
 Chunk addresses hash uncompressed framed bytes, so changing the zlib level leaves
 all identities unchanged. Native checkout and merge still have materializing paths;
 streaming those paths and pack compaction are separate follow-up work.
+Text merge interprets verified manifest payloads exactly like blobs: append-only
+PM histories union both sides' appended events, and ordinary text uses diff3.
+Blob/manifest transitions do not create semantic conflicts. These merges assemble
+the logical payloads in memory and store their result as a blob, including real
+diff3 markers when text conflicts. Incompatible record/link transitions retain
+their existing explicit-conflict behavior.
 
 Annotation reads verified logical text from blob and manifest storage, following
 setters across storage transitions and renames. Fragmented PM histories retain
@@ -61,6 +70,10 @@ listings. Atomic ref writes use exclusive randomized names in the reserved
 `.lock` namespace, preventing collisions with legitimate refs. Legacy `.tmp`
 files containing addresses are retained conservatively; malformed `.tmp` refs
 refuse collection before deletion rather than being silently omitted.
+Ref refusals report logical repository paths such as `.pmvcs/refs/heads/main`,
+without exposing the absolute store location. Old `<ref>.<pid>.tmp` crash leftovers
+cannot be distinguished from legal refs by their names; explicit inspection and
+migration remain tracked in `pm-vcs-legacyreftmp`.
 An active receiver FileId lease conservatively retains the entire store because
 unpublished arrivals need not yet have a tree attributing their FileId. Released
 or expired leases stop that additional retention. Corrupt metadata, unavailable

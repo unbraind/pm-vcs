@@ -1,6 +1,5 @@
 import { retainedAttestation } from "./signatures.ts";
 import { inheritedConflict, competingResolutions, carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
-import { manifestFragments } from "./manifest-pages.ts";
 // History rewriting, and the three-way tree merge rewriting shares with `merge`.
 //
 // Two responsibilities live here because they are one mechanism seen twice. A
@@ -33,7 +32,6 @@ import {
   type FileMode,
   type Signature,
   compareByteOrder,
-  decodeManifest,
   decodeRecord,
   effectiveChangeId,
   encodeRecord,
@@ -42,7 +40,7 @@ import {
   readCommit,
   writeCommit,
 } from "./model.ts";
-import { hashObject, type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
+import { type ObjectId, type ObjectStore, ObjectStoreError } from "./objects.ts";
 import {
   type ConflictLabels,
   type ContentMergeResult,
@@ -52,7 +50,7 @@ import {
 import { mergeAppendOnlyLog, mergeRecords } from "./records.ts";
 import { type RepositoryConfig, isRecordPath, matchesGlob } from "./config.ts";
 import { buildTree, flattenTree } from "./worktree.ts";
-import { readFragmentBlob } from "./fragments.ts";
+import { readFragmented } from "./fragments.ts";
 
 /** One path that could not be merged automatically. */
 export interface MergeConflict {
@@ -140,9 +138,11 @@ export class RewriteConflictError extends Error {
 /**
  * Merges one attributed payload path; competing repository links refuse atomically.
  *
- * Intentional absence, manifest or mixed-kind changes preserve our complete object and return a
- * content conflict for explicit resolution. Record objects take the per-field path; native PM append-only histories union
- * their events. Other blobs and rewritten history prefixes take diff3. The
+ * Intentional absence or incompatible kinds preserve our complete object and return a
+ * content conflict for explicit resolution. Verified manifests share blob semantics:
+ * native PM append-only histories union their events; other text and rewritten
+ * history prefixes take diff3. These merges materialize the logical payloads and
+ * store the result as a blob. Record objects take the per-field path. The
  * distinction is made on the stored object's type rather than on the path's
  * extension, so what a file is called never decides how it merges.
  *
@@ -167,14 +167,19 @@ export function mergePath(
   return ctx.store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
     // Only a durable denial means intentional absence. Verify every surviving
     // frame and hash before returning a conflict; missing or damaged bytes refuse.
-    const ourObject = ctx.store.denial(ourId) === undefined ? ctx.store.read(ourId) : null;
-    const theirObject = ctx.store.denial(theirId) === undefined ? ctx.store.read(theirId) : null;
-    const baseObject = baseId === null || ctx.store.denial(baseId) !== undefined ? null : ctx.store.read(baseId);
+    /** Interpret verified logical file bytes independently of their storage layout. */
+    const read = (id: ObjectId | null) => {
+      if (id === null || ctx.store.denial(id) !== undefined) return null;
+      const object = ctx.store.read(id);
+      return object.type === "manifest" ? { type: "blob" as const, payload: readFragmented(ctx.store, id) } : object;
+    };
+    const ourObject = read(ourId);
+    const theirObject = read(theirId);
+    const baseObject = read(baseId);
     for (const object of [ourObject, theirObject, baseObject]) {
       if (object !== null && !["blob", "record", "manifest", "link"].includes(object.type)) {
         throw new ObjectStoreError("object_type_mismatch", `Merge payload at ${path} has structural object kind ${object.type}.`);
       }
-      if (object?.type === "manifest") for (const { fragment } of manifestFragments(ctx.store, hashObject("manifest", object.payload))) readFragmentBlob(ctx.store, fragment);
     }
     if (ourObject?.type === "link" || theirObject?.type === "link" || baseObject?.type === "link") {
       throw new ObjectStoreError("link_merge_conflict", `Competing link descriptors at ${path} require explicit pin reconciliation before merging.`);
@@ -183,10 +188,9 @@ export function mergePath(
       return { id: ourId, conflict: { path, reason: "content" } };
     }
     const records = ourObject.type === "record" && theirObject.type === "record";
-    // Manifest metadata is not file text. Kind transitions need an explicit
-    // resolution, preserving one complete side rather than synthesizing bytes.
-    if (ourObject.type === "manifest" || theirObject.type === "manifest" || baseObject?.type === "manifest"
-      || ourObject.type !== theirObject.type
+    // Only semantic kind transitions require explicit resolution; storage
+    // transitions between blobs and manifests retain the same text interpretation.
+    if (ourObject.type !== theirObject.type
       || (baseObject !== null && baseObject.type !== ourObject.type)) {
       return { id: ourId, conflict: { path, reason: "content" } };
     }
