@@ -4,6 +4,11 @@
 
 ### Added
 
+- Annotate text lines and structured fields with native change provenance ([pm-vcs-p7annotate](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-p7annotate.toon))
+- Resolve conflicts and propagate resolutions through automatic descendant rebase ([pm-vcs-p7resolve](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-p7resolve.toon))
+- Sign changes with ed25519 and enforce trusted keys on publication ([pm-vcs-p7sign](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-p7sign.toon))
+- Bisect stable changes using a linked pm test command ([pm-vcs-p7bisect](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-p7bisect.toon))
+- First-class conflict objects stored in changes ([pm-vcs-p7objects](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-p7objects.toon))
 - Merge concurrent served review records per field with recorded outcomes ([pm-vcs-6e5m](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-6e5m.toon))
 - Prove served forge tenant isolation and receiver lease refusals ([pm-vcs-mv7e](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-mv7e.toon))
 - Serve native patch series with an agent command workflow ([pm-vcs-ttqa](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-ttqa.toon))
@@ -46,11 +51,20 @@
 
 ### Changed
 
+- Enable the gated pm-github issue sync and remove the braces chain ([pm-vcs-3dxi](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-3dxi.toon))
+- Adopt pm-github 2026.10.16: default-branch-safe gated sync and daily gated closeout PRs ([pm-vcs-h67d](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-h67d.toon))
 - Regenerate selfhost.bundle for the updated source ([pm-vcs-3nxa](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-3nxa.toon))
 - Phase 2: change identities and history rewriting ([pm-vcs-ijj7](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-ijj7.toon))
 
 ### Fixed
 
+- Fail closed when repository configuration exists but cannot be read ([pm-vcs-00mb](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-00mb.toon))
+- Honor disabled HTTP Date headers when serving with native Bun ([pm-vcs-sl77](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-sl77.toon))
+- Disambiguate parent object-fetch endpoints from nested objects repositories ([pm-vcs-w3yi](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-w3yi.toon))
+- Prevent served CLI fixture leases expiring during concurrent npm test ([pm-vcs-forgeleaseexpiry](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-forgeleaseexpiry.toon))
+- Preserve bisect reports when the culprit is a shallow boundary ([pm-vcs-bisect-shallow-report](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-bisect-shallow-report.toon))
+- Preflight status refresh mutates index before refused operations ([pm-vcs-switch-cache](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-switch-cache.toon))
+- Allow action-only Dependabot bumps through the committed self-host audit ([pm-vcs-koq1](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-koq1.toon))
 - The packed-consumer acceptance test hardcodes the pinned SDK version, so every pm-cli dependency update fails CI ([pm-vcs-15ab](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-15ab.toon))
 - Make every production TypeScript script part of exact coverage and add lint and duplication gates ([pm-vcs-op2c](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-op2c.toon))
 - Make sparse view widening and narrowing descriptor-safe against ancestor replacement ([pm-vcs-74qw](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-74qw.toon))
@@ -92,10 +106,13 @@
 
 ### Security
 
+- Remove vulnerable optional glob dependencies from the fleet duplication gate ([pm-vcs-qfku](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-qfku.toon))
 - Consume the canonical attestation gate instead of carrying a copy of it ([pm-vcs-5m22](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-5m22.toon))
 
 ### Other
 
+- Phase 5: the forge and the patch series ([pm-vcs-5h6j](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-5h6j.toon))
+- Phase 7: agents never stop on a conflict ([pm-vcs-phase7](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-phase7.toon))
 - Auto-merge green Dependabot updates and group the pm toolchain into one daily PR ([pm-vcs-0bur](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-0bur.toon))
 - Certify pm CLI 2026.9.23 and adopt the guarded pm-ops merge-driver launcher ([pm-vcs-6smg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-6smg.toon))
 - Certify pm CLI 2026.9.17 ([pm-vcs-65yt](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-65yt.toon))
