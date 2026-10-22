@@ -78,7 +78,9 @@ jobs:
         run: npm run release:check
 
       - name: Full Bun release gate
-        run: bun run release:check
+        run: |
+          bun run release:check
+          bun test --timeout 120000 ./test/tracker-lenses.test.ts
 
       # The gate prints percentages but not which branch was missed, and a
       # coverage result that reproduces only on a runner is otherwise undebuggable

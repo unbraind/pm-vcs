@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -67,4 +67,26 @@ test("manual CI dispatch preserves all four required check names", () => {
   const names = [...jobs.matchAll(/^  ([\w-]+):\n[\s\S]*?node-version: \[([^\]]+)\]/gmu)]
     .flatMap((match) => match[2]!.split(",").map((version) => `${match[1]} (${version.trim()})`));
   assert.deepEqual(names, ["test (22)", "test (26)", "windows-acceptance-launcher (22)", "windows-acceptance-launcher (26)"]);
+});
+
+test("Bun CI gate executes tracker lens tests in the Bun runtime", () => {
+  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const tail = ci.slice(ci.indexOf("      - name: Full Bun release gate"));
+  const step = tail.slice(0, tail.indexOf("\n\n"));
+  const script = step.slice(step.indexOf("        run: |\n") + "        run: |\n".length)
+    .split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-bun-workflow-"));
+  try {
+    mkdirSync(join(root, "test"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { "release:check": "node -e \"require('node:fs').writeFileSync('gate-ran', 'yes')\"" } }));
+    writeFileSync(join(root, "test/tracker-lenses.test.ts"), `import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { test } from "node:test";
+test("runtime witness", () => { assert.ok(process.versions.bun); writeFileSync("bun-ran", process.versions.bun); });
+`);
+    const result = spawnSync("bash", ["-e", "-c", script], { cwd: root, encoding: "utf8", timeout: 120_000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(join(root, "gate-ran"), "utf8"), "yes");
+    assert.ok(readFileSync(join(root, "bun-ran"), "utf8"), "workflow must execute tests under Bun");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

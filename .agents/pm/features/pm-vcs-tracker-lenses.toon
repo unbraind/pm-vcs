@@ -6,12 +6,12 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T21:35:13.973Z"
-updated_at: "2026-10-22T09:42:29.618Z"
-assignee: pi-agent
-claim_principal: pi-agent
+updated_at: "2026-10-22T10:07:53.361Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: "Malformed tracker objects remain opaque; views never rewrite content; every semantic statement cites the original object/change.; Typed SDK and CLI with bounded TOON/JSON, typed refusals and remedies, README and example, non-git public tracker validation, targeted regressions and CI npm plus Bun release gates."
-comments[13]{created_at,author,text}:
+comments[15]{created_at,author,text}:
   "2026-10-21T21:35:19.901Z",codex-agent,"Overlap check against current CLI 2026.10.21 and package main 27e1d84: core history owns tracker event streams and lifecycle mutations; pm-context assembles present context, pm-graph projects graph queries, pm-memory owns memory workflows, pm-changelog produces release notes. None explains one immutable native change as tracker field deltas. Reuse annotatePath/changeProvenance, native conflict IDs, signature policy and bisect rather than duplicating them. New query compares selected change to first parent, never invokes Git or writes content. Open reconciliation PR items are excluded from this work. Dependencies remain pinned."
   "2026-10-21T21:44:03.043Z",codex-agent,"Implemented explainChange SDK and vcs explain with opt-in labels, first-parent semantics, exact immutable commit/object/path citations, scalar/digest summaries and explicit pagination. Canonical SDK parsing plus typed collection coordinates prevent malformed tracker interpretations. Unresolved fields retain ordinary provenance; native conflict metadata is reused. No Git subprocess or mutable tracker read on the query path. Targeted SDK, CLI harness, installed TOON/JSON, malformed, shallow, conflict, deletion and byte-preservation checks are passing. CI now runs the unchanged npm and Bun release:check gates for both Node matrix versions; local full suites remain delegated to CI because host CPU is saturated."
   "2026-10-21T21:47:33.879Z",codex-agent,"Behavioral revert proof on production TypeScript: disable only the semantic label selection, then node --test --test-name-pattern=\"^SDK lenses\" test/tracker-lenses.test.ts fails 0/1; bypass only the malformed-tracker opacity guard, then node --test --test-name-pattern=\"^malformed tracker\" test/tracker-lenses.test.ts fails 0/1. Both functions are restored. Tests import source directly, so a dist rebuild is not needed for either revert. Collection projections now expose exact entry indices and bounded target/path/command/log coordinates; duplicates retain their counts and order-only edits do not invent membership changes."
@@ -25,18 +25,22 @@ comments[13]{created_at,author,text}:
   "2026-10-22T09:36:53.505Z",pi-agent,"Review of PR 140 unresolved threads against head c0df1c35554ca91e54edf83f303be7ec75dbc8bb. Collection duplicate pairing is valid: ascending after-indices consumed with pop report an appended identical entry at entryAfter 0 instead of 1, while a trailing removal already reports entryBefore 1. Fix will pair from the front and assert both coordinates. The Bun workflow thread is being checked against the contracted npm and bun release:check gates before any workflow edit."
   "2026-10-22T09:41:56.163Z",pi-agent,"Revert proof for duplicate collection coordinates: restoring only the match consumption in collectionStatements from shift() to pop() makes node --test --test-name-pattern='^collection lenses' test/tracker-lenses.test.ts fail 0/1. The appended [file] to [file, file] assertion expected entryAfter 1 and observed 0. The trailing-removal assertion was not reached. Source was restored to front pairing immediately. The same command then passed 1/1. Tests import source, so the proof did not need a dist rebuild. The full lens file then passed 7/7, including the installed CLI case with no Git executable. Public-window statement counts are unchanged because this aligns duplicate indices without adding or dropping rows."
   "2026-10-22T09:42:12.394Z",pi-agent,"CI thread PRRT_kwDOToJT7M6vBSTC is not a defect in the contracted gate. The step already runs bun run release:check, the package-manager gate required beside npm run release:check. release:check is npm scripts, and coverage is c8 invoking node --expose-gc --test. No bunfig is present. With node already on PATH, bun run does not alias node to bun. A local script probe showed bun run executes system node with no Bun runtime version, while bun --bun aliases node to the bun binary. Forcing --bun would replace the Node and c8 coverage toolchain instead of running the unchanged release gate. The merge-base workflow had no Bun-runtime test job, so this is not a regression. No workflow edit."
-files[8]{path,scope}:
+  "2026-10-22T10:06:16.550Z",codex-agent,"Continuation review: remote head pulled; branch contains current main. Reviewed unpushed duplicate-coordinate commit as an untrusted draft and retained its front pairing plus bidirectional coordinate assertions. Both unresolved threads and every comment were read; latest CodeRabbit review has no outside-diff findings. Superseding the prior Bun refusal: the unchanged package-manager gate alone does not exercise the new feature under Bun. Add explicit Bun execution of the complete tracker-lenses test file after the full Bun release gate, with a regression that executes the actual workflow block and requires a Bun runtime witness. Self-reviewed the full diff for duplicate matching and runtime-selector defects; collection matching is shared by all lenses. No other occurrence found."
+  "2026-10-22T10:07:53.361Z",codex-agent,"Independent continuation revert proofs: changing only collectionStatements match consumption from shift() back to pop() makes node --test --test-name-pattern=^collection\\ lenses test/tracker-lenses.test.ts fail 0/1 (actual entryAfter 0, expected 1); restoring it passes 1/1. Removing only the explicit bun test command from the CI shell block makes node --test --test-name-pattern=^Bun\\ CI\\ gate test/dependency-refresh-workflow.test.ts fail 0/1 because the Bun witness is absent; restoring it passes 1/1. Both source/workflow restorations completed before any archive generation. Node workflow file passes 4/4, and bun test --timeout 120000 ./test/tracker-lenses.test.ts passes 7/7 under Bun 1.3.5, including packed CLI without Git. npm ci passes with zero vulnerabilities. Full release gates will use isolated HOME and disabled global/system Git config; no threshold changes."
+files[9]{path,scope}:
   .github/workflows/ci.yml,project
   engine/tracker-lenses.ts,project
   index.ts,project
+  test/dependency-refresh-workflow.test.ts,project
   test/helpers/validate-tracker-lenses.ts,project
   test/raw-coverage.test.ts,project
   test/tracker-lenses.test.ts,project
   test/vcs-commands.test.ts,project
   vcs-commands.ts,project
-tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/tracker-lenses.test.ts,project,codex-agent,"2026-10-21T21:43:56.997Z",local_mutation,feat/tracker-semantic-lenses
   node --test --test-name-pattern='^collection lenses' test/tracker-lenses.test.ts,project,pi-agent,"2026-10-22T09:42:29.048Z",local_mutation,feat/tracker-semantic-lenses
+  node --test test/dependency-refresh-workflow.test.ts,project,codex-agent,"2026-10-22T10:07:14.520Z",local_mutation,feat/tracker-semantic-lenses
 docs[2]{path,scope}:
   docs/tracker-lenses.md,project
   README.md,project
