@@ -313,12 +313,12 @@ export class ObjectStore {
     const temporary = `${destination}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
     const handle = openSync(temporary, "wx");
     try {
-      writeSync(handle, compressed);
-      fsyncSync(handle);
-    } finally {
-      closeSync(handle);
-    }
-    try {
+      try {
+        writeSync(handle, compressed);
+        fsyncSync(handle);
+      } finally {
+        closeSync(handle);
+      }
       renameSync(temporary, destination);
     } catch (error) {
       rmSync(temporary, { force: true });

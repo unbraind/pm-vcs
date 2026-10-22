@@ -114,12 +114,17 @@ function writeAtomic(path: string, contents: string): void {
   const temporary = join(dirname(path), `ref-${process.pid}-${randomBytes(6).toString("hex")}.lock`);
   const handle = openSync(temporary, "wx");
   try {
-    writeSync(handle, `${contents}\n`);
-    fsyncSync(handle);
-  } finally {
-    closeSync(handle);
+    try {
+      writeSync(handle, `${contents}\n`);
+      fsyncSync(handle);
+    } finally {
+      closeSync(handle);
+    }
+    renameSync(temporary, path);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
   }
-  renameSync(temporary, path);
 }
 
 /**

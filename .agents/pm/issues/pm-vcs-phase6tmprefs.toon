@@ -6,23 +6,49 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-21T16:56:40.572Z"
-updated_at: "2026-10-21T21:19:15.707Z"
+updated_at: "2026-10-22T11:03:03.545Z"
 author: codex-agent
 acceptance_criteria: GC and listing retain every legal tmp-named ref and directory; corrupt tmp refs refuse deletion; atomic ref temporary files occupy only the reserved lock namespace and never overwrite a valid ref; independent behavioural revert regressions fail.
 parent: pm-vcs-b7cb
 severity: high
-comments[3]{created_at,author,text}:
+comments[6]{created_at,author,text}:
   "2026-10-21T17:19:37.543Z",codex-agent,"Verified 36/36 ref and GC tests, both directly and through pm test --run --progress. Function-only behavioral reverts independently fail: restoring writeAtomic loses the process-shaped tmp ref; restoring RefStore.list hides a legal tmp ref; restoring refRoots fails both retained-root cases and corrupt-root refusal. Native CLI acceptance also passed with only Node on PATH and a fatal Git interceptor, including tmp-branch listing and applied GC retention. No existing ref or oplog data was trimmed."
   "2026-10-21T21:15:54.583Z",codex-agent,"PR 138 unresolved thread PRRT_kwDOToJT7M6u84nm is valid: fail-closed malformed-ref refusal omits the offending path. Include the ref path while retaining pre-sweep refusal; extend regression to assert the exact error and retained garbage. No thread replies or resolutions."
   "2026-10-21T21:18:36.528Z",codex-agent,"Behavioural revert proof: replacing only refRoots with the fetched PR-head function makes all four targeted GC regressions fail (0/4 pass): empty and partial tmp refs omit the offending path, as do ref-file and ref-directory symlinks. Restoring the fix passes all four, retaining fail-closed collection and every synthetic unreachable object on refusal. Exact command: node --test --test-name-pattern=\"^GC refuses a corrupt tmp-named ref|^bad upload roots|^dangling links\" test/gc.test.ts."
-files[4]{path,scope}:
+  "2026-10-22T10:59:25.444Z",codex-agent,"Continuation round for PR 138: pulled the remote head and confirmed current main is already included; no interrupted draft edits or unpushed commits were present. Read every unresolved thread comment and the latest CodeRabbit review, which has no outside-diff section. Thread PRRT_kwDOToJT7M6vAP0c is valid: writeAtomic removes no reserved random temp after write, fsync, close or rename failure. Whole-diff review found the same write/fsync/close cleanup gap in ObjectStore.writeRaw, whose existing catch covers rename only. Extend cleanup over the whole owned publication in both locations; add eight real plain-directory regressions with descriptor-scoped filesystem fault injection, checking exact error identity, closed descriptors, preserved prior data and unrelated files, and successful retry. No pm SDK mocks or Git dependency."
+  "2026-10-22T11:01:32.581Z",codex-agent,"Independent behavioral revert proofs completed before archive generation. Reverting only writeAtomic to the fetched head makes node --test --test-name-pattern=\"^atomic ref publication\" test/atomic-publication-cleanup.test.ts fail 0/5; restoring it passes 5/5. Reverting only ObjectStore.writeRaw makes node --test --test-name-pattern=\"^atomic object publication\" test/atomic-publication-cleanup.test.ts pass 1/4 and fail 3/4: write/fsync/close leave owned temp files, while the existing rename cleanup still passes. Restoring it passes 4/4. Full new file passes 9/9, including a repeated native rename refusal without fault injection, with all functions restored. Tests import source directly, so no dist rebuild is required for proof. Bun real-ref suite passes 12/12. Pinned npm ci, source/test typechecks, lint and zero-duplication checks pass; thresholds are unchanged."
+  "2026-10-22T11:03:01.873Z",codex-agent,"Final implementation receipt for PR 138: linked pm test run passes 3/3 commands with 37 ref/GC tests, 4 focused fail-closed GC tests and 9 cleanup tests (50 executions, zero failures/skips/cancellations). ObjectStore tests separately pass 14/14. Bun runs pass 12/12 real-ref tests and 1/1 selected native cleanup regression. Build, source/test typechecks, lint, docstrings and the 0% duplication gate pass. Strict pm health passes with the CI-pinned project extension; only two pre-existing advisory warnings remain, and history is append-only. dist is ignored, not committed. The restored production functions and tracker are staged before deterministic archive generation. Full unchanged-threshold npm and Bun release gates on Node 22/26 are required at the final-head receipt https://github.com/unbraind/pm-vcs/pull/138/checks; those exact-head CI results are authoritative for full-suite counts. Claim released for orchestrator verification; item remains in_progress. No review replies/resolutions, merge, release, dependency bump or out-of-scope service changes."
+files[6]{path,scope}:
   engine/gc.ts,project
+  engine/objects.ts,project
   engine/refs.ts,project
+  test/atomic-publication-cleanup.test.ts,project
   test/gc.test.ts,project
   test/refs.test.ts,project
-tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
-  node --test test/refs.test.ts test/gc.test.ts,project,900,codex-agent,"2026-10-21T16:56:55.575Z",local_mutation,feat/phase6-chunked-storage
-  "node --test --test-name-pattern=\"^GC refuses a corrupt tmp-named ref|^bad upload roots|^dangling links\" test/gc.test.ts",project,900,codex-agent,"2026-10-21T21:17:31.423Z",local_mutation,feat/phase6-chunked-storage
+tests[3]:
+  - command: node --test test/refs.test.ts test/gc.test.ts
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-21T16:56:55.575Z"
+      source_kind: local_mutation
+      source_ref: feat/phase6-chunked-storage
+  - command: "node --test --test-name-pattern=\"^GC refuses a corrupt tmp-named ref|^bad upload roots|^dangling links\" test/gc.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-21T21:17:31.423Z"
+      source_kind: local_mutation
+      source_ref: feat/phase6-chunked-storage
+  - command: node --test test/atomic-publication-cleanup.test.ts
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-22T11:00:54.897Z"
+      source_kind: local_mutation
+      source_ref: feat/phase6-chunked-storage
 docs[2]{path,scope}:
   docs/phase6-scale-receipt.md,project
   docs/scale-history-and-gc.md,project
