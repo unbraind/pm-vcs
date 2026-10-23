@@ -139,7 +139,7 @@ test("trust, revocation, algorithm and canonical signature checks fail closed", 
     refused(() => inspectChangeBundle(f.receiver.objects, seal(value, false), f.policy), "bundle_signature_refused");
   }
   refused(() => inspectChangeBundle(f.receiver.objects, changed(f.bytes, { publicKey: "broken" }), f.policy), "bundle_signature_refused");
-  for (const key of [keys.publicKey, generateKeyPairSync("rsa", { modulusLength: 1024 }).privateKey]) {
+  for (const key of [keys.publicKey, generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey]) {
     refused(() => exportChangeBundle(f.repo.objects, f.selected, f.scope, author.email, key), "bundle_signature_refused");
   }
   for (const signer of ["", "line\nbreak", 5]) refused(() => exportChangeBundle(f.repo.objects, f.selected, f.scope, signer as string, keys.privateKey), "bundle_signature_refused");
