@@ -1,0 +1,25 @@
+id: pm-vcs-worktree-walk-race
+title: Keep native staging stable when working-tree children vanish
+description: "PR 141 CI test (26) once failed in listWorkingTree while a telemetry flush.lock directory vanished after listing. The unchanged retry passed. Handle disappearing or replaced child entries without suppressing root or unexpected filesystem failures, and exclude installation runtime state before descent and staging."
+type: Issue
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-10-23T08:47:27.367Z"
+updated_at: "2026-10-23T09:09:12.089Z"
+author: codex-agent
+acceptance_criteria: "Deterministic real-filesystem seam removes a child directory between listing and descent; ENOENT and ENOTDIR child failures skip that child while walk-root and other failures still throw. Non-negatable .pm-cli/runtime exclusion applies at any depth without blanket-excluding the global settings directory. Separate revert proofs fail for traversal handling and runtime exclusion. No-git SDK tracker, targeted checks, self-host verification at committed HEAD and full npm/Bun CI gates pass."
+comments[4]{created_at,author,text}:
+  "2026-10-23T08:47:30.662Z",codex-agent,"Orientation found no flush.lock or matching walk-race item; related existing ignore items cover tracker caches and VCS control paths. Packaged CLI docs/EXTENSIONS.md identifies the global .pm-cli extension directory; docs/CONFIGURATION.md documents installation runtime counters in runtime/telemetry/read-sampling.json. The public telemetry runtime declarations identify global-root queue/state/flush-lock paths. Decision: reserve only the adjacent .pm-cli/runtime path components, case-insensitively and at any depth, through the existing non-negatable runtime fence. Keep non-runtime settings eligible under existing rules. Do not change telemetry configuration. Use an injectable synchronous directory reader over real filesystem entries to reproduce child disappearance deterministically, with per-child error handling and root errors untouched. PR 144 and its branch remain unchanged."
+  "2026-10-23T09:04:38.363Z",codex-agent,"Implementation: directory reader is injectable per call; real child read/stat failures ENOENT or ENOTDIR skip only that child. Root directory reads stay outside the child guard. EACCES, EIO and unexpected errors propagate unchanged. A final no-follow leaf stat omits vanished or type-replaced entries. Installation runtime is non-negatable and pruned in both tracker discovery and working-tree enumeration; ordinary runtime-fence exceptions still remain discoverable. Positive verification: 60 focused walk/ignore/control tests passed, including 13 new regressions; 3 raw-coverage/inventory boundary tests passed. Native staging ran in a real SDK-initialized non-git tracker with an empty executable search path. Runtime cannot be explicitly staged or materialized, visible legacy runtime index entries are removed on add, and global settings remain eligible. Source build, typecheck, test typecheck, lint, 0% duplication and docstrings passed; production inventory stays 76 files."
+  "2026-10-23T09:04:39.182Z",codex-agent,"Independent behavioral revert proofs: (1) remove only the ENOENT/ENOTDIR suppression from listWorkingTree while retaining the deterministic real-filesystem reader seam; the removed-directory test fails with ENOENT scandir (1 test, 0 pass, exit 1). (2) revert only isRuntimeIgnored to omit the installation-runtime fence; the exclusion test fails false !== true for .pm-cli/runtime (1 test, 0 pass, exit 1). Original fixed source bytes restored exactly after each experiment; these regressions import source, so no dist rebuild is needed for the negative proof. Full npm/Bun release gates remain assigned to CI at unchanged thresholds."
+  "2026-10-23T09:09:10.338Z",codex-agent,"PM-linked verification completed: the registered focused command passed 60/60 tests, zero failed/cancelled/skipped/todo. Test-result persistence is disabled by project policy, so these observed results are retained here without changing settings. Build, typecheck, test typecheck, lint, duplication (0%), docstrings and the 3-test raw-coverage/inventory suite passed. Both negative behavioral proofs failed independently and restored source matched byte-for-byte afterward. README documents the reserved runtime subtree and the best-effort child-race boundary. No dependency bump or telemetry configuration change was needed; no pm CLI/SDK bug was found. Implementation is complete; exact-head full npm/Bun gate results and URLs will be added to the separate PR. Leaving the item unclosed for orchestrator verification."
+files[3]{path,scope}:
+  engine/ignore.ts,project
+  engine/worktree.ts,project
+  test/worktree-walk-race.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=1 test/worktree-walk-race.test.ts test/worktree.test.ts test/ignore.test.ts test/control-directories.test.ts,project,codex-agent,"2026-10-23T09:04:42.000Z",local_mutation,fix/worktree-walk-vanishing-entries
+docs[1]{path,scope}:
+  README.md,project
+body: ""

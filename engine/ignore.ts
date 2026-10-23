@@ -12,7 +12,7 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { getPmGitignoreBlock, getSettingsPath, resolveImplicitPmRoot, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 
 import { matchesGlob } from "./config.ts";
@@ -76,6 +76,7 @@ function discoverTrackerRootsBelow(root: string, start: string, candidates: Set<
       // A symlinked directory is not `isDirectory`, so aliases cannot escape.
       if (!entry.isDirectory() || isPrunableDirectory(entry.name)) continue;
       const child = join(current, entry.name);
+      if (isInstallationRuntimePath(relative(root, child).split(sep).join("/"))) continue;
       const tracker = resolvePmRoot(root, child);
       if (existsSync(getSettingsPath(tracker))) candidates.add(tracker);
       if (existsSync(getSettingsPath(current)) && (FENCED_TRACKER_DIRECTORIES as readonly string[]).includes(entry.name)) {
@@ -215,9 +216,15 @@ function matchesPatterns(path: string, rules: IgnoreRules): boolean {
     && !rules.negations.some((pattern) => matchesGlob(path, pattern));
 }
 
-/** Whether a path is excluded by an SDK runtime fence, independent of project rules. */
+/** Installation runtime is tool-owned state even when the global directory is not a local tracker. */
+export function isInstallationRuntimePath(path: string): boolean {
+  const segments = path.split("/");
+  return segments.some((segment, index) => segment.toLowerCase() === ".pm-cli" && segments[index + 1]?.toLowerCase() === "runtime");
+}
+
+/** Whether installation or SDK tracker runtime excludes a path, independent of project negations. */
 export function isRuntimeIgnored(path: string, rules: IgnoreRules): boolean {
-  return rules.runtime?.some((fence) => matchesPatterns(path, fence)) ?? false;
+  return isInstallationRuntimePath(path) || (rules.runtime?.some((fence) => matchesPatterns(path, fence)) ?? false);
 }
 
 /**
