@@ -1,5 +1,7 @@
 /** Signed, closed native histories whose replay authority is independently limited by the receiver. */
 import { createHash, createPublicKey, sign, verify, type KeyObject } from "node:crypto";
+import { lstatSync } from "node:fs";
+import { join } from "node:path";
 import { collectCommitObjects, importBundleObjects, parseBundle, serializeBundle } from "./bundle.ts";
 import { requireClosure, type ClosureMetadata } from "./closure.ts";
 import { conflictReferences, decodeConflict } from "./conflicts.ts";
@@ -9,7 +11,7 @@ import { canonicalRecordValue, compareByteOrder, decodeCommit, decodeManifest, d
 import { ObjectStoreError, isObjectId, type ObjectId, type ObjectStore } from "./objects.ts";
 import { assertRefName } from "./refs.ts";
 import type { Repository } from "./repo.ts";
-import { assertTrustedChanges, parseTrustedKeys } from "./signature-policy.ts";
+import { assertTrustedChanges, parseTrustedKeys, readTrustedKeys } from "./signature-policy.ts";
 import { keyFingerprint, parsePublicKey, publicKeyText, type TrustedKeys } from "./signatures.ts";
 
 /** Exact relative paths and destination branch names; no globs, prefix grants or implicit dependencies. */
@@ -40,7 +42,7 @@ export interface ChangeBundleReport {
   readonly scopeComplete: true;
 }
 /** Stable refusal discriminants for retry decisions. */
-export type ChangeBundleRefusalCode = "invalid_change_bundle" | "bundle_scope_refused" | "bundle_signature_refused" | "bundle_incomplete" | "bundle_lease_refused";
+export type ChangeBundleRefusalCode = "invalid_change_bundle" | "bundle_scope_refused" | "bundle_signature_refused" | "bundle_incomplete" | "bundle_lease_refused" | "bundle_ref_conflict";
 /** Sanitized refusal carrying a machine-readable code and concrete recovery instruction. */
 export class ChangeBundleRefusal extends ObjectStoreError {
   /** Narrow discriminator shared by SDK and command handlers. */
@@ -189,14 +191,34 @@ function preflight(store: ObjectStore, bytes: Buffer, authorization: ChangeBundl
     const signature = Buffer.from(envelope.signature, "base64");
     valid = signature.length === 64 && signature.toString("base64") === envelope.signature && verify(null, signingBytes(manifest), parsePublicKey(manifest.publicKey), signature);
   } catch { throw new ChangeBundleRefusal("bundle_signature_refused", SIGNATURE); }
-  const keyId = keyFingerprint(manifest.publicKey);
-  if (!valid || !Number.isSafeInteger(now) || !authorization.trust.keys.some(entry => entry.publicKey === manifest.publicKey && entry.identity === manifest.signer)
-    || authorization.trust.revocations.some(entry => entry.keyId === keyId && entry.effectiveAt <= now)) throw new ChangeBundleRefusal("bundle_signature_refused", SIGNATURE);
+  if (!valid) throw new ChangeBundleRefusal("bundle_signature_refused", SIGNATURE);
+  assertManifestSigner(manifest, authorization.trust, now);
   if (scope.refs.some(name => !authorization.scope.refs.includes(name)) || scope.paths.some(path => !authorization.scope.paths.includes(path))) throw new ChangeBundleRefusal("bundle_scope_refused", SCOPE);
   const metadata = closure(store, archive, manifest);
   const report: ChangeBundleReport = { manifest: digest(canonical(manifest)), objects: included.length, excluded: excluded.length, changes: metadata.commits.size,
     refs: scope.refs.length, unknownOmissions: manifest.unknownOmissions, complete: !manifest.unknownOmissions && excluded.length === 0, scopeComplete: true };
   return { manifest, archive, metadata, report };
+}
+/** Re-evaluate the independent receiver grant and effective revocations at the current publication clock. */
+function assertManifestSigner(manifest: ChangeBundleManifest, trust: TrustedKeys, now: number): void {
+  const keyId = keyFingerprint(manifest.publicKey);
+  if (!Number.isSafeInteger(now) || !trust.keys.some(entry => entry.publicKey === manifest.publicKey && entry.identity === manifest.signer)
+    || trust.revocations.some(entry => entry.keyId === keyId && entry.effectiveAt <= now)) throw new ChangeBundleRefusal("bundle_signature_refused", SIGNATURE);
+}
+/** Check the whole incoming namespace and existing filesystem before admission, including empty ref directories. */
+function assertDestinationRefs(control: string, names: readonly string[]): void {
+  const selected = new Set(names);
+  for (const name of names) {
+    const segments = name.split("/");
+    for (let length = 1; length <= segments.length; length += 1) {
+      const prefix = segments.slice(0, length).join("/");
+      const parent = length < segments.length;
+      const entry = lstatSync(join(control, prefix), { throwIfNoEntry: false });
+      if ((parent && selected.has(prefix)) || (entry !== undefined && (parent ? !entry.isDirectory() : !entry.isFile()))) {
+        throw new ChangeBundleRefusal("bundle_ref_conflict", "Choose destination branches without parent/child name collisions; independently review and rename conflicting local refs or remove abandoned empty ref directories before retrying.");
+      }
+    }
+  }
 }
 /** Read-only verification of cryptography, receiver authorization and complete native closure, without Git. */
 export function inspectChangeBundle(store: ObjectStore, bytes: Buffer, authorization: ChangeBundleAuthorization, now = Date.now()): ChangeBundleReport {
@@ -207,14 +229,21 @@ export function importChangeBundle(repository: Repository, bytes: Buffer, author
   const { objects: store, refs } = repository;
   return store.withWriteLock(() => {
     const checked = preflight(store, bytes, authorization, now);
+    const control = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
+    assertDestinationRefs(control, checked.manifest.scope.refs);
     const leases = row(expected, checked.manifest.scope.refs);
     if (Object.entries(leases).some(([name, value]) => (value !== null && (typeof value !== "string" || !isObjectId(value))) || refs.read(name) !== value)) throw new ChangeBundleRefusal("bundle_lease_refused", "Read every destination branch and provide its exact expected object id, or null for a new branch; retry after reviewing concurrent changes.");
-    const targets = Object.values(checked.manifest.tips); const control = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
+    const targets = Object.values(checked.manifest.tips);
     const recheck = assertTrustedChanges(control, checked.metadata.commits, targets);
     importBundleObjects(store, checked.archive);
     assertCheckpointPublication(store, control, checked.metadata.commits, targets);
-    recheck();
-    refs.transaction(Object.entries(checked.manifest.tips).map(([name, next]) => ({ name, next, expected: expected[name] })));
+    refs.transaction(Object.entries(checked.manifest.tips).map(([name, next]) => ({ name, next, expected: expected[name] })), () => {
+      recheck();
+      const publicationNow = Date.now();
+      assertManifestSigner(checked.manifest, parseTrustedKeys(authorization.trust), publicationNow);
+      const local = readTrustedKeys(control);
+      if (local !== null && local.revocations.some(entry => entry.keyId === keyFingerprint(checked.manifest.publicKey) && entry.effectiveAt <= publicationNow)) throw new ChangeBundleRefusal("bundle_signature_refused", SIGNATURE);
+    });
     return checked.report;
   });
 }

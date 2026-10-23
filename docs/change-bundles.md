@@ -13,7 +13,13 @@ sender-selected branch names grant receiver permission. Import admits objects an
 publishes only the named branches; it does not check out files, execute commands,
 replay tracker mutations, change HEAD, adopt clone identity, or import erasure
 authority. Local signature and semantic checkpoint publication policies still
-apply. Admitted objects may remain when a local checkpoint publication rule refuses
+apply. Import validates all destination names before admitting objects, including
+parent/child collisions within the bundle, existing local refs and empty ref
+directories. Such a refusal publishes no refs and stores no objects. Immediately
+before ref publication, under the shared store lease and all destination ref locks,
+import rechecks the receiver grant and current revocation times, and reloads any
+local trusted-key revocations for the manifest signer. Admitted objects may remain
+when a publication-time signer revocation or local checkpoint rule refuses
 the ref update, just as with ordinary native transport. A capability limits this
 operation; it cannot restrict subsequent actions by the receiving repository owner.
 
@@ -127,9 +133,10 @@ and no unknown omissions. A selective archive therefore never claims to reproduc
 the complete source project.
 
 `ChangeBundleRefusal` exposes `code` and `remedy` for malformed contracts,
-cross-scope references, untrusted/revoked/tampered signatures, incomplete closure
-and stale leases. Fix the named input, narrow the selected history, independently
-authorize all referenced scope, restore missing objects, or review fresh destination
+cross-scope references, untrusted/revoked/tampered signatures, incomplete closure,
+stale leases and destination ref collisions (`bundle_ref_conflict`). Fix the named
+input, narrow the selected history, independently authorize all referenced scope,
+restore missing objects, or review fresh destination
 values as directed. Core native integrity, erasure, signature and checkpoint
 refusals retain their existing typed codes. Ordinary forge/tenant authorization
 and durable upload receipt expiry are separate contracts.

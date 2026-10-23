@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { existsSync, readFileSync, truncateSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, truncateSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -187,6 +187,77 @@ test("multiple destination branches require authority and exact leases as one tr
   assert.deepEqual(snapshot(f.receiver), before);
   assert.equal(importChangeBundle(f.receiver, bytes, policy, { [branch]: null, [second]: null }).refs, 2);
   assert.equal(f.receiver.refs.read(branch), f.last); assert.equal(f.receiver.refs.read(second), f.first);
+});
+
+test("destination ref namespace collisions refuse the whole import before storing objects", async () => {
+  const f = await fixture();
+  const cases = [
+    { incoming: ["refs/heads/0", "refs/heads/a", "refs/heads/a/b"], existing: [] },
+    { incoming: ["refs/heads/0", "refs/heads/a/b"], existing: ["refs/heads/a"] },
+    { incoming: ["refs/heads/0", "refs/heads/a"], existing: ["refs/heads/a/b"] },
+  ];
+  for (const { incoming, existing } of cases) {
+    const receiver = Repository.init(temp());
+    for (const name of existing) receiver.refs.compareAndSwap(name, null, f.first);
+    const scope = { ...f.scope, refs: incoming }; const policy = { ...f.policy, scope };
+    const bytes = exportChangeBundle(f.repo.objects, Object.fromEntries(incoming.map(name => [name, f.last])), scope, author.email, keys.privateKey);
+    const before = snapshot(receiver);
+    refused(() => importChangeBundle(receiver, bytes, policy, Object.fromEntries(incoming.map(name => [name, null]))), "bundle_ref_conflict");
+    assert.deepEqual(snapshot(receiver), before);
+    assert.equal(receiver.refs.read("refs/heads/0"), null);
+    assert.equal(existsSync(join(receiver.controlDirectory, "refs/heads/0.lock")), false);
+  }
+  // Empty directories left by earlier transactions cannot become a ref file either.
+  mkdirSync(join(f.receiver.controlDirectory, branch), { recursive: true });
+  const before = snapshot(f.receiver);
+  refused(() => importChangeBundle(f.receiver, f.bytes, f.policy, { [branch]: null }), "bundle_ref_conflict");
+  assert.deepEqual(snapshot(f.receiver), before);
+  assert.equal(existsSync(join(f.receiver.root, ".git")), false);
+});
+
+test("manifest signer revoked during object admission cannot publish refs", async () => {
+  for (const mode of ["scheduled", "appended", "removed", "local"] as const) {
+    const f = await fixture(); const fingerprint = keyFingerprint(publicKey);
+    const trust = { version: 1 as const, keys: [...f.policy.trust.keys], revocations: [...f.policy.trust.revocations] };
+    if (mode === "scheduled") trust.revocations.push({ keyId: fingerprint, effectiveAt: 20 });
+    const policy = { ...f.policy, trust }; const before = f.receiver.refs.list("refs/");
+    const accept = f.receiver.objects.accept; const clock = Date.now;
+    let receiverNow = 10; let admitted = false;
+    Date.now = () => receiverNow;
+    f.receiver.objects.accept = function (...args: Parameters<typeof accept>): void {
+      accept.apply(this, args); admitted = true;
+      assert.equal(existsSync(join(f.receiver.controlDirectory, "objects.lock")), true);
+      receiverNow = 20;
+      if (mode === "appended") trust.revocations.push({ keyId: fingerprint, effectiveAt: 20 });
+      if (mode === "removed") trust.keys.length = 0;
+      if (mode === "local") {
+        updateTrustedKeys(this, f.receiver.controlDirectory, { publicKey: keys.publicKey.export({ format: "pem", type: "spki" }).toString(), identity: author.email });
+        updateTrustedKeys(this, f.receiver.controlDirectory, { keyId: fingerprint, effectiveAt: 20 });
+      }
+    };
+    try {
+      refused(() => importChangeBundle(f.receiver, f.bytes, policy, { [branch]: null }, 10), "bundle_signature_refused");
+      assert.equal(admitted, true); assert.equal(f.receiver.objects.has(f.last), true);
+      assert.deepEqual(f.receiver.refs.list("refs/"), before);
+      assert.equal(f.receiver.refs.read(branch), null);
+    } finally { f.receiver.objects.accept = accept; Date.now = clock; }
+  }
+});
+
+test("publication permits unrelated and not-yet-effective local manifest revocations", async () => {
+  const other = generateKeyPairSync("ed25519").publicKey;
+  for (const revocation of [{ keyId: keyFingerprint(publicKeyText(other)), effectiveAt: 0 }, { keyId: keyFingerprint(publicKey), effectiveAt: Number.MAX_SAFE_INTEGER }]) {
+    const f = await fixture(); const accept = f.receiver.objects.accept;
+    f.receiver.objects.accept = function (...args: Parameters<typeof accept>): void {
+      accept.apply(this, args);
+      updateTrustedKeys(this, f.receiver.controlDirectory, { publicKey: keys.publicKey.export({ format: "pem", type: "spki" }).toString(), identity: author.email });
+      updateTrustedKeys(this, f.receiver.controlDirectory, { publicKey: other.export({ format: "pem", type: "spki" }).toString(), identity: "other@example.invalid" });
+      updateTrustedKeys(this, f.receiver.controlDirectory, revocation);
+    };
+    try { importChangeBundle(f.receiver, f.bytes, f.policy, { [branch]: null }); }
+    finally { f.receiver.objects.accept = accept; }
+    assert.equal(f.receiver.refs.read(branch), f.last);
+  }
 });
 
 test("comma-containing refs cannot alias two-ref scopes in tips", async () => {
