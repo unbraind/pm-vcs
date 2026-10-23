@@ -77,6 +77,19 @@ test("manual CI dispatch preserves all four required check names", () => {
   assert.deepEqual(names, ["test (22)", "test (26)", "windows-acceptance-launcher (22)", "windows-acceptance-launcher (26)"]);
 });
 
+test("dependency refresh provisions the CI-pinned Bun runtime before release checks", () => {
+  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const refresh = readFileSync(new URL("../.github/workflows/dependency-refresh.yml", import.meta.url), "utf8");
+  const pin = ci.match(/uses: (oven-sh\/setup-bun@[a-f0-9]{40} #[^\n]+)[\s\S]*?bun-version: "([^"]+)"/u);
+  assert.ok(pin, "CI must declare an immutable Bun action and runtime version");
+  const setup = refresh.indexOf(`uses: ${pin[1]}`);
+  assert.ok(setup >= 0, "refresh must use the same pinned Bun action as CI");
+  const gate = refresh.indexOf("      - name: Run release checks");
+  assert.ok(setup < gate, "Bun must be provisioned before the release gate");
+  assert.match(refresh.slice(setup, gate), new RegExp(`bun-version: "${pin[2]!.replaceAll(".", "\\.")}"`, "u"));
+  assert.match(refresh.slice(gate), /run: npm run release:check/u);
+});
+
 test("Bun CI gate executes tracker lens tests in the Bun runtime", {
   skip: !commandAvailable("bash") || !commandAvailable("bun"),
 }, () => {
