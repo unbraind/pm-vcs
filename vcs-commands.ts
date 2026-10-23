@@ -1,3 +1,4 @@
+import { registerChangeBundleCommands } from "./change-bundle-commands.ts";
 import { registerCheckpointCommands } from "./checkpoint-commands.ts";
 import { registerSigningCommands } from "./signing-commands.ts";
 import { verifyChangeSignature, type ChangeSignatureResult } from "./engine/signatures.ts";
@@ -395,6 +396,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
   registerBisectCommands(api);
   registerSigningCommands(api);
   registerCheckpointCommands(api);
+  registerChangeBundleCommands(api);
   api.registerCommand({
     name: "vcs init",
     description:

@@ -135,15 +135,16 @@ export interface ObjectImportReport {
  *
  * @param store - Object store holding every object in the header's object list.
  * @param header - The validated bundle header.
+ * @param metadata - Carry repository identity and erasure metadata; false for independently authorized closed archives.
  * @returns The bundle bytes.
  */
-export function serializeBundle(store: ObjectStore, header: BundleContents): Buffer {
+export function serializeBundle(store: ObjectStore, header: BundleContents, metadata = true): Buffer {
   const objects = header.objects.filter(/** Typed absence is transferred as audit metadata, never payload. */ (id) => store.denial(id) === undefined);
   const denials = store.denials();
   if (denials.some(/** Incomplete physical deletion cannot be exported as a successful terminal state. */ (denial) => denial.pending)) throw new ObjectStoreError("erasure_incomplete", "Finish erasure cleanup before exporting history.");
   const identity = store.recordedIdentity();
   const enriched: BundleContents = { ...header, objects,
-    ...(identity === undefined ? {} : { identity }), ...(denials.length === 0 ? {} : { denials }) };
+    ...(!metadata || identity === undefined ? {} : { identity }), ...(!metadata || denials.length === 0 ? {} : { denials }) };
   const lines = [BUNDLE_FORMAT, JSON.stringify(enriched)];
   for (const id of objects) {
     const object = store.read(id);

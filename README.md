@@ -28,6 +28,26 @@ pm vcs init
 
 ---
 
+## Capability-limited change bundles
+
+Export selected native histories with an Ed25519-signed manifest of permitted
+paths/branches, included objects and excluded objects. The receiver supplies its
+own scope, trusted keys and exact branch leases. Cross-scope references refuse
+before object import; signatures bind every manifest field. Unknown omissions
+prevent a completeness claim. Native identities and complete selected ancestry
+are preserved; mixed-scope commits refuse rather than widening authorization.
+
+```sh
+pm vcs bundle export selected.bundle --input request.json --key-file ../signing.pem --json
+pm vcs bundle inspect selected.bundle --authorization authority.json
+pm vcs bundle import selected.bundle --authorization authority.json --expected expected.json --json
+```
+
+The typed SDK exposes `exportChangeBundle`, `inspectChangeBundle` and
+`importChangeBundle`. Both TOON and JSON reports contain compact counts and a
+manifest digest. See the [request, receiver-policy and SDK example](docs/change-bundles.md)
+for exact schemas, replay limits, omission semantics and refusal remedies.
+
 ## Why write another version control system
 
 Git is superb at what it was built for. It was built for source files, and its merge is a
@@ -276,7 +296,7 @@ are recorded as evidence on the item. See [the full bisect contract](docs/bisect
 
 ## Without git
 
-Native commits, refs, history, merges, bundles, transports, signing, annotation,
+Native commits, refs, history, merges, capability-limited change bundles, transports, signing, annotation,
 bisect, semantic validation checkpoints and tracker change lenses work in a plain-directory PM project without a git executable. Bisect
 predicates must supply their own dependencies. The optional `vcs git` interoperability
 commands need a git repository and refuse with an actionable diagnostic otherwise.

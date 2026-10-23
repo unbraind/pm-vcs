@@ -1,0 +1,29 @@
+id: pm-vcs-change-bundles
+title: Export signed native history with an explicit replay capability and omission manifest
+description: "Add capability-limited selective native bundles with independent receiver authorization, exact signed manifests, compact reports and no-git SDK/CLI support."
+type: Feature
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-10-23T14:30:38.322Z"
+updated_at: "2026-10-23T14:50:42.508Z"
+author: codex-agent
+acceptance_criteria: Cross-scope references fail before import; Signatures bind the exact manifest; Unknown omissions prevent a completeness claim
+comments[4]{created_at,author,text}:
+  "2026-10-23T14:31:15.022Z",codex-agent,"Overlap recheck: current host is 2026.10.23; pinned SDK is 2026.10.15 and remains unchanged. Core workspace snapshots/history replay, extension capabilities and MCP authorization do not define native selective object archives. Sibling pm-context serves projected context with omission receipts; pm-swarm lanes and pm-web access controls do not bind native closure and replay authorization in a signed manifest. Reuse native bundle hashing/closure, object-store lease, ref CAS, signature key parsing, SDK extension registration/rendering/testing and PmClient tracker operations. Existing forge transport and tenant authorization remain primitives; Phase 6 streaming and pm-vcs-uploadretention receipt expiry remain separate backlog. Contract: select exact native tips and explicit permitted paths/ref names; carry their full ancestry without rewriting identities; refuse histories that reference paths outside scope. Inventory excluded physical objects without payload disclosure; partial or erased source state prevents a source completeness claim. Receiver independently supplies scope, trusted keys and expected ref values before import."
+  "2026-10-23T14:41:15.359Z",codex-agent,"Implemented typed SDK export/inspect/import and vcs bundle commands. Bundles bind exact tips, replay scope, archive digest, included/excluded inventories, unknown omissions and signer key in a domain-separated Ed25519 manifest. Receiver policy is independent, native closure is self-contained even when missing objects are already held, unsupported external links and copiedFrom/checkpoint dependencies outside scope are refused, and explicit ref CAS is checked before storage. Native serializer now supports closed archives that omit clone identity and erasure metadata so import cannot grant repository identity or erasure authority. Local targeted adversarial/no-git validation is in progress; full npm/Bun gates are reserved for CI as requested."
+  "2026-10-23T14:49:32.130Z",codex-agent,"Acceptance evidence: 17 focused adversarial scenarios passed, with 100% statements/branches/functions/lines on the new engine and command module; an additional multi-branch transaction scenario is now linked. Behavioural revert proofs independently disabled receiver scope enforcement, removed unknownOmissions from signed bytes, and allowed unknown omissions to claim completeness: each matching regression failed, then production code was restored. Public committed tracker validation at 641d2d66d31308f0171df2c666e18dc1d27aee03: 158 item files, 5 selected and 153 excluded; 173 native objects, 10 carried and 163 excluded; 31,013-byte bundle; 1 change and 1 branch; export/inspect/import 187 ms. All 158 copied item files stayed byte-identical. Empty executable search path and Git discovery ceiling were used; cross-scope replay refused without receiver inventory changes. Full measured protocol and combined source digest are in docs/change-bundles.md."
+  "2026-10-23T14:50:40.666Z",codex-agent,"Linked pm test run passed 28/28 (18 new change-bundle scenarios plus 10 existing bundle regressions), zero fail/skip/cancel/todo. Full local typecheck, lint, duplication and docstring gates passed. No pm CLI or SDK defect was established during this work. CI retains the unchanged npm and Bun release thresholds on Node 22/26 and additionally exercises the new bundle scenarios directly under Bun. Remaining verification is the exact pushed-head CI gate; PR will carry its run URL and measured counts."
+files[6]{path,scope}:
+  change-bundle-commands.ts,project
+  engine/bundle.ts,project
+  engine/change-bundles.ts,project
+  index.ts,project
+  test/change-bundles.test.ts,project
+  vcs-commands.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=1 test/change-bundles.test.ts test/bundle.test.ts,project,codex-agent,"2026-10-23T14:48:04.242Z",local_mutation,feat/change-bundles
+docs[2]{path,scope}:
+  docs/change-bundles.md,project
+  README.md,project
+body: ""
