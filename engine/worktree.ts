@@ -9,6 +9,7 @@
 
 import {
   type BigIntStats,
+  type Dirent,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -19,7 +20,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import { type IgnoreRules, isControlPath, isIgnored, isRuntimeIgnored, isPrunableDirectory } from "./ignore.ts";
+import { type IgnoreRules, isControlPath, isIgnored, isInstallationRuntimePath, isRuntimeIgnored, isPrunableDirectory } from "./ignore.ts";
 import { validConflictIds, compareByteOrder, type FileId, type FileMode, isFileId, type TreeEntry, readTree, writeTree } from "./model.ts";
 import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError, type StoredObject } from "./objects.ts";
 
@@ -351,26 +352,35 @@ export function decodeIndex(contents: string): IndexEntry[] {
  * @param controlDirectory - Name of the control directory to skip.
  * @param rules - Ignore rules excluding further paths.
  * @param inspectLeafLinks - Include ordinary leaf links for no-follow erasure inspection, regardless of their target.
- * @returns Canonical repository-relative paths, sorted.
+ * @param readDirectory - Directory-entry reader; injectable for deterministic child-disappearance regressions.
+ * @returns Canonical repository-relative paths, sorted; vanished children are omitted, while root and unexpected errors propagate.
  */
-export function listWorkingTree(root: string, controlDirectory: string, rules: IgnoreRules, inspectLeafLinks = false): string[] {
+export function listWorkingTree(root: string, controlDirectory: string, rules: IgnoreRules, inspectLeafLinks = false,
+  readDirectory: (directory: string) => Dirent[] = directory => readdirSync(directory, { withFileTypes: true })): string[] {
   const found: string[] = [];
-  /** Descend through materializable entries without following symlinks or tool-owned directories. */
+  /** Root reads remain outside child guards, so an unavailable root never looks like an empty working tree. */
   const walk = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of readDirectory(directory)) {
       if (entry.name.toLowerCase() === controlDirectory.toLowerCase()) continue;
-      // Pruning happens on the directory name, before descending: walking
-      // node_modules only to discard every path it yields is the difference
-      // between an instant status and a multi-second one.
-      if (entry.isDirectory() && isPrunableDirectory(entry.name)) continue;
       const absolute = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        walk(absolute);
-        continue;
-      }
-      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
       const path = relative(root, absolute).split(sep).join("/");
-      if (!isIgnored(path, rules) && ((inspectLeafLinks && entry.isSymbolicLink()) || !isProtectedWorktreePath(root, path, true))) found.push(path);
+      // Only immutable tool-owned fences can prune a directory: project patterns can be negated.
+      if (entry.isDirectory() && (isPrunableDirectory(entry.name) || isInstallationRuntimePath(path))) continue;
+      try {
+        if (entry.isDirectory()) {
+          walk(absolute);
+          continue;
+        }
+        if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+        if (isIgnored(path, rules) || (!(inspectLeafLinks && entry.isSymbolicLink()) && isProtectedWorktreePath(root, path, true))) continue;
+        const stat = lstatSync(absolute);
+        // A leaf replaced after readdir must not bypass the earlier no-follow checks.
+        if ((!stat.isFile() && !stat.isSymbolicLink()) || stat.isSymbolicLink() !== entry.isSymbolicLink()) continue;
+        found.push(path);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      }
     }
   };
   walk(root);
