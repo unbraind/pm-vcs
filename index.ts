@@ -1,3 +1,4 @@
+export { createSemanticCheckpoint, checkpointClaims, attachCheckpoint, inspectCheckpoints, loadCheckpointReceipt, parseCheckpointRequest, parseCheckpointRequirement, parseCheckpointPolicy, updateCheckpointPolicy, CheckpointRefusal, CHECKPOINT_POLICY_FILE, type CheckpointSelection, type CheckpointRequirement, type CheckpointReceipt, type CheckpointRequest, type SemanticCheckpoint, type CheckpointRefusalCode, type CheckpointStatus, type CheckpointReport } from "./engine/checkpoints.ts";
 // pm-vcs — a version control system for structured project data.
 //
 // This module registers two command groups. `pm vcs <verb>` operates on pm-vcs's

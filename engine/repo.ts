@@ -1,3 +1,5 @@
+import type { AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
+import { attachCheckpoint, createSemanticCheckpoint, type CheckpointRequest } from "./checkpoints.ts";
 import { signChange } from "./signatures.ts";
 import { inspectClosure, type ClosureReport } from "./closure.ts";
 // The porcelain: init, stage, commit, branch, switch, merge, log, diff.
@@ -136,6 +138,7 @@ import {
   planSplit,
   planSquash,
   planSign,
+  planCheckpoint,
 } from "./rewrite.ts";
 
 import { CONTROL_DIRECTORY, INSTANCE_LINK_FILE, resolveInstanceLink } from "./instance-link.ts";
@@ -2540,22 +2543,32 @@ export class Repository {
     return head;
   }
 
-  /** Explicitly attest a revision without accessing keys during creation, rewrite or publication. */
-  sign(revision: string, key: KeyObject, committer: Signature, now: Date): ObjectId | null {
-    return this.objects.withWriteLock(/** Signing and descendant replay share the existing rewrite transaction. */ () => {
+  /** Serialize metadata attachment with reachability checks, descendant replay and ref publication. */
+  private rewriteMetadata(revision: string, now: Date, plan: (id: ObjectId, original: Commit, refs: readonly RefSnapshot[], head: HeadSnapshot) => RewritePlan): ObjectId | null {
+    return this.objects.withWriteLock(/** Metadata and descendant replay share the existing rewrite transaction. */ () => {
       this.assertCleanWorktree();
-      const id = this.resolve(revision);
-      const original = readCommit(this.objects, id);
-      const refs = this.refSnapshots();
-      const head = this.headSnapshot();
+      const id = this.resolve(revision); const original = readCommit(this.objects, id);
+      const refs = this.refSnapshots(); const head = this.headSnapshot();
       if (!refs.some(ref => reachable(this.objects, ref.target).has(id))
         && (head.target === null || !reachable(this.objects, head.target).has(id))) {
-        throw new ObjectStoreError("unreachable_revision", "Revision is not reachable from a branch, tag or HEAD; nothing would carry the signature.");
+        throw new ObjectStoreError("unreachable_revision", "Revision is not reachable from a branch, tag or HEAD; attach metadata to a reachable change.");
       }
-      const attestation = signChange(id, original, key);
-      const plan = planSign(this.rewriteContext(committer), id, attestation, refs, head);
-      return this.applyRewrite(plan, now);
+      return this.applyRewrite(plan(id, original, refs, head), now);
     });
+  }
+
+  /** Attach a core receipt under the native writer lease, preserving stable change identity and undo. */
+  checkpoint(revision: string, request: CheckpointRequest, verdict: AssuranceGateVerdict, committer: Signature, now: Date): ObjectId | null {
+    return this.rewriteMetadata(revision, now, (id, original, refs, head) => {
+      const claim = createSemanticCheckpoint(this.objects, id, original, request, verdict);
+      return planCheckpoint(this.rewriteContext(committer), id, attachCheckpoint(original, claim), refs, head);
+    });
+  }
+
+  /** Explicitly attest a revision without accessing keys during creation, rewrite or publication. */
+  sign(revision: string, key: KeyObject, committer: Signature, now: Date): ObjectId | null {
+    return this.rewriteMetadata(revision, now, (id, original, refs, head) =>
+      planSign(this.rewriteContext(committer), id, signChange(id, original, key), refs, head));
   }
 
   /**

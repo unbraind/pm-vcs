@@ -1,3 +1,4 @@
+import { registerCheckpointCommands } from "./checkpoint-commands.ts";
 import { registerSigningCommands } from "./signing-commands.ts";
 import { verifyChangeSignature, type ChangeSignatureResult } from "./engine/signatures.ts";
 import { EMPTY_TRUST, readTrustedKeys } from "./engine/signature-policy.ts";
@@ -393,6 +394,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
   registerForgeCommands(api);
   registerBisectCommands(api);
   registerSigningCommands(api);
+  registerCheckpointCommands(api);
   api.registerCommand({
     name: "vcs init",
     description:

@@ -1,0 +1,36 @@
+id: pm-vcs-semantic-checkpoints
+title: Retain validation checkpoints only while native semantic scope is unchanged
+description: Attach deterministic core-assurance receipt bindings to stable native changes; recheck selected record fields and explicit policy dependencies during inspection and receiver publication.
+type: Feature
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-10-23T06:41:48.591Z"
+updated_at: "2026-10-23T07:07:57.392Z"
+author: codex-agent
+acceptance_criteria: "Irrelevant edits retain valid evidence; relevant edits invalidate it; publication cannot substitute an old claim for the changed scope. Typed SDK and CLI, compact TOON/JSON, typed refusals with remedies, README example, non-git regression and read-only public-tracker measurements, npm and Bun CI release gates."
+comments[5]{created_at,author,text}:
+  "2026-10-23T06:41:52.097Z",codex-agent,"Overlap recheck: core SDK owns assurance declarations, evaluateAssuranceGate/evaluateAssuranceAssertion, durable recordAssuranceVerdict/listAssuranceVerdicts and item codecs. pm-ops evidence-expiry owns wall-clock and package/backend freshness; pm-review owns review closeout; native signatures prove authorship, bisect runs linked tests, and tracker lenses describe immutable deltas. None binds durable assertion receipts to selected native record fields and policy dependencies at publication. Implement only that binding, reusing core receipt reads, record codecs, native rewrite/CAS and receiver writer leases. No dependency bump required for those APIs."
+  "2026-10-23T06:58:36.571Z",codex-agent,"Implemented exact durable core assertion selection, native semantic scope/dependency fingerprints, commit-carried claims, atomic descendant replay/undo, signed checkpoint headers, bounded diagnostics and receiver-owned publication requirements. No-git installed CLI attachment and TOON/JSON inspection passed with an empty executable search path. Initial focused suite: 12 passed, 0 failed. Source-only coverage probe: 100% statements/functions/lines; closing remaining legacy/linked-instance branches before CI."
+  "2026-10-23T06:58:49.812Z",codex-agent,"Read-only public-data validation against origin/main d55311e: 316 files, 4912114 bytes, 155 items, 2432 history records. Native snapshot derived outside the frozen tracker. 620 comparisons: 155 valid baselines, 155 irrelevant edits retained, 155 relevant edits invalidated, 155 policy-dependency edits invalidated. Maximum compact JSON report 124 bytes; fingerprint/check loop 83992 ms on the saturated host. Source digest 914317b6b061ffbcf6d5836f2213be418a4d3181e8a04164c2d8afc4ec0a53e1 remained unchanged; no git repository in the scratch project. Reproduction helper: test/helpers/validate-checkpoints.ts."
+  "2026-10-23T07:06:35.858Z",codex-agent,"Behavioral revert proofs: removing only the receiver checkpoint preflight made the receiver replay regression fail with Missing expected rejection (exit 1); removing only selected-value projection from the fingerprint made the relevant-edit regression report valid instead of scope_changed (exit 1). Exact original bytes restored after each. Full unchanged-threshold local checks passed: typecheck, test typecheck, lint, duplicates 0%, docstrings; 107 existing model/rewrite/signature/publication regressions passed, zero fail/skip/cancel/todo. Native rebase scenarios and linked-instance policy passed in the 15-test checkpoint suite. Added native file/HTTP forge-series guards to cover the alternate publication surface before review objects or catalog refs can move."
+  "2026-10-23T07:07:55.975Z",codex-agent,"Final local verification: pm test pm-vcs-semantic-checkpoints --run --progress passed all 17 checkpoint tests (0 fail/skip/cancel/todo), including actual native rebases, core verified receipt reads, installed JSON/TOON commands with no Git executable, file/HTTP push and streamed publication, and file/HTTP forge refusal. Project test-result persistence is disabled, so this comment records the observed result without changing workspace policy. Existing focused regression command node --test --test-concurrency=1 test/model.test.ts test/rewrite.test.ts test/signatures.test.ts test/publication-validation.test.ts passed 107/107. Final typecheck, test typecheck, lint, duplicates 0% and docstring checks passed. New checkpoint source/CLI coverage probe reached 100/100/100/100. Full npm and Bun release gates are intentionally delegated to the PR CI matrix; exact-head results and run URL will be recorded in the PR. Explicit scope/dependency completeness and trusted receipt collectors remain consumer responsibilities. No new pm CLI/SDK bug found. Implementation complete; leaving the item open for orchestrator verification."
+files[12]{path,scope}:
+  checkpoint-commands.ts,project
+  engine/checkpoints.ts,project
+  engine/forge.ts,project
+  engine/model.ts,project
+  engine/repo.ts,project
+  engine/rewrite.ts,project
+  engine/signatures.ts,project
+  engine/transport.ts,project
+  index.ts,project
+  test/checkpoints.test.ts,project
+  test/helpers/validate-checkpoints.ts,project
+  vcs-commands.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/checkpoints.test.ts,project,codex-agent,"2026-10-23T06:59:11.646Z",local_mutation,feat/semantic-validation-checkpoints
+docs[2]{path,scope}:
+  docs/checkpoint-example.json,project
+  README.md,project
+body: ""
