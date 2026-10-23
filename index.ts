@@ -23,6 +23,7 @@ export { createSemanticCheckpoint, checkpointClaims, attachCheckpoint, inspectCh
 //     `--no-changed-fields`, `--full-changed-fields`). Declaring one aborts
 //     registration at that command and silently drops every later sibling.
 
+export { exportChangeBundle, inspectChangeBundle, importChangeBundle, parseChangeBundleScope, parseChangeBundleAuthorization, ChangeBundleRefusal, type ChangeBundleScope, type ChangeBundleAuthorization, type ChangeBundleManifest, type ChangeBundleReport, type ChangeBundleRefusalCode } from "./engine/change-bundles.ts";
 import { guardCredentialOutput } from "./credential-output.ts";
 export { explainChange, TRACKER_LENSES, type TrackerLens, type ExplainChangeOptions, type ExplainedChange, type ChangeStatement, type ChangeCitation, type LensValue } from "./engine/tracker-lenses.ts";
 import type {
