@@ -1,3 +1,4 @@
+import { assertCheckpointPublication } from "./checkpoints.ts";
 import { assertTrustedChanges } from "./signature-policy.ts";
 import { historyOptions, type HistoryOptions } from "./partial.ts";
 import { PublicationLeases, filesystemPrincipal, type FileLease, type LeaseRequest, type LeaseProof, type ReceiverPrincipal } from "./publication-leases.ts";
@@ -436,6 +437,7 @@ export class FileTransport implements Transport {
     repository.refs.transaction(updates.map(/** Preserve the sender observation as the receiver CAS expectation. */ (update) => ({ name: update.ref, expected: update.expected, next: update.next })),
       /** Check expiry at the publication linearization point, using only the receiver clock. */ () => {
         const recheckRevocations = assertTrustedChanges(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, updates.map(update => update.next));
+        assertCheckpointPublication(repository.objects, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, updates.map(update => update.next));
         leases.assertPublication(updates, proofs, metadata);
         recheckRevocations();
       });

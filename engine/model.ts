@@ -93,6 +93,8 @@ export interface Signature {
 
 /** A commit: a tree, its ancestry, and who recorded it. */
 export interface Commit {
+  /** Opaque canonical-base64 semantic checkpoint claims, independently checked at publication. */
+  readonly checkpoints?: string;
   /** Opaque base64 Ed25519 envelope; verification classifies malformed evidence without echoing it. */
   readonly attestation?: string;
   /** Root tree of the snapshot this commit names. */
@@ -436,6 +438,10 @@ function splitHeader(line: string): { keyword: string; value: string } {
 export function encodeCommit(commit: Commit): Buffer {
   const lines = [`tree ${commit.tree}`];
   if (commit.changeId !== undefined) lines.push(`change ${commit.changeId}`);
+  if (commit.checkpoints !== undefined) {
+    if (/[\r\n]/.test(commit.checkpoints)) throw new ObjectStoreError("invalid_checkpoint_header", "Checkpoint claims must occupy one header line.");
+    lines.push(`checkpoints ${commit.checkpoints}`);
+  }
   if (commit.attestation !== undefined) {
     if (/[\r\n]/.test(commit.attestation)) throw new ObjectStoreError("invalid_attestation", "Attestation must occupy one header line.");
     lines.push(`attestation ${commit.attestation}`);
@@ -517,6 +523,7 @@ export function decodeCommit(payload: Buffer): Commit {
   let tree: ObjectId | undefined;
   let changeId: ObjectId | undefined;
   let attestation: string | undefined;
+  let checkpoints: string | undefined;
   const items: string[] = [];
   const parents: ObjectId[] = [];
   let author: Signature | undefined;
@@ -542,6 +549,9 @@ export function decodeCommit(payload: Buffer): Commit {
         throw new ObjectStoreError("malformed_object", `Commit names change "${value}", which is not an object id.`);
       }
       changeId = value;
+    } else if (keyword === "checkpoints") {
+      if (checkpoints !== undefined) throw new ObjectStoreError("malformed_object", "Commit carries duplicate checkpoint headers.");
+      checkpoints = value;
     } else if (keyword === "attestation") {
       if (attestation !== undefined) throw new ObjectStoreError("malformed_object", "Commit carries duplicate attestations.");
       attestation = value;
@@ -576,7 +586,7 @@ export function decodeCommit(payload: Buffer): Commit {
   // none, and is its own change. Assembling the object with it only when present
   // is what keeps the encoder's `changeId !== undefined` check honest on a
   // round-trip.
-  const base = { tree, parents, author, committer, ...(attestation === undefined ? {} : { attestation }), message: text.slice(blankLine + 2), ...(items.length === 0 ? {} : { items }) };
+  const base = { tree, parents, author, committer, ...(checkpoints === undefined ? {} : { checkpoints }), ...(attestation === undefined ? {} : { attestation }), message: text.slice(blankLine + 2), ...(items.length === 0 ? {} : { items }) };
   return changeId === undefined ? base : { ...base, changeId };
 }
 
