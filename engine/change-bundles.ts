@@ -69,7 +69,7 @@ function strings(raw: unknown, valid: (value: string) => boolean): string[] {
 }
 /** Canonical native relative path, excluding traversal, wildcards, controls and platform ambiguity. */
 function pathAllowed(path: string): boolean {
-  return path.length > 0 && path.length <= 512 && !/[\\\x00-\x20\x7f:*?[\]]/.test(path) && path.split("/").every(part => part !== "" && part !== "." && part !== "..");
+  return path.length > 0 && path.length <= 512 && !/[\\\x00-\x1f\x7f:*?[\]]/.test(path) && path.split("/").every(part => part !== "" && part !== "." && part !== "..");
 }
 /** Parse explicit replay scope at both SDK and CLI boundaries. Lists must already be sorted and unique. */
 export function parseChangeBundleScope(raw: unknown): ChangeBundleScope {
@@ -128,7 +128,10 @@ function closure(store: ObjectStore, archive: Buffer, manifest: ChangeBundleMani
       const tree = trees.pop()!;
       for (const entry of metadata.trees.get(tree.id)!) {
         const path = tree.prefix + entry.name;
-        if (entry.mode === "40000") trees.push({ id: entry.id, prefix: path + "/" });
+        if (entry.mode === "40000") {
+          if (!manifest.scope.paths.some(selected => selected.startsWith(path + "/"))) throw new ChangeBundleRefusal("bundle_scope_refused", SCOPE);
+          trees.push({ id: entry.id, prefix: path + "/" });
+        }
         else {
           if (!manifest.scope.paths.includes(path)) throw new ChangeBundleRefusal("bundle_scope_refused", SCOPE);
           if (entry.fileId !== undefined) fileIds.add(entry.fileId);

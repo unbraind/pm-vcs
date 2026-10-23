@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { existsSync, truncateSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, truncateSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -263,6 +263,23 @@ test("native conflict sides, repeated payloads, absent FileIds and in-scope copy
   refused(() => native(repo, [{ name: "a", mode: "100644", id: link }], scope), "bundle_scope_refused");
 });
 
+test("unrelated empty directory references refuse, while explicitly authorized filenames may contain spaces", async () => {
+  const f = await fixture(); const empty = f.repo.objects.write("tree", encodeTree([]));
+  refused(() => native(f.repo, [{ name: "private.txt", mode: "100644", id: f.excluded }], f.scope), "bundle_scope_refused");
+  refused(() => native(f.repo, [{ name: "private", mode: "40000", id: empty }], f.scope), "bundle_scope_refused");
+  const tree = f.repo.objects.write("tree", encodeTree([{ name: "private", mode: "40000", id: empty }]));
+  const commit = f.repo.objects.write("commit", encodeCommit({ tree, parents: [], author, committer: author, message: "Adversarial empty directory" }));
+  const archive = serializeBundle(f.repo.objects, { refs: { [branch]: commit }, prerequisites: [], objects: [empty, tree, commit].sort() }, false);
+  const incoming = wire(archiveChanged(f.bytes, archive)); incoming.manifest = { ...incoming.manifest, tips: { [branch]: commit } };
+  const before = snapshot(f.receiver);
+  refused(() => importChangeBundle(f.receiver, seal(incoming), f.policy, { [branch]: null }), "bundle_scope_refused");
+  assert.deepEqual(snapshot(f.receiver), before);
+  const id = f.repo.objects.write("blob", Buffer.from("Authorized content"));
+  const scope = { paths: ["review notes.txt"], refs: [branch] };
+  const bytes = native(f.repo, [{ name: "review notes.txt", mode: "100644", id }], scope);
+  assert.equal(importChangeBundle(f.receiver, bytes, { ...f.policy, scope }, { [branch]: null }).scopeComplete, true);
+});
+
 test("manifest fragment payloads and manifest pages close over exact carried native objects", async () => {
   const f = await fixture(); const repo = f.repo;
   const blob = repo.objects.write("blob", Buffer.from("text"));
@@ -309,10 +326,16 @@ test("CLI handlers use explicit input, external signing keys and independent imp
   const output = join(external, "selected.bundle");
   const run = (action: string, args: string[], options: Record<string, unknown>, root = f.root) => harness.runCommand({ command: `vcs bundle ${action}`, args, options, pmRoot: join(root, ".agents/pm") });
   assert.equal((await run("export", [output], { input: request, keyFile })).errorMessage, undefined);
+  const written = readFileSync(output);
+  assert.match((await run("export", [output], { input: request, keyFile })).errorMessage!, /new writable output/);
+  assert.deepEqual(readFileSync(output), written);
   const inspected = await run("inspect", [output], { authorization }, f.receiver.root);
   assert.equal(inspected.errorMessage, undefined); assert.equal((inspected.result as { changes: number }).changes, 2);
   assert.equal((await run("import", [output], { authorization, expected }, f.receiver.root)).errorMessage, undefined);
   assert.equal(f.receiver.refs.read(branch), f.last);
+  writeFileSync(request, JSON.stringify({ scope: f.scope, tips: f.selected, signer: author.email, omitFields: ["description"] }));
+  assert.match((await run("export", [output], { input: request, keyFile })).errorMessage!, /Supply only scope/);
+  writeFileSync(request, JSON.stringify({ scope: f.scope, tips: f.selected, signer: author.email }));
   assert.match((await run("export", [output], { input: request })).errorMessage!, /documented/);
   assert.match((await run("export", [], { input: request, keyFile })).errorMessage!, /output file/);
   assert.match((await run("inspect", [], { authorization })).errorMessage!, /signed change bundle/);

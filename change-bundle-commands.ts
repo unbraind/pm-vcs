@@ -37,12 +37,14 @@ export function registerChangeBundleCommands(api: ExtensionApi): void {
       { long: "--key-file", value_name: "file", value_type: "string", description: "External Ed25519 private key" }],
     run(context: CommandHandlerContext) {
       const repository = openRepository(context); const request = input(context, "input");
+      if (Object.keys(request).sort().join(",") !== "scope,signer,tips") throw new ChangeBundleRefusal("invalid_change_bundle", "Supply only scope, tips and signer in the export request; field projection and omission extensions are unsupported.");
       const scope = parseChangeBundleScope(request.scope);
       const selected = request.tips as Record<string, string>;
       const key = readSigningKey(fileOption(context, "keyFile"), repository.root);
       const archive = exportChangeBundle(repository.objects, selected, scope, request.signer as string, key);
       const output = resolve(requiredArgument(context, 0, "file", "Pass a new output file for the signed change bundle."));
-      writeFileSync(output, archive, { flag: "wx", mode: 0o600 });
+      try { writeFileSync(output, archive, { flag: "wx", mode: 0o600 }); }
+      catch { throw new ChangeBundleRefusal("invalid_change_bundle", "Choose a new writable output file; existing files are never overwritten."); }
       return { ok: true, bytes: archive.length };
     } });
   for (const action of ["inspect", "import"] as const) api.registerCommand({ name: `vcs bundle ${action}`,
