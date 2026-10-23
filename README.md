@@ -861,12 +861,23 @@ native VCS changes.
 `pm vcs checkpoint attach` binds one exact durable core assurance assertion to a
 stable native change. Its fingerprint covers explicitly selected top-level record
 fields and policy dependencies in the immutable native tree, including file
-identity, mode, field absence and selector definitions. Unselected field edits,
+identity, mode, copy provenance, field absence and selector definitions. The native
+canonical tree-entry encoder binds every stored metadata attribute. Whole-file
+selections bind the content object id; field selections substitute the canonical
+selected-field digest so unrelated fields can still change. Unselected field edits,
 comments on other fields, descriptions and parent-only rewrites retain evidence.
 Selected field edits, deletion, moves, conflict units, file replacement and policy
 changes require validation again. Order inside a selected collection is significant.
 New native changes need their own checkpoint; a checkpoint is never inherited
 from an ancestor merely because the assertion name matches.
+
+An attached claim is immutable. Attaching identical normalized content is a no-op,
+preserving the commit, signature and operation log. Replacing it, including widening
+its scope or changing dependencies, requires a new durable evaluation for the current
+native tree and the exact replacement selectors: `evaluated_at` must be later than
+the attached receipt, and both the evidence digest and fingerprint must change.
+Reusing the original receipt refuses even when the native tree itself is unchanged.
+Claims made with an older fingerprint encoding fail closed and need revalidation.
 
 Core assurance still owns contracts, evaluation and durable receipts. First run
 and record the actual core gate using the **native tree id** as its `tree_id`.
@@ -932,7 +943,7 @@ CLI/HTTP consumers. Checkpoints retain stale claims visibly until revalidation.
 
 A checkpoint attests scoped reuse of an agent's accepted receipt, rather than
 proving that an arbitrary agent executed a test honestly. Native signing supplies
-authorship and covers checkpoint headers; attaching a checkpoint clears the old
+authorship and covers checkpoint headers; changing attached checkpoints clears the old
 signature and requires explicit signing again. Wall-clock expiry, package/backend
 freshness and review approval remain separate policies. Keep receiver
 administration trusted and retain the core history alongside native bundles for

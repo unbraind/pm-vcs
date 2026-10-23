@@ -28,14 +28,14 @@ afterEach(() => { for (const dir of owned.splice(0)) dir.cleanup(); });
 /** Allocate a disposable real directory. */
 function temp() { const dir = makeTempDir(); owned.push(dir); return dir.root; }
 /** Produce a real core assurance result, without mocking any SDK behavior. */
-async function receipt(treeId: string, pmRoot: string): Promise<AssuranceGateVerdict> {
+async function receipt(treeId: string, pmRoot: string, at = evaluatedAt): Promise<AssuranceGateVerdict> {
   const document: AssuranceDocument = { version: 1,
     measurements: [{ id: "population", source: { kind: "items" } }],
     assertions: [{ id: "ready", measurement_id: "population", owner_item_id: "fixture", scope: { kind: "all" }, floor: 1, enforcement: "block",
       negative_control: { cases: [{ observed: 1, expected: "pass" }, { observed: 0, expected: "fail" }] } }],
     gates: [{ id: "quality", assertion_ids: ["ready"], triggers: ["ci"] }] };
   const context = await createAssuranceWorkspaceContext(pmRoot, { tree_id: treeId, resolve_tree: false, strict_read: true });
-  return { ...await evaluateAssuranceGate("quality", document, context, { trigger: "ci" }), evaluated_at: evaluatedAt };
+  return { ...await evaluateAssuranceGate("quality", document, context, { trigger: "ci" }), evaluated_at: at };
 }
 /** Initialize a no-Git SDK tracker and native record scope with a declared policy dependency. */
 async function fixture() {
@@ -60,6 +60,86 @@ function revised(repo: Repository, commit: Commit, path: string, document: Recor
   entries.set(path, { ...previous, id: repo.objects.write("record", encodeRecord(document)) });
   return { ...commit, tree: buildTree(repo.objects, entries) };
 }
+
+test("reattaching a wider scope cannot reuse the original tree and evaluatedAt receipt", async () => {
+  const { repo, id, commit, request, verdict, path, pmRoot } = await fixture();
+  const first = repo.checkpoint(id, request, verdict, author, new Date(2))!;
+  const attached = readCommit(repo.objects, first);
+  const original = checkpointClaims(attached)[0];
+  const widened = { ...request, scope: [{ path, fields: ["status", "acceptance_criteria", "title"] }] };
+  const before = repo.operations.read();
+  assert.throws(() => repo.checkpoint("HEAD", widened, verdict, author, new Date(3)), error =>
+    error instanceof CheckpointRefusal && error.code === "checkpoint_evidence_refused" && /later.*exact replacement scope/.test(error.remedy));
+  assert.equal(repo.resolve("HEAD"), first);
+  assert.deepEqual(repo.operations.read(), before);
+  assert.deepEqual(checkpointClaims(readCommit(repo.objects, first)), [original]);
+  assert.equal(inspectCheckpoints(repo.objects, first, attached, [widened]).rows[0].status, "requirement_changed");
+  updateCheckpointPolicy(repo.objects, repo.controlDirectory, [widened]);
+  assert.throws(() => assertCheckpointPublication(repo.objects, repo.controlDirectory, new Map([[first, attached]]), [first]), { code: "checkpoint_publication_refused" });
+
+  const freshRequest = { ...widened, receipt: { treeId: commit.tree, evaluatedAt: "2026-10-23T00:00:01.000Z" } };
+  const freshVerdict = await receipt(commit.tree, pmRoot, freshRequest.receipt.evaluatedAt);
+  await recordAssuranceVerdict(pmRoot, freshVerdict, { author: "fixture" });
+  const fresh = createSemanticCheckpoint(repo.objects, first, attached, freshRequest, await loadCheckpointReceipt(pmRoot, freshRequest));
+  assert.notEqual(fresh.fingerprint, original.fingerprint);
+  assert.notEqual(fresh.evidenceDigest, original.evidenceDigest);
+  for (const invalid of [
+    { ...fresh, receipt: { ...fresh.receipt, treeId: "a".repeat(64) } },
+    { ...fresh, receipt: { ...fresh.receipt, evaluatedAt } },
+    { ...fresh, receipt: { ...fresh.receipt, evaluatedAt: "2026-10-22T00:00:00.000Z" } },
+    { ...fresh, fingerprint: original.fingerprint },
+    { ...fresh, evidenceDigest: original.evidenceDigest },
+  ]) assert.throws(() => attachCheckpoint(attached, invalid), { code: "checkpoint_evidence_refused" });
+  const renewed = repo.checkpoint("HEAD", freshRequest, freshVerdict, author, new Date(4))!;
+  const renewedCommit = readCommit(repo.objects, renewed);
+  assert.equal(inspectCheckpoints(repo.objects, renewed, renewedCommit, [widened]).ok, true);
+  assertCheckpointPublication(repo.objects, repo.controlDirectory, new Map([[renewed, renewedCommit]]), [renewed]);
+});
+
+test("identical normalized checkpoint attachment preserves commit, signature and operation log", async () => {
+  const { repo, id, request, verdict, path } = await fixture();
+  repo.checkpoint(id, request, verdict, author, new Date(2));
+  const keys = generateKeyPairSync("ed25519");
+  const signed = repo.sign("HEAD", keys.privateKey, author, new Date(3))!;
+  const commit = readCommit(repo.objects, signed);
+  const before = repo.operations.read();
+  const equivalent = { ...request, scope: [{ path, fields: ["acceptance_criteria", "status"] }] };
+  assert.equal(repo.checkpoint("HEAD", equivalent, verdict, author, new Date(4)), signed);
+  assert.deepEqual(readCommit(repo.objects, repo.resolve("HEAD")), commit);
+  assert.deepEqual(repo.operations.read(), before);
+  assert.ok(commit.attestation);
+});
+
+test("selected copiedFrom provenance invalidates whole-file and field claims on scope and dependencies", async () => {
+  const { repo, id, commit, request, path, pmRoot } = await fixture();
+  for (const dependency of [false, true]) for (const fields of [undefined, [dependency ? "revision" : "status"]]) {
+    const selected = dependency ? "policy.json" : path;
+    const selection = { path: selected, ...(fields === undefined ? {} : { fields }) };
+    const capture = { ...request, ...(dependency ? { dependencies: [selection] } : { scope: [selection] }) };
+    const entries = flattenTree(repo.objects, commit.tree);
+    const entry = entries.get(selected)!;
+    for (const initial of [undefined, "c".repeat(32)]) {
+      entries.set(selected, { ...entry, copiedFrom: initial });
+      const baseline = { ...commit, tree: buildTree(repo.objects, entries) };
+      const currentRequest = { ...capture, receipt: { ...request.receipt, treeId: baseline.tree } };
+      const currentVerdict = await receipt(baseline.tree, pmRoot);
+      const claim = createSemanticCheckpoint(repo.objects, id, baseline, currentRequest, currentVerdict);
+      const carried = { ...baseline, checkpoints: attachCheckpoint(baseline, claim) };
+      assert.equal(inspectCheckpoints(repo.objects, id, carried, [capture]).ok, true);
+      for (const copiedFrom of initial === undefined ? ["c".repeat(32)] : ["d".repeat(32), undefined]) {
+        entries.set(selected, { ...entry, copiedFrom });
+        const changed = { ...carried, tree: buildTree(repo.objects, entries) };
+        const after = flattenTree(repo.objects, changed.tree).get(selected)!;
+        assert.equal(after.id, entry.id);
+        assert.equal(after.mode, entry.mode);
+        assert.equal(after.fileId, entry.fileId);
+        assert.equal(inspectCheckpoints(repo.objects, id, changed, [capture]).rows[0].status, "scope_changed");
+        const changedId = writeCommit(repo.objects, changed);
+        assert.throws(() => assertCheckpointPublication(repo.objects, repo.controlDirectory, new Map([[changedId, changed]]), [changedId]), { code: "checkpoint_publication_refused" });
+      }
+    }
+  }
+});
 
 test("irrelevant record fields and descriptions retain claims; relevant fields, policy and identities invalidate them", async () => {
   const { repo, id, request, carried, path, claim, pmRoot } = await fixture();
@@ -237,12 +317,12 @@ test("CLI harness delegates verified receipt attachment, policy and compact insp
 });
 
 test("installed CLI attaches and inspects JSON and TOON in a non-git tracker with no Git executable", async () => {
-  const { root, request } = await fixture(); const bins = temp();
+  const { root, request, repo, path } = await fixture(); const bins = temp();
   const input = join(root, "checkpoint.json"); writeFileSync(input, JSON.stringify(request));
   installPackedExtension(root);
   const cli = join(packageRoot, "node_modules/@unbrained/pm-cli/dist/cli.js");
   const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(root), PM_AUTHOR: "fixture" };
-  const run = (args: string[]) => execFileSync(process.execPath, [cli, ...args], { cwd: root, env, encoding: "utf8" });
+  const run = (args: string[]) => execFileSync(process.execPath, [cli, ...args], { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const attached = JSON.parse(run(["vcs", "checkpoint", "attach", "HEAD", "--input", "checkpoint.json", "--json"])) as { ok: boolean };
   assert.equal(attached.ok, true);
   const json = run(["vcs", "checkpoint", "inspect", "HEAD", "--limit", "1", "--json"]);
@@ -250,6 +330,13 @@ test("installed CLI attaches and inspects JSON and TOON in a non-git tracker wit
   assert.ok(Buffer.byteLength(json) < 1000);
   const toon = run(["vcs", "checkpoint", "inspect", "HEAD"]);
   assert.match(toon, /valid/); assert.ok(Buffer.byteLength(toon) < 1000);
+  const head = repo.resolve("HEAD"); const operations = repo.operations.read();
+  run(["vcs", "checkpoint", "attach", "HEAD", "--input", "checkpoint.json", "--json"]);
+  assert.equal(repo.resolve("HEAD"), head);
+  assert.deepEqual(repo.operations.read(), operations);
+  writeFileSync(input, JSON.stringify({ ...request, scope: [{ path, fields: ["status", "acceptance_criteria", "title"] }] }));
+  assert.throws(() => run(["vcs", "checkpoint", "attach", "HEAD", "--input", "checkpoint.json", "--json"]), /attached claim is immutable/);
+  assert.equal(repo.resolve("HEAD"), head);
   assert.equal(existsSync(join(root, ".git")), false);
 });
 

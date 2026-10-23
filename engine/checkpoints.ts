@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { listAssuranceVerdicts, type AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
 import { writePrivateJson } from "./composition.ts";
-import { canonicalRecordValue, compareByteOrder, decodeRecord, effectiveChangeId, type Commit, type RecordValue } from "./model.ts";
+import { canonicalRecordValue, compareByteOrder, decodeRecord, effectiveChangeId, encodeTree, type Commit, type RecordValue } from "./model.ts";
 import { ObjectStoreError, isObjectId, type ObjectId, type ObjectStore } from "./objects.ts";
 import { flattenTree } from "./worktree.ts";
 
@@ -111,12 +111,15 @@ function fingerprint(store: ObjectStore, changeId: ObjectId, commit: Commit, req
     const entry = tree.get(selection.path);
     if (entry === undefined) return { path: selection.path, missing: true };
     if ((entry.conflicts?.length ?? 0) > 0) throw new CheckpointRefusal("checkpoint_conflict", "Resolve selected native file conflicts before accepting or reusing validation.");
-    const identity = { path: selection.path, fileId: entry.fileId ?? null, mode: entry.mode };
-    if (selection.fields === undefined) return { ...identity, object: entry.id };
-    let record: ReturnType<typeof decodeRecord>;
-    try { record = decodeRecord(store.readTyped(entry.id, "record")); }
-    catch { throw new CheckpointRefusal("checkpoint_scope_unavailable", "Restore selected objects and configure field-selected files as valid native records before revalidating."); }
-    return { ...identity, fields: selection.fields.map(field => Object.hasOwn(record, field) ? [field, true, record[field]] : [field, false]) };
+    let content = entry.id;
+    if (selection.fields !== undefined) {
+      let record: ReturnType<typeof decodeRecord>;
+      try { record = decodeRecord(store.readTyped(entry.id, "record")); }
+      catch { throw new CheckpointRefusal("checkpoint_scope_unavailable", "Restore selected objects and configure field-selected files as valid native records before revalidating."); }
+      content = digest(selection.fields.map(field => Object.hasOwn(record, field) ? [field, true, record[field]] : [field, false]));
+    }
+    // Reuse the native encoder for every stored attribute, replacing only field-projected content.
+    return { path: selection.path, entry: encodeTree([{ ...entry, name: "selected", id: content }]).toString("base64") };
   };
   return digest({ changeId, requirement: parseCheckpointRequirement(request), receipt: request.receipt, evidenceDigest, scope: request.scope.map(project), dependencies: request.dependencies.map(project) });
 }
@@ -154,7 +157,9 @@ export function createSemanticCheckpoint(store: ObjectStore, id: ObjectId, commi
     throw new CheckpointRefusal("checkpoint_scope_unavailable", "Commit every selected scope and policy dependency before collecting validation.");
   }
   const changeId = effectiveChangeId(id, commit);
-  return { ...request, version: 1, changeId, fingerprint: fingerprint(store, changeId, commit, request, digest(verdict)), evidenceDigest: digest(verdict) };
+  const claim: SemanticCheckpoint = { ...request, version: 1, changeId, fingerprint: fingerprint(store, changeId, commit, request, digest(verdict)), evidenceDigest: digest(verdict) };
+  attachCheckpoint(commit, claim);
+  return claim;
 }
 /** Read durable verified workspace history through the SDK; missing or ambiguous receipts never become claims. */
 export async function loadCheckpointReceipt(pmRoot: string, input: CheckpointRequest): Promise<AssuranceGateVerdict> {
@@ -166,9 +171,19 @@ export async function loadCheckpointReceipt(pmRoot: string, input: CheckpointReq
   if (matching.length !== 1) throw new CheckpointRefusal("checkpoint_evidence_unavailable", "Select one exact durable core receipt in the newest 1000 gate verdicts.");
   return matching[0];
 }
-/** Replace only the named claim; retaining stale claims makes invalidation visible until explicitly revalidated. */
+/** Identical claims are idempotent; replacing an immutable claim requires a later receipt for the current native tree. */
 export function attachCheckpoint(commit: Commit, claim: SemanticCheckpoint): string {
-  const claims = checkpointClaims(commit).filter(row => row.id !== claim.id).concat(claim).sort((a, b) => compareByteOrder(a.id, b.id));
+  const normalized = checkpointClaims({ ...commit, checkpoints: Buffer.from(JSON.stringify([claim])).toString("base64") })[0];
+  const previous = checkpointClaims(commit);
+  const existing = previous.find(row => row.id === normalized.id);
+  if (existing !== undefined) {
+    if (digest(existing) === digest(normalized)) return commit.checkpoints!;
+    if (normalized.receipt.treeId !== commit.tree || normalized.receipt.evaluatedAt <= existing.receipt.evaluatedAt
+      || normalized.fingerprint === existing.fingerprint || normalized.evidenceDigest === existing.evidenceDigest) {
+      throw new CheckpointRefusal("checkpoint_evidence_refused", "An attached claim is immutable. Collect a later durable passing assertion on the current native tree for the exact replacement scope and dependencies, then attach the new claim.");
+    }
+  }
+  const claims = previous.filter(row => row.id !== normalized.id).concat(normalized).sort((a, b) => compareByteOrder(a.id, b.id));
   const encoded = Buffer.from(JSON.stringify(claims)).toString("base64");
   checkpointClaims({ ...commit, checkpoints: encoded });
   return encoded;

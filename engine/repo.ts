@@ -2543,8 +2543,8 @@ export class Repository {
     return head;
   }
 
-  /** Serialize metadata attachment with reachability checks, descendant replay and ref publication. */
-  private rewriteMetadata(revision: string, now: Date, plan: (id: ObjectId, original: Commit, refs: readonly RefSnapshot[], head: HeadSnapshot) => RewritePlan): ObjectId | null {
+  /** Serialize metadata attachment with reachability checks; a null plan leaves refs, signatures and operation history unchanged. */
+  private rewriteMetadata(revision: string, now: Date, plan: (id: ObjectId, original: Commit, refs: readonly RefSnapshot[], head: HeadSnapshot) => RewritePlan | null): ObjectId | null {
     return this.objects.withWriteLock(/** Metadata and descendant replay share the existing rewrite transaction. */ () => {
       this.assertCleanWorktree();
       const id = this.resolve(revision); const original = readCommit(this.objects, id);
@@ -2553,15 +2553,17 @@ export class Repository {
         && (head.target === null || !reachable(this.objects, head.target).has(id))) {
         throw new ObjectStoreError("unreachable_revision", "Revision is not reachable from a branch, tag or HEAD; attach metadata to a reachable change.");
       }
-      return this.applyRewrite(plan(id, original, refs, head), now);
+      const rewrite = plan(id, original, refs, head);
+      return rewrite === null ? head.target : this.applyRewrite(rewrite, now);
     });
   }
 
-  /** Attach a core receipt under the native writer lease, preserving stable change identity and undo. */
+  /** Attach a core receipt under the native writer lease; identical claims are no-ops, while changed claims retain stable identity and undo. */
   checkpoint(revision: string, request: CheckpointRequest, verdict: AssuranceGateVerdict, committer: Signature, now: Date): ObjectId | null {
     return this.rewriteMetadata(revision, now, (id, original, refs, head) => {
       const claim = createSemanticCheckpoint(this.objects, id, original, request, verdict);
-      return planCheckpoint(this.rewriteContext(committer), id, attachCheckpoint(original, claim), refs, head);
+      const checkpoints = attachCheckpoint(original, claim);
+      return checkpoints === original.checkpoints ? null : planCheckpoint(this.rewriteContext(committer), id, checkpoints, refs, head);
     });
   }
 
