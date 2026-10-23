@@ -418,6 +418,19 @@ inside them. Materialization filters the target tree, so history recorded before
 existed still cannot write over another tool's state. This is pinned by a test that builds a
 deliberately hostile commit naming `.git/HEAD` and asserts it materializes to nothing.
 
+The installation-owned `.pm-cli/runtime/` directory is also **always excluded** at
+any depth and in every case spelling. It contains transient CLI state, including
+telemetry queues and the concurrently created/removed `telemetry/flush.lock` directory.
+The walk prunes this runtime subtree before descent, project negations cannot
+re-include it, and materialization cannot overwrite it. This does not blanket-ignore
+`.pm-cli/`: settings and other non-runtime paths follow the usual rules. The next
+add removes visible legacy runtime entries from an older index.
+
+Working-tree enumeration tolerates children that disappear or become non-directories
+between listing and descent/stat (`ENOENT` or `ENOTDIR`). Only the affected child is
+omitted from that enumeration; an unavailable walk root and all other I/O failures
+still fail. The walk is a filesystem observation, not a snapshot of concurrent edits.
+
 The `.pmvcs` name is reserved at **every depth**, including a leaf entry, and in every
 case spelling (`.PMVCS`, `.PmVcS`). A parent repository tracks a child repository's source
 and PM records, while keeping the child's credentials, objects, refs and private state
