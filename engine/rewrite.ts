@@ -537,17 +537,30 @@ function firstParentTree(store: ObjectStore, commit: Commit): ObjectId | null {
 
 /** Preserve an attestation only while all of its signed fields remain byte-identical. */
 function writeRewrittenCommit(store: ObjectStore, id: ObjectId, original: Commit, replacement: Commit): ObjectId {
-  return writeCommit(store, { ...replacement, ...retainedAttestation(id, original, replacement) });
+  const carried = { ...replacement, ...(original.checkpoints === undefined ? {} : { checkpoints: original.checkpoints }) };
+  return writeCommit(store, { ...carried, ...retainedAttestation(id, original, carried) });
 }
 
-/** Plan explicit signing with the existing descendant replay and atomic ref movement machinery. */
-export function planSign(ctx: RewriteContext, revision: ObjectId, attestation: string,
-  refs: readonly RefSnapshot[], head: HeadSnapshot): RewritePlan {
+/** Plan immutable metadata attachment with the existing atomic descendant replay machinery. */
+function planMetadata(ctx: RewriteContext, revision: ObjectId, metadata: Pick<Commit, "attestation" | "checkpoints">,
+  refs: readonly RefSnapshot[], head: HeadSnapshot, command: string, summary: string): RewritePlan {
   const original = readCommit(ctx.store, revision);
   const edits = new Map<ObjectId, EditBuilder>([[revision, parents => [writeCommit(ctx.store, {
-    ...original, parents, changeId: effectiveChangeId(revision, original), attestation,
+    ...original, parents, changeId: effectiveChangeId(revision, original), ...metadata,
   })]]]);
-  return planReplay(ctx, edits, refs, head, "sign", `Signed change ${effectiveChangeId(revision, original)}.`);
+  return planReplay(ctx, edits, refs, head, command, summary);
+}
+
+/** Plan explicit signing without changing the snapshot or its existing semantic claims. */
+export function planSign(ctx: RewriteContext, revision: ObjectId, attestation: string,
+  refs: readonly RefSnapshot[], head: HeadSnapshot): RewritePlan {
+  return planMetadata(ctx, revision, { attestation }, refs, head, "sign", `Signed change ${effectiveChangeId(revision, readCommit(ctx.store, revision))}.`);
+}
+
+/** Attach claims and invalidate prior signatures, which did not cover the newly added evidence. */
+export function planCheckpoint(ctx: RewriteContext, revision: ObjectId, checkpoints: string,
+  refs: readonly RefSnapshot[], head: HeadSnapshot): RewritePlan {
+  return planMetadata(ctx, revision, { checkpoints, attestation: undefined }, refs, head, "checkpoint", `Attached validation to change ${effectiveChangeId(revision, readCommit(ctx.store, revision))}.`);
 }
 
 /** Builds a replacement commit, recording the change identity a re-point keeps. */

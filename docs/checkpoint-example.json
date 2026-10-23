@@ -1,0 +1,16 @@
+{
+  "id": "ready",
+  "gateId": "release",
+  "assertionId": "acceptance",
+  "scope": [
+    { "path": ".agents/pm/tasks/example.toon", "fields": ["status", "acceptance_criteria", "dependencies"] }
+  ],
+  "dependencies": [
+    { "path": ".agents/pm/assurance.json" },
+    { "path": "policy/release.json" }
+  ],
+  "receipt": {
+    "treeId": "0000000000000000000000000000000000000000000000000000000000000000",
+    "evaluatedAt": "2026-10-23T00:00:00.000Z"
+  }
+}

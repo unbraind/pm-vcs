@@ -38,6 +38,7 @@ export class ChangeSignatureError extends ObjectStoreError {
 export function changeSigningPayload(id: ObjectId, commit: Commit): Buffer {
   return Buffer.concat([Buffer.from("pm-vcs/change-signature\0v1\0", "utf8"), encodeRecord({
     changeId: effectiveChangeId(id, commit), tree: commit.tree,
+    ...(commit.checkpoints === undefined ? {} : { checkpoints: commit.checkpoints }),
     author: { name: commit.author.name, email: commit.author.email, timestamp: commit.author.timestamp,
       timezoneOffsetMinutes: commit.author.timezoneOffsetMinutes },
     message: commit.message, items: [...new Set(commit.items ?? [])].sort(compareByteOrder),

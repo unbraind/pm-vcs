@@ -40,6 +40,7 @@ test("native staging streams CDC, retains renamed identities and traces PM items
   const { repo, client } = await fresh();
   const item = (await client.create({ type: "Task", title: "Binary provenance", author: "fixture" })).item.id;
   const bytes = randomBytes(2 * 1024 * 1024);
+  bytes[400] = 42; // Pin the mutation coordinate so a literal-42 write would be a reproducible no-op.
   const file = join(repo.root, "asset.bin"); writeFileSync(file, bytes);
   const expected = cdcFragmentedContentId(bytes, STAGING_CDC_PARAMS);
   assert.equal(cdcFragmentedFileContentId(file), cdcFragmentedContentId(bytes));
@@ -72,7 +73,7 @@ test("native staging streams CDC, retains renamed identities and traces PM items
   writeFileSync(join(repo.root, "copy.bin"), Buffer.from("short"));
   assert.deepEqual(repo.status(forbidBuffer).unstaged, [{ path: "copy.bin", kind: "modified" }]);
   const fd = openSync(join(repo.root, "renamed.bin"), "r+");
-  try { writeSync(fd, Buffer.from([42]), 0, 1, 400); } finally { closeSync(fd); }
+  try { writeSync(fd, Buffer.from([edited[400] ^ 255]), 0, 1, 400); } finally { closeSync(fd); }
   assert.ok(repo.status(forbidBuffer).unstaged.some(entry => entry.path === "renamed.bin"));
   repo.stage(["renamed.bin"], forbidBuffer);
   assert.notEqual(repo.readIndex().find(entry => entry.path === "renamed.bin")!.id, current.id);

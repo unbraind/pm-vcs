@@ -1,3 +1,4 @@
+import { assertCheckpointPublication } from "./checkpoints.ts";
 import { assertTrustedChanges } from "./signature-policy.ts";
 /** Native forge catalogs and review history, rooted in ordinary refs and objects. */
 import { exportBundle, importBundleObjects } from "./bundle.ts";
@@ -124,6 +125,7 @@ function publishSeries(repository: Repository, request: ForgeRequest, principal:
   const leases = new PublicationLeases(store, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, principal);
   const leaseUpdates = roots.map(next => ({ ref: request.branch!, expected: oldTip, next }));
   // Refuse before writing review objects; the check inside the ref transaction below stays authoritative.
+  assertCheckpointPublication(store, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, [tip]);
   leases.assertPublication(leaseUpdates, request.proofs!, metadata);
   const oldReview = repository.refs.read(reviewRef);
   const review = writeReview(repository, createReviewRecord(request.series!, "pending"), { action: "propose", principal: principal.principal, series: request.series! }, oldReview, principal);
@@ -134,6 +136,7 @@ function publishSeries(repository: Repository, request: ForgeRequest, principal:
   repository.refs.transaction(updates,
     /** Check every patch root, including side histories, at the catalog publication point. */ () => {
       const recheckRevocations = assertTrustedChanges(repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, roots);
+      assertCheckpointPublication(store, repository.instanceLink?.controlDirectory ?? repository.controlDirectory, metadata.commits, [tip]);
       leases.assertPublication(leaseUpdates, request.proofs!, metadata);
       recheckRevocations();
     });

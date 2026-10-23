@@ -277,7 +277,7 @@ are recorded as evidence on the item. See [the full bisect contract](docs/bisect
 ## Without git
 
 Native commits, refs, history, merges, bundles, transports, signing, annotation,
-bisect and tracker change lenses work in a plain-directory PM project without a git executable. Bisect
+bisect, semantic validation checkpoints and tracker change lenses work in a plain-directory PM project without a git executable. Bisect
 predicates must supply their own dependencies. The optional `vcs git` interoperability
 commands need a git repository and refuse with an actionable diagnostic otherwise.
 
@@ -417,6 +417,19 @@ something it shares rather than owns.
 inside them. Materialization filters the target tree, so history recorded before the rules
 existed still cannot write over another tool's state. This is pinned by a test that builds a
 deliberately hostile commit naming `.git/HEAD` and asserts it materializes to nothing.
+
+The installation-owned `.pm-cli/runtime/` directory is also **always excluded** at
+any depth and in every case spelling. It contains transient CLI state, including
+telemetry queues and the concurrently created/removed `telemetry/flush.lock` directory.
+The walk prunes this runtime subtree before descent, project negations cannot
+re-include it, and materialization cannot overwrite it. This does not blanket-ignore
+`.pm-cli/`: settings and other non-runtime paths follow the usual rules. The next
+add removes visible legacy runtime entries from an older index.
+
+Working-tree enumeration tolerates children that disappear or become non-directories
+between listing and descent/stat (`ENOENT` or `ENOTDIR`). Only the affected child is
+omitted from that enumeration; an unavailable walk root and all other I/O failures
+still fail. The walk is a filesystem observation, not a snapshot of concurrent edits.
 
 The `.pmvcs` name is reserved at **every depth**, including a leaf entry, and in every
 case spelling (`.PMVCS`, `.PmVcS`). A parent repository tracks a child repository's source
@@ -855,3 +868,96 @@ example](docs/tracker-lenses.md) for fields, refusals and continuation.
 
 Core history continues to own tracker event records; lenses interpret immutable
 native VCS changes.
+
+## Semantic validation checkpoints
+
+`pm vcs checkpoint attach` binds one exact durable core assurance assertion to a
+stable native change. Its fingerprint covers explicitly selected top-level record
+fields and policy dependencies in the immutable native tree, including file
+identity, mode, copy provenance, field absence and selector definitions. The native
+canonical tree-entry encoder binds every stored metadata attribute. Whole-file
+selections bind the content object id; field selections substitute the canonical
+selected-field digest so unrelated fields can still change. Unselected field edits,
+comments on other fields, descriptions and parent-only rewrites retain evidence.
+Selected field edits, deletion, moves, conflict units, file replacement and policy
+changes require validation again. Order inside a selected collection is significant.
+New native changes need their own checkpoint; a checkpoint is never inherited
+from an ancestor merely because the assertion name matches.
+
+An attached claim is immutable. Attaching identical normalized content is a no-op,
+preserving the commit, signature and operation log. Replacing it, including widening
+its scope or changing dependencies, requires a new durable evaluation for the current
+native tree and the exact replacement selectors: `evaluated_at` must be later than
+the attached receipt, and both the evidence digest and fingerprint must change.
+Reusing the original receipt refuses even when the native tree itself is unchanged.
+Claims made with an older fingerprint encoding fail closed and need revalidation.
+
+Core assurance still owns contracts, evaluation and durable receipts. First run
+and record the actual core gate using the **native tree id** as its `tree_id`.
+Choose the exact gate, assertion and `evaluated_at` from `pm assurance verdicts`.
+The assertion must pass with proven negative controls and a positive population;
+dry runs, incomplete results and ambiguous receipts refuse. Other assertions in
+the same gate remain independent. The newest 1000 matching gate receipts are
+searched through the core SDK's verified workspace history.
+
+Adapt [the example request](docs/checkpoint-example.json) to actual tracked paths
+and the captured receipt; its zero tree id is a placeholder. Include every input
+that can affect the contract in `scope` or `dependencies`, including the assurance
+registry, external policy revision files, configuration and implementation files.
+Omitted inputs cannot invalidate evidence. Omit `fields` to bind the entire file;
+field selection requires a configured native record. Paths are exact, relative
+and unique within each selection list; no globs or implicit dependency traversal.
+
+```bash
+pm vcs checkpoint attach HEAD --input checkpoint.json --json
+pm vcs checkpoint inspect HEAD --limit 20
+pm vcs checkpoint inspect HEAD --json
+# On the receiving native repository, install an array of required scopes:
+pm vcs checkpoint policy --input required-checkpoints.json
+```
+
+`required-checkpoints.json` is an array of request objects with `receipt` removed.
+Receiver policy is private administrative state in `.pmvcs/checkpoint-policy.json`;
+it must be configured independently on each receiver and is never copied from
+sender advertisements. An empty array disables requirements. Malformed/unreadable
+policy refuses publication. Publication checks **every proposed tip**, including
+force pushes, no-op ref updates and native forge series tips, inside the existing shared writer lease and
+ref transaction. It rechecks all carried claims and receiver requirements, so an
+old claim, a missing claim or a narrower scope cannot satisfy the changed scope.
+Historical claims describe their own snapshots; requirements apply to published
+tips, rather than retroactively requiring claims on legacy ancestry.
+
+The typed SDK exports `CheckpointRequest`, `CheckpointRequirement`,
+`SemanticCheckpoint`, `CheckpointReport`, `CheckpointRefusal`,
+`loadCheckpointReceipt`, `createSemanticCheckpoint`, `inspectCheckpoints` and
+`updateCheckpointPolicy` from `pm-vcs`. Use `Repository.checkpoint` for atomic
+attachment, descendant replay and operation-log undo. Backend hosts can pass
+an authenticated `AssuranceGateVerdict` directly; the directory command reads it
+through the core SDK. Neither path evaluates contracts or runs tests itself.
+
+```ts
+import { loadCheckpointReceipt, inspectCheckpoints } from "pm-vcs";
+import { readCommit } from "pm-vcs/dist/engine/model.js";
+
+const verdict = await loadCheckpointReceipt(trackerRoot, request);
+repository.checkpoint("HEAD", request, verdict, committer, new Date());
+const id = repository.resolve("HEAD");
+const report = inspectCheckpoints(repository.objects, id,
+  readCommit(repository.objects, id), requiredScopes);
+```
+
+Inspection is read-only: `ok` is the authoritative diagnostic predicate; an
+invalid diagnostic still returns structured rows. Publication refuses nonzero.
+Default TOON and host `--json` contain only ids, statuses, remedies, total and
+omitted counts. All claims are checked before `--limit` (1..100, default 20)
+compacts the output; claims and receiver requirements are each bounded to 32.
+SDK refusals carry `code` and `remedy`, with the remedy also in the message for
+CLI/HTTP consumers. Checkpoints retain stale claims visibly until revalidation.
+
+A checkpoint attests scoped reuse of an agent's accepted receipt, rather than
+proving that an arbitrary agent executed a test honestly. Native signing supplies
+authorship and covers checkpoint headers; changing attached checkpoints clears the old
+signature and requires explicit signing again. Wall-clock expiry, package/backend
+freshness and review approval remain separate policies. Keep receiver
+administration trusted and retain the core history alongside native bundles for
+independent receipt auditing.
