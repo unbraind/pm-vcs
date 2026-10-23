@@ -67,7 +67,9 @@ pm vcs bundle import selected.bundle --authorization authority.json --expected e
 ```
 
 For an existing branch, replace `null` with its independently read current native
-commit id. Every imported branch needs exactly one expected value. A mismatch
+commit id. Tip and expected-value maps must match the declared scope ref by ref;
+commas are literal characters in a ref name, never branch-set separators.
+Every imported branch needs exactly one expected value. A mismatch
 refuses before importing objects. Import deliberately leaves the native index and
 working files alone; inspect or check out the admitted history separately.
 

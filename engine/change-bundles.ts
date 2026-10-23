@@ -56,9 +56,9 @@ const SCOPE = "Select only fully authorized histories and paths, or obtain indep
 const INCOMPLETE = "Restore complete selected ancestry and payloads; include every referenced native object exactly once, without unrelated objects.";
 const SIGNATURE = "Use an external Ed25519 key trusted for this signer by the receiver, and regenerate the bundle after any manifest or archive change.";
 
-/** Reject unknown schema fields so an unsupported omission or authorization contract cannot be silently ignored. */
-function row(raw: unknown, keys: string): Record<string, unknown> {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw) || Object.keys(raw).sort().join(",") !== keys) throw new ChangeBundleRefusal("invalid_change_bundle", INVALID);
+/** Compare exact key arrays so punctuation in a ref name cannot impersonate multiple authorized fields. */
+function row(raw: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw) || JSON.stringify(Object.keys(raw).sort()) !== JSON.stringify([...keys].sort())) throw new ChangeBundleRefusal("invalid_change_bundle", INVALID);
   return raw as Record<string, unknown>;
 }
 /** Require a bounded, unique, canonically sorted set, without silently dropping selectors. */
@@ -73,7 +73,7 @@ function pathAllowed(path: string): boolean {
 }
 /** Parse explicit replay scope at both SDK and CLI boundaries. Lists must already be sorted and unique. */
 export function parseChangeBundleScope(raw: unknown): ChangeBundleScope {
-  const scope = row(raw, "paths,refs");
+  const scope = row(raw, ["paths", "refs"]);
   const paths = strings(scope.paths, pathAllowed);
   const refs = strings(scope.refs, name => { assertRefName(name); return name.startsWith("refs/heads/"); });
   if (paths.length === 0 || refs.length === 0 || refs.length > 100 || paths.length > 1000) throw new ChangeBundleRefusal("invalid_change_bundle", INVALID);
@@ -81,7 +81,7 @@ export function parseChangeBundleScope(raw: unknown): ChangeBundleScope {
 }
 /** Parse receiver-owned trust using the core native signature policy rather than a second key schema. */
 export function parseChangeBundleAuthorization(raw: unknown): ChangeBundleAuthorization {
-  const policy = row(raw, "scope,trust");
+  const policy = row(raw, ["scope", "trust"]);
   return { scope: parseChangeBundleScope(policy.scope), trust: parseTrustedKeys(policy.trust) };
 }
 /** Canonical JSON bytes shared with native record encoding; the signature covers every manifest field. */
@@ -92,7 +92,7 @@ function digest(bytes: Buffer): string { return createHash("sha256").update(byte
 function signingBytes(manifest: ChangeBundleManifest): Buffer { return Buffer.concat([Buffer.from("pm-vcs/change-bundle\0v1\0"), canonical(manifest)]); }
 /** Validate the exact destination tips independently of advertised archive headers. */
 function tips(raw: unknown, scope: ChangeBundleScope): Record<string, ObjectId> {
-  const values = row(raw, [...scope.refs].sort().join(","));
+  const values = row(raw, scope.refs);
   if (Object.values(values).some(value => typeof value !== "string" || !isObjectId(value))) throw new ChangeBundleRefusal("invalid_change_bundle", INVALID);
   return values as Record<string, ObjectId>;
 }
@@ -171,10 +171,10 @@ function preflight(store: ObjectStore, bytes: Buffer, authorization: ChangeBundl
   let envelope: Record<string, unknown>;
   try {
     if (bytes.length > 33554432 || !bytes.subarray(0, FORMAT.length + 1).equals(Buffer.from(FORMAT + "\n"))) throw new Error("Format.");
-    envelope = row(JSON.parse(bytes.subarray(FORMAT.length + 1).toString("utf8")), "archive,manifest,signature");
+    envelope = row(JSON.parse(bytes.subarray(FORMAT.length + 1).toString("utf8")), ["archive", "manifest", "signature"]);
     if (!bytes.equals(Buffer.from(FORMAT + "\n" + canonical(envelope).toString("utf8") + "\n"))) throw new Error("Canonical.");
   } catch { throw new ChangeBundleRefusal("invalid_change_bundle", INVALID); }
-  const source = row(envelope.manifest, "archiveDigest,excluded,included,publicKey,scope,signer,tips,unknownOmissions,version");
+  const source = row(envelope.manifest, ["archiveDigest", "excluded", "included", "publicKey", "scope", "signer", "tips", "unknownOmissions", "version"]);
   const scope = parseChangeBundleScope(source.scope);
   const included = strings(source.included, isObjectId); const excluded = strings(source.excluded, isObjectId); const carried = new Set(included);
   if (source.version !== 1 || typeof source.unknownOmissions !== "boolean" || typeof source.archiveDigest !== "string" || !isObjectId(source.archiveDigest)
@@ -207,7 +207,7 @@ export function importChangeBundle(repository: Repository, bytes: Buffer, author
   const { objects: store, refs } = repository;
   return store.withWriteLock(() => {
     const checked = preflight(store, bytes, authorization, now);
-    const leases = row(expected, [...checked.manifest.scope.refs].sort().join(","));
+    const leases = row(expected, checked.manifest.scope.refs);
     if (Object.entries(leases).some(([name, value]) => (value !== null && (typeof value !== "string" || !isObjectId(value))) || refs.read(name) !== value)) throw new ChangeBundleRefusal("bundle_lease_refused", "Read every destination branch and provide its exact expected object id, or null for a new branch; retry after reviewing concurrent changes.");
     const targets = Object.values(checked.manifest.tips); const control = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
     const recheck = assertTrustedChanges(control, checked.metadata.commits, targets);

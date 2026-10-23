@@ -189,6 +189,43 @@ test("multiple destination branches require authority and exact leases as one tr
   assert.equal(f.receiver.refs.read(branch), f.last); assert.equal(f.receiver.refs.read(second), f.first);
 });
 
+test("comma-containing refs cannot alias two-ref scopes in tips", async () => {
+  const f = await fixture();
+  const pair = ["refs/heads/a", "refs/heads/b"];
+  const single = "refs/heads/a,refs/heads/b";
+  const scope = { ...f.scope, refs: pair }; const singleScope = { ...f.scope, refs: [single] };
+  const pairTips = { [pair[1]]: f.first, [pair[0]]: f.last }; const singleTips = { [single]: f.last };
+  const before = snapshot(f.receiver);
+  refused(() => exportChangeBundle(f.repo.objects, singleTips, scope, author.email, keys.privateKey), "invalid_change_bundle");
+  refused(() => exportChangeBundle(f.repo.objects, pairTips, singleScope, author.email, keys.privateKey), "invalid_change_bundle");
+  const validSingle = exportChangeBundle(f.repo.objects, singleTips, singleScope, author.email, keys.privateKey);
+  const forged = changed(validSingle, { scope });
+  refused(() => inspectChangeBundle(f.receiver.objects, forged, { ...f.policy, scope }), "invalid_change_bundle");
+  refused(() => importChangeBundle(f.receiver, forged, { ...f.policy, scope }, { [pair[0]]: null, [pair[1]]: null }), "invalid_change_bundle");
+  assert.deepEqual(snapshot(f.receiver), before);
+  assert.equal(importChangeBundle(f.receiver, validSingle, { ...f.policy, scope: singleScope }, { [single]: null }).refs, 1);
+  assert.equal(f.receiver.refs.read(single), f.last);
+});
+
+test("comma-containing refs cannot alias two-ref scopes in leases", async () => {
+  const f = await fixture();
+  const pair = ["refs/heads/a", "refs/heads/b"];
+  const single = "refs/heads/a,refs/heads/b";
+  const scope = { ...f.scope, refs: pair }; const singleScope = { ...f.scope, refs: [single] };
+  const pairTips = { [pair[1]]: f.first, [pair[0]]: f.last };
+  const pairExpected = { [pair[1]]: null, [pair[0]]: null }; const singleExpected = { [single]: null };
+  const pairBytes = exportChangeBundle(f.repo.objects, pairTips, scope, author.email, keys.privateKey);
+  const singleBytes = exportChangeBundle(f.repo.objects, { [single]: f.last }, singleScope, author.email, keys.privateKey);
+  const before = snapshot(f.receiver);
+  refused(() => importChangeBundle(f.receiver, pairBytes, { ...f.policy, scope }, singleExpected), "invalid_change_bundle");
+  refused(() => importChangeBundle(f.receiver, singleBytes, { ...f.policy, scope: singleScope }, pairExpected), "invalid_change_bundle");
+  assert.deepEqual(snapshot(f.receiver), before);
+  assert.equal(importChangeBundle(f.receiver, pairBytes, { ...f.policy, scope }, pairExpected).refs, 2);
+  assert.equal(importChangeBundle(f.receiver, singleBytes, { ...f.policy, scope: singleScope }, singleExpected).refs, 1);
+  assert.equal(f.receiver.refs.read(pair[0]), f.last); assert.equal(f.receiver.refs.read(pair[1]), f.first);
+  assert.equal(f.receiver.refs.read(single), f.last);
+});
+
 test("strict scope, trust and tip parsers reject unsupported, duplicate and unsafe authority", async () => {
   const f = await fixture();
   for (const scope of [null, [], {}, { ...f.scope, unknown: true }, { ...f.scope, paths: null }, { ...f.scope, paths: [1] }, { ...f.scope, paths: [""] },
