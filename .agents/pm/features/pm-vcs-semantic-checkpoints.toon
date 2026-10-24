@@ -2,13 +2,18 @@ id: pm-vcs-semantic-checkpoints
 title: Retain validation checkpoints only while native semantic scope is unchanged
 description: Attach deterministic core-assurance receipt bindings to stable native changes; recheck selected record fields and explicit policy dependencies during inspection and receiver publication.
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-23T06:41:48.591Z"
-updated_at: "2026-10-23T10:30:40.153Z"
+updated_at: "2026-10-24T21:49:35.234Z"
+closed_at: "2026-10-24T21:49:35.219Z"
+completed_at: "2026-10-24T21:49:35.219Z"
 author: codex-agent
 acceptance_criteria: "Irrelevant edits retain valid evidence; relevant edits invalidate it; publication cannot substitute an old claim for the changed scope. Typed SDK and CLI, compact TOON/JSON, typed refusals with remedies, README example, non-git regression and read-only public-tracker measurements, npm and Bun CI release gates."
+resolution: "Semantic scope preserves irrelevant-edit validation while invalidating relevant changes and refusing substitution of stale claims, with compact no-git SDK/CLI and release CI."
+expected_result: "Irrelevant edits retain valid evidence; relevant edits invalidate it; publication cannot substitute an old claim for the changed scope. Typed SDK and CLI, compact TOON/JSON, typed refusals with remedies, README example, non-git regression and read-only public-tracker measurements, npm and Bun CI release gates."
+actual_result: "https://github.com/unbraind/pm-vcs/pull/144, merged 2026-10-23T11:12:38Z, merge 641d2d66d31308f0171df2c666e18dc1d27aee03: Semantic scope preserves irrelevant-edit validation while invalidating relevant changes and refusing substitution of stale claims, with compact no-git SDK/CLI and release CI."
 comments[12]{created_at,author,text}:
   "2026-10-23T06:41:52.097Z",codex-agent,"Overlap recheck: core SDK owns assurance declarations, evaluateAssuranceGate/evaluateAssuranceAssertion, durable recordAssuranceVerdict/listAssuranceVerdicts and item codecs. pm-ops evidence-expiry owns wall-clock and package/backend freshness; pm-review owns review closeout; native signatures prove authorship, bisect runs linked tests, and tracker lenses describe immutable deltas. None binds durable assertion receipts to selected native record fields and policy dependencies at publication. Implement only that binding, reusing core receipt reads, record codecs, native rewrite/CAS and receiver writer leases. No dependency bump required for those APIs."
   "2026-10-23T06:58:36.571Z",codex-agent,"Implemented exact durable core assertion selection, native semantic scope/dependency fingerprints, commit-carried claims, atomic descendant replay/undo, signed checkpoint headers, bounded diagnostics and receiver-owned publication requirements. No-git installed CLI attachment and TOON/JSON inspection passed with an empty executable search path. Initial focused suite: 12 passed, 0 failed. Source-only coverage probe: 100% statements/functions/lines; closing remaining legacy/linked-instance branches before CI."
@@ -43,4 +48,5 @@ tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
 docs[2]{path,scope}:
   docs/checkpoint-example.json,project
   README.md,project
+close_reason: "https://github.com/unbraind/pm-vcs/pull/144, merged 2026-10-23T11:12:38Z, merge 641d2d66d31308f0171df2c666e18dc1d27aee03: Semantic scope preserves irrelevant-edit validation while invalidating relevant changes and refusing substitution of stale claims, with compact no-git SDK/CLI and release CI."
 body: ""
