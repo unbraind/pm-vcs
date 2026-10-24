@@ -2,13 +2,19 @@ id: pm-vcs-worktree-walk-race
 title: Keep native staging stable when working-tree children vanish
 description: "PR 141 CI test (26) once failed in listWorkingTree while a telemetry flush.lock directory vanished after listing. The unchanged retry passed. Handle disappearing or replaced child entries without suppressing root or unexpected filesystem failures, and exclude installation runtime state before descent and staging."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-23T08:47:27.367Z"
-updated_at: "2026-10-23T09:09:12.089Z"
+updated_at: "2026-10-24T23:15:53.161Z"
+closed_at: "2026-10-24T21:49:35.666Z"
+completed_at: "2026-10-23T10:14:54.000Z"
 author: codex-agent
 acceptance_criteria: "Deterministic real-filesystem seam removes a child directory between listing and descent; ENOENT and ENOTDIR child failures skip that child while walk-root and other failures still throw. Non-negatable .pm-cli/runtime exclusion applies at any depth without blanket-excluding the global settings directory. Separate revert proofs fail for traversal handling and runtime exclusion. No-git SDK tracker, targeted checks, self-host verification at committed HEAD and full npm/Bun CI gates pass."
+repro_steps: "PR 141 CI test (26) once failed in listWorkingTree while a telemetry flush.lock directory vanished after listing. The unchanged retry passed. Handle disappearing or replaced child entries without suppressing root or unexpected filesystem failures, and exclude installation runtime state before descent and staging."
+resolution: "Child ENOENT/ENOTDIR traversal races skip only vanished children, root/other errors still throw, and nested runtime exclusions cannot be negated; real-filesystem reverts and self-host gates pass."
+expected_result: "Deterministic real-filesystem seam removes a child directory between listing and descent; ENOENT and ENOTDIR child failures skip that child while walk-root and other failures still throw. Non-negatable .pm-cli/runtime exclusion applies at any depth without blanket-excluding the global settings directory. Separate revert proofs fail for traversal handling and runtime exclusion. No-git SDK tracker, targeted checks, self-host verification at committed HEAD and full npm/Bun CI gates pass."
+actual_result: "https://github.com/unbraind/pm-vcs/pull/145, merged 2026-10-23T10:14:54Z, merge 06f63925a7a909f4b89d1780ade66bf2edfe30a1: Child ENOENT/ENOTDIR traversal races skip only vanished children, root/other errors still throw, and nested runtime exclusions cannot be negated; real-filesystem reverts and self-host gates pass."
 comments[4]{created_at,author,text}:
   "2026-10-23T08:47:30.662Z",codex-agent,"Orientation found no flush.lock or matching walk-race item; related existing ignore items cover tracker caches and VCS control paths. Packaged CLI docs/EXTENSIONS.md identifies the global .pm-cli extension directory; docs/CONFIGURATION.md documents installation runtime counters in runtime/telemetry/read-sampling.json. The public telemetry runtime declarations identify global-root queue/state/flush-lock paths. Decision: reserve only the adjacent .pm-cli/runtime path components, case-insensitively and at any depth, through the existing non-negatable runtime fence. Keep non-runtime settings eligible under existing rules. Do not change telemetry configuration. Use an injectable synchronous directory reader over real filesystem entries to reproduce child disappearance deterministically, with per-child error handling and root errors untouched. PR 144 and its branch remain unchanged."
   "2026-10-23T09:04:38.363Z",codex-agent,"Implementation: directory reader is injectable per call; real child read/stat failures ENOENT or ENOTDIR skip only that child. Root directory reads stay outside the child guard. EACCES, EIO and unexpected errors propagate unchanged. A final no-follow leaf stat omits vanished or type-replaced entries. Installation runtime is non-negatable and pruned in both tracker discovery and working-tree enumeration; ordinary runtime-fence exceptions still remain discoverable. Positive verification: 60 focused walk/ignore/control tests passed, including 13 new regressions; 3 raw-coverage/inventory boundary tests passed. Native staging ran in a real SDK-initialized non-git tracker with an empty executable search path. Runtime cannot be explicitly staged or materialized, visible legacy runtime index entries are removed on add, and global settings remain eligible. Source build, typecheck, test typecheck, lint, 0% duplication and docstrings passed; production inventory stays 76 files."
@@ -22,4 +28,5 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-concurrency=1 test/worktree-walk-race.test.ts test/worktree.test.ts test/ignore.test.ts test/control-directories.test.ts,project,codex-agent,"2026-10-23T09:04:42.000Z",local_mutation,fix/worktree-walk-vanishing-entries
 docs[1]{path,scope}:
   README.md,project
+close_reason: "https://github.com/unbraind/pm-vcs/pull/145, merged 2026-10-23T10:14:54Z, merge 06f63925a7a909f4b89d1780ade66bf2edfe30a1: Child ENOENT/ENOTDIR traversal races skip only vanished children, root/other errors still throw, and nested runtime exclusions cannot be negated; real-filesystem reverts and self-host gates pass."
 body: ""

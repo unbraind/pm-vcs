@@ -2,13 +2,19 @@ id: pm-vcs-tracker-selfhost
 title: Explain self-host refresh recovery for tracker-only PRs
 description: "PR #139 changes only tracker records and CHANGELOG.md but fails the committed self-host equality audit. Refresh its bundle without weakening verification. Recurring workflow proposal: when equality fails, print the exact recovery sequence: stage all intended tracker/source/docs changes explicitly, npm run changelog:full, stage CHANGELOG.md, npm run self-host:write, git add selfhost.bundle, commit, then npm run accept:self-host at HEAD. A future regression should prove a tracker-only commit fails with actionable guidance and passes after the committed refresh; verification must remain read-only."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags[3]: ci,contributor-workflow,self-host
 created_at: "2026-10-21T19:49:18.736Z"
-updated_at: "2026-10-22T19:23:06.105Z"
+updated_at: "2026-10-24T23:15:56.129Z"
+closed_at: "2026-10-24T21:49:36.849Z"
+completed_at: "2026-10-22T20:21:17.000Z"
 author: codex-agent
 acceptance_criteria: "PR #139 has a refreshed committed snapshot, targeted local acceptance and full CI evidence; contributor diagnostic proposal remains tracked for separate implementation."
+repro_steps: "PR #139 changes only tracker records and CHANGELOG.md but fails the committed self-host equality audit. Refresh its bundle without weakening verification. Recurring workflow proposal: when equality fails, print the exact recovery sequence: stage all intended tracker/source/docs changes explicitly, npm run changelog:full, stage CHANGELOG.md, npm run self-host:write, git add selfhost.bundle, commit, then npm run accept:self-host at HEAD. A future regression should prove a tracker-only commit fails with actionable guidance and passes after the committed refresh; verification must remain read-only."
+resolution: Refreshes the committed tracker-only snapshot and verifies exact self-host equality and CI; the broader contributor-diagnostic proposal remains explicitly separate.
+expected_result: "PR #139 has a refreshed committed snapshot, targeted local acceptance and full CI evidence; contributor diagnostic proposal remains tracked for separate implementation."
+actual_result: "https://github.com/unbraind/pm-vcs/pull/139, merged 2026-10-22T20:21:17Z, merge 6ca942791f02dbd9cce3d6e22773960db32e4b92: Refreshes the committed tracker-only snapshot and verifies exact self-host equality and CI; the broader contributor-diagnostic proposal remains explicitly separate."
 comments[7]{created_at,author,text}:
   "2026-10-21T19:49:29.300Z",codex-agent,"Orientation found no tracker-only recovery item; related closed pm-vcs-koq1 concerns external action pins and pm-vcs-m6j4 concerns an older refresh. PR branch contains origin/main (0 behind, 1 ahead). The existing operational-entry regression reproduced the CI failure: 0/1 passed, with tracker records, append-only histories and CHANGELOG.md differing. AGENTS.md and scripts/self-host.ts require staged intended files -> writer -> commit -> verify HEAD. Plan: retain strict equality and unchanged runtime source; record linked checks, finish tracker writes, regenerate changelog and bundle, commit as SteveBot, verify targeted test and self-host acceptance, push and use CI for the full gate as requested. No behavioral code changed; the red baseline is the artifact negative proof."
   "2026-10-21T19:51:57.150Z",codex-agent,"Committed snapshot 5cc231b passed all 3 linked commands via pm test --run --progress: npm run accept:self-host exit 0; node --test --test-name-pattern=\"operational entry points enforce real audits through direct CLI processes\" test/exact-gates.test.ts 1/1 passed; node --test test/self-host.test.ts 62/62 passed. Zero failures, cancellations, skips or todos. The unrefreshed PR baseline failed that same operational-entry test 0/1, proving the artifact correction matters. npm ci and npm run build passed; changelog generation/check passed. Existing history streams are append-only and new tracker fields contain no absolute local paths. Linked result persistence is disabled by existing policy (tracking_disabled), so receipts are recorded in this comment. Release the claim and retain in_progress for orchestrator verification; contributor diagnostic remains a separate implementation proposal. Final receipt bytes require one last staged bundle refresh, followed by HEAD acceptance and focused checks, then push and full CI. Full local npm/Bun release gates are intentionally delegated to CI under the task instruction."
@@ -66,4 +72,5 @@ tests[4]:
       source_ref: chore/reconcile-tracker-1021
 docs[1]{path,scope}:
   AGENTS.md,project
+close_reason: "https://github.com/unbraind/pm-vcs/pull/139, merged 2026-10-22T20:21:17Z, merge 6ca942791f02dbd9cce3d6e22773960db32e4b92: Refreshes the committed tracker-only snapshot and verifies exact self-host equality and CI; the broader contributor-diagnostic proposal remains explicitly separate."
 body: ""

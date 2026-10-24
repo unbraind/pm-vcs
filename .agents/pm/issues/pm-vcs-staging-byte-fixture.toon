@@ -2,18 +2,25 @@ id: pm-vcs-staging-byte-fixture
 title: Guarantee a real byte mutation in the CDC staging regression
 description: "The streaming staging regression writes literal byte 42 at random offset 400. With probability 1/256 the byte is already 42, so the operation is a no-op and the unstaged-change assertion fails even when staging is correct. Observed on Node 22 in PR 144 CI run 39919162579; the same test passed in the first full gate and in isolation."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-23T07:58:19.503Z"
-updated_at: "2026-10-23T08:00:14.269Z"
+updated_at: "2026-10-24T23:15:53.947Z"
+closed_at: "2026-10-24T21:49:36.199Z"
+completed_at: "2026-10-23T11:12:38.000Z"
 author: codex-agent
 acceptance_criteria: "Pin the mutation coordinate to 42 and replace it with its XOR inverse; reverting only the changed write-byte expression must fail the existing unstaged-change assertion. Production staging, safety bounds and coverage thresholds remain unchanged."
 parent: pm-vcs-phase6stage
+repro_steps: "The streaming staging regression writes literal byte 42 at random offset 400. With probability 1/256 the byte is already 42, so the operation is a no-op and the unstaged-change assertion fails even when staging is correct. Observed on Node 22 in PR 144 CI run 39919162579; the same test passed in the first full gate and in isolation."
+resolution: "The CDC regression writes the XOR inverse at coordinate 42, guaranteeing real mutation; reverting only that expression fails the unchanged unstaged-change assertion."
+expected_result: "Pin the mutation coordinate to 42 and replace it with its XOR inverse; reverting only the changed write-byte expression must fail the existing unstaged-change assertion. Production staging, safety bounds and coverage thresholds remain unchanged."
+actual_result: "https://github.com/unbraind/pm-vcs/pull/144, merged 2026-10-23T11:12:38Z, merge 641d2d66d31308f0171df2c666e18dc1d27aee03: The CDC regression writes the XOR inverse at coordinate 42, guaranteeing real mutation; reverting only that expression fails the unchanged unstaged-change assertion."
 comments[1]{created_at,author,text}:
   "2026-10-23T08:00:07.636Z",codex-agent,"Fixed only the test fixture: coordinate 400 starts as byte 42 and the later write uses edited[400] XOR 255, guaranteeing a real mutation while keeping the large random payload and streaming contracts. Behavioral revert proof: restore only the old literal-42 write with the controlled coordinate retained; the original unstaged-change assertion fails deterministically (exit 1). Exact fixed bytes restored, then pm test pm-vcs-staging-byte-fixture --run --progress passed 1/1 with no skips. Test typecheck and focused lint passed. Production staging code and all safety/coverage thresholds are unchanged; leaving this item open for orchestrator verification."
 files[1]{path,scope}:
   test/phase6-staging.test.ts,project
 tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   "node --test --test-name-pattern=\"native staging streams CDC\" test/phase6-staging.test.ts",project,codex-agent,"2026-10-23T07:58:47.884Z",local_mutation,feat/semantic-validation-checkpoints
+close_reason: "https://github.com/unbraind/pm-vcs/pull/144, merged 2026-10-23T11:12:38Z, merge 641d2d66d31308f0171df2c666e18dc1d27aee03: The CDC regression writes the XOR inverse at coordinate 42, guaranteeing real mutation; reverting only that expression fails the unchanged unstaged-change assertion."
 body: ""

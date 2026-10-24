@@ -2,15 +2,21 @@ id: pm-vcs-phase6tmprefs
 title: Retain legal tmp refs during GC and protect ref publication names
 description: "Confirmed in a disposable real PM tracker: refs/metadata/retained.tmp is accepted by RefStore, omitted by listing, and skipped by reachability GC; apply deletes its still-referenced payload. GC also skips valid tmp-named directories. Atomic publication uses a process-shaped tmp name that can collide with a valid ref."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags: []
 created_at: "2026-10-21T16:56:40.572Z"
-updated_at: "2026-10-22T14:48:51.695Z"
+updated_at: "2026-10-24T23:15:47.736Z"
+closed_at: "2026-10-24T21:49:34.048Z"
+completed_at: "2026-10-22T22:03:12.000Z"
 author: codex-agent
 acceptance_criteria: GC and listing retain every legal tmp-named ref and directory; corrupt tmp refs refuse deletion; atomic ref temporary files occupy only the reserved lock namespace and never overwrite a valid ref; independent behavioural revert regressions fail.
 parent: pm-vcs-b7cb
 severity: high
+repro_steps: "Confirmed in a disposable real PM tracker: refs/metadata/retained.tmp is accepted by RefStore, omitted by listing, and skipped by reachability GC; apply deletes its still-referenced payload. GC also skips valid tmp-named directories. Atomic publication uses a process-shaped tmp name that can collide with a valid ref."
+resolution: GC/listing retain legal tmp-named roots and refuse corrupt roots; atomic temporary ref publication uses only the reserved lock namespace with independent failing reverts.
+expected_result: GC and listing retain every legal tmp-named ref and directory; corrupt tmp refs refuse deletion; atomic ref temporary files occupy only the reserved lock namespace and never overwrite a valid ref; independent behavioural revert regressions fail.
+actual_result: "https://github.com/unbraind/pm-vcs/pull/138, merged 2026-10-22T22:03:12Z, merge 69164ec133ecca8f5bcb9a72d465f1830135151f: GC/listing retain legal tmp-named roots and refuse corrupt roots; atomic temporary ref publication uses only the reserved lock namespace with independent failing reverts."
 comments[9]{created_at,author,text}:
   "2026-10-21T17:19:37.543Z",codex-agent,"Verified 36/36 ref and GC tests, both directly and through pm test --run --progress. Function-only behavioral reverts independently fail: restoring writeAtomic loses the process-shaped tmp ref; restoring RefStore.list hides a legal tmp ref; restoring refRoots fails both retained-root cases and corrupt-root refusal. Native CLI acceptance also passed with only Node on PATH and a fatal Git interceptor, including tmp-branch listing and applied GC retention. No existing ref or oplog data was trimmed."
   "2026-10-21T21:15:54.583Z",codex-agent,"PR 138 unresolved thread PRRT_kwDOToJT7M6u84nm is valid: fail-closed malformed-ref refusal omits the offending path. Include the ref path while retaining pre-sweep refusal; extend regression to assert the exact error and retained garbage. No thread replies or resolutions."
@@ -55,4 +61,5 @@ tests[3]:
 docs[2]{path,scope}:
   docs/phase6-scale-receipt.md,project
   docs/scale-history-and-gc.md,project
+close_reason: "https://github.com/unbraind/pm-vcs/pull/138, merged 2026-10-22T22:03:12Z, merge 69164ec133ecca8f5bcb9a72d465f1830135151f: GC/listing retain legal tmp-named roots and refuse corrupt roots; atomic temporary ref publication uses only the reserved lock namespace with independent failing reverts."
 body: ""
