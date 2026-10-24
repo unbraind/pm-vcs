@@ -6,9 +6,9 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-10-21T21:35:13.973Z"
-updated_at: "2026-10-24T21:49:36.978Z"
+updated_at: "2026-10-24T23:15:57.271Z"
 closed_at: "2026-10-24T21:49:36.962Z"
-completed_at: "2026-10-24T21:49:36.962Z"
+completed_at: "2026-10-22T15:39:34.000Z"
 author: codex-agent
 acceptance_criteria: "Malformed tracker objects remain opaque; views never rewrite content; every semantic statement cites the original object/change.; Typed SDK and CLI with bounded TOON/JSON, typed refusals and remedies, README and example, non-git public tracker validation, targeted regressions and CI npm plus Bun release gates."
 resolution: "Read-only tracker lenses cite original native objects/changes for lifecycle, dependencies, evidence and policy; malformed objects stay opaque with compact no-git/public-copy release evidence."

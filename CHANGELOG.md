@@ -4,10 +4,10 @@
 
 ### Added
 
-- Explain native changes through tracker lifecycle dependency evidence and policy lenses ([pm-vcs-tracker-lenses](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-tracker-lenses.toon))
-- Stream ordinary large-file staging into native CDC manifests ([pm-vcs-phase6stage](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6stage.toon))
-- Retain validation checkpoints only while native semantic scope is unchanged ([pm-vcs-semantic-checkpoints](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-semantic-checkpoints.toon))
 - Export signed native history with an explicit replay capability and omission manifest ([pm-vcs-change-bundles](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-change-bundles.toon))
+- Retain validation checkpoints only while native semantic scope is unchanged ([pm-vcs-semantic-checkpoints](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-semantic-checkpoints.toon))
+- Stream ordinary large-file staging into native CDC manifests ([pm-vcs-phase6stage](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6stage.toon))
+- Explain native changes through tracker lifecycle dependency evidence and policy lenses ([pm-vcs-tracker-lenses](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-tracker-lenses.toon))
 - Annotate text lines and structured fields with native change provenance ([pm-vcs-p7annotate](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-p7annotate.toon))
 - Resolve conflicts and propagate resolutions through automatic descendant rebase ([pm-vcs-p7resolve](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-p7resolve.toon))
 - Sign changes with ed25519 and enforce trusted keys on publication ([pm-vcs-p7sign](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-p7sign.toon))
@@ -62,13 +62,12 @@
 
 ### Fixed
 
-- Investigate GC-sensitive streaming erasure retention measurement on Node 22 ([pm-vcs-1bcq](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-1bcq.toon))
-- Explain self-host refresh recovery for tracker-only PRs ([pm-vcs-tracker-selfhost](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-tracker-selfhost.toon))
+- Refresh the committed archive after the toolchain launcher update ([pm-vcs-toolchain137](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-toolchain137.toon))
+- Provision Bun before dependency refresh release checks ([pm-vcs-refresh-bun](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-refresh-bun.toon))
 - Guarantee a real byte mutation in the CDC staging regression ([pm-vcs-staging-byte-fixture](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-staging-byte-fixture.toon))
 - Keep native staging stable when working-tree children vanish ([pm-vcs-worktree-walk-race](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-worktree-walk-race.toon))
-- Provision Bun before dependency refresh release checks ([pm-vcs-refresh-bun](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-refresh-bun.toon))
-- Refresh the committed archive after the toolchain launcher update ([pm-vcs-toolchain137](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-toolchain137.toon))
 - Retain legal tmp refs during GC and protect ref publication names ([pm-vcs-phase6tmprefs](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-phase6tmprefs.toon))
+- Explain self-host refresh recovery for tracker-only PRs ([pm-vcs-tracker-selfhost](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-tracker-selfhost.toon))
 - Fail closed when repository configuration exists but cannot be read ([pm-vcs-00mb](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-00mb.toon))
 - Honor disabled HTTP Date headers when serving with native Bun ([pm-vcs-sl77](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-sl77.toon))
 - Disambiguate parent object-fetch endpoints from nested objects repositories ([pm-vcs-w3yi](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-w3yi.toon))
@@ -76,6 +75,7 @@
 - Preserve bisect reports when the culprit is a shallow boundary ([pm-vcs-bisect-shallow-report](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-bisect-shallow-report.toon))
 - Preflight status refresh mutates index before refused operations ([pm-vcs-switch-cache](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-switch-cache.toon))
 - Allow action-only Dependabot bumps through the committed self-host audit ([pm-vcs-koq1](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-koq1.toon))
+- Investigate GC-sensitive streaming erasure retention measurement on Node 22 ([pm-vcs-1bcq](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-1bcq.toon))
 - The packed-consumer acceptance test hardcodes the pinned SDK version, so every pm-cli dependency update fails CI ([pm-vcs-15ab](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-15ab.toon))
 - Make every production TypeScript script part of exact coverage and add lint and duplication gates ([pm-vcs-op2c](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-op2c.toon))
 - Make sparse view widening and narrowing descriptor-safe against ancestor replacement ([pm-vcs-74qw](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-74qw.toon))

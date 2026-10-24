@@ -6,9 +6,9 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-10-15T07:41:15.297Z"
-updated_at: "2026-10-24T21:49:37.318Z"
+updated_at: "2026-10-24T23:15:58.877Z"
 closed_at: "2026-10-24T21:49:37.299Z"
-completed_at: "2026-10-24T21:49:37.299Z"
+completed_at: "2026-10-15T15:36:29.000Z"
 author: codex-agent
 repro_steps: "PR 112 CI run 38678658274 attempt 1 on 2026-10-15 failed test/stream-erasure-legacy-fetch-repair.test.ts:85: streaming erasure does not retain a bounded 32 MiB unrelated loose-leaf corpus. Node 22.23.3 reported unrelated payloads retained 9775242 bytes at completed inventory boundary against the unchanged 8 MiB assertion. Attempt 2 passed at the same source head. Investigate GC timing; apply only a clear small deterministic fix with a behavioural revert proof, otherwise record analysis and keep the test unchanged. Original run: https://github.com/unbraind/pm-vcs/actions/runs/38678658274/attempts/1; rerun: https://github.com/unbraind/pm-vcs/actions/runs/38678658274/attempts/2."
 resolution: Synchronous array-buffer sweeping makes the unchanged 32 MiB/8 MiB measurement deterministic; repeated Node 22 tests and flag-only/held-corpus negative controls prove measurement sensitivity.

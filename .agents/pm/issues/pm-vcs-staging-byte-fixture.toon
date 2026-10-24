@@ -6,9 +6,9 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-10-23T07:58:19.503Z"
-updated_at: "2026-10-24T21:49:36.237Z"
+updated_at: "2026-10-24T23:15:53.947Z"
 closed_at: "2026-10-24T21:49:36.199Z"
-completed_at: "2026-10-24T21:49:36.199Z"
+completed_at: "2026-10-23T11:12:38.000Z"
 author: codex-agent
 acceptance_criteria: "Pin the mutation coordinate to 42 and replace it with its XOR inverse; reverting only the changed write-byte expression must fail the existing unstaged-change assertion. Production staging, safety bounds and coverage thresholds remain unchanged."
 parent: pm-vcs-phase6stage

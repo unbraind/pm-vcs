@@ -6,9 +6,9 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-10-23T06:41:48.591Z"
-updated_at: "2026-10-24T21:49:35.234Z"
+updated_at: "2026-10-24T23:15:52.077Z"
 closed_at: "2026-10-24T21:49:35.219Z"
-completed_at: "2026-10-24T21:49:35.219Z"
+completed_at: "2026-10-23T11:12:38.000Z"
 author: codex-agent
 acceptance_criteria: "Irrelevant edits retain valid evidence; relevant edits invalidate it; publication cannot substitute an old claim for the changed scope. Typed SDK and CLI, compact TOON/JSON, typed refusals with remedies, README example, non-git regression and read-only public-tracker measurements, npm and Bun CI release gates."
 resolution: "Semantic scope preserves irrelevant-edit validation while invalidating relevant changes and refusing substitution of stale claims, with compact no-git SDK/CLI and release CI."

@@ -6,9 +6,9 @@ status: closed
 priority: 2
 tags[1]: "gh:unbraind/pm-vcs#147"
 created_at: "2026-10-23T14:30:38.322Z"
-updated_at: "2026-10-24T21:49:34.265Z"
+updated_at: "2026-10-24T23:15:48.883Z"
 closed_at: "2026-10-24T21:49:34.225Z"
-completed_at: "2026-10-24T21:49:34.225Z"
+completed_at: "2026-10-23T19:48:25.000Z"
 author: codex-agent
 acceptance_criteria: Cross-scope references fail before import; Signatures bind the exact manifest; Unknown omissions prevent a completeness claim
 resolution: "Signed export binds exact manifests, refuses cross-scope replay and records explicit omission/completeness limits."
