@@ -2,13 +2,18 @@ id: pm-vcs-tracker-lenses
 title: Explain native changes through tracker lifecycle dependency evidence and policy lenses
 description: Opt-in read-only projections over immutable native VCS changes alongside ordinary field and text provenance. Core history retains ownership of tracker records.
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-21T21:35:13.973Z"
-updated_at: "2026-10-22T13:26:43.132Z"
+updated_at: "2026-10-24T21:49:36.978Z"
+closed_at: "2026-10-24T21:49:36.962Z"
+completed_at: "2026-10-24T21:49:36.962Z"
 author: codex-agent
 acceptance_criteria: "Malformed tracker objects remain opaque; views never rewrite content; every semantic statement cites the original object/change.; Typed SDK and CLI with bounded TOON/JSON, typed refusals and remedies, README and example, non-git public tracker validation, targeted regressions and CI npm plus Bun release gates."
+resolution: "Read-only tracker lenses cite original native objects/changes for lifecycle, dependencies, evidence and policy; malformed objects stay opaque with compact no-git/public-copy release evidence."
+expected_result: "Malformed tracker objects remain opaque; views never rewrite content; every semantic statement cites the original object/change.; Typed SDK and CLI with bounded TOON/JSON, typed refusals and remedies, README and example, non-git public tracker validation, targeted regressions and CI npm plus Bun release gates."
+actual_result: "https://github.com/unbraind/pm-vcs/pull/140, merged 2026-10-22T15:39:34Z, merge e3f91077537581094f2bf5be536af2e44dc05c04: Read-only tracker lenses cite original native objects/changes for lifecycle, dependencies, evidence and policy; malformed objects stay opaque with compact no-git/public-copy release evidence."
 comments[22]{created_at,author,text}:
   "2026-10-21T21:35:19.901Z",codex-agent,"Overlap check against current CLI 2026.10.21 and package main 27e1d84: core history owns tracker event streams and lifecycle mutations; pm-context assembles present context, pm-graph projects graph queries, pm-memory owns memory workflows, pm-changelog produces release notes. None explains one immutable native change as tracker field deltas. Reuse annotatePath/changeProvenance, native conflict IDs, signature policy and bisect rather than duplicating them. New query compares selected change to first parent, never invokes Git or writes content. Open reconciliation PR items are excluded from this work. Dependencies remain pinned."
   "2026-10-21T21:44:03.043Z",codex-agent,"Implemented explainChange SDK and vcs explain with opt-in labels, first-parent semantics, exact immutable commit/object/path citations, scalar/digest summaries and explicit pagination. Canonical SDK parsing plus typed collection coordinates prevent malformed tracker interpretations. Unresolved fields retain ordinary provenance; native conflict metadata is reused. No Git subprocess or mutable tracker read on the query path. Targeted SDK, CLI harness, installed TOON/JSON, malformed, shallow, conflict, deletion and byte-preservation checks are passing. CI now runs the unchanged npm and Bun release:check gates for both Node matrix versions; local full suites remain delegated to CI because host CPU is saturated."
@@ -49,4 +54,5 @@ tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
 docs[2]{path,scope}:
   docs/tracker-lenses.md,project
   README.md,project
+close_reason: "https://github.com/unbraind/pm-vcs/pull/140, merged 2026-10-22T15:39:34Z, merge e3f91077537581094f2bf5be536af2e44dc05c04: Read-only tracker lenses cite original native objects/changes for lifecycle, dependencies, evidence and policy; malformed objects stay opaque with compact no-git/public-copy release evidence."
 body: ""

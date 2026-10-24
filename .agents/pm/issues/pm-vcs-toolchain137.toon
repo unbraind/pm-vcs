@@ -2,12 +2,18 @@ id: pm-vcs-toolchain137
 title: Refresh the committed archive after the toolchain launcher update
 description: The pm-toolchain dependency PR includes a tracked launcher template change without its corresponding archive refresh. Regenerate the self-host bundle and preserve the real operational audit assertions.
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags[1]: "gh:unbraind/pm-vcs#137"
 created_at: "2026-10-23T14:51:56.343Z"
-updated_at: "2026-10-23T16:46:36.828Z"
+updated_at: "2026-10-24T21:49:34.686Z"
+closed_at: "2026-10-24T21:49:34.674Z"
+completed_at: "2026-10-24T21:49:34.674Z"
 author: codex-agent
+repro_steps: The pm-toolchain dependency PR includes a tracked launcher template change without its corresponding archive refresh. Regenerate the self-host bundle and preserve the real operational audit assertions.
+resolution: Regenerates the committed self-host archive after the canonical toolchain launcher update and verifies combined-head operational and self-host gates.
+expected_result: The pm-toolchain dependency PR includes a tracked launcher template change without its corresponding archive refresh. Regenerate the self-host bundle and preserve the real operational audit assertions.
+actual_result: "https://github.com/unbraind/pm-vcs/pull/137, merged 2026-10-23T17:31:49Z, merge 6a4fc2420f6ec2341a49509c93072bee266dd583: Regenerates the committed self-host archive after the canonical toolchain launcher update and verifies combined-head operational and self-host gates."
 comments[4]{created_at,author,text}:
   "2026-10-23T14:52:34.772Z",codex-agent,"Reproduced the exact operational entry-point failure on the Dependabot head: the committed launcher hash differs from the archive hash. The launcher was already changed in commit 259703b without an archive refresh. This is a stale consumer snapshot, not a pm-ops, pm-cli, or pm-changelog regression. Regenerate the archive; preserve source and every assertion. Auto-merge disabled to retain the requested review boundary."
   "2026-10-23T14:56:40.822Z",codex-agent,"After regenerating the archive, the unchanged operational entry-point regression passes: 1 test, 0 failures/skips. The original archive fails with the committed launcher hash mismatch, establishing the behavioral revert proof. Regenerated changelog is unchanged because this tracking item remains in progress. Full npm/Bun gates and exact-head CI are next."
@@ -28,4 +34,5 @@ docs[3]{path,scope}:
   docs/served-forge.md,project
   "https://github.com/unbraind/pm-vcs/actions/runs/39959992473",project
   "https://github.com/unbraind/pm-vcs/pull/137",project
+close_reason: "https://github.com/unbraind/pm-vcs/pull/137, merged 2026-10-23T17:31:49Z, merge 6a4fc2420f6ec2341a49509c93072bee266dd583: Regenerates the committed self-host archive after the canonical toolchain launcher update and verifies combined-head operational and self-host gates."
 body: ""

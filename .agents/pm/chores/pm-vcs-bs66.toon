@@ -1,0 +1,25 @@
+id: pm-vcs-bs66
+title: Close delivered pm items and reserve in progress for active work (2026-10-24)
+description: "Review every in-progress and open record against merged delivery and current PR evidence. Preserve uncertain work as open, release stale claims, and submit the tracker changes for review."
+type: Chore
+status: open
+priority: 2
+tags[2]: maintenance,tracker-hygiene
+created_at: "2026-10-24T21:41:35.086Z"
+updated_at: "2026-10-24T21:50:16.807Z"
+author: codex-agent
+estimated_minutes: 60
+acceptance_criteria: "Every original in-progress and open item is inspected; delivery closures name the implementing merged PR, date and merge SHA and match the recorded acceptance; inactive work is open with claims released; original history records remain append-only; tracker health, changelog and PR CI outcomes are recorded."
+risk: low
+confidence: high
+comments[3]{created_at,author,text}:
+  "2026-10-24T21:41:35.371Z",codex-agent,"Oriented context, searched existing hygiene work, and read the complete tracker. Checking every original in-progress and open item against PR title/body/commits, delivery links and acceptance. The owner authorizes evidence-backed closure in this sweep. Ambiguous claims remain open; no PR merge or history rewrite."
+  "2026-10-24T21:49:37.405Z",codex-agent,"Reviewed 23 original active items. 11 verified deliveries closed and 2 inactive items returned to open. Every other original open item remains open because complete delivery or explicit supersession was not established. No cancellation by inference, software change, threshold reduction, or history rewrite. Per-item evidence is recorded in closure reasons and the PR table. Tracker, changelog and CI verification follow."
+  "2026-10-24T21:50:16.807Z",codex-agent,"Local tracker verification passed: repository changelog generation and consistency check, pinned strict health with required merge drivers under isolated Git identity, changed-item history verification, independent original-history prefix checks and linked git diff --check. All original inactive work and this audit have released claims; no in-progress item remains. No production function changed, so source-function revert proof is inapplicable; per-item merged ancestry and lifecycle/history checks are the evidence. The PR will carry the full before/after/evidence table. Complete npm/Bun release checks and native platform checks run in PR CI; their final outcome is reported separately, without treating queued or skipped checks as approval."
+files[1]{path,scope,note}:
+  .agents/pm,project,Tracker lifecycle and append-only evidence
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  git diff --check,project,codex-agent,"2026-10-24T21:49:37.467Z",local_mutation,chore/pm-in-progress-sweep
+docs[1]{path,scope,note}:
+  CHANGELOG.md,project,Regenerated package release notes
+body: ""
