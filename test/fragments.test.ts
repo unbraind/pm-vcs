@@ -591,11 +591,13 @@ test("decodeManifest rejects a missing total header", () => {
 });
 
 test("decodeManifest rejects a wrong format marker", () => {
-  const payload = Buffer.from(`pm-vcs-manifest 2\ntotal 0\n`, "utf8");
-  assert.throws(
-    () => decodeManifest(payload),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object",
-  );
+  for (const version of [2, 99]) {
+    const payload = Buffer.from(`pm-vcs-manifest ${version}\ntotal 0\n`, "utf8");
+    assert.throws(
+      () => decodeManifest(payload),
+      (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object",
+    );
+  }
 });
 
 test("decodeManifest rejects a fragment line with the wrong field count", () => {

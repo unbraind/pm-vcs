@@ -148,6 +148,7 @@ test("streams retain an opened representation across repack and stop between buf
   const f = await fixture(); f.repo.objects.compact();
   const lines = f.repo.objects.readLines(f.live,"blob"); assert.equal(lines.next().value,"line-a");
   transition(f,"repack"); assert.deepEqual([...lines],["line-b"]);
+  const pinned = f.repo.objects.resolveLocation(f.live)!;
   const deniedLines = f.repo.objects.readLines(f.live,"blob"); assert.equal(deniedLines.next().value,"line-a");
   writeFileSync(join(f.repo.root,"stream-live"),payload); f.repo.stage(["stream-live"]);
   const record = f.repo.objects.recordDenials.bind(f.repo.objects); let pendingChecks = 0;
@@ -157,6 +158,7 @@ test("streams retain an opened representation across repack and stop between buf
   };
   f.repo.obliterate("stream-live","erase-fixture","fixture-stream-cleanup",new Date(2));
   assert.equal(pendingChecks,readers.length);
+  assert.throws(() => [...objectPayloadChunks(pinned,f.live,"blob")],{code:"object_obliterated"});
   assert.throws(() => deniedLines.next(),{code:"object_obliterated"});
   for (const reader of readers) verify(reader,f,f.live,true);
 });
@@ -228,6 +230,8 @@ test("inventory retries catalog errors after transitions and deduplicates a reti
 
 test("a pinned packed member refuses truncation without returning neighboring or unverified bytes", async () => {
   const f = await fixture(); const store = f.repo.objects; store.compact();
+  const pack = store.inventory().find((entry) => entry.id === f.live)!.path;
+  assert.deepEqual(Buffer.concat([...objectPayloadChunks(pack,f.live,"blob")]),payload);
   const location = store.resolveLocation(f.live)!; const length = location.length; closeSync(location.fd);
   const read = fs.readSync;
   mock.method(fs,"readSync",(fd: number, buffer: Buffer, offset: number, size: number, position: number) => { if (size === length) return 0; return read(fd,buffer,offset,size,position); }); syncBuiltinESMExports();

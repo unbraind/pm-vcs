@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-25T04:18:07.450Z"
+updated_at: "2026-10-25T04:26:21.810Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[15]{created_at,author,text}:
+comments[16]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -28,7 +28,8 @@ comments[15]{created_at,author,text}:
   "2026-10-25T04:01:53.563Z",codex-agent,"Additional revert proof: removed only the pre-decode recognized-temporary skip from ObjectStore.looseLocations and ran node --test --test-name-pattern='zero-byte and truncated' test/packs.test.ts. It failed 0/1 with corrupt_object; restoring the skip passed 1/1. Pinned descriptor ownership also fixes a worker double-close discovered by the existing feature-edge tests (23/23 passing). Typecheck, test compilation, lint, duplication and docstring gates pass at unchanged thresholds. The linked reader/durability command ran via pm test --run --only-last --progress and passed 10/10; result recording is disabled by project policy, so aggregate evidence is recorded here without changing policy. New targeted tests additionally cover corrupted/changing generation metadata, exhausted inventory retries, stable native I/O errors, retired inventory deduplication, descriptor truncation, and denial checks while physical bytes still exist."
   "2026-10-25T04:09:01.030Z",codex-agent,"Follow-up validation found and fixed two class-adjacent issues before final acceptance. Existing strace one-open assertions caught eager hydration reopening present objects; read, bounded reads, streams and default state now resolve once and hydrate only stable absence. Existing byte budgets remain unchanged and traces now include positioned pread64 reads. Six bounded-I/O cases pass, including a 128 MiB leaf corpus read once with bounded retained buffers; the upload-ordering case separately passes with explicit fail-closed logical-probe evidence when denial metadata is corrupt. Windows CI run 40160452176 exposed metadata fsync on a read-only handle (EPERM); writeAtomicJson now opens its flush handle writable. A portable real-filesystem Windows handle-contract regression passes. Reverting only that open mode fails 0/1 with EPERM and restoration passes 1/1. Reintroducing only eager hydration in read fails the existing shared-import one-open regression 0/1; restoration passes 1/1. Final benchmark after the one-open fix: 343 loose files / 1,357,188 compressed bytes / 2,187,264 allocated versus 1 pack / 1,262,537 compressed / 1,265,664 allocated; median/p95 ms 0.185120/0.636548 loose and 0.277932/1.413965 packed; 301 samples each, 686 verified comparisons, 0 live GC removals."
   "2026-10-25T04:18:05.989Z",codex-agent,"Complete exported-reader audit now includes SharedObjectStore's four overrides: 25 logical entry points total. The PM-linked reader/durability target passes 14/14 with 6,750 live/erased checks (25 readers x 135 writer boundaries x 2) and 700 resolver schedules (25 x 4 transitions x 7 boundaries), plus denied checks. Shared chunk streams retain missing_fragment remedies; reverting only that override fails the focused regression 0/1 and restoring it passes 1/1. Busy state inspection now propagates object_store_changing after exactly 8 attempts rather than falsely reporting corruption; reverting only this guard fails 0/1. Recognized loose temporary stream paths now resolve store authorization before decoding; reverting only this native-path recognition fails 0/1 by allowing a denied temporary payload. Both restored focused checks pass 2/2. Presence/type probes, pack backend error passthrough and inventory native errors are explicitly covered. Windows shipped-CLI GC passes on Node 22 and 26 in CI run 40160870184; npm/Bun full release gates are still running."
-files[19]{path,scope}:
+  "2026-10-25T04:26:18.584Z",codex-agent,"CI-driven final regression closure: central durability calls now preserve native filesystem hooks, so existing worktree race tests can inject real leaf replacement and directory-pruning races. The unchanged node --test test/worktree-races.test.ts suite passes 266/266 across four capability configurations. Reverting only unlink/rmdir dispatch in the durability helper to captured native functions fails the 12 focused competing-transition cases; restoring dynamic native dispatch passes all 12. Stream tests now cover a direct indexed-pack path and a descriptor denied before iteration, and remove obsolete worker-path ENOENT translation because workers read pinned descriptors. Targeted stream coverage is 100% in statements/branches/functions/lines with 10/10 cases. The manifest negative-marker test also includes unsupported version 99, preserving the format-corruption refusal branch. Full-gate thresholds and source inventory remain unchanged (84 production files)."
+files[21]{path,scope}:
   .github/workflows/ci.yml,project
   engine/durability.ts,project
   engine/erasure.ts,project
@@ -42,18 +43,21 @@ files[19]{path,scope}:
   index.ts,project
   scripts/pack-benchmark.ts,project
   test/durability.test.ts,project
+  test/fragments.test.ts,project
   test/helpers/pack-worker.ts,project
   test/object-read-protocol.test.ts,project
   test/packs.test.ts,project
   test/raw-coverage.test.ts,project
   test/vcs-commands.test.ts,project
+  test/worktree-races.test.ts,project
   vcs-commands.ts,project
-tests[5]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[6]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts,project,600,codex-agent,"2026-10-25T00:50:11.882Z",local_mutation,feat/indexed-pack-storage
   node --test --test-name-pattern=agent.compaction test/packs.test.ts,project,60,codex-agent,"2026-10-25T00:53:18.003Z",local_mutation,feat/indexed-pack-storage
   node --test --test-name-pattern=maintenance.rejects test/packs.test.ts,project,60,codex-agent,"2026-10-25T00:59:26.949Z",local_mutation,feat/indexed-pack-storage
   node_modules/.bin/c8 --include=engine/packs.ts --include=scripts/pack-benchmark.ts --100 --per-file --reports-dir=coverage/packs-targeted node --test test/packs.test.ts,project,600,codex-agent,"2026-10-25T01:22:43.589Z",local_mutation,feat/indexed-pack-storage
   node --test test/object-read-protocol.test.ts test/durability.test.ts,project,600,codex-agent,"2026-10-25T03:57:50.813Z",local_mutation,feat/indexed-pack-storage
+  "node --test --test-name-pattern=\"unlink refuses a concurrent leaf directory|pruning refuses content added|pruning refuses a directory recreated\" test/worktree-races.test.ts",project,120,codex-agent,"2026-10-25T04:26:21.623Z",local_mutation,feat/indexed-pack-storage
 docs[4]{path,scope}:
   docs/indexed-pack-benchmark.json,project
   docs/indexed-packs.md,project

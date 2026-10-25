@@ -110,7 +110,7 @@ Only explicit internal erasure inspection can access denied physical bytes, and
 it requires the owning writer lease. Recognized loose write temporaries are
 skipped before decoding during compaction, including empty and truncated files.
 
-`engine/durability.ts` owns every file flush and namespace mutation. On POSIX it
+`engine/durability.ts` owns every file flush and durable rename, link and removal. On POSIX it
 flushes files before publication and synchronizes affected directories after
 namespace changes. Node does not support directory fsync on Windows: that policy
 keeps file fsync before atomic publication and uses acknowledgment of synchronous

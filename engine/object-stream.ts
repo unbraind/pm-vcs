@@ -34,7 +34,6 @@ export function* objectPayloadChunks(path: string | ObjectLocation, id: ObjectId
       const chunk = Buffer.from(slot.subarray(0, Atomics.load(state, 1)));
       if (status === 3) {
         const fault = JSON.parse(chunk.toString()) as { code: string; message: string };
-        if (fault.code === "ENOENT") throw new ObjectStoreError("object_not_found", `No object ${id} in the store.`);
         if (fault.code.startsWith("Z_")) throw new ObjectStoreError("corrupt_object", "Object could not be decompressed.");
         throw Object.assign(new Error(fault.message), { code: fault.code });
       }
