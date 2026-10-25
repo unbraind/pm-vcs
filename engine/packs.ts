@@ -1,6 +1,6 @@
 /** Immutable indexed packs: independently compressed frames keep their uncompressed addresses. */
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { deflateSync, inflateSync } from "node:zlib";
 import { ObjectStoreError } from "./object-error.ts";
@@ -68,7 +68,7 @@ export class PackStorage {
     const result: string[] = [];
     for (const entry of readdirSync(this.directory, { withFileTypes: true })) {
       if (entry.isFile() && /^[0-9a-f]{64}\.pack$/.test(entry.name)) result.push(join(this.directory, entry.name));
-      else skipped.push({ name: entry.name, reason: "foreign or unpublished storage; left untouched" });
+      else skipped.push({ name: `packs/${entry.name}`, reason: "foreign or unpublished storage; left untouched" });
     }
     return result.sort();
   }
@@ -164,9 +164,7 @@ export class PackStorage {
       const path = join(this.directory, entry.name);
       const marker = join(path, "owner");
       if (!lstatSync(marker, { throwIfNoEntry: false })?.isFile() || readFileSync(marker, "utf8") !== `pm-vcs-pack-1 ${entry.name}\n`) continue;
-      const children = readdirSync(path, { withFileTypes: true });
-      if (children.some((child) => !child.isFile() || !["owner", "payload"].includes(child.name))) continue;
-      rmSync(path, { recursive: true }); syncDirectory(this.directory); packBoundary.visit("recovered");
+      this.cleanupJob(path); packBoundary.visit("recovered");
     }
   }
 
@@ -201,7 +199,7 @@ export class PackStorage {
         const job = this.publish(bytes, destination, store);
         // The verified immutable destination is now the authority; interruptions merely leave duplicate sources.
         for (const item of batch) { looseBytes += lstatSync(item.path).size; unlinkSync(item.path); syncDirectory(join(store.storageRoot(), item.id.slice(0, 2))); objects++; packBoundary.visit("retired"); }
-        rmSync(job, { recursive: true }); syncDirectory(this.directory); packBoundary.visit("cleaned");
+        this.cleanupJob(job); packBoundary.visit("cleaned");
         batch = []; size = 0;
       };
       for (const item of store.walkLooseInventory(skipped)) {
@@ -212,7 +210,10 @@ export class PackStorage {
         batch.push(item); size += cost;
       }
       flush();
-      const after = this.files();
+      const late: { name: string; reason: string }[] = [];
+      const after = this.files(late);
+      const known = new Set(skipped.map((entry) => entry.name));
+      for (const entry of late) if (!known.has(entry.name)) { skipped.push(entry); known.add(entry.name); }
       return { objects, packs: after.length - before.length, looseBytes, packBytes: after.filter((path) => !before.includes(path)).reduce((sum, path) => sum + lstatSync(path).size, 0), skippedCount: skipped.length, omittedSkipped: Math.max(0, skipped.length - 20), skipped: skipped.slice(0, 20) };
     });
   }
@@ -229,6 +230,19 @@ export class PackStorage {
     }
     syncDirectory(this.directory); syncDirectory(join(destination, "..")); packBoundary.visit("published");
     return job;
+  }
+
+  /** Retire only package-owned regular staging leaves; foreign children keep their directory and are reported by files(). */
+  private cleanupJob(job: string): void {
+    // Payload goes first: a crash after marker retirement must never leave unmarked owned bytes.
+    for (const name of ["payload", "owner"]) {
+      const path = join(job, name);
+      if (lstatSync(path, { throwIfNoEntry: false })?.isFile() === true) { unlinkSync(path); syncDirectory(job); packBoundary.visit(`staging-${name}-retired`); }
+    }
+    try { rmdirSync(job); packBoundary.visit("staging-job-retired"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error;
+    }
+    syncDirectory(this.directory);
   }
 
   /** Reject aliases before recovery can touch a store protected by a different lexical lease path. */
@@ -255,7 +269,7 @@ export class PackStorage {
         const destination = join(directory, item.id.slice(2));
         if (!existsSync(destination)) {
           const job = this.publish(deflateSync(frameObject(item.object.type, item.object.payload)), destination, store);
-          rmSync(job, { recursive: true }); syncDirectory(this.directory); packBoundary.visit("cleaned");
+          this.cleanupJob(job); packBoundary.visit("cleaned");
         } else store.readInventoryObject(item.id, destination);
         syncDirectory(directory); packBoundary.visit("unpacked");
       }

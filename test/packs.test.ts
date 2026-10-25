@@ -358,3 +358,48 @@ test("maintenance rejects aliased roots before recovery can delete a different l
   }
   const empty = new ObjectStore(join(repo.root, "empty/objects")); assert.equal(empty.compact().objects, 0);
 });
+
+
+test("cleanup preserves foreign additions at every staging boundary and reports them without retaining owned bytes", async () => {
+  for (const boundary of ["owner", "staged", "published", "retired", "staging-payload-retired", "staging-owner-retired"]) {
+    const repo = await fresh(); const entries = corpus(repo, 2); let note: string | undefined;
+    packBoundary.visit = (step) => {
+      if (step !== boundary || note !== undefined) return;
+      const directory = join(repo.controlDirectory, "objects/packs");
+      const name = readdirSync(directory).find((entry) => entry.startsWith("job-"))!;
+      note = join(directory, name, "foreign.txt"); writeFileSync(note, "foreign record remains owned by its writer");
+    };
+    const result = repo.objects.compact(); packBoundary.visit = () => {};
+    assert.ok(note); assert.equal(readFileSync(note, "utf8"), "foreign record remains owned by its writer");
+    assert.equal(result.skippedCount, 1); assert.match(result.skipped[0].name, /^packs\/job-/);
+    assert.equal(fs.existsSync(join(dirname(note), "payload")), false); assert.equal(fs.existsSync(join(dirname(note), "owner")), false);
+    equalReads(repo, entries);
+  }
+});
+
+test("authorized erasure retires owned interrupted staging payloads even beside foreign records", async () => {
+  const repo = await fresh(); writeFileSync(join(repo.root, "asset"), "selected-staging-payload-749681235-long-enough"); repo.stage(["asset"]);
+  const selected = repo.readIndex()[0].id; repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+  let directory: string | undefined;
+  packBoundary.visit = (step) => {
+    if (step !== "staged") return;
+    const packs = join(repo.controlDirectory, "objects/packs"); const name = readdirSync(packs).find((entry) => entry.startsWith("job-"))!;
+    directory = join(packs, name); writeFileSync(join(directory, "foreign.txt"), "preserve unrelated writer notes");
+    throw new Error("interrupted owned staging");
+  };
+  assert.throws(() => repo.objects.compact(), /interrupted owned staging/); packBoundary.visit = () => {}; assert.ok(directory);
+  repo.obliterate("asset", "erase-fixture", "fixture-cleanup", new Date(1));
+  assert.equal(fs.existsSync(join(directory, "payload")), false); assert.equal(fs.existsSync(join(directory, "owner")), false);
+  assert.equal(readFileSync(join(directory, "foreign.txt"), "utf8"), "preserve unrelated writer notes");
+  assert.throws(() => repo.objects.read(selected), { code: "object_obliterated" });
+});
+
+test("cleanup preserves operational directory errors and retry keeps verified published reads", async () => {
+  const repo = await fresh(); const entries = corpus(repo, 2); const remove = fs.rmdirSync;
+  mock.method(fs, "rmdirSync", (...args: Parameters<typeof fs.rmdirSync>) => {
+    if (String(args[0]).includes("job-")) throw Object.assign(new Error("directory unavailable"), { code: "EACCES" });
+    return remove(...args);
+  }); syncBuiltinESMExports();
+  assert.throws(() => repo.objects.compact(), { code: "EACCES" }); mock.restoreAll(); syncBuiltinESMExports();
+  equalReads(repo, entries); repo.objects.compact(); equalReads(repo, entries);
+});

@@ -46,8 +46,11 @@ also exported by the SDK.
 Publication writes a unique staging directory and durable ownership marker,
 fsyncs the payload, exclusively links the complete immutable pack, and fsyncs the
 parent before removing any source. Retry verifies published packs, retires their
-duplicate loose copies and removes only staging jobs with matching ownership
-markers and known regular children. Unknown files, links and jobs are left alone
+duplicate loose copies and retires only regular `payload` and `owner` leaves of staging jobs with
+matching ownership markers. It removes the directory only when empty; foreign
+children survive and receive skip reasons, including records arriving during
+publication. Payload retirement precedes marker retirement, so interruption
+cannot leave unmarked owned bytes. Unknown files, links and jobs are left alone
 and reported as foreign. Empty interrupted directories have no payload and may
 remain as reported foreign entries. No job is a retention root: all staged bytes
 also exist in an authoritative loose object or published pack.
