@@ -97,6 +97,11 @@ test("owned opens close on native metadata/read faults and cannot close a reused
   const f = await fixture(); t.after(() => f.dir.cleanup());
   const path = join(f.store.storageRoot(),f.id.slice(0,2),f.id.slice(2));
   const file = objectFiles.open(path,"r"); file.close(); const next = objectFiles.open(path,"r"); file.close(); assert.ok(readFileSync(next.fd).length > 0); next.close();
+  const baseline = descriptors();
+  mock.method(fs,"readSync",() => 0); syncBuiltinESMExports();
+  try { assert.throws(() => [...f.store.readChunks(f.id,"blob")],{code:"corrupt_object"}); }
+  finally { mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.equal(descriptors(),baseline); assert.equal(objectFiles.active.size,0);
   for (const packed of [false,true]) {
     if (packed) f.store.compact();
     for (const method of ["fstatSync","readSync"] as const) {
