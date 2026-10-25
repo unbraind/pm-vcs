@@ -8,13 +8,13 @@ import { afterEach, mock, test } from "node:test";
 import { deflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
-import { frameObject } from "../engine/objects.ts";
-import { ErasureStorageRefusal, erasureScanLimits, erasureScanBoundary, fingerprint, matchesFingerprints, readFingerprints, scanErasureStorage } from "../engine/erasure-scan.ts";
+import { frameObject, OBJECT_TYPES } from "../engine/objects.ts";
+import { ErasureStorageRefusal, erasureScanLimits, erasureScanBoundary, fingerprint, fingerprintJournal, matchesFingerprints, type ErasureFingerprint, readFingerprints, scanErasureStorage } from "../engine/erasure-scan.ts";
 import { objectFiles } from "../engine/object-files.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 const temporary: ReturnType<typeof makeTempDir>[] = [];
-afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); erasureScanBoundary.visit = () => {}; erasureScanLimits.minimum=16*1024*1024; erasureScanLimits.ratio=1032*6; objectFiles.opened=()=>{}; for (const dir of temporary.splice(0)) dir.cleanup(); });
+afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); erasureScanBoundary.visit = () => {}; erasureScanLimits.minimum=16*1024*1024; erasureScanLimits.ratio=1032*6; erasureScanLimits.depth=6; erasureScanLimits.streams=32; erasureScanLimits.contexts=512; erasureScanLimits.wordBytes=16*1024*1024; objectFiles.opened=()=>{}; for (const dir of temporary.splice(0)) dir.cleanup(); });
 let random = 314159;
 /** Deterministic randomized corpus is reproducible in Node and Bun release gates. */
 function number(): number { random = (Math.imul(random,1664525)+1013904223) >>> 0; return random; }
@@ -43,7 +43,7 @@ test("copied foreign backup.pack blocks erasure without deleting the foreign cop
 test("random stores succeed iff no retained raw, encoded, copied, renamed or partial payload remains", async (t) => {
   let cases=0;
   const paths=["backup.pack","packs/copy.bin","aa/renamed.data","temporary/job/partial.tmp","packs/foreign/deep/member","other/cache/record"];
-  for (let encoding=0;encoding<12;encoding++) for (const path of paths) for (const retained of [false,true]) {
+  for (let encoding=0;encoding<14;encoding++) for (const path of paths) for (const retained of [false,true]) {
     const f=await fixture(); const frame=frameObject("blob",f.bytes); const root=f.repo.objects.storageRoot();
     let encoded:Buffer;
     if (encoding===0) encoded=f.bytes;
@@ -56,6 +56,7 @@ test("random stores succeed iff no retained raw, encoded, copied, renamed or par
       if(encoding===9) encoded[encoded.length-1]^=1;
       if(encoding===10) encoded=slice.subarray(2,-4);
       if(encoding===11) encoded=deflateSync(frame,{level:1}).subarray(2,-4);
+      if(encoding>=12) encoded=deflateSync(frameObject(encoding===12?"record":"link",f.bytes),{level:9}).subarray(2,-4);
     }
     if(!retained) encoded=Buffer.from(`unrelated-${number()}-clean-storage`);
     const offset=cases%3===0?65_520:number()%129;
@@ -67,7 +68,7 @@ test("random stores succeed iff no retained raw, encoded, copied, renamed or par
     if(retained) { rmSync(foreign); f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)); }
     cases++;
   }
-  assert.equal(cases,144); t.diagnostic("144 randomized non-git stores: 12 encodings x 6 locations x retained/clean; random offsets include scanner chunk crossings");
+  assert.equal(cases,168); t.diagnostic("168 randomized non-git stores: 14 encodings x 6 locations x retained/clean; random offsets include scanner chunk crossings");
 });
 
 test("a post-deletion foreign copy leaves denial pending and persisted fingerprints detect it on every retry", async () => {
@@ -91,7 +92,7 @@ test("SIGKILL at EVERY erasure proof, scan and publication boundary converges wi
     assert.equal(child.signal,"SIGKILL",`${ordinal}/${steps[ordinal-1]}: ${child.stderr}`);
     f.repo.objects.recoverWriterLock(); const receipt=f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));
     assert.equal(f.repo.objects.denials()[0].pending,false); assert.equal(f.repo.operations.read().filter((entry)=>entry.command==="obliterate").length,1);
-    assert.equal(Object.keys(JSON.parse(readFileSync(join(f.repo.controlDirectory,"erasure-verification.json"),"utf8"))).length,1);
+    assert.equal(Object.keys(JSON.parse(readFileSync(join(f.repo.controlDirectory,"erasure-verification.json"),"utf8")).records).length,1);
     assert.equal(receipt.fileId,f.fileId);
   }
   t.diagnostic(`${steps.length} SIGKILL boundaries: ${[...new Set(steps)].join(", ")}`);
@@ -100,8 +101,11 @@ test("SIGKILL at EVERY erasure proof, scan and publication boundary converges wi
 test("fingerprint windows, proof validation, foreign classes and native scanner faults fail safely", async()=>{
   const f=await fixture(); const a=Buffer.from("matching-window"), b=Buffer.from("window"); const patterns=[fingerprint(a),fingerprint(b),fingerprint(a)];
   assert.ok(matchesFingerprints(Buffer.from("padding-matching-window-suffix"),patterns)); assert.equal(matchesFingerprints(Buffer.from("clean"),patterns),false); assert.equal(matchesFingerprints(Buffer.from("clean"),[]),false);
-  for(const value of [null,[],{bad:[]},{[f.id]:[null]},{[f.id]:[{length:0,rolling:0,digest:f.id}]},{[f.id]:[{length:2,rolling:-1,digest:f.id}]},{[f.id]:[{length:2,rolling:0,digest:"bad"}]}]) assert.throws(()=>readFingerprints(value),{code:"unsupported_erasure_storage"});
-  assert.deepEqual(readFingerprints({}),{});
+  for(const value of [null,[],{bad:[]},{[f.id]:[null]},{[f.id]:[{length:0,rolling:0,digest:f.id}]},{[f.id]:[{length:2,rolling:-1,digest:f.id}]},{[f.id]:[{length:2,rolling:0,digest:"bad"}]}]) {
+    const journal = value===null||Array.isArray(value)?value:fingerprintJournal(value as Record<string,ErasureFingerprint[]>);
+    assert.throws(()=>readFingerprints(journal),{code:"unsupported_erasure_storage"});
+  }
+  assert.deepEqual(readFingerprints(fingerprintJournal({})),{});
   for(const value of [Buffer.from([255]),Buffer.from("four")]) {const proof=fingerprint(value);assert.equal(proof.rolling,0);assert.ok(matchesFingerprints(Buffer.concat([Buffer.from("prefix"),value,Buffer.from("suffix")]),[proof]));}
   const root=join(f.dir.root,"scan"); place(root,"temporary/clean.tmp",Buffer.from("clean"));
   const report=scanErasureStorage(root,patterns); assert.equal(report.foreign,1); assert.equal(report.classes["temporary-storage"],1);
@@ -125,9 +129,6 @@ test("scanner covers every regular class and refuses unreadable, aliased, changi
   writeFileSync(plain,deflateSync(Buffer.alloc(60_000,105)));assert.equal(scanErasureStorage(root,patterns).files,6);
   erasureScanLimits.minimum=0; erasureScanLimits.ratio=0;
   assert.throws(()=>scanErasureStorage(root,patterns),{code:"unsupported_erasure_storage"});erasureScanLimits.minimum=16*1024*1024;erasureScanLimits.ratio=1032*6;
-  const read=fs.readSync;
-  mock.method(fs,"readSync",(fd:number,buffer:Buffer,offset:number,size:number,position:number)=>buffer.length===64?0:read(fd,buffer,offset,size,position));syncBuiltinESMExports();
-  assert.throws(()=>scanErasureStorage(root,patterns),{code:"unsupported_erasure_storage"});mock.restoreAll();syncBuiltinESMExports();
   const target=place(f.dir.root,"not-a-directory",Buffer.from("outside"));assert.throws(()=>scanErasureStorage(target,patterns),{code:"unsupported_erasure_storage"});
   fs.symlinkSync(target,join(root,"alias"));assert.throws(()=>scanErasureStorage(root,patterns),{code:"unsupported_erasure_storage"});rmSync(join(root,"alias"));
   const stat=fs.fstatSync;
@@ -225,4 +226,88 @@ test("physical proof includes dormant object directories in every registered ins
   assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(2)),{code:"erasure_retained_copy"});assert.equal(f.repo.objects.denials().length,0);
   writeFileSync(ghost,"harmless foreign instance cache");place(local,"packs/"+"f".repeat(64)+".pack",Buffer.from("harmless inactive native-looking record"));const receipt=f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(2));
   assert.ok(receipt.storage.foreign>=2);assert.equal(readFileSync(ghost,"utf8"),"harmless foreign instance cache");assert.equal(existsSync(join(instance.root,"asset")),false);
+});
+
+
+test("type-independent erasure catches retyped native bodies with stripped wrappers",async()=>{
+  const selected=Buffer.from("selected-type-independent-private-marker-389162".repeat(64));const f=await fixture(selected);
+  const encoded=deflateSync(frameObject("record",selected),{level:9}).subarray(2,-4);assert.equal(encoded.includes(selected),false);
+  const path=place(f.repo.objects.storageRoot(),"packs/foreign-copy",encoded);
+  assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),{code:"erasure_retained_copy"});assert.equal(f.repo.objects.denials().length,0);assert.deepEqual(readFileSync(path),encoded);
+});
+
+
+test("every native object kind and compression level remains denied after wrapper stripping",async(t)=>{
+  const selected=Buffer.from("all-kind-native-compressed-marker-681429".repeat(64));const f=await fixture(selected);let cases=0;
+  const path=join(f.repo.objects.storageRoot(),"packs/all-kind-copy");mkdirSync(dirname(path),{recursive:true});
+  for(const kind of OBJECT_TYPES)for(const level of [1,6,9]){
+    const body=deflateSync(frameObject(kind,selected),{level}).subarray(2,-4);writeFileSync(path,body);
+    assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),{code:"erasure_retained_copy"},`${kind}/${level}`);
+    assert.deepEqual(readFileSync(path),body);assert.equal(f.repo.objects.denials().length,0);cases++;
+  }
+  rmSync(path);f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));assert.equal(cases,27);t.diagnostic(`${OBJECT_TYPES.length} frame kinds x three native compression levels = ${cases} wrapper-stripped cases`);
+});
+
+
+test("corrupt fingerprint journal cannot hide a retained raw copy after original bytes disappear",async()=>{
+  const selected=Buffer.from("selected-proof-corruption-private-marker-348719".repeat(64));const f=await fixture(selected);f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));
+  const path=join(f.repo.controlDirectory,"erasure-verification.json");const saved=readFileSync(path);const journal=JSON.parse(saved.toString()) as {records:Record<string,ErasureFingerprint[]>};
+  const id=f.repo.objects.denials()[0].id;const patterns=journal.records[id];const original=fingerprint(selected);const index=patterns.findIndex((item)=>item.length===original.length&&item.digest===original.digest);assert.ok(index>=0);
+  patterns[index]={...patterns[index],rolling:(patterns[index].rolling^1)>>>0};writeFileSync(path,JSON.stringify(journal));
+  const foreign=place(f.repo.objects.storageRoot(),"packs/foreign-copy",Buffer.concat([Buffer.alloc(19,7),selected]));
+  assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),(error:unknown)=>error instanceof ErasureStorageRefusal&&error.fileClass==="verification-metadata");assert.ok(readFileSync(foreign).includes(selected));
+  writeFileSync(path,saved);assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),{code:"erasure_retained_copy"});rmSync(foreign);f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));
+  assert.equal(f.repo.operations.read().filter((entry)=>entry.command==="obliterate").length,1);
+});
+
+test("journal rejects unknown versions, checksum changes and malformed signature records",async()=>{
+  const f=await fixture();const base=fingerprintJournal({[f.id]:[fingerprint(f.bytes)]});
+  for(const patch of [{format:"foreign"},{records:null},{records:[]},{records:7},{checksum:7},{checksum:"bad"},{checksum:"0".repeat(64)}]) assert.throws(()=>readFingerprints({...base,...patch}),{code:"unsupported_erasure_storage"});
+  for(const entry of [[],7,{length:null,rolling:0,digest:f.id},{length:2,rolling:1.5,digest:f.id},{length:2,rolling:0x1_0000_0000,digest:f.id},{length:2,rolling:0,digest:7},{...fingerprint(f.bytes),foreign:true}]) {
+    const records={[f.id]:[entry]} as unknown as Record<string,ErasureFingerprint[]>;
+    assert.throws(()=>readFingerprints(fingerprintJournal(records)),{code:"unsupported_erasure_storage"});
+  }
+  assert.throws(()=>readFingerprints(7),{code:"unsupported_erasure_storage"});
+});
+
+test("nested native encodings remain detectable across offsets, base64 alignments and truncated checksums",async(t)=>{
+  const selected=Buffer.from("recursive-native-private-marker-527193".repeat(32));const f=await fixture(selected);
+  f.repo.objects.compact();const entry=f.repo.objects.inventory().find((item)=>item.id===f.id)!;const packed=readFileSync(entry.path);
+  const compressed=deflateSync(frameObject("record",selected),{level:9});const body=compressed.subarray(2,-4);
+  const base64=(bytes:Buffer)=>Buffer.from(bytes.toString("base64"));
+  let six=body;for(let depth=0;depth<6;depth++)six=base64(six);
+  const representations=[base64(body),base64(compressed),base64(packed),deflateSync(base64(body)),base64(deflateSync(base64(body))),base64(base64(body)),base64(compressed.subarray(0,-2)),base64(Buffer.concat([compressed.subarray(0,-1),Buffer.from([compressed.at(-1)!^1])])),six];
+  f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));let cases=0;
+  for(const encoded of representations)for(let prefix=0;prefix<4;prefix++)for(const crossing of [false,true]){
+    const path=place(f.repo.objects.storageRoot(),"foreign/nested-copy",Buffer.concat([Buffer.alloc(crossing?65_535:7,0xa7),Buffer.from("A".repeat(prefix)),encoded,Buffer.from("BBB!suffix")]));
+    assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),{code:"erasure_retained_copy"},`${cases}/${prefix}/${crossing}`);
+    rmSync(path);f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));cases++;
+  }
+  assert.equal(cases,72);assert.equal(objectFiles.active.size,0);t.diagnostic("72 nested codec cases: 9 representations x 4 alignments x 2 offsets; each followed by a clean successful retry");
+});
+
+test("recursive scanner refuses unsupported inspection depth and bounded codec resources without a false success",async()=>{
+  const f=await fixture();const root=join(f.dir.root,"bounded-codecs");const path=place(root,"data",Buffer.from("ordinary"));const patterns=[fingerprint(f.bytes)];
+  const encoded=Buffer.from(deflateSync(Buffer.from("ordinary bounded representation")).toString("base64"));
+  for(const limit of ["depth","contexts","streams","wordBytes"] as const){
+    writeFileSync(path,limit==="streams"?deflateSync(Buffer.from("ordinary")):encoded);
+    const prior=erasureScanLimits[limit];erasureScanLimits[limit]=0;
+    assert.throws(()=>scanErasureStorage(root,patterns),{code:"uninspectable_payload"},limit);erasureScanLimits[limit]=prior;
+    assert.equal(objectFiles.active.size,0);
+  }
+  let deep=Buffer.from("ordinary very deeply wrapped representation");for(let depth=0;depth<8;depth++)deep=Buffer.from(deep.toString("base64"));
+  writeFileSync(path,deep);assert.throws(()=>scanErasureStorage(root,patterns),{code:"uninspectable_payload"});
+});
+
+test("streaming scanner preserves nested state across compressed input slots and closes active dictionaries on faults",async()=>{
+  const f=await fixture();const root=join(f.dir.root,"streaming-codecs");const selected=Buffer.from("compressed-slot-selected-marker-937216".repeat(64));
+  const noise=Buffer.alloc(100_000);for(let i=0;i<noise.length;i++)noise[i]=number()>>>24;
+  const compressed=deflateSync(Buffer.concat([noise,selected]));assert.ok(compressed.length>65_536);assert.equal(compressed.includes(selected),false);
+  const path=place(root,"data",compressed);assert.throws(()=>scanErasureStorage(root,[fingerprint(selected)]),{code:"erasure_retained_copy"});
+  writeFileSync(path,Buffer.from(compressed.toString("base64")));assert.throws(()=>scanErasureStorage(root,[fingerprint(selected)]),{code:"erasure_retained_copy"});
+  writeFileSync(path,compressed);erasureScanBoundary.visit=(step)=>{if(step==="file-chunk")throw new Error("injected scan interruption");};
+  assert.throws(()=>scanErasureStorage(root,[fingerprint(selected)]),{code:"unsupported_erasure_storage"});erasureScanBoundary.visit=()=>{};assert.equal(objectFiles.active.size,0);
+  // No terminal byte window exists until the final unpadded base64 word is flushed at EOF.
+  writeFileSync(path,Buffer.from(deflateSync(selected).toString("base64").replace(/=+$/,"")));
+  assert.throws(()=>scanErasureStorage(root,[fingerprint(selected)]),{code:"erasure_retained_copy"});
 });

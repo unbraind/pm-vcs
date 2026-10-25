@@ -1,5 +1,5 @@
 import { deflateSync } from "node:zlib";
-import { fingerprint, matchesFingerprints, readFingerprints, scanErasureStorage, erasureScanBoundary, type ErasureFingerprint, type ErasureFileClass, type ErasureStorageReport } from "./erasure-scan.ts";
+import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, erasureScanBoundary, type ErasureFingerprint, type ErasureFileClass, type ErasureStorageReport } from "./erasure-scan.ts";
 import { durability } from "./durability.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Authorized FileId-scoped erasure over the complete supported loose storage backend. */
@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { authorize, readLayers, assertCompositionPath, syncDirectory, writePrivateJson } from "./composition.ts";
 import { payloadDigest, encodeTombstone, type ErasureDenial } from "./lifecycle.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
-import { frameObject, hashObject, readControlJson, ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
+import { frameObject, hashObject, OBJECT_TYPES, readControlJson, ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
 import { inspectClosure } from "./closure.ts";
 import { inspectRepresentations } from "./representations.ts";
 import { ALWAYS_IGNORED } from "./ignore.ts";
@@ -160,7 +160,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       }
     }
     const proofsPath = join(control, "erasure-verification.json");
-    const proofs = readFingerprints(readControlJson(proofsPath, "unsupported_erasure_storage", "erasure verification", {}));
+    const proofs = readFingerprints(readControlJson(proofsPath, "unsupported_erasure_storage", "erasure verification", fingerprintJournal({})));
     const payloads: ErasureFingerprint[] = [...(existing === undefined ? [] : proofs[existing.id] ?? [])];
     const loaded = new Set<ObjectId>();
     for (const [path, id] of physical) {
@@ -169,8 +169,11 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       loaded.add(id);
       const frame = frameObject(object.type, object.payload);
       payloads.push(fingerprint(frame));
-      // A copied native member remains recoverable after its zlib wrapper is stripped.
-      for (const level of [1, 6, 9]) payloads.push(fingerprint(deflateSync(frame, { level }).subarray(2, -4)));
+      // Payload denial is type-independent, including native members retyped before their wrappers were stripped.
+      for (const kind of OBJECT_TYPES) {
+        const member = frameObject(kind, object.payload);
+        for (const level of [1, 6, 9]) payloads.push(fingerprint(deflateSync(member, { level }).subarray(2, -4)));
+      }
       if (object.type !== "manifest" && object.payload.length > 0) payloads.push(fingerprint(object.payload), fingerprint(Buffer.from(object.payload.toString("base64"))));
     }
     if (payloads.length === 0) throw new ObjectStoreError("incomplete_erasure_inventory", "No byte-proof metadata is available; restore verified erasure evidence from its source before retrying. No physical-erasure success was certified.");
@@ -264,8 +267,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       assertAuditSafe([frameObject("tombstone", payload), Buffer.from(JSON.stringify(next)), Buffer.from(JSON.stringify(completed)), Buffer.from(`${JSON.stringify(operation)}\n`)], payloads);
       const signatures = [...new Map(payloads.map((item) => [`${item.length}:${item.rolling}:${item.digest}`,item])).values()];
       const updatedProofs = { ...proofs, [id]: signatures };
-      assertAuditSafe([Buffer.from(JSON.stringify(updatedProofs))], payloads);
-      if (JSON.stringify(proofs) !== JSON.stringify(updatedProofs)) writePrivateJson(proofsPath, updatedProofs);
+      assertAuditSafe([Buffer.from(JSON.stringify(fingerprintJournal(updatedProofs)))], payloads);
+      if (JSON.stringify(proofs) !== JSON.stringify(updatedProofs)) writePrivateJson(proofsPath, fingerprintJournal(updatedProofs));
       erasureScanBoundary.visit("proof-persisted");
       // Preflight every proposed representation before the first audit-object or denial write.
       if (existing === undefined) store.write("tombstone", payload);

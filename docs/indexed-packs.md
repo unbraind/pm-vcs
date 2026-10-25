@@ -167,11 +167,16 @@ Names, extensions, pack magic and recognized inventory entries do not define the
 proof boundary. It detects raw payloads, typed frames, canonical payload base64
 (as written by bundles), and embedded zlib streams at any byte offset, including
 pack members and recoverable data with a truncated or invalid checksum. Native compressed-member bodies stripped of their zlib headers/checksums are
-fingerprinted too. All
+fingerprinted too, for every supported frame kind: changing the kind does not
+reopen the payload. All
 compression levels written by loose storage, unpacking and packs are covered.
+The same streaming inspector composes embedded zlib and base64 decoding: bundle
+encodings of complete packs or stripped compressed members remain detectable.
+Four base64 alignments handle alphabetic prefixes and partial final words.
 
 Before deletion, the engine records only lengths, rolling signatures and SHA-256
-hashes in private `erasure-verification.json` metadata. No selected content is
+hashes in a versioned, checksummed private `erasure-verification.json` journal.
+Unknown formats and checksum damage refuse certification before lookup. No selected content is
 persisted there. These signatures let a retry verify raw copies at arbitrary
 offsets after canonical objects have already disappeared. SHA-256 confirms every
 rolling-hash candidate. The same writer lease covers reading/updating this proof,
@@ -189,8 +194,11 @@ and do not duplicate the completed operation receipt.
 
 Scanning keeps source/decoded slots bounded (64 KiB / 16 KiB) and rolling windows
 bounded by the largest selected representation. Decode work is limited to the
-larger of 16 MiB and six maximum-ratio DEFLATE passes over a file; exhaustion
-refuses a proof. As before, complete recognized historical structure is required
+larger of 16 MiB and six maximum-ratio DEFLATE passes over a file. Inspection
+is bounded to six nested codec layers, 32 active zlib streams per layer, 512
+live inspectors and 16 MiB base64 words. Exhaustion refuses a proof with
+`uninspectable_payload` (or the decode-budget refusal), rather than silently
+accepting an uninspected encoding. As before, complete recognized historical structure is required
 for attribution. This verifies the owned filesystem namespace under its writer
 lease, not secure sector wiping or copies outside that namespace.
 
@@ -200,7 +208,9 @@ before pinning. Namespace retirement does not invalidate verified immutable
 bytes; in-place size/mtime changes still refuse. Link count and ctime are not
 content identities because unlinking changes them.
 
-Regression evidence: 144 seeded stores across twelve encodings and six locations,
+Regression evidence: 168 seeded stores across fourteen encodings and six locations,
+72 nested codec cases across nine forms, four alignments and two offsets, 27
+frame-kind/compression-level combinations with stripped wrappers, and
 406 actual pinned/native I/O boundary injections across all 25 reader APIs, nine
 logical SIGKILL cuts, 66 native proof/denial publication cuts, and a competing
 process at every logical erasure boundary on one non-git tracker.
