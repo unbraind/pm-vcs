@@ -40,6 +40,9 @@ Object storage and representation changes use the package's existing
 The host SDK has no binary object-pack or compressed-range-storage primitive.
 
 Every mutation reads its inventory inside the lease and releases the lease last.
+Maintenance rejects aliased object-directory roots before cleanup can touch data
+protected by a different lease path. Common store refusals use `ObjectStoreError`,
+also exported by the SDK.
 Publication writes a unique staging directory and durable ownership marker,
 fsyncs the payload, exclusively links the complete immutable pack, and fsyncs the
 parent before removing any source. Retry verifies published packs, retires their

@@ -173,6 +173,7 @@ export class PackStorage {
   /** Publish one complete pack durably before deleting any loose source, in bounded deterministic batches. */
   compact(store: ObjectStore): PackReport {
     return store.withWriteLock(() => {
+      this.assertRoot(store);
       if (store.denials().some((denial) => denial.pending)) throw new PackRefusal("pack_erasure_pending", "Authorized erasure is incomplete.", "Resume the authorized obliterate command before compacting.");
       this.recover();
       const skipped: { name: string; reason: string }[] = [];
@@ -230,6 +231,12 @@ export class PackStorage {
     return job;
   }
 
+  /** Reject aliases before recovery can touch a store protected by a different lexical lease path. */
+  private assertRoot(store: ObjectStore): void {
+    const root = lstatSync(store.storageRoot(), { throwIfNoEntry: false });
+    if (root !== undefined && !root.isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Pack maintenance requires a real object directory. Use the repository's real object directory and retry.");
+  }
+
   /** Persist one owned staging file and close it even if durability fails. */
   private durableFile(path: string, bytes: Buffer): void {
     const fd = openSync(path, "wx", 0o600);
@@ -239,6 +246,7 @@ export class PackStorage {
   /** Materialize verified loose copies before retiring packs; erasure can then use its existing physical deletion proof. */
   unpack(store: ObjectStore): void {
     store.withWriteLock(() => {
+      this.assertRoot(store);
       this.recover();
       // Finish complete verification before representation changes, then retain only one leaf buffer per copy.
       for (const item of this.inventory()) void item;

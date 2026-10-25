@@ -345,3 +345,16 @@ test("agent compaction receipts bound foreign records and report exact omission 
   assert.equal(result.skippedCount, 40); assert.equal(result.omittedSkipped, 20);
   assert.equal(readdirSync(directory).length, 40);
 });
+
+
+test("maintenance rejects aliased roots before recovery can delete a different lease owner's staging", async () => {
+  const repo = await fresh(); corpus(repo, 2); repo.objects.compact();
+  const directory = join(repo.controlDirectory, "objects/packs"); const name = `job-${"c".repeat(24)}`;
+  const job = join(directory, name); mkdirSync(job); writeFileSync(join(job, "owner"), `pm-vcs-pack-1 ${name}\n`); writeFileSync(join(job, "payload"), "owned interrupted staging");
+  const alias = join(repo.root, "object-alias"); symlinkSync(join(repo.controlDirectory, "objects"), alias, "dir");
+  const store = new ObjectStore(alias);
+  for (const action of [() => store.compact(), () => store.unpack()]) {
+    assert.throws(action, { code: "unsupported_erasure_storage" }); assert.ok(lstatSync(job).isDirectory());
+  }
+  const empty = new ObjectStore(join(repo.root, "empty/objects")); assert.equal(empty.compact().objects, 0);
+});
