@@ -294,6 +294,34 @@ stable change and its provenance, or reports ambiguity when unresolved candidate
 could contain the regression. Start, per-change results, halts and the verdict
 are recorded as evidence on the item. See [the full bisect contract](docs/bisect.md).
 
+## Indexed pack storage
+
+`pm vcs compact` durably replaces loose objects with bounded indexed packs.
+SHA-256 identities still name the uncompressed typed frame, so refs, bundles,
+manifest ranges and upload pins keep the same addresses. Independently compressed
+members permit verified reads of a single range without decompressing a whole pack.
+The command returns compact TOON by default; add `--json` for JSON counts, physical
+bytes and explicit skip reasons (at most 20, with exact omission counts). It works in a plain tracker without Git.
+
+```sh
+pm vcs compact --json
+pm vcs verify
+pm vcs gc                 # preview reachability-based collection
+pm vcs gc --apply
+```
+
+The SDK exposes `ObjectStore.compact(): PackReport` and typed `PackRefusal`
+errors with `code` and `remedy`. Publication and retirement use the existing
+shared store lease. An interrupted writer requires `pm vcs recover-lock` before
+retrying; the retry removes only owned staging jobs and converges without
+changing object addresses. Unknown records are skipped and reported. Pack
+corruption refuses retirement and collection. Objects over the 16 MiB packing
+bound remain loose. Authorized erasure first materializes verified loose copies
+and retires every pack, then applies the existing permanent denial and physical
+deletion proof. GC rewrites packed survivors when collecting packed members.
+
+See the [format, recovery and SDK example](docs/indexed-packs.md).
+
 ## Without git
 
 Native commits, refs, history, merges, capability-limited change bundles, transports, signing, annotation,

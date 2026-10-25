@@ -106,6 +106,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     const existing = local.find(/** Retry uses the original immutable audit metadata. */ (entry) => entry.tombstone.fileId === fileId);
     for (const instance of instances) assertSupportedControl(instance.controlDirectory);
     assertSupportedControl(control);
+    // Rewrite representation only after authorization and before taking the physical deletion inventory.
+    store.unpack();
     const physical = new Map<string, ObjectId>();
     const inventory = new Map<ObjectId, InventoryObject>();
     for (const { id, path, object } of store.walkInventory()) {

@@ -1,7 +1,9 @@
+import { packBoundary } from "./packs.ts";
+import { syncDirectory } from "./composition.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Conservative collection under the same interprocess transaction as writers. */
 import { lstatSync, readdirSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { decodeCommit, decodeManifest, decodeSeries, decodeTree } from "./model.ts";
 import { ObjectStoreError, isObjectId, readControlJson, type ObjectId } from "./objects.ts";
 import { requireInstances } from "./instances.ts";
@@ -14,9 +16,9 @@ export interface GcReport {
   readonly retained: number;
   readonly candidates: readonly ObjectId[];
   readonly removed: number;
-  /** Compressed physical bytes planned for removal, including recognized temporary copies. */
+  /** Compressed candidate bytes including loose temporaries and apportioned pack index overhead. */
   readonly candidateBytes: number;
-  /** Compressed physical bytes actually unlinked by a completed apply. */
+  /** Net physical bytes reclaimed after a completed sweep and any survivor rewrite. */
   readonly reclaimedBytes: number;
   /** Active file leases conservatively retain unpublished, unattributed arrivals too. */
   readonly activeLeases: number;
@@ -124,10 +126,10 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
         if (lease !== null && lease.active && lease.expiry > Date.now()) activeLeases++;
       }
     }
-    const inventory: { id: ObjectId; path: string; bytes: number }[] = [];
+    const inventory: { id: ObjectId; path: string; bytes: number; packed: boolean }[] = [];
     // Complete the physical preflight before unlinking even the first candidate.
     for (const item of store.walkInventory()) {
-      inventory.push({ id: item.id, path: item.path, bytes: lstatSync(item.path).size });
+      inventory.push({ id: item.id, path: item.path, bytes: item.bytes, packed: item.packed !== undefined });
 
     }
     const partial = store.partialState();
@@ -150,10 +152,19 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
     }
     const candidates = inventory.filter(/** Physical copies of a retained address remain retained. */ (item) => !retained.has(item.id));
     const candidateBytes = candidates.reduce(/** Count physical bytes rather than logical uncompressed payloads. */ (sum, item) => sum + item.bytes, 0);
+    const physicalBefore = inventory.reduce((sum, item) => sum + item.bytes, 0);
+    let reclaimedBytes = 0;
     if (apply) {
-      for (const candidate of candidates) unlinkSync(candidate.path);
-      store.releaseUploadRoots(visited);
+      const packed = candidates.some((candidate) => candidate.packed);
+      if (packed) store.unpack();
+      for (const candidate of candidates) {
+        const path = candidate.packed ? join(store.storageRoot(), candidate.id.slice(0, 2), candidate.id.slice(2)) : candidate.path;
+        if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) { unlinkSync(path); syncDirectory(dirname(path)); packBoundary.visit("collected"); }
+      }
+      if (inventory.some((item) => item.packed)) store.compact();
+      store.releaseUploadRoots(visited); packBoundary.visit("released-pins");
+      reclaimedBytes = Math.max(0, physicalBefore - [...store.walkInventory()].reduce((sum, item) => sum + item.bytes, 0));
     }
-    return { applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed: apply ? candidates.length : 0, candidateBytes, reclaimedBytes: apply ? candidateBytes : 0, activeLeases };
+    return { applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed: apply ? candidates.length : 0, candidateBytes, reclaimedBytes, activeLeases };
   });
 }

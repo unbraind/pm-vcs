@@ -6,6 +6,7 @@ import { EMPTY_TRUST, readTrustedKeys } from "./engine/signature-policy.ts";
 import { annotatePath, type AnnotationRow } from "./engine/annotate.ts";
 import { explainChange, type ExplainedChange, type TrackerLens } from "./engine/tracker-lenses.ts";
 import { historyOptions, type HistoryOptions } from "./engine/partial.ts";
+import type { PackReport } from "./engine/packs.ts";
 import { collectGarbage, type GcReport } from "./engine/gc.ts";
 import { changeRemoteLease } from "./engine/lease-workflows.ts";
 import type { LeaseRequest } from "./engine/publication-leases.ts";
@@ -1280,6 +1281,14 @@ export function registerVcsCommands(api: ExtensionApi): void {
         },
         diff: parent === undefined ? "" : repository.diff(parent, id),
       };
+    },
+  });
+
+  api.registerCommand({
+    name: "vcs compact",
+    description: "Compact loose objects into bounded indexed packs under the shared writer lease. Object identities, range reads and retention roots remain unchanged.",
+    run(context: CommandHandlerContext): VcsEnvelope & { compact: PackReport } {
+      return { ok: true, compact: openRepository(context).objects.compact() };
     },
   });
 

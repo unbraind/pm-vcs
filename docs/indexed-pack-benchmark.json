@@ -1,0 +1,39 @@
+{
+  "source": "unbraind/pm-vcs public origin/main tracker",
+  "revision": "c7790d45aab22a3a28b4d44955a592dfc06e715e",
+  "inputMode": "read-only copy",
+  "environment": "non-git scratch project; warm reads on a shared busy host",
+  "trackerFiles": 330,
+  "objects": 343,
+  "loose": {
+    "files": 343,
+    "bytes": 1357177,
+    "allocatedBytes": 2187264,
+    "read": {
+      "samples": 301,
+      "medianMs": 0.10572099999990314,
+      "p95Ms": 0.8946799999998802
+    }
+  },
+  "packed": {
+    "files": 1,
+    "bytes": 1262545,
+    "allocatedBytes": 1265664,
+    "read": {
+      "samples": 301,
+      "medianMs": 0.24147599999969316,
+      "p95Ms": 1.4401789999992616
+    }
+  },
+  "compaction": {
+    "objects": 343,
+    "packs": 1,
+    "looseBytes": 1357177,
+    "packBytes": 1262545,
+    "skippedCount": 0,
+    "omittedSkipped": 0,
+    "skipped": []
+  },
+  "gcRemoved": 0,
+  "verifiedReads": 686
+}

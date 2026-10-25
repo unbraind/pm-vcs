@@ -41,6 +41,7 @@ import { resolveObjectsControl } from "./instance-link.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
 import { encodeTombstone, assertArrivalsAllowed, readDenials, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { writePrivateJson } from "./composition.ts";
+import { PackStorage, type PackReport } from "./packs.ts";
 
 /** Synchronous store handles addressing one root share reentrancy; independent processes still use the exclusive filesystem lease. */
 const activeLeases = new Set<string>();
@@ -60,24 +61,20 @@ export interface StoredObject {
   readonly payload: Buffer;
 }
 
+/** One verified physical representation; packed members expose their actual file and compressed byte range. */
+export interface InventoryEntry {
+  readonly id: ObjectId;
+  readonly path: string;
+  readonly bytes: number;
+  readonly object: StoredObject;
+  readonly packed?: { readonly offset: number; readonly length: number };
+}
+
 /** Matches exactly a 64-character lowercase hex string. */
 const OBJECT_ID_PATTERN = /^[0-9a-f]{64}$/;
 
-/**
- * Raised for every fault this module can detect, so callers can distinguish a
- * repository problem from a programming error without matching on messages.
- */
-export class ObjectStoreError extends Error {
-  /** Stable machine-readable discriminator for the fault. */
-  readonly code: string;
-
-  /** Construct a repository fault carrying a stable code while retaining the native error message contract. */
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = "ObjectStoreError";
-    this.code = code;
-  }
-}
+export { ObjectStoreError } from "./object-error.ts";
+import { ObjectStoreError } from "./object-error.ts";
 
 /**
  * Reads one control-directory JSON file, returning the fallback only on ENOENT.
@@ -235,6 +232,7 @@ export function parseFramedObject(framed: Buffer): StoredObject {
 export class ObjectStore {
   /** Absolute path to the directory holding the fan-out subdirectories. */
   private readonly root: string;
+  private readonly packs: PackStorage;
   /** Validated immutable denials and address indexes follow the registry's filesystem identity. */
   private denialCache?: { signature: string; entries: ErasureDenial[]; objects: Map<ObjectId, ErasureDenial>; files: Map<string, ErasureDenial> };
 
@@ -243,6 +241,7 @@ export class ObjectStore {
    */
   constructor(root: string) {
     this.root = root;
+    this.packs = new PackStorage(root);
   }
 
   /**
@@ -265,11 +264,25 @@ export class ObjectStore {
   has(id: ObjectId): boolean {
     this.assertId(id);
     try {
-      return statSync(this.pathFor(id)).isFile();
-    } catch {
+      if (statSync(this.pathFor(id)).isFile()) return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (this.packs.has(id)) return true;
+    try { return statSync(this.pathFor(id)).isFile(); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return false;
     }
   }
+
+  /** Object storage root for representation backends; callers must retain the shared writer lease for mutations. */
+  storageRoot(): string { return this.root; }
+
+  /** Compact verified loose frames under the shared writer lease, preserving all logical identities. */
+  compact(): PackReport { return this.packs.compact(this); }
+
+  /** Restore loose representations durably before authorized erasure or a packed sweep. */
+  unpack(): void { this.packs.unpack(this); }
 
   /**
    * Writes an object, or does nothing if its content is already stored.
@@ -358,7 +371,13 @@ export class ObjectStore {
       compressed = readFileSync(this.pathFor(id));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      throw new ObjectStoreError("object_not_found", `No object ${id} in the store.`);
+      const packed = this.packs.read(id);
+      if (packed !== undefined) return packed;
+      // A concurrent unpack may have retired its pack after publishing this loose copy.
+      try { compressed = readFileSync(this.pathFor(id)); } catch (retry) {
+        if ((retry as NodeJS.ErrnoException).code !== "ENOENT") throw retry;
+        throw new ObjectStoreError("object_not_found", `No object ${id} in the store.`);
+      }
     }
     let framed: Buffer;
     try {
@@ -391,7 +410,10 @@ export class ObjectStore {
     if (this.denial(id) !== undefined) return false;
     let fd: number;
     try { fd = openSync(this.pathFor(id), "r"); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        const packed = this.packs.type(id);
+        return packed !== undefined && [type, ...alternatives].includes(packed);
+      }
       throw error;
     }
     let matching = false;
@@ -434,7 +456,12 @@ export class ObjectStore {
     const path = this.pathFor(id);
     let fd: number;
     try { fd = openSync(path, "r"); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ObjectStoreError("object_not_found", `No object ${id} in the store.`);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        const object = this.read(id);
+        if (object.payload.length > limit) throw new ObjectStoreError("object_payload_limit", "Object requires bounded streaming decoding.");
+        if (object.type !== type) throw new ObjectStoreError("object_type_mismatch", "Object has the wrong kind.");
+        return object.payload;
+      }
       throw error;
     }
     let compressed: Buffer;
@@ -467,7 +494,11 @@ export class ObjectStore {
     const denial = this.denial(id);
     if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
     this.hydrate(id);
-    yield* objectPayloadLines(objectPayloadChunks(this.pathFor(id), id, type));
+    const packed = this.packs.read(id);
+    if (packed !== undefined) {
+      if (packed.type !== type) throw new ObjectStoreError("object_type_mismatch", "Object has the wrong kind.");
+      yield* objectPayloadLines([packed.payload]);
+    } else yield* objectPayloadLines(objectPayloadChunks(this.pathFor(id), id, type));
   }
 
   /**
@@ -632,7 +663,7 @@ export class ObjectStore {
   }
 
   /** Materialize the verified physical inventory for callers that deliberately retain every payload. */
-  inventory(): { id: ObjectId; path: string; object: StoredObject }[] {
+  inventory(): InventoryEntry[] {
     return [...this.walkInventory()];
   }
 
@@ -643,20 +674,29 @@ export class ObjectStore {
    * all payloads. Hold the store lease across multiple passes when planning erasure.
    * Denied physical copies remain visible so pending authorized cleanup can resume.
    */
-  *walkInventory(): Generator<{ id: ObjectId; path: string; object: StoredObject }> {
+  *walkInventory(): Generator<InventoryEntry> {
+    yield* this.walkLooseInventory();
+    yield* this.packs.inventory();
+  }
+
+  /** Walk verified loose copies independently of indexed packs; representation maintenance holds the writer lease. */
+  *walkLooseInventory(skipped?: { name: string; reason: string }[]): Generator<InventoryEntry> {
     if (!existsSync(this.root)) return;
     if (!lstatSync(this.root).isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Object storage cannot follow a symlink.");
     for (const directory of readdirSync(this.root, { withFileTypes: true })) {
+      if (directory.name === "packs" && directory.isDirectory()) continue;
       if (!directory.isDirectory() || !/^[0-9a-f]{2}$/.test(directory.name)) {
+        if (skipped !== undefined) { skipped.push({ name: directory.name, reason: "foreign loose-storage entry; left untouched" }); continue; }
         throw new ObjectStoreError("unsupported_erasure_storage", "Unknown object storage must be removed or supported before erasure.");
       }
       for (const file of readdirSync(join(this.root, directory.name), { withFileTypes: true })) {
         if (!file.isFile() || !/^[0-9a-f]{62}(?:\.[0-9]+\.[0-9a-f]{12}\.tmp)?$/.test(file.name)) {
+          if (skipped !== undefined) { skipped.push({ name: `${directory.name}/${file.name}`, reason: "foreign loose-storage record; left untouched" }); continue; }
           throw new ObjectStoreError("unsupported_erasure_storage", "Unindexed storage artefacts prevent a complete erasure inventory.");
         }
         const id = directory.name + file.name.slice(0, 62);
         const path = join(this.root, directory.name, file.name);
-        yield { id, path, object: this.readInventoryObject(id, path) };
+        yield { id, path, bytes: lstatSync(path).size, object: this.readInventoryObject(id, path) };
       }
     }
   }
@@ -669,6 +709,7 @@ export class ObjectStore {
    */
   readInventoryObject(id: ObjectId, path: string): StoredObject {
     this.assertId(id);
+    if (dirname(path) === join(this.root, "packs") && /^[0-9a-f]{64}\.pack$/.test(basename(path))) return this.packs.readAt(id, path);
     const canonical = this.pathFor(id);
     if (dirname(path) !== dirname(canonical) || (basename(path) !== id.slice(2)
       && !new RegExp(`^${id.slice(2)}\\.[0-9]+\\.[0-9a-f]{12}\\.tmp$`).test(basename(path)))) {
