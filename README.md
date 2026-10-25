@@ -239,16 +239,16 @@ a denied FileId fail preflight before storing bytes or moving refs.
 The guarantee covers application-visible loose storage and known shared worktrees;
 it excludes external backups, independently owned clones, filesystem snapshots and
 physical-media recovery. The filesystem operator must exclude concurrent direct edits
-outside pm-vcs. There is no genuine pack backend: unknown storage is a refusal, never
-a successful erasure. Payload-only resumable upload batches refuse after erasure
+outside pm-vcs. Loose objects and indexed packs must be fully accountable; unknown
+storage refuses unless explicitly purged with a receipt and re-verification. Payload-only resumable upload batches refuse after erasure
 because that protocol carries no FileId provenance. Direct `ObjectStore.write` calls
 must then supply a non-denied FileId for new blob/record/manifest payloads.
 
-Physical erasure inspects retained loose-object copies, including raw frames,
-zlib and base64 wrappers, before publishing denial. Supported encodings exceeding
-bounded inspection cause refusal. Windows erasure refuses before deletion because
-Node cannot provide directory fsync; ordinary metadata uses fsynced atomic replacement
-with that directory-durability limit. See the shipped
+Physical erasure verifies every regular object-store file as a complete native
+representation and rechecks descriptor/pathname identity before completion.
+Fingerprint scans provide extra diagnostics. Windows uses file fsync plus
+synchronous namespace acknowledgment with a weaker power-loss guarantee than POSIX
+directory fsync. See the shipped
 [composition and erasure design](docs/links-layers-obliteration.md) for exact bounds.
 
 Engine APIs live in `engine/repo.ts`: `identity`, `setAuthority`, `stageLink`, `links`,
@@ -1020,7 +1020,11 @@ finishing iteration, including early consumer cancellation. Streaming reads use
 a bounded synchronous decoder; see the [descriptor ownership contract](docs/indexed-packs.md#descriptor-ownership)
 and its per-operation, low-descriptor-limit regression checks.
 
-Obliteration verifies all regular files in object storage, including foreign and
-renamed packs. Retained copies block completion with a typed storage-class remedy;
-clean foreign files are preserved and counted. See [physical erasure verification](docs/indexed-packs.md#physical-erasure-verification)
-for resumable fingerprint proofs and descriptor-only inventory validation.
+Obliteration certifies only fully accountable object storage: every regular file
+must be a complete native loose object or checksummed pack, and no accounted
+object may have an erased identity or payload. Foreign, renamed or partial files
+return `unverifiable`, even when no payload signature matches. Explicit
+`pm vcs obliterate <file-id> --purge-unaccounted` removes exactly the selected
+unaccounted files with an identity-bound receipt, then re-verifies. See
+[physical erasure verification](docs/indexed-packs.md#physical-erasure-verification)
+for authorization, bounded retries and SDK examples.

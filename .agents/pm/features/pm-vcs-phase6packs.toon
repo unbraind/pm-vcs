@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-25T17:26:36.582Z"
+updated_at: "2026-10-25T21:21:21.290Z"
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[44]{created_at,author,text}:
+comments[48]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -55,9 +55,15 @@ comments[44]{created_at,author,text}:
   "2026-10-25T17:03:10.223Z",codex-agent,"Final constant-run validation passed: linked erasure suite 24/24, zero failed/skipped/cancelled tests; focused scanner 19/19 with 100% statements/branches/functions/lines; coverage-instrumented empty-file/32 MiB compatibility suite 2/2 with its original 30-second child timeout and 8 MiB retained-buffer budget. Instrumented corpus completed in 8.5 seconds and retained 1,179,665 bytes. Typecheck, source/test compilation, lint, docstrings and zero duplication pass. All round-3 byte-scope, descriptor-only, journal, nested-codec, zero-byte and bounded-work revert proofs are recorded. Self-host write/commit/accept and publication follow, then fresh exact-head npm/Bun CI; final counts/run URL will be in PR 150. Main item stays in_progress and evidence transport remains an open follow-up."
   "2026-10-25T17:25:15.949Z",codex-agent,"Run 40214697356 passed all 1,957 tests on Node 26, including the unchanged compatibility/memory tests; release acceptance then stopped at 99.55% branch coverage in report aggregation. The lcov artifact isolates an impossible nullish fallback: a value obtained from Object.keys of the package-written class-count map cannot be absent. Aggregation now iterates typed entries directly. Extended the existing dormant-instance regression with the same pack-storage class in active and dormant roots and asserts the exact aggregate count of three preserved foreign files. No threshold or test limit changes; fresh self-host and exact-head gates follow after the targeted check."
   "2026-10-25T17:26:33.823Z",codex-agent,"Aggregation target passes 1/1 with three preserved foreign pack-storage files summed across active and dormant roots. Targeted c8 confirms both remaining aggregation branches execute (counts 7 and 5); the impossible absent-value fallback has been removed without changing receipt behavior. Typecheck and source/test compilation pass. Run 40214697356 passed 1,957/1,957 tests on both Node versions; the sole release-gate failure was that unreachable branch, so Bun did not run. The final focused checks and new self-host commit retain all thresholds; the replacement CI run must pass npm and Bun before handoff."
-files[33]{path,scope}:
+  "2026-10-25T20:19:01.130Z",codex-agent,"Round-4 plan: replace encoding-search certification with complete native-file accountability. Every regular file must be an exact valid loose object or checksum/index/member-verified native pack; all foreign, renamed, partial and old temporary files refuse as unverifiable. Add explicit purge-unaccounted with a durable identity-bound purge plan and bounded receipt, preserving peer replacements and resumable deletion. Certification revalidates descriptor/path identity and the complete namespace with bounded retries. Fingerprints remain diagnostic only. Closed logical-reader, durability and resource-lifetime protocols stay unchanged."
+  "2026-10-25T21:00:18.441Z",codex-agent,"Round-4 evidence so far: 160 seeded store states, 190 exhaustive truncation/overwrite cases, 32 replacement schedules across loose/pack verification, 96 real native purge crash cuts, and 39 competing-process transitions on one non-git tracker all pass. Complete parsing checks zlib termination and exact consumption, framing, content identity, pack index/checksum/kind/size bounds. I/O faults are not classified as purgeable format failures. Repaired native peers survive purge planning; an authorized interrupted plan resumes only its exact stored identity. Closed reader/resource/durability paths remain unchanged. Optional fingerprint transport was re-scoped in pm-vcs-erasureprooftransport because it is no longer certificate evidence."
+  "2026-10-25T21:07:58.688Z",codex-agent,"Round-4 revert proof: replacing only eraseFile with its prior fingerprint-based implementation makes the fully recoverable one-byte-truncated headerless DEFLATE regression fail 0/1 (Missing expected exception; it incorrectly certifies success). Restoring native accountability passes 1/1. Command: node --test --test-name-pattern=\"fully recoverable one-byte-truncated\" test/erasure-accountability.test.ts. Separate proof: reverting the verifier to descriptor-only checks and removing its final pathname barrier makes the final-operation replacement race fail 0/1 (Missing expected exception; selected bytes remain at the certified pathname). Restoring fd/path identity checks passes 1/1. Command: node --test --test-name-pattern=\"final operation rechecks\" test/erasure-accountability.test.ts. Both behavioral mutations were restored; ordinary pinned-reader behavior is unchanged."
+  "2026-10-25T21:21:15.901Z",codex-agent,"Round-4 implementation complete: success requires complete canonical loose frames or fully checksummed/indexed packs for every regular file across active and registered dormant object roots. Foreign/renamed/copied/truncated/partial files are unverifiable regardless of byte signatures. Explicit purge-unaccounted journals exact relative file identity, SHA-256 and bytes before deletion, reports deleted/observed-absent/replaced with 20-entry receipts, and re-verifies under the same native lease. Certification compares fd/path device, inode, size and mtime, with eight file attempts, eight catalogue passes and bounded receipt stabilization; ordinary pinned reads retain their closed descriptor-only protocol. Byte fingerprints are optional diagnostics. PM-linked command node --test test/erasure-accountability.test.ts passed 16/16, including 96 native SIGKILL cuts and 39 competing real-process transitions on one non-git tracker. Final focused c8 command (test-skip-pattern SIGKILL|competing) passed 15/15 and the new module reached 100/100/100/100; includes added receipt churn, random offsets in 160 store states, 190 independent native-decoder mutation cases and 32 replacement cells. Instrumented 32 MiB compatibility check passed in 20.4 seconds with 1181841 retained bytes under unchanged 30-second/8 MiB bounds. Targeted installed CLI, temporary-copy and second-inventory compatibility fixes pass. Source/test typecheck, lint, docstrings, zero duplication and strict health pass with CI-pinned project extension. Broad local compatibility coverage was stopped to avoid repeating costly unrelated process tests; full unchanged npm/Bun release gates and Windows GC evidence will come from exact-head PR CI. Existing benchmark remains frozen. Optional diagnostic transport follow-up remains open and is no longer a certification prerequisite; host ExtensionCommandSdk still has no binary object-pack/compressed-range primitive. Item stays in_progress; no merge or release."
+files[37]{path,scope}:
   .github/workflows/ci.yml,project
+  composition-commands.ts,project
   engine/durability.ts,project
+  engine/erasure-accountability.ts,project
   engine/erasure-scan.ts,project
   engine/erasure.ts,project
   engine/gc.ts,project
@@ -71,11 +77,13 @@ files[33]{path,scope}:
   scripts/pack-benchmark.ts,project
   test/composition.test.ts,project
   test/durability.test.ts,project
+  test/erasure-accountability.test.ts,project
   test/erasure-fragment-repairs.test.ts,project
   test/erasure-storage.test.ts,project
   test/fragments.test.ts,project
   test/helpers/erasure-peer.ts,project
   test/helpers/erasure-proof-crash.ts,project
+  test/helpers/erasure-purge-worker.ts,project
   test/helpers/erasure-scan-worker.ts,project
   test/helpers/external-object-retirement.ts,project
   test/helpers/object-lifetime-soak.ts,project
@@ -89,7 +97,7 @@ files[33]{path,scope}:
   test/vcs-commands.test.ts,project
   test/worktree-races.test.ts,project
   vcs-commands.ts,project
-tests[10]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[11]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts,project,600,codex-agent,"2026-10-25T00:50:11.882Z",local_mutation,feat/indexed-pack-storage
   node --test --test-name-pattern=agent.compaction test/packs.test.ts,project,60,codex-agent,"2026-10-25T00:53:18.003Z",local_mutation,feat/indexed-pack-storage
   node --test --test-name-pattern=maintenance.rejects test/packs.test.ts,project,60,codex-agent,"2026-10-25T00:59:26.949Z",local_mutation,feat/indexed-pack-storage
@@ -100,9 +108,11 @@ tests[10]{command,scope,timeout_seconds,provenance{author,created_at,source_kind
   node --test test/object-lifetime.test.ts,project,300,codex-agent,"2026-10-25T09:23:52.753Z",local_mutation,feat/indexed-pack-storage
   node --test test/erasure-storage.test.ts,project,600,codex-agent,"2026-10-25T14:46:59.037Z",local_mutation,feat/indexed-pack-storage
   "node --expose-gc --test --test-name-pattern=\"empty file preserves|bounded 32 MiB\" test/composition.test.ts test/stream-erasure-legacy-fetch-repair.test.ts",project,120,codex-agent,"2026-10-25T16:46:49.456Z",local_mutation,feat/indexed-pack-storage
-docs[4]{path,scope}:
+  node --test test/erasure-accountability.test.ts,project,900,codex-agent,"2026-10-25T21:08:15.598Z",local_mutation,feat/indexed-pack-storage
+docs[5]{path,scope}:
   docs/indexed-pack-benchmark.json,project
   docs/indexed-packs.md,project
+  docs/links-layers-obliteration.md,project
   docs/scale-history-and-gc.md,project
   README.md,project
 body: ""

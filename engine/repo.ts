@@ -40,7 +40,7 @@ import {
 import { type ObjectId, type PayloadState, ObjectStore, ObjectStoreError, hashObject, isObjectId, assertRegistryName, readControlJson } from "./objects.ts";
 
 import { assertCompositionPath, assertSafeFilePath, authorize, configureAuthority, decodeLink, encodeLink, pathsOverlap, readLayers, writePrivateJson, type AuthorityChangeAuthorization, type LocalLayer, type RepositoryLink } from "./composition.ts";
-import { eraseFile, type ErasureReceipt } from "./erasure.ts";
+import { eraseFile, type ErasureReceipt, type ErasureOptions } from "./erasure.ts";
 import { CDC_STAGING_THRESHOLD, STAGING_CDC_PARAMS, blobFileContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmented, writeCdcFragmentedFile } from "./fragments.ts";
 
 
@@ -1198,7 +1198,7 @@ export class Repository {
   }
 
   /** Permanently erase all payloads of a FileId, including every shared instance. */
-  obliterate(selector: string, credential: string, reason: string, now: Date): ErasureReceipt {
+  obliterate(selector: string, credential: string, reason: string, now: Date, options: ErasureOptions = {}): ErasureReceipt {
     return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
       let pmRoot = this.pmRoot;
       if (pmRoot !== undefined && pmRoot !== "") {
@@ -1214,7 +1214,7 @@ export class Repository {
         if (path !== this.hubRoot && !this.instanceIsBound(path)) throw new ObjectStoreError("unbound_instance", "An inventoried instance is missing or no longer linked to this hub; explicitly prune retired paths before erasure.");
         return Repository.open(path, pmRoot);
       });
-      return eraseFile(this, instances, selector, credential, reason, now);
+      return eraseFile(this, instances, selector, credential, reason, now, options);
     });
   }
 

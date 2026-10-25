@@ -183,7 +183,8 @@ test("authorized erasure scrubs historical, renamed, unreachable, indexed, fragm
   assert.ok(scanBytes(shared.root, marker) > 0);
   refuses(() => repo.obliterate(fileId, "read-fixture", "incident", new Date()), "unauthorized");
   assert.ok(scanBytes(repo.root, marker) > 0);
-  const receipt = repo.obliterate(fileId, "erase-fixture", "incident", new Date(4000));
+  refuses(() => repo.obliterate(fileId, "erase-fixture", "incident", new Date(4000)), "unverifiable");
+  const receipt = repo.obliterate(fileId, "erase-fixture", "incident", new Date(4000), { purgeUnaccounted: true });
   assert.equal(receipt.fileId, fileId);
   assert.equal(scanBytes(repo.root, marker), 0);
   assert.equal(scanBytes(shared.root, marker), 0);
@@ -273,7 +274,7 @@ test("affected layers and untracked copies refuse erasure and preserve independe
   repo.obliterate(id, "erase-fixture", "incident", new Date());
 });
 
-test("unsupported control and incomplete inventory refuse; harmless foreign object files are scanned and reported", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
+test("unsupported control and incomplete inventory refuse; foreign object files require explicit purge", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
   const { repo } = await fixture(); commit(repo, "secret.bin");
   const entry = repo.readIndex().find(entry => entry.path === "secret.bin")!;
   mkdirSync(join(repo.controlDirectory, "packs")); writeFileSync(join(repo.controlDirectory, "packs", "old.pack"), Buffer.from("opaque pack"));
@@ -285,10 +286,11 @@ test("unsupported control and incomplete inventory refuse; harmless foreign obje
   writeFileSync(join(repo.controlDirectory, "objects", "unknown.pack"), "opaque pack");
   writeFileSync(`${objectPath(repo, entry.id)}.tmp`, "unindexed temp copy");
   assert.deepEqual(repo.objects.denials(), []);
-  const receipt = repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date());
-  assert.equal(receipt.storage.foreign, 2);
-  assert.equal(readFileSync(join(repo.controlDirectory, "objects", "unknown.pack"),"utf8"), "opaque pack");
-  assert.equal(readFileSync(`${objectPath(repo, entry.id)}.tmp`,"utf8"), "unindexed temp copy");
+  refuses(() => repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date()), "unverifiable");
+  const receipt = repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date(), { purgeUnaccounted: true });
+  assert.equal(receipt.storage.foreign, 0); assert.equal(receipt.purge.deleted, 2);
+  assert.equal(existsSync(join(repo.controlDirectory, "objects", "unknown.pack")), false);
+  assert.equal(existsSync(`${objectPath(repo, entry.id)}.tmp`), false);
 });
 
 test("typed reads and verification distinguish missing and corrupt from obliterated content", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
@@ -618,7 +620,7 @@ test("recoverable loose-frame wrappers refuse erasure before mutation and refuse
   let nested = framed;
   for (let depth = 0; depth < 8; depth += 1) nested = Buffer.from(nested.toString("base64"));
   const nestedId = repo.objects.write("blob", nested);
-  refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "uninspectable_payload"); assert.deepEqual(repo.objects.denials(), []); rmSync(objectPath(repo, nestedId));
+  refuses(() => inspectRepresentations(nested, () => false), "uninspectable_payload"); assert.deepEqual(repo.objects.denials(), []); rmSync(objectPath(repo, nestedId));
   repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()); assert.equal(scanBytes(repo.root, marker), 0);
   refuses(() => repo.objects.write("blob", nested, "a".repeat(32)), "uninspectable_payload");
   assert.equal(readFileSync(join(repo.root, "keep.bin"), "utf8"), "unrelated preserved object bytes");
@@ -1982,6 +1984,11 @@ test("grant repair installed CLI parses separate current and legacy flags and pr
   const created = spawnSync(process.execPath, [pmExecutable, "--json", "vcs", "layer", "ordinary", "src/search/a.txt", overlay], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
   assert.equal(created.status, 0, created.stderr + created.stdout); assert.equal(readFileSync(join(repo.root, "src/search/a.txt"), "utf8"), "ordinary CLI overlay\n"); repo.removeLayer("ordinary");
   commit(repo, "src/search/a.txt", Buffer.from("unrelated CLI source\n")); commit(repo, "secret.bin", Buffer.from("installed-cli-selected-marker-374698"));
-  const erased = spawnSync(process.execPath, [pmExecutable, "--json", "vcs", "obliterate", "secret.bin", "--erase-token-file", eraseToken, "--reason", "incident"], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
-  assert.equal(erased.status, 0, erased.stderr + erased.stdout); assert.equal(existsSync(join(repo.root, "secret.bin")), false); assert.equal(readFileSync(join(repo.root, "src/search/a.txt"), "utf8"), "unrelated CLI source\n");
+  const foreign = join(repo.objects.storageRoot(), "opaque-cache"); writeFileSync(foreign, "unaccounted CLI bytes");
+  const eraseArgs = [pmExecutable, "--json", "vcs", "obliterate", "secret.bin", "--erase-token-file", eraseToken, "--reason", "incident"];
+  const withoutPurge = spawnSync(process.execPath, eraseArgs, { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
+  assert.equal(withoutPurge.status, 1); assert.match(withoutPurge.stdout + withoutPurge.stderr, /unverifiable|purge-unaccounted/); assert.ok(existsSync(foreign));
+  const erased = spawnSync(process.execPath, [...eraseArgs, "--purge-unaccounted"], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
+  assert.equal(erased.status, 0, erased.stderr + erased.stdout); assert.equal(existsSync(foreign), false);
+  assert.equal(JSON.parse(erased.stdout).erasure.purge.deleted, 1); assert.equal(existsSync(join(repo.root, "secret.bin")), false); assert.equal(readFileSync(join(repo.root, "src/search/a.txt"), "utf8"), "unrelated CLI source\n");
 });

@@ -100,6 +100,13 @@ export class PackStorage {
     this.indexes.set(path, index); return index;
   }
 
+  /** Fully account a caller-pinned pack, including its physical checksum and every compressed member. @internal */
+  verifyFile(fd: number, path: string, inspect: (id: ObjectId, offset: number, length: number, type: ObjectType, maxFrameBytes: number) => void): void {
+    const index = this.index(fd, path);
+    if (digest(range(fd, 0, index.bytes)) !== basename(path, ".pack")) corrupt();
+    for (const entry of index.entries) inspect(entry[0], index.start + entry[1], entry[2], entry[3], LIMIT);
+  }
+
   /** Open one immutable indexed range; descriptor ownership transfers to the common resolver. @internal */
   locate(id: ObjectId, exactPath?: string): ObjectHandle | undefined {
     const paths = exactPath === undefined ? this.files() : [exactPath];

@@ -11,19 +11,20 @@ export interface ErasureFingerprint { readonly length: number; readonly rolling:
 /** Receipts classify storage without disclosing names or content. */
 export type ErasureFileClass = "object-root" | "loose-storage" | "pack-storage" | "temporary-storage" | "foreign-directory" | "verification-metadata";
 /** Complete physical scan receipt, including harmless foreign files rather than silently skipping them. */
-export interface ErasureStorageReport { readonly files: number; readonly foreign: number; readonly classes: Readonly<Partial<Record<ErasureFileClass, number>>> }
+export interface ErasureStorageReport { readonly accountable?: true; readonly objects?: number; readonly diagnostic?: string; readonly files: number; readonly foreign: number; readonly classes: Readonly<Partial<Record<ErasureFileClass, number>>> }
 /** Typed refusal includes a storage class and a remedy, without copying potentially sensitive filenames. */
 export class ErasureStorageRefusal extends ObjectStoreError {
   /** Stable SDK discriminator for retained bytes or an incomplete physical proof. */
-  override readonly code: "erasure_retained_copy" | "unsupported_erasure_storage" | "uninspectable_payload";
+  override readonly code: "unverifiable" | "erasure_retained_copy" | "unsupported_erasure_storage" | "uninspectable_payload";
   /** Class containing retained bytes, unreadable storage, or an unstable scan. */
   readonly fileClass: ErasureFileClass;
   /** Explicit cleanup remains the foreign owner's responsibility. */
-  readonly remedy = "Remove the explicit retained copy or restore stable readable storage, then retry authorized obliteration.";
+  readonly remedy: string;
   /** Construct a safe refusal instead of issuing a physical-erasure success receipt. */
-  constructor(code: "erasure_retained_copy" | "unsupported_erasure_storage" | "uninspectable_payload", fileClass: ErasureFileClass) {
-    super(code, `Physical erasure verification failed for ${fileClass}. Remove the explicit retained copy or restore stable readable storage, then retry authorized obliteration.`);
+  constructor(code: "unverifiable" | "erasure_retained_copy" | "unsupported_erasure_storage" | "uninspectable_payload", fileClass: ErasureFileClass) {
+    super(code, code === "unverifiable" ? `Object storage is unverifiable for ${fileClass}. Restore a complete native representation or explicitly retry with --purge-unaccounted; selected files are receipted and storage is re-verified.` : `Physical erasure verification failed for ${fileClass}. Remove the explicit retained copy or restore stable readable storage, then retry authorized obliteration.`);
     this.name = "ErasureStorageRefusal"; this.code = code; this.fileClass = fileClass;
+    this.remedy = code === "unverifiable" ? "Restore complete native storage or retry with --purge-unaccounted to remove exactly the unaccounted files and re-verify." : "Remove the explicit retained copy or restore stable readable storage, then retry authorized obliteration.";
   }
 }
 /** Write/crash and storage-scan observations run inside the existing owning erasure lease. @internal */
@@ -129,7 +130,7 @@ class Matcher {
 /** Inspect an already observed representation using the same persisted byte-window proof. */
 export function matchesFingerprints(bytes: Buffer, patterns: readonly ErasureFingerprint[]): boolean { return new Matcher(patterns).feed(bytes); }
 /** Classify without exposing arbitrary names; unknown names remain foreign regardless of their decodable contents. */
-function classify(parts: readonly string[]): { kind: ErasureFileClass; foreign: boolean } {
+export function classifyErasureFile(parts: readonly string[]): { kind: ErasureFileClass; foreign: boolean } {
   const leaf = parts[parts.length - 1] ?? "";
   const knownLoose = parts.length === 2 && /^[0-9a-f]{2}$/.test(parts[0]) && /^[0-9a-f]{62}(?:\.[0-9]+\.[0-9a-f]{12}\.tmp)?$/.test(leaf);
   const knownPack = parts.length === 2 && parts[0] === "packs" && /^[0-9a-f]{64}\.pack$/.test(leaf);
@@ -250,12 +251,12 @@ export function scanErasureStorage(root: string, patterns: readonly ErasureFinge
   const classes: Partial<Record<ErasureFileClass, number>> = {}; let files = 0; let foreign = 0;
   /** Descend real directories only, including arbitrary foreign and temporary subdirectories. */
   const walk = (directory: string, parts: string[]): void => {
-    if (!lstatSync(directory).isDirectory()) throw new ErasureStorageRefusal("unsupported_erasure_storage", classify(parts).kind);
+    if (!lstatSync(directory).isDirectory()) throw new ErasureStorageRefusal("unsupported_erasure_storage", classifyErasureFile(parts).kind);
     const entries = readdirSync(directory, { withFileTypes: true });
     for (const entry of entries) {
       const path = join(directory, entry.name); const names = [...parts, entry.name];
       if (entry.isDirectory()) { walk(path, names); continue; }
-      const { kind, foreign: isForeign } = classify(names);
+      const { kind, foreign: isForeign } = classifyErasureFile(names);
       if (!entry.isFile()) throw new ErasureStorageRefusal("unsupported_erasure_storage", kind);
       if (excluded.has(path)) continue;
       let file: ReturnType<typeof objectFiles.open> | undefined;
@@ -292,7 +293,7 @@ export function scanErasureStorage(root: string, patterns: readonly ErasureFinge
     }
     const names = entries.map((entry) => `${entry.name}:${entry.isDirectory()}`).sort();
     const current = readdirSync(directory, { withFileTypes: true }).map((entry) => `${entry.name}:${entry.isDirectory()}`).sort();
-    if (JSON.stringify(names) !== JSON.stringify(current)) throw new ErasureStorageRefusal("unsupported_erasure_storage", classify(parts).kind);
+    if (JSON.stringify(names) !== JSON.stringify(current)) throw new ErasureStorageRefusal("unsupported_erasure_storage", classifyErasureFile(parts).kind);
   };
   walk(root, []); return { files, foreign, classes };
 }

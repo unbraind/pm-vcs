@@ -75,7 +75,7 @@ Authorized erasure verifies and materializes all pack members under the same
 lease before planning physical deletion. It then retires packs and owned staging
 payloads, so the existing erasure inventory can prove that no recoverable packed
 copy survives. Permanent denials continue to prevent reads and resurrection.
-This deliberately trades erasure I/O for the existing complete deletion proof.
+This deliberately trades erasure I/O for complete native-file accountability.
 It does not promise secure overwriting of filesystem blocks or external backups.
 
 To reproduce aggregate measurements on an approved public tracker copy:
@@ -160,69 +160,84 @@ and ownership baselines after every operation.
 
 ### Physical erasure verification
 
-Obliteration independently scans **every regular file** below the object-storage
-root, including pack, loose, temporary and arbitrary foreign subdirectories.
-Dormant object directories in registered instances are included too.
-Names, extensions, pack magic and recognized inventory entries do not define the
-proof boundary. It detects raw payloads, typed frames, canonical payload base64
-(as written by bundles), and embedded zlib streams at any byte offset, including
-pack members and recoverable data with a truncated or invalid checksum. Native compressed-member bodies stripped of their zlib headers/checksums are
-fingerprinted too, for every supported frame kind: changing the kind does not
-reopen the payload. All
-compression levels written by loose storage, unpacking and packs are covered.
-The same streaming inspector composes embedded zlib and base64 decoding: bundle
-encodings of complete packs or stripped compressed members remain detectable.
-Four base64 alignments handle alphabetic prefixes and partial final words.
+Success requires an **accountable store**, rather than a negative search for an
+encoding. Every regular file below the active object root and dormant object roots
+of registered instances participates, including every pack, loose, temporary and
+foreign subdirectory, regardless of name or extension. Missing roots are checked
+again before completion. Each file must be either a canonical loose pathname
+containing one complete zlib frame with matching logical SHA-256, kind and length,
+or a canonical pack pathname whose complete physical SHA-256, index coverage,
+member bounds and every logical member verify. Trailing bytes, incomplete streams,
+renamed or copied packs, foreign files and old write temporaries are unaccounted.
+No object-store temporary is live at the completion barrier. Empty directories
+contain no bytes and may remain. Links and special files refuse verification.
 
-Before deletion, the engine records only lengths, rolling signatures and SHA-256
-hashes in a versioned, checksummed private `erasure-verification.json` journal.
-Unknown formats and checksum damage refuse certification before lookup. No selected content is
-persisted there. Format 2 uses an at-most-eight-byte rolling suffix filter and
-full SHA-256 confirmation, so filtering work does not grow with the number of
-selected representation lengths. Constant byte runs skip only equivalent
-windows after checking a full maximum-length window; matches spanning slots
-still use the retained ring state. Zero-byte erasure retains its typed identity;
-it does not select unrelated empty structural kinds. These signatures let a retry verify raw copies at arbitrary
-offsets after canonical objects have already disappeared. SHA-256 confirms every
-rolling-hash candidate. The same writer lease covers reading/updating this proof,
-publication of pending denial, deletion, final scan and completion. Interrupted
-atomic proof/denial temporaries remain preserved and inspected during retry.
+Every accounted object is checked against permanent denial addresses and nonempty,
+type-independent payload SHA-256 digests. Empty payloads retain their typed address;
+unrelated empty structural objects remain valid. Denial and native accountability
+are required even if no byte diagnostic matches. Unknown files without the selected
+payload still make the store `unverifiable`; compressed variants and truncations
+cannot bypass this rule. The refusal names only a safe file class and a remedy.
 
-The preflight scan excludes only selected, verified files scheduled for deletion.
-The final scan excludes nothing. A hit throws typed `ErasureStorageRefusal` with
-`erasure_retained_copy`, a safe `fileClass` and a remedy. Foreign files are never
-deleted by the scanner. Harmless foreign files remain and are counted in the
-receipt's `storage.files`, `storage.foreign` and bounded `storage.classes` map.
-Unreadable, changing, aliased or excessive-decode storage refuses completion.
-Post-deletion failures leave denial pending; retries use the durable signatures
-and do not duplicate the completed operation receipt.
+Default obliteration preserves unaccounted files and refuses. An operator with
+current erase authority can explicitly authorize their deletion:
 
-Scanning keeps source/decoded slots bounded (64 KiB / 16 KiB) and rolling windows
-bounded by the largest selected representation. Decode work is limited to the
-larger of 16 MiB and six maximum-ratio DEFLATE passes over a file. Inspection
-is bounded to six nested codec layers, 32 active zlib streams per layer, 512
-live inspectors and 16 MiB base64 words. Exhaustion refuses a proof with
-`uninspectable_payload` (or the decode-budget refusal), rather than silently
-accepting an uninspected encoding. As before, complete recognized historical structure is required
-for attribution. This verifies the owned filesystem namespace under its writer
-lease, not secure sector wiping or copies outside that namespace.
+```sh
+pm vcs obliterate <file-id> --erase-token-file erase-token --reason incident --purge-unaccounted --json
+```
 
-Once an object descriptor is pinned, subsequent inventory validation uses only
-`fstat` and reads on that descriptor. Root, parent and leaf names are validated
-before pinning. Namespace retirement does not invalidate verified immutable
-bytes; in-place size/mtime changes still refuse. Link count and ctime are not
-content identities because unlinking changes them.
+```ts
+const receipt = repository.obliterate(fileId, eraseCredential, "incident", new Date(), {
+  purgeUnaccounted: true,
+});
+console.log(receipt.storage.accountable, receipt.purge.deleted, receipt.purge.omitted);
+```
 
-Regression evidence: 168 seeded stores across fourteen encodings and six locations,
-72 nested codec cases across nine forms, four alignments and two offsets, 27
-frame-kind/compression-level combinations with stripped wrappers, and
-406 actual pinned/native I/O boundary injections across all 25 reader APIs, nine
-logical SIGKILL cuts, 66 native proof/denial publication cuts, and a competing
-process at every logical erasure boundary on one non-git tracker.
+The typed SDK exports `ErasureOptions`, `ErasureAccountabilityReport`,
+`ErasurePurgeEntry` and `ErasurePurgeReceipt`. The existing writer lease covers the
+entire operation and releases last. Before unlinking an unaccounted file, a durable
+private `erasure-purge.json` plan records its relative pathname, class, physical
+SHA-256, byte count and device/inode/size/mtime identity. Audit arguments are
+validated before purge. The engine rechecks that exact identity immediately before
+unlinking; a repaired native peer is preserved. A retry without the flag can finish
+only its exact previously authorized plan. Foreign or invalid purge metadata
+refuses without granting deletion. Normal object deletion still follows FileId
+attribution and refuses another owner's shared payload.
 
-Older or imported denials can lack the byte-window evidence needed for a new
-physical certificate after source bytes are gone. This refuses with
-`incomplete_erasure_inventory` until verified source evidence is restored; it
-never treats a policy-only denial as a byte-deletion proof. Automatic transport
-of this additional evidence is tracked separately. Existing logical denials
-continue to block reads and arrivals.
+Purge receipts distinguish confirmed deletion, observed absence after interruption,
+and peer replacement. They contain exact counts and confirmed deleted bytes, at
+most 20 entries and an omitted count; they never include content. More than 20 files
+can be purged. The full journal remains private. A fresh verification follows any
+purge or receipt transition before completion is published. A crash can leave a
+pending denial or an incomplete purge plan; authorized rerun converges without
+repeating the completed operation receipt.
+
+Certification opens one registered descriptor at a time, parses from that fd,
+then compares `fstat(fd)` with `lstat(path)` using device, inode, size and mtime.
+A renamed, replaced or resized file restarts inspection. A final catalogue barrier
+checks every directory and pathname again, across all roots together. Each file
+and the complete scope have eight attempts; continued mutation returns
+`unverifiable`. Source reads and decoded slots are bounded to 64 KiB and 16 KiB.
+This pathname check belongs to certification: ordinary pinned object readers keep
+using their descriptor when compaction retires its pathname, as described above.
+
+Byte/fingerprint scans remain extra positive-copy diagnostics. Their checksummed
+private journal stores only lengths and digests, never selected bytes. A positive
+hit can refuse cleanup; a negative, unavailable or resource-limited diagnostic
+cannot certify absence. Missing or foreign diagnostic metadata is preserved and
+reported, while complete native accountability remains mandatory. Optional
+transport of these diagnostics is tracked separately; tombstone IDs and payload
+digests continue to deny reads and arrivals independently.
+
+Regression evidence includes 160 seeded store states across ten native/foreign/
+copied/renamed/truncated/overwritten forms, 190 exhaustive truncation/overwrite
+cases with an independent native decoder, and 32 replacement cells across every
+verification boundary for loose and packed files. Native purge publication,
+directory barriers and unlinking have 96 real SIGKILL cuts. A competing process
+runs at every accountability/purge boundary on one non-git tracker. Earlier reader
+retirement and resource-lifetime regressions remain part of the release gate.
+
+This certificate covers the inspected filesystem namespace under the native writer
+lease. It does not promise secure sector wiping, external backup removal, or
+protection against mutation after the final barrier by an actor bypassing that
+lease. Windows uses the documented namespace acknowledgment policy above.

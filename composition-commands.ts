@@ -146,6 +146,7 @@ export function registerCompositionCommands(api: ExtensionApi): void {
     flags: [
       { long: "--erase-token-file", value_name: "file", value_type: "string", description: "Local permanent-erasure credential file" },
       { long: "--reason", value_name: "code", value_type: "string", description: "Bounded audit reason code" },
+      { long: "--purge-unaccounted", description: "Explicitly delete identity-checked unaccounted object-store files, receipt them and re-verify" },
       { long: "--recover-lock", description: "Explicitly recover a crashed writer lock before authorized cleanup" },
     ],
     /** Persist denial before byte deletion and return only the typed audit receipt. */
@@ -158,7 +159,7 @@ export function registerCompositionCommands(api: ExtensionApi): void {
         authorize(repo.instanceLink?.controlDirectory ?? repo.controlDirectory, "erase", token);
         repo.objects.recoverWriterLock();
       }
-      return { ok: true, erasure: repo.obliterate(requiredArgument(context, 0, "FileId or indexed path", "pm vcs obliterate file --reason incident"), token, reason, new Date()) };
+      return { ok: true, erasure: repo.obliterate(requiredArgument(context, 0, "FileId or indexed path", "pm vcs obliterate file --reason incident"), token, reason, new Date(), { purgeUnaccounted: context.options?.purgeUnaccounted === true }) };
     },
   });
 }
