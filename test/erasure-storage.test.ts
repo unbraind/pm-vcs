@@ -224,8 +224,9 @@ test("physical proof includes dormant object directories in every registered ins
   const local=join(Repository.open(instance.root).controlDirectory,"objects");
   const ghost=place(local,"packs/backup.pack",deflateSync(frameObject("blob",f.bytes)));
   assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(2)),{code:"erasure_retained_copy"});assert.equal(f.repo.objects.denials().length,0);
+  place(f.repo.objects.storageRoot(),"packs/active-cache",Buffer.from("harmless active class overlap"));
   writeFileSync(ghost,"harmless foreign instance cache");place(local,"packs/"+"f".repeat(64)+".pack",Buffer.from("harmless inactive native-looking record"));const receipt=f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(2));
-  assert.ok(receipt.storage.foreign>=2);assert.equal(readFileSync(ghost,"utf8"),"harmless foreign instance cache");assert.equal(existsSync(join(instance.root,"asset")),false);
+  assert.equal(receipt.storage.classes["pack-storage"],3);assert.ok(receipt.storage.foreign>=3);assert.equal(readFileSync(ghost,"utf8"),"harmless foreign instance cache");assert.equal(existsSync(join(instance.root,"asset")),false);
 });
 
 

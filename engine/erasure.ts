@@ -184,7 +184,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const classes: Partial<Record<ErasureFileClass, number>> = {}; let files = 0; let foreign = 0;
       for (const root of roots) {
         const report = scanErasureStorage(root, payloads, excluded); files += report.files; foreign += root === store.storageRoot() ? report.foreign : report.files;
-        for (const kind of Object.keys(report.classes) as ErasureFileClass[]) classes[kind] = (classes[kind] ?? 0) + (report.classes[kind] ?? 0);
+        for (const [kind, count] of Object.entries(report.classes) as [ErasureFileClass, number][]) classes[kind] = (classes[kind] ?? 0) + count;
       }
       return { files, foreign, classes };
     };
