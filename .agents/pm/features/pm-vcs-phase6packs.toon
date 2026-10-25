@@ -2,12 +2,16 @@ id: pm-vcs-phase6packs
 title: Compact loose chunks into indexed pack storage
 description: "The measured slice uses existing compressed loose objects. Design pack compaction with stable uncompressed identities, indexed ranges, reachability-aware retention, resumable publication and authorized erasure compatibility."
 type: Feature
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-21T14:49:57.681Z"
+updated_at: "2026-10-25T00:35:13.936Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
+comments[1]{created_at,author,text}:
+  "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
 body: ""
