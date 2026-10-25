@@ -9,7 +9,8 @@ import { ObjectStore, ObjectStoreError, type ObjectLocation, type ObjectId, type
 /** Stream verified payload chunks without materializing compressed or inflated object bytes. */
 export function* objectPayloadChunks(path: string | ObjectLocation, id: ObjectId, type: ObjectType, timeoutMs = 30_000): Generator<Buffer> {
   const location = typeof path === "string" ? (() => {
-    const native = (basename(path) === id.slice(2) && basename(dirname(path)) === id.slice(0, 2)) || (basename(dirname(path)) === "packs" && /^[0-9a-f]{64}\.pack$/.test(basename(path)));
+    const loose = basename(dirname(path)) === id.slice(0, 2) && basename(path).slice(0, 62) === id.slice(2) && /^[0-9a-f]{62}(?:\.[0-9]+\.[0-9a-f]{12}\.tmp)?$/.test(basename(path));
+    const native = loose || (basename(dirname(path)) === "packs" && /^[0-9a-f]{64}\.pack$/.test(basename(path)));
     const store = new ObjectStore(native ? dirname(dirname(path)) : dirname(path));
     return store.resolveLocation(id, { path, standalone: !native });
   })() : path;

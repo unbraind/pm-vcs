@@ -94,12 +94,13 @@ The input tracker is read only. It does not report item content or local paths.
 All logical object readers share `ObjectStore.resolveLocation`: presence and
 kind probes, complete and bounded reads, typed reads, state inspection,
 hydration, inventories and both chunk and line iterators. Pack backend readers
-and the exported chunk decoder delegate to the same protocol. A generation
+and the exported chunk decoder delegate to the same protocol. The test inventory
+includes all 25 logical entry points, including shared-instance overrides. A generation
 marker covers the loose set and pack catalog under the existing writer lease.
 The resolver retries from the beginning when that generation changes, at most
 `OBJECT_READ_RETRIES` (8) times. Only an unchanged idle generation proves
 `object_not_found`; continued maintenance returns `object_store_changing` with
-a retry remedy. Operational I/O failures remain visible.
+a retry remedy, including state inspection without falsely reporting corruption. Operational I/O failures remain visible.
 
 Each successful resolution opens and retains one immutable descriptor and byte
 range. A stream retains that handle until its decompression worker terminates,

@@ -697,7 +697,7 @@ export class ObjectStore {
   state(id: ObjectId, read?: () => StoredObject): PayloadState {
     try { return { kind: "present", object: this.withLocation(id, (location) => read === undefined ? this.readLocation(id, location) : read(), { hydrate: true }) }; } catch (error) {
       if (error instanceof ObliteratedObjectError) return { kind: "obliterated", tombstone: error.tombstone };
-      if (!(error instanceof ObjectStoreError)) throw error;
+      if (!(error instanceof ObjectStoreError) || error.code === "object_store_changing") throw error;
       return { kind: error.code === "object_not_found" || error.code === "missing_fragment" ? "missing" : "corrupt", code: error.code };
     }
   }

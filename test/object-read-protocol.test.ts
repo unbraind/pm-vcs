@@ -4,11 +4,13 @@ import fs, { closeSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } f
 import { join } from "node:path";
 import { afterEach, mock, test } from "node:test";
 import ts from "typescript5";
+import { deflateSync } from "node:zlib";
 import { syncBuiltinESMExports } from "node:module";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { ObjectStore, OBJECT_READ_RETRIES, objectReadBoundary, type InventoryEntry } from "../engine/objects.ts";
+import { ObjectStore, frameObject, OBJECT_READ_RETRIES, objectReadBoundary, type InventoryEntry } from "../engine/objects.ts";
 import { PackStorage, packBoundary } from "../engine/packs.ts";
 import { objectPayloadChunks } from "../engine/object-stream.ts";
+import { SharedObjectStore } from "../engine/instances.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { Repository } from "../engine/repo.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -74,11 +76,15 @@ const readers: readonly Reader[] = [
   { name: "PackStorage.read", invoke: (f,id) => assert.deepEqual(new PackStorage(f.repo.objects.storageRoot()).read(id)?.payload,payload) },
   { name: "PackStorage.readAt", invoke: (f,id) => assert.deepEqual(new PackStorage(f.repo.objects.storageRoot()).readAt(id,join(f.repo.objects.storageRoot(),id.slice(0,2),id.slice(2))).payload,payload) },
   { name: "PackStorage.inventory", invoke: (f,id,d) => inventory(new PackStorage(f.repo.objects.storageRoot()).inventory(),id,d) },
+  { name: "SharedObjectStore.read", invoke: (f,id) => assert.deepEqual(new SharedObjectStore(f.repo.objects.storageRoot()).read(id).payload,payload) },
+  { name: "SharedObjectStore.readBoundedTyped", invoke: (f,id) => assert.deepEqual(new SharedObjectStore(f.repo.objects.storageRoot()).readBoundedTyped(id,"blob"),payload) },
+  { name: "SharedObjectStore.readLines", invoke: (f,id) => assert.deepEqual([...new SharedObjectStore(f.repo.objects.storageRoot()).readLines(id,"blob")],["line-a","line-b"]) },
+  { name: "SharedObjectStore.readChunks", invoke: (f,id) => assert.deepEqual(Buffer.concat([...new SharedObjectStore(f.repo.objects.storageRoot()).readChunks(id,"blob")]),payload) },
   { name: "objectPayloadChunks", invoke: (f,id) => assert.deepEqual(Buffer.concat([...objectPayloadChunks(join(f.repo.objects.storageRoot(),id.slice(0,2),id.slice(2)),id,"blob")]),payload) },
 ];
 /** Denial may be represented by the API's typed absence or its documented false/undefined state. */
 function verify(reader: Reader, f: Fixture, id: string, denied: boolean): void {
-  try { reader.invoke(f,id,denied); assert.ok(!denied || !["read","readBoundedTyped","readLines","readChunks","readTyped","readInventoryObject","PackStorage.read","PackStorage.readAt","objectPayloadChunks"].includes(reader.name), `${reader.name} returned denied bytes`); }
+  try { reader.invoke(f,id,denied); assert.ok(!denied || !["read","readBoundedTyped","readLines","readChunks","readTyped","readInventoryObject","PackStorage.read","PackStorage.readAt","SharedObjectStore.read","SharedObjectStore.readBoundedTyped","SharedObjectStore.readLines","SharedObjectStore.readChunks","objectPayloadChunks"].includes(reader.name), `${reader.name} returned denied bytes`); }
   catch (error) { if (!denied || !(error instanceof Error) || !("code" in error) || error.code !== "object_obliterated") throw error; }
 }
 
@@ -99,7 +105,11 @@ test("reader surface enumeration classifies every exported operation and prevent
   assert.deepEqual(packReaders.sort(),readers.filter((reader) => reader.name.startsWith("PackStorage.")).map((reader) => reader.name.slice(12)).sort());
   const streamSource = ts.createSourceFile("object-stream.ts",readFileSync(join(packageRoot,"engine/object-stream.ts"),"utf8"),ts.ScriptTarget.Latest,true);
   assert.deepEqual(streamSource.statements.filter(ts.isFunctionDeclaration).map((node) => node.name!.text),["objectPayloadChunks","objectPayloadLines"]); // lines is a pure decoder of caller-supplied chunks
-  assert.equal(readers.length,21);
+  const sharedSource = ts.createSourceFile("instances.ts",readFileSync(join(packageRoot,"engine/instances.ts"),"utf8"),ts.ScriptTarget.Latest,true);
+  const sharedDefinition = sharedSource.statements.find((node): node is ts.ClassDeclaration => ts.isClassDeclaration(node) && node.name?.text === "SharedObjectStore")!;
+  const sharedReaders = sharedDefinition.members.filter((member) => ts.isMethodDeclaration(member) && !member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword)).map((member) => member.name!.getText(sharedSource));
+  assert.deepEqual(sharedReaders.sort(),readers.filter((reader) => reader.name.startsWith("SharedObjectStore.")).map((reader) => reader.name.slice(18)).sort());
+  assert.equal(readers.length,25);
 });
 
 test("EVERY reader x EVERY compact/unpack/repack/GC boundary retains live bytes and never resurrects an erased object", async (t) => {
@@ -121,7 +131,7 @@ test("EVERY reader retries from the top or pins its opened handle when each stor
     verify(reader,f,f.live,false); objectReadBoundary.visit = () => {};
     verify(reader,f,f.erased,true); cells++;
   }
-  assert.equal(cells,588); t.diagnostic(`resolution matrix: ${readers.length} readers x 4 transitions x 7 resolver boundaries = ${cells} schedules, plus erased checks`);
+  assert.equal(cells,700); t.diagnostic(`resolution matrix: ${readers.length} readers x 4 transitions x 7 resolver boundaries = ${cells} schedules, plus erased checks`);
 });
 
 test("a retained object retries a retired pack catalog after concurrent GC repacks its survivors", async () => {
@@ -155,10 +165,15 @@ test("retry exhaustion is typed after exactly eight generations; stable absence 
   const f = await fixture(); let attempts = 0;
   objectReadBoundary.visit = (step) => { if (step === "generation") { attempts++; f.repo.objects.withWriteLock(() => f.repo.objects.markStorageGeneration()); } };
   assert.throws(() => f.repo.objects.has(f.live),{code:"object_store_changing"}); assert.equal(attempts,OBJECT_READ_RETRIES);
+  attempts = 0; assert.throws(() => f.repo.objects.state(f.live),{code:"object_store_changing"}); assert.equal(attempts,OBJECT_READ_RETRIES);
   objectReadBoundary.visit = () => {};
+  assert.equal(f.repo.objects.hasType("f".repeat(64),"blob"),false);
+  assert.throws(() => f.repo.objects.hasType("invalid","blob"),{code:"invalid_object_id"});
   assert.equal(f.repo.objects.has("f".repeat(64)),false); assert.throws(() => f.repo.objects.read("f".repeat(64)),{code:"object_not_found"});
   assert.throws(() => [...f.repo.objects.walkErasureInventory()],{code:"physical_read_requires_lease"});
   assert.throws(() => f.repo.objects.resolveLocation(f.live,{physical:true}),{code:"physical_read_requires_lease"});
+  assert.throws(() => [...new SharedObjectStore(f.repo.objects.storageRoot()).readChunks("f".repeat(64),"blob")],{code:"missing_fragment"});
+  assert.throws(() => [...new SharedObjectStore(f.repo.objects.storageRoot()).readChunks(f.live,"tree")],{code:"object_type_mismatch"});
 });
 
 
@@ -180,6 +195,13 @@ test("generation metadata refuses corruption and retries inconsistent snapshots 
   }
   objectReadBoundary.visit = (step) => { if (step === "pinned") throw Object.assign(new Error("stable disk failure"),{code:"EIO"}); };
   assert.throws(() => store.has(f.live),{code:"EIO"}); objectReadBoundary.visit = () => {};
+  const open = fs.openSync;
+  mock.method(fs,"openSync",(...args: Parameters<typeof fs.openSync>) => {
+    if (String(args[0]).endsWith(f.live.slice(2))) throw Object.assign(new Error("stable inventory permission failure"),{code:"EACCES"});
+    return open(...args);
+  }); syncBuiltinESMExports();
+  assert.throws(() => store.inventory(),{code:"EACCES"});
+  mock.restoreAll(); syncBuiltinESMExports();
   const stat = fs.fstatSync;
   mock.method(fs,"fstatSync",() => { throw Object.assign(new Error("descriptor unavailable"),{code:"EIO"}); }); syncBuiltinESMExports();
   assert.throws(() => store.resolveLocation(f.live),{code:"EIO"});
@@ -210,6 +232,17 @@ test("a pinned packed member refuses truncation without returning neighboring or
   const read = fs.readSync;
   mock.method(fs,"readSync",(fd: number, buffer: Buffer, offset: number, size: number, position: number) => { if (size === length) return 0; return read(fd,buffer,offset,size,position); }); syncBuiltinESMExports();
   assert.throws(() => store.read(f.live),{code:"corrupt_pack"});
+  assert.throws(() => new PackStorage(store.storageRoot()).type(f.live),{code:"corrupt_pack"});
   mock.restoreAll(); syncBuiltinESMExports();
+  assert.equal(new PackStorage(store.storageRoot()).type("f".repeat(64)),undefined);
   const loose = join(store.storageRoot(),f.live.slice(0,2),f.live.slice(2)); mkdirSync(loose); assert.equal(store.has(f.live),false);
+});
+
+
+test("recognized loose temporary streams enforce the store's permanent denial before decoding", async () => {
+  const f = await fixture(); const temporary = join(f.repo.objects.storageRoot(),f.erased.slice(0,2),`${f.erased.slice(2)}.123.abcdef123456.tmp`);
+  writeFileSync(temporary,deflateSync(frameObject("blob",Buffer.from("selected-read-protocol-erasure-936492125-long-enough"))));
+  assert.throws(() => [...objectPayloadChunks(temporary,f.erased,"blob")],{code:"object_obliterated"});
+  // Raw arbitrary-file decoding remains a codec; native object addresses, packs and recognized temporaries have store authorization.
+  assert.ok(f.repo.objects.inventory().every((entry) => entry.id !== f.erased));
 });

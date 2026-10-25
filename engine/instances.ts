@@ -266,6 +266,11 @@ export class SharedObjectStore extends ObjectStore {
     try { yield* super.readLines(id, type); } catch (error) { this.missing(id, error); }
   }
 
+  /** Keep chunk-stream absence actionable for shared instances throughout the verified iterator. */
+  *readChunks(id: ObjectId, type: ObjectType, timeoutMs?: number): Generator<Buffer> {
+    try { yield* super.readChunks(id, type, timeoutMs); } catch (error) { this.missing(id, error); }
+  }
+
   /** Translate only absence; preserve corruption and operational filesystem failures. */
   private missing(id: ObjectId, error: unknown): never {
     if (error instanceof ObjectStoreError && error.code === "object_not_found") {
