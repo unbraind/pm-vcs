@@ -6,18 +6,19 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-25T00:59:35.480Z"
+updated_at: "2026-10-25T01:09:14.347Z"
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[6]{created_at,author,text}:
+comments[7]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
   "2026-10-25T00:53:16.802Z",codex-agent,"PM-linked targeted command passed 64/64 tests with zero skips, failures or cancellations, including real SIGKILL and competing-process schedules on one non-git tracker. Follow-up focused checks passed the foreign-record tolerance, real inventory ranges, all 48 command contracts, and bounded agent receipts. Additional revert proofs: removing only the 20-entry receipt cap failed its omission-count regression; restoring only the original collectGarbage failed the random-corpus differential test by losing live packed reads. Project test-result tracking is disabled by existing policy, so these measured results are recorded here rather than changing that setting."
   "2026-10-25T00:54:25.140Z",codex-agent,"Public real-data validation: read-only copy of the public unbraind/pm-vcs tracker at c7790d45aab22a3a28b4d44955a592dfc06e715e, 330 tracked files and 343 native objects in a non-git project. Loose: 343 files, 1357177 compressed bytes, 2187264 allocated bytes; pack: 1 file, 1262545 compressed bytes, 1265664 allocated bytes. Warm verified-read median/p95 (301 samples): loose 0.105721/0.894680 ms; packed 0.241476/1.440179 ms. All 686 differential reads across compaction and GC matched; GC removed 0 live objects. Packed reads are slower in this measurement; no speedup claim. Aggregate receipt: docs/indexed-pack-benchmark.json. Full npm/Bun release-gate evidence will come from CI because the shared host is saturated."
   "2026-10-25T00:59:33.858Z",codex-agent,"Ready-for-review PR: https://github.com/unbraind/pm-vcs/pull/150 . Final concurrency hardening rejects symlink-aliased object roots before staging recovery can touch a store protected by a different lexical lease path. The focused maintenance/foreign/output tests passed 3/3; disabling only the early root guard made the ownership-preservation regression fail (1 test, 1 failure), then restoration passed. Local typecheck, test typecheck and lint passed. The self-host writer/committed acceptance gate is repeated for this change and PM metadata. Full unchanged-threshold npm/Bun gates are running in PR CI; final exact-head counts and links will be published in the PR and handoff. Item stays in_progress for orchestrator verification; no merge or release."
-files[11]{path,scope}:
+  "2026-10-25T01:09:11.793Z",codex-agent,"CI run https://github.com/unbraind/pm-vcs/actions/runs/40148633317 measured all 83 production files at 100% statements, branches, functions and lines on Node 22 and 26. Its sole test failure was the explicit source-inventory assertion still declaring 80 files (1901/1902 tests passed); Bun was correctly not counted as evidence. Updated that declaration to 83 to include engine/packs.ts, engine/object-error.ts and scripts/pack-benchmark.ts, preserving every coverage threshold and ignore-directive guard. The focused raw-coverage tests pass after the inventory correction. Exact-head full npm/Bun gates will rerun after this committed self-host update."
+files[12]{path,scope}:
   engine/erasure.ts,project
   engine/gc.ts,project
   engine/object-error.ts,project
@@ -27,6 +28,7 @@ files[11]{path,scope}:
   scripts/pack-benchmark.ts,project
   test/helpers/pack-worker.ts,project
   test/packs.test.ts,project
+  test/raw-coverage.test.ts,project
   test/vcs-commands.test.ts,project
   vcs-commands.ts,project
 tests[3]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
