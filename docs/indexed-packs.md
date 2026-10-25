@@ -157,3 +157,48 @@ throw, async stream destroy and AbortController cancellation. Eight Linux child
 processes with a 128-descriptor limit each perform 10,000 consecutive synchronous
 stream operations without an event-loop turn (80,000 total), checking descriptor
 and ownership baselines after every operation.
+
+### Physical erasure verification
+
+Obliteration independently scans **every regular file** below the object-storage
+root, including pack, loose, temporary and arbitrary foreign subdirectories.
+Names, extensions, pack magic and recognized inventory entries do not define the
+proof boundary. It detects raw payloads, typed frames, canonical payload base64
+(as written by bundles), and embedded zlib streams at any byte offset, including
+pack members and recoverable data with a truncated or invalid checksum. All
+compression levels written by loose storage, unpacking and packs are covered.
+
+Before deletion, the engine records only lengths, rolling signatures and SHA-256
+hashes in private `erasure-verification.json` metadata. No selected content is
+persisted there. These signatures let a retry verify raw copies at arbitrary
+offsets after canonical objects have already disappeared. SHA-256 confirms every
+rolling-hash candidate. The same writer lease covers reading/updating this proof,
+publication of pending denial, deletion, final scan and completion. Interrupted
+atomic proof/denial temporaries remain preserved and inspected during retry.
+
+The preflight scan excludes only selected, verified files scheduled for deletion.
+The final scan excludes nothing. A hit throws typed `ErasureStorageRefusal` with
+`erasure_retained_copy`, a safe `fileClass` and a remedy. Foreign files are never
+deleted by the scanner. Harmless foreign files remain and are counted in the
+receipt's `storage.files`, `storage.foreign` and bounded `storage.classes` map.
+Unreadable, changing, aliased or excessive-decode storage refuses completion.
+Post-deletion failures leave denial pending; retries use the durable signatures
+and do not duplicate the completed operation receipt.
+
+Scanning keeps source/decoded slots bounded (64 KiB / 16 KiB) and rolling windows
+bounded by the largest selected representation. Decode work is limited to the
+larger of 16 MiB and six maximum-ratio DEFLATE passes over a file; exhaustion
+refuses a proof. As before, complete recognized historical structure is required
+for attribution. This verifies the owned filesystem namespace under its writer
+lease, not secure sector wiping or copies outside that namespace.
+
+Once an object descriptor is pinned, subsequent inventory validation uses only
+`fstat` and reads on that descriptor. Root, parent and leaf names are validated
+before pinning. Namespace retirement does not invalidate verified immutable
+bytes; in-place size/mtime changes still refuse. Link count and ctime are not
+content identities because unlinking changes them.
+
+Regression evidence: 120 seeded stores across ten encodings and six locations,
+406 actual pinned/native I/O boundary injections across all 25 reader APIs, nine
+logical SIGKILL cuts, 66 native proof/denial publication cuts, and a competing
+process at every logical erasure boundary on one non-git tracker.

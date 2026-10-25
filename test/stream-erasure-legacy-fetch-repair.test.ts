@@ -173,7 +173,7 @@ test("streaming inventory preserves the collecting API and verifies canonical an
   repo.obliterate("selected", "erase-fixture", "incident", new Date(2000)); assert.equal(existsSync(path), false); assert.equal(existsSync(temporary), false);
 });
 
-for (const damage of ["corrupt-temp", "missing-history", "unknown-storage"] as const) test(`streaming erasure refuses unrelated ${damage} before durable mutation`, () => {
+for (const damage of ["corrupt-temp", "missing-history", "unknown-storage"] as const) test(`streaming erasure byte proof handles unrelated ${damage}`, () => {
   const { repo, selected } = fixture();
   if (damage === "corrupt-temp") writeFileSync(`${objectPath(repo, selected.id)}.123.abcdef123456.tmp`, "invalid compressed copy");
   if (damage === "missing-history") {
@@ -183,9 +183,17 @@ for (const damage of ["corrupt-temp", "missing-history", "unknown-storage"] as c
   }
   if (damage === "unknown-storage") mkdirSync(join(repo.controlDirectory, "objects", "pack"));
   const before = durable(repo);
-  assert.throws(() => repo.obliterate(selected.fileId!, "erase-fixture", "incident", new Date(2000)),
-    { code: { "corrupt-temp": "corrupt_object", "missing-history": "incomplete_erasure_inventory", "unknown-storage": "unsupported_erasure_storage" }[damage] });
-  assert.deepEqual(durable(repo), before); assert.deepEqual(readFileSync(join(repo.root, "selected")), selectedBytes);
+  if (damage === "missing-history") {
+    assert.throws(() => repo.obliterate(selected.fileId!, "erase-fixture", "incident", new Date(2000)), { code: "incomplete_erasure_inventory" });
+    assert.deepEqual(durable(repo), before); assert.deepEqual(readFileSync(join(repo.root, "selected")), selectedBytes);
+  } else {
+    const receipt = repo.obliterate(selected.fileId!, "erase-fixture", "incident", new Date(2000));
+    assert.equal(repo.objects.denials()[0].pending, false); assert.equal(existsSync(join(repo.root,"selected")),false);
+    if (damage === "corrupt-temp") {
+      assert.equal(readFileSync(`${objectPath(repo, selected.id)}.123.abcdef123456.tmp`,"utf8"), "invalid compressed copy");
+      assert.equal(receipt.storage.classes["temporary-storage"],1);
+    } else assert.ok(lstatSync(join(repo.controlDirectory,"objects","pack")).isDirectory());
+  }
 });
 
 for (const change of ["new-copy", "lost-copy"] as const) test(`streaming second pass refuses a real ${change} before denial`, () => {
@@ -202,7 +210,7 @@ for (const change of ["new-copy", "lost-copy"] as const) test(`streaming second 
   assert.deepEqual(repo.refs.list("refs/"), refs); assert.deepEqual(repo.operations.read(), log); assert.deepEqual(readFileSync(join(repo.root, "selected")), selectedBytes);
 });
 
-for (const changed of ["leaf", "parent", "root", "in-place"] as const) test(`physical inventory refuses real ${changed} replacement during a verified read`, () => {
+for (const changed of ["leaf", "parent", "root", "in-place"] as const) test(`pinned physical inventory tolerates namespace replacement and refuses ${changed} byte mutation`, () => {
   const { repo, selected } = fixture(); const path = objectPath(repo, selected.id); const root = join(repo.controlDirectory, "objects");
   const read = fs.readFileSync; let changedOnce = false;
   mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
@@ -219,7 +227,9 @@ for (const changed of ["leaf", "parent", "root", "in-place"] as const) test(`phy
     }
     return result;
   }); syncBuiltinESMExports();
-  assert.throws(() => repo.objects.readInventoryObject(selected.id, path), { code: "unsupported_erasure_storage" }); assert.equal(changedOnce, true);
+  if (changed === "in-place") assert.throws(() => repo.objects.readInventoryObject(selected.id, path), { code: "unsupported_erasure_storage" });
+  else assert.deepEqual(repo.objects.readInventoryObject(selected.id,path).payload, selectedBytes);
+  assert.equal(changedOnce, true);
 });
 
 test("physical inventory rejects actual directory and leaf aliases and preserves native read errno", () => {

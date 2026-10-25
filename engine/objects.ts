@@ -351,7 +351,7 @@ export class ObjectStore {
         }
         if (location === undefined) return undefined;
         const pinned = location;
-        const check = physical || options.standalone ? () => {} : () => this.assertVisible(id);
+        const check = () => { objectReadBoundary.visit("pinned-check", id, attempt); if (!physical && !options.standalone) this.assertVisible(id); };
         objectReadBoundary.visit("pinned", id, attempt);
         check();
         return { ...pinned, generation: after.key, check,
@@ -807,14 +807,14 @@ export class ObjectStore {
   /** Inspect intentionally denied physical copies only inside authorized maintenance's writer transaction. @internal */
   *walkErasureInventory(kind: "all" | "pack" = "all"): Generator<InventoryEntry> {
     if (!activeLeases.has(resolve(this.root))) throw new ObjectStoreError("physical_read_requires_lease", "Physical erasure inspection requires the owning writer lease.");
-    yield* this.walkRepresentations(kind, undefined, true);
+    yield* this.walkRepresentations(kind, [], true);
   }
 
   /** Re-read one denied physical copy for an already authorized erasure plan. @internal */
   readErasureObject(id: ObjectId, path: string): StoredObject { return this.inventoryObject(id, path, true); }
 
   /** Collect names only, so incomplete recognized temporaries cannot reach a decoder on the compaction path. */
-  private looseLocations(skipped?: { name: string; reason: string }[]): { id: ObjectId; path: string }[] {
+  private looseLocations(skipped?: { name: string; reason: string }[], physical = false): { id: ObjectId; path: string }[] {
     const result: { id: ObjectId; path: string }[] = [];
     if (!existsSync(this.root)) return result;
     if (!lstatSync(this.root).isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Object storage cannot follow a symlink.");
@@ -830,7 +830,7 @@ export class ObjectStore {
           throw new ObjectStoreError("unsupported_erasure_storage", "Unindexed storage artefacts prevent a complete erasure inventory.");
         }
         const id = directory.name + file.name.slice(0, 62);
-        if (skipped !== undefined && file.name.endsWith(".tmp")) { skipped.push({ name: id, reason: "loose write temporary; retained for its writer" }); continue; }
+        if (skipped !== undefined && file.name.endsWith(".tmp") && !physical) { skipped.push({ name: id, reason: "loose write temporary; retained for its writer" }); continue; }
         result.push({ id, path: join(this.root, directory.name, file.name) });
       }
     }
@@ -838,12 +838,12 @@ export class ObjectStore {
   }
 
   /** Snapshot the loose set and pack indexes in one unchanged generation before yielding any representation. */
-  private representationLocations(kind: "all" | "loose" | "pack", skipped?: { name: string; reason: string }[]): { id: ObjectId; path: string }[] {
+  private representationLocations(kind: "all" | "loose" | "pack", skipped?: { name: string; reason: string }[], physical = false): { id: ObjectId; path: string }[] {
     for (let attempt = 0; attempt < OBJECT_READ_RETRIES; attempt++) {
       const before = this.storageGeneration(); const notes: { name: string; reason: string }[] | undefined = skipped === undefined ? undefined : [];
       let result: { id: ObjectId; path: string }[];
       objectReadBoundary.visit("inventory", "*", attempt);
-      try { result = [...(kind === "pack" ? [] : this.looseLocations(notes)), ...(kind === "loose" ? [] : this.packs.locations())]; }
+      try { result = [...(kind === "pack" ? [] : this.looseLocations(notes, physical)), ...(kind === "loose" ? [] : this.packs.locations())]; }
       catch (error) { const after = this.storageGeneration(); if (before.key !== after.key || !after.consistent) continue; throw error; }
       const after = this.storageGeneration();
       if (!before.consistent || !after.consistent || before.key !== after.key || before.active || after.active) continue;
@@ -856,7 +856,7 @@ export class ObjectStore {
   /** Verify each snapshot member using a pinned current location, deduplicating physical fallbacks after a transition. */
   private *walkRepresentations(kind: "all" | "loose" | "pack", skipped?: { name: string; reason: string }[], physical = false): Generator<InventoryEntry> {
     const seen = new Set<string>();
-    for (const entry of this.representationLocations(kind, skipped)) {
+    for (const entry of this.representationLocations(kind, skipped, physical)) {
       let location: ObjectLocation | undefined;
       try { location = this.resolveLocation(entry.id, { path: entry.path, physical }); }
       catch (error) { if (error instanceof ObliteratedObjectError) continue; throw error; }
@@ -864,7 +864,13 @@ export class ObjectStore {
       try {
         if ((kind === "loose" && location.packed !== undefined) || (kind === "pack" && location.packed === undefined)) continue;
         const key = `${location.path}:${entry.id}`; if (seen.has(key)) continue; seen.add(key);
-        const object = this.readInventoryLocation(entry.id, location); location.check();
+        let object: StoredObject;
+        try { object = this.readInventoryLocation(entry.id, location); }
+        catch (error) {
+          if (physical && entry.path.endsWith(".tmp") && error instanceof ObjectStoreError && ["corrupt_object", "malformed_object"].includes(error.code)) continue;
+          throw error;
+        }
+        location.check();
         yield { id: entry.id, path: location.path, object, bytes: location.bytes ?? location.length, ...(location.packed === undefined ? {} : { packed: location.packed }) };
       } finally { location.close(); }
     }
@@ -891,18 +897,14 @@ export class ObjectStore {
     return this.withLocation(id, (location) => this.readInventoryLocation(id, location), { path, physical });
   }
 
-  /** Keep strict physical identity checks inside a stable generation; legitimate representation retirement keeps its opened handle valid. */
+  /** Once pinned, validate only descriptor identity and bytes; pathname retirement never invalidates an immutable read. */
   private readInventoryLocation(id: ObjectId, location: ObjectLocation): StoredObject {
-    const root = lstatSync(this.root, { bigint: true });
-    const parent = lstatSync(dirname(location.path), { bigint: true });
-    const leaf = fstatSync(location.fd, { bigint: true });
-    if (!root.isDirectory() || !parent.isDirectory() || !leaf.isFile()) throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory cannot follow directory or leaf links.");
+    const before = fstatSync(location.fd, { bigint: true });
+    if (!before.isFile()) throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory requires a regular pinned descriptor.");
     const object = this.readLocation(id, location);
-    if (location.generation === this.storageGeneration().key) {
-      const current = lstatSync(location.path, { bigint: true }); const currentRoot = lstatSync(this.root, { bigint: true }); const currentParent = lstatSync(dirname(location.path), { bigint: true });
-      if (current.dev !== leaf.dev || current.ino !== leaf.ino || current.mtimeNs !== leaf.mtimeNs || current.ctimeNs !== leaf.ctimeNs || current.size !== leaf.size
-        || currentRoot.dev !== root.dev || currentRoot.ino !== root.ino || currentParent.dev !== parent.dev || currentParent.ino !== parent.ino) throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory identity changed during its verified read.");
-    }
+    const after = fstatSync(location.fd, { bigint: true });
+    // Unlinking changes ctime/link count, but leaves this descriptor and its verified bytes intact.
+    if (before.dev !== after.dev || before.ino !== after.ino || before.mtimeNs !== after.mtimeNs || before.size !== after.size) throw new ObjectStoreError("unsupported_erasure_storage", "Pinned inventory bytes changed during verification.");
     return object;
   }
 

@@ -1,12 +1,13 @@
+import { fingerprint, matchesFingerprints, readFingerprints, scanErasureStorage, erasureScanBoundary, type ErasureFingerprint, type ErasureStorageReport } from "./erasure-scan.ts";
 import { durability } from "./durability.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Authorized FileId-scoped erasure over the complete supported loose storage backend. */
 import { type BigIntStats, existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { authorize, readLayers, assertCompositionPath, syncDirectory } from "./composition.ts";
+import { authorize, readLayers, assertCompositionPath, syncDirectory, writePrivateJson } from "./composition.ts";
 import { payloadDigest, encodeTombstone, type ErasureDenial } from "./lifecycle.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
-import { frameObject, hashObject, ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
+import { frameObject, hashObject, readControlJson, ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
 import { inspectClosure } from "./closure.ts";
 import { inspectRepresentations } from "./representations.ts";
 import { ALWAYS_IGNORED } from "./ignore.ts";
@@ -22,6 +23,8 @@ export interface ErasureReceipt {
   readonly tombstone: ObjectId;
   /** Permanently denied object addresses, including fragments. */
   readonly removed: readonly ObjectId[];
+  /** Every surviving regular storage file was inspected, including harmless foreign files. */
+  readonly storage: ErasureStorageReport;
 }
 
 /** Whole-store planning metadata excludes leaf buffers and retains only ownership and payload references. */
@@ -54,9 +57,9 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, Inventory
 /** Refuse unsupported control storage and temporary metadata copies before reporting physical erasure. */
 function assertSupportedControl(control: string): void {
   const supported = new Set(["objects", "refs", "leases", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "remotes.json",
-    "partial.json", "upload-roots.json", "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "objects.generation", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
+    "partial.json", "upload-roots.json", "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "objects.generation", "erasure-verification.json", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
   for (const entry of readdirSync(control, { withFileTypes: true })) {
-    if ((!supported.has(entry.name) && !(entry.isFile() && /^objects\.(?:lock\.[0-9]+|generation)\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
+    if ((!supported.has(entry.name) && !(entry.isFile() && /^(?:objects\.(?:lock\.[0-9]+|generation)|(?:erasure-verification|denials)\.json)\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Unknown control storage or symlinks prevent a complete erasure receipt.");
     }
   }
@@ -75,20 +78,20 @@ function assertSupportedControl(control: string): void {
 }
 
 /** Detect recoverable selected bytes in raw, compressed and base64 worktree representations. */
-function containsSelectedBytes(bytes: Buffer, payloads: readonly Buffer[]): boolean {
-  return inspectRepresentations(bytes, /** A retained full payload or fragment prevents a false physical-erasure receipt. */ (candidate) => payloads.some(/** Preserve ambiguous or independently owned copies rather than deleting them. */ (payload) => candidate.includes(payload)));
+function containsSelectedBytes(bytes: Buffer, payloads: readonly ErasureFingerprint[]): boolean {
+  return inspectRepresentations(bytes, /** A retained full payload or fragment prevents a false physical-erasure receipt. */ (candidate) => matchesFingerprints(candidate, payloads));
 }
 
 /** Inspect a schema-validated live writer PID as raw and canonical base64 bytes, without mistaking decimal 80-prefixed PIDs for zlib streams. */
-function containsPidBytes(bytes: Buffer, payloads: readonly Buffer[]): boolean {
-  if (payloads.some((payload) => bytes.includes(payload))) return true;
+function containsPidBytes(bytes: Buffer, payloads: readonly ErasureFingerprint[]): boolean {
+  if (matchesFingerprints(bytes, payloads)) return true;
   const text = bytes.toString("utf8");
   const decoded = Buffer.from(text, "base64");
   return decoded.toString("base64") === text && containsSelectedBytes(decoded, payloads);
 }
 
 /** Validate proposed and actual audit representations without retaining a selected payload in generated metadata. */
-function assertAuditSafe(candidates: readonly Buffer[], payloads: readonly Buffer[]): void {
+function assertAuditSafe(candidates: readonly Buffer[], payloads: readonly ErasureFingerprint[]): void {
   for (const candidate of candidates) if (containsSelectedBytes(candidate, payloads)) {
     throw new ObjectStoreError("erasure_audit_conflict", "Generated audit metadata retains selected bytes; choose nonconflicting bounded metadata before retrying.");
   }
@@ -155,14 +158,20 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         throw new ObjectStoreError("erasure_dedup_conflict", "An unrelated manifest or conflict references payloads selected for erasure.");
       }
     }
-    const payloads: Buffer[] = [];
+    const proofsPath = join(control, "erasure-verification.json");
+    const proofs = readFingerprints(readControlJson(proofsPath, "unsupported_erasure_storage", "erasure verification", {}));
+    const payloads: ErasureFingerprint[] = [...(existing === undefined ? [] : proofs[existing.id] ?? [])];
     const loaded = new Set<ObjectId>();
     for (const [path, id] of physical) {
       if (!selected.has(id) || loaded.has(id)) continue;
       const object = store.readErasureObject(id, path);
       loaded.add(id);
-      if (object.type !== "manifest" && object.payload.length > 0) payloads.push(object.payload);
+      payloads.push(fingerprint(frameObject(object.type, object.payload)));
+      if (object.type !== "manifest" && object.payload.length > 0) payloads.push(fingerprint(object.payload), fingerprint(Buffer.from(object.payload.toString("base64"))));
     }
+    if (payloads.length === 0) throw new ObjectStoreError("incomplete_erasure_inventory", "No persisted byte proof is available; restore a verified selected representation before retrying.");
+    const deleting = new Set([...physical].filter(([_path,id]) => selected.has(id)).map(([path]) => path));
+    scanErasureStorage(store.storageRoot(), payloads, deleting);
     // A second complete verified pass inspects copies without retaining unrelated leaves.
     const inspected = new Set<string>();
     for (const { id, path, object } of store.walkErasureInventory()) {
@@ -239,9 +248,15 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const summary = `Obliterated FileId ${fileId}; tombstone ${id}.`;
       const operation = { sequence: repository.operations.read().length + 1, command: "obliterate", at: now.toISOString(), summary, refs: [] };
       assertAuditSafe([frameObject("tombstone", payload), Buffer.from(JSON.stringify(next)), Buffer.from(JSON.stringify(completed)), Buffer.from(`${JSON.stringify(operation)}\n`)], payloads);
+      const signatures = [...new Map(payloads.map((item) => [`${item.length}:${item.rolling}:${item.digest}`,item])).values()];
+      const updatedProofs = { ...proofs, [id]: signatures };
+      assertAuditSafe([Buffer.from(JSON.stringify(updatedProofs))], payloads);
+      if (JSON.stringify(proofs) !== JSON.stringify(updatedProofs)) writePrivateJson(proofsPath, updatedProofs);
+      erasureScanBoundary.visit("proof-persisted");
       // Preflight every proposed representation before the first audit-object or denial write.
       if (existing === undefined) store.write("tombstone", payload);
       store.recordDenials(next);
+      erasureScanBoundary.visit("pending");
       const directories = new Set<string>();
       for (const [instance, paths] of removals) {
         for (const [path, stat] of paths) {
@@ -253,11 +268,18 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         if (!selected.has(objectId)) continue;
         durability.remove(path, { force: true });
         directories.add(dirname(path));
+        erasureScanBoundary.visit("object-deleted");
       }
       for (const directory of directories) syncDirectory(directory);
+      const storage = scanErasureStorage(store.storageRoot(), signatures);
+      erasureScanBoundary.visit("storage-verified");
       store.recordDenials(completed);
-      repository.operations.append("obliterate", summary, [], now, undefined, /** Validate the exact assigned receipt even if an independent log writer changed its sequence. */ (receipt) => assertAuditSafe([Buffer.from(`${JSON.stringify(receipt)}\n`)], payloads));
-      return { fileId, tombstone: id, removed: [...selected].sort() };
+      erasureScanBoundary.visit("completed");
+      if (!repository.operations.read().some((entry) => entry.command === "obliterate" && entry.summary === summary)) {
+        repository.operations.append("obliterate", summary, [], now, undefined, /** Validate the exact assigned receipt even if an independent log writer changed its sequence. */ (receipt) => assertAuditSafe([Buffer.from(`${JSON.stringify(receipt)}\n`)], payloads));
+      }
+      erasureScanBoundary.visit("receipt");
+      return { fileId, tombstone: id, removed: [...selected].sort(), storage };
     } finally {
       for (const mutation of mutations.values()) mutation.close();
     }

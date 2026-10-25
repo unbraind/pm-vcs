@@ -1019,3 +1019,8 @@ Indexed-pack and loose readers close owned descriptors before returning or
 finishing iteration, including early consumer cancellation. Streaming reads use
 a bounded synchronous decoder; see the [descriptor ownership contract](docs/indexed-packs.md#descriptor-ownership)
 and its per-operation, low-descriptor-limit regression checks.
+
+Obliteration verifies all regular files in object storage, including foreign and
+renamed packs. Retained copies block completion with a typed storage-class remedy;
+clean foreign files are preserved and counted. See [physical erasure verification](docs/indexed-packs.md#physical-erasure-verification)
+for resumable fingerprint proofs and descriptor-only inventory validation.

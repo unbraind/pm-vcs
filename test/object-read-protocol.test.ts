@@ -1,7 +1,8 @@
 /** Every logical reader shares generation retries, pinned handles and terminal denial enforcement. */
 import assert from "node:assert/strict";
 import fs, { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
 import { afterEach, mock, test } from "node:test";
 import ts from "typescript5";
 import { deflateSync } from "node:zlib";
@@ -13,11 +14,13 @@ import { objectPayloadChunks } from "../engine/object-stream.ts";
 import { SharedObjectStore } from "../engine/instances.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { Repository } from "../engine/repo.ts";
+import { objectFiles, type ObjectFile } from "../engine/object-files.ts";
+import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { lifetimeReaders } from "./helpers/object-lifetime.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const temporary: ReturnType<typeof makeTempDir>[] = [];
-afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); packBoundary.visit = () => {}; objectReadBoundary.visit = () => {}; for (const dir of temporary.splice(0)) dir.cleanup(); });
+afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); objectFiles.opened = () => {}; packBoundary.visit = () => {}; objectReadBoundary.visit = () => {}; for (const dir of temporary.splice(0)) dir.cleanup(); });
 const payload = Buffer.from("line-a\nline-b\n");
 /** One real SDK tracker retains one object and permanently erases a second before all schedules. */
 async function fixture() {
@@ -227,6 +230,7 @@ test("inventory retries catalog errors after transitions and deduplicates a reti
   assert.ok(store.inventory().some((entry) => entry.id === f.live)); assert.ok(once);
   mock.restoreAll(); syncBuiltinESMExports();
   objectReadBoundary.visit = (step) => { if (step === "pinned") { objectReadBoundary.visit = () => {}; const dir = join(store.storageRoot(),f.live.slice(0,2)); fs.renameSync(dir,dir+"-old"); writeFileSync(dir,"replacement"); } };
+  assert.deepEqual(store.readInventoryObject(f.live,loose).payload,payload);
   assert.throws(() => store.readInventoryObject(f.live,loose),{code:"unsupported_erasure_storage"});
 });
 
@@ -251,4 +255,74 @@ test("recognized loose temporary streams enforce the store's permanent denial be
   assert.throws(() => [...objectPayloadChunks(temporary,f.erased,"blob")],{code:"object_obliterated"});
   // Raw arbitrary-file decoding remains a codec; native object addresses, packs and recognized temporaries have store authorization.
   assert.ok(f.repo.objects.inventory().every((entry) => entry.id !== f.erased));
+});
+
+
+test("EVERY pinned reader boundary tolerates an external retirement with unchanged generation and lock", async(t)=>{
+  const f=await fixture(); const store=f.repo.objects; let schedules=0; let points=0; let empty=0;
+  /** Record every actual descriptor fstat/read boundary and every visibility check after resolution. */
+  const observe=(reader:Reader,ordinal:number,plan:string):string[]=>{
+    const trace:string[]=[]; const owners=new Map<ObjectFile,string>(); const pinned=new Set<ObjectFile>(); let injected=false;
+    const root=store.storageRoot();
+    /** Inject one competing process while preserving the exact observed generation/lease state. */
+    const boundary=(name:string):void=>{
+      trace.push(name);
+      if(ordinal===0 || trace.length!==ordinal) return;
+      const marker=readFileSync(join(f.repo.controlDirectory,"objects.generation")); const lock=fs.lstatSync(join(f.repo.controlDirectory,"objects.lock"),{bigint:true});
+      const child=spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/external-object-retirement.ts"),plan],{env:{...process.env,...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.repo.root)},encoding:"utf8",timeout:30_000});
+      assert.equal(child.status,0,child.stderr); assert.deepEqual(readFileSync(join(f.repo.controlDirectory,"objects.generation")),marker);
+      const same=fs.lstatSync(join(f.repo.controlDirectory,"objects.lock"),{bigint:true}); assert.equal(same.ino,lock.ino); assert.equal(same.mtimeNs,lock.mtimeNs); injected=true;
+    };
+    objectFiles.opened=(file,path)=>{owners.set(file,path);};
+    objectReadBoundary.visit=(step)=>{
+      if(step==="pinned") { for(const file of objectFiles.active) if(owners.get(file)?.startsWith(root+"/")) pinned.add(file); boundary("pinned"); }
+      if(step==="pinned-check") boundary("pinned-check");
+    };
+    for(const name of ["fstatSync","readSync","readFileSync"] as const) {
+      const original=fs[name];
+      mock.method(fs,name,(...args:unknown[])=>{
+        const active=typeof args[0]==="number" && [...pinned].some((file)=>file.fd===args[0]&&objectFiles.active.has(file));
+        if(active) boundary(`${name}:before`);
+        const value:unknown=Reflect.apply(original,fs,args);
+        if(active) boundary(`${name}:after`);
+        return value;
+      });
+    }
+    const stat=fs.lstatSync;
+    mock.method(fs,"lstatSync",(...args:Parameters<typeof fs.lstatSync>)=>{
+      if([...pinned].some((file)=>objectFiles.active.has(file)) && (String(args[0])===root || String(args[0]).startsWith(root+"/"))) throw new Error("Pinned reader rechecked a retired pathname");
+      return stat(...args);
+    }); syncBuiltinESMExports();
+    try { store.withWriteLock(()=>verify(reader,f,f.live,false)); if(ordinal>0) assert.ok(injected,`${reader.name} missing boundary ${ordinal}`); }
+    finally { mock.restoreAll(); syncBuiltinESMExports(); objectFiles.opened=()=>{}; objectReadBoundary.visit=()=>{}; }
+    return trace;
+  };
+  for(const reader of readers) for(const packed of [false,true]) {
+    /** Restore the same fixture representation before discovery and each independent injection schedule. */
+    const preparePlan=():string=>{
+      store.unpack(); if(packed) store.compact();
+      const entries=store.inventory(); const plan=join(f.repo.root,"external-retirement-plan.json");
+      writeFileSync(plan,JSON.stringify({loose:entries.map((entry)=>({path:join(store.storageRoot(),entry.id.slice(0,2),entry.id.slice(2)),bytes:deflateSync(frameObject(entry.object.type,entry.object.payload)).toString("base64")})),packs:[...new Set(entries.filter((entry)=>entry.packed!==undefined).map((entry)=>entry.path))]}));
+      return plan;
+    };
+    const trace=observe(reader,0,preparePlan()); if(trace.length===0) empty++; points+=trace.length;
+    for(let ordinal=1;ordinal<=trace.length;ordinal++) { observe(reader,ordinal,preparePlan()); verify(reader,f,f.erased,true); schedules++; }
+  }
+  assert.equal(schedules,points); assert.equal(empty,3); t.diagnostic(`${readers.length} readers x loose/packed: ${schedules} actual pinned/native I/O boundary injections; independent process preserves generation and writer-lock inode/mtime; erased reads remain denied`);
+});
+
+
+test("pinned inventory survives external unpack with identical generation and writer lock",async()=>{
+  const f=await fixture(); f.repo.objects.compact(); const store=f.repo.objects;
+  const entries=store.inventory(); const pack=entries.find((entry)=>entry.id===f.live)!.path;
+  const plan=join(f.repo.root,"external-plan.json");
+  writeFileSync(plan,JSON.stringify({loose:entries.map((entry)=>({path:join(store.storageRoot(),entry.id.slice(0,2),entry.id.slice(2)),bytes:deflateSync(frameObject(entry.object.type,entry.object.payload)).toString("base64")})),packs:[...new Set(entries.map((entry)=>entry.path))]}));
+  store.withWriteLock(()=>{
+    const marker=readFileSync(join(f.repo.controlDirectory,"objects.generation"));const lock=fs.lstatSync(join(f.repo.controlDirectory,"objects.lock"),{bigint:true});let once=false;
+    objectReadBoundary.visit=(step)=>{if(step!=="pinned"||once)return;once=true;objectReadBoundary.visit=()=>{};
+      const child=spawnSync(process.execPath,[join(packageRoot,"test/helpers/external-object-retirement.ts"),plan],{env:{...process.env,...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.repo.root)},encoding:"utf8",timeout:30_000});assert.equal(child.status,0,child.stderr);
+    };
+    assert.deepEqual(store.readInventoryObject(f.live,pack).payload,payload);assert.ok(once);
+    assert.deepEqual(readFileSync(join(f.repo.controlDirectory,"objects.generation")),marker);assert.equal(fs.lstatSync(join(f.repo.controlDirectory,"objects.lock"),{bigint:true}).ino,lock.ino);
+  });
 });

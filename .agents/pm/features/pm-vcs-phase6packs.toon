@@ -6,11 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-25T09:28:32.510Z"
+updated_at: "2026-10-25T14:46:59.132Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[25]{created_at,author,text}:
+comments[29]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -36,9 +38,14 @@ comments[25]{created_at,author,text}:
   "2026-10-25T09:23:19.211Z",codex-agent,"Revert proof (resource lifetime): changed only objectPayloadChunks final cleanup from immediate location.close() to queueMicrotask(() => location.close()), restoring deferred closure. Exact command: node --test --test-name-pattern=\"synchronous completed packed streams\" test/object-lifetime.test.ts. Reverted behavior failed 0/1 on operation zero with 23 descriptors versus baseline 22; restored immediate close passed 1/1. No revert retained. The new per-operation invariant has 25 reader APIs x 4 exit modes x 2 representations = 200 cells, with 94 acquired-handle fault/abort injections; scalar early-stop means synchronous completion and empty inventories have no handle to fault. Eight Linux children under ulimit -n 128 each performed 10,000 consecutive synchronous streams without event-loop turns: 80,000 operations, baseline/after 22/22 for every mode and representation, zero EMFILE and zero ownership leaks. Explicit iterator return/throw and Readable.from destroy/AbortController settlement tests also pass."
   "2026-10-25T09:25:33.756Z",codex-agent,"Additional ownership audit found writer-lock fstat was outside its cleanup try. Moved it inside the same synchronous finally as descriptor release and temporary cleanup. Revert proof: restored only the pre-try fstat placement and ran node --test --test-name-pattern=\"object-layer explicit opens\" test/object-lifetime.test.ts: failed 0/1 (23 descriptors versus 22); restored cleanup scope passed 1/1. An explicit-open guard now prevents object/pack/stream/durability code from bypassing the owner helper. The pm-linked resource suite passed 6/6 before this additional narrow invariant; result recording remains disabled by the existing project policy."
   "2026-10-25T09:28:30.397Z",codex-agent,"Resource-lifetime validation complete: pm test pm-vcs-phase6packs --run --progress --only-last passes the final 7/7 resource cases, including all 80,000 low-limit operations. Targeted c8 command (engine/object-files.ts and engine/object-stream.ts; selected object-lifetime, feature-edges and object-read-protocol cases) passes 12/12 with 100% statements/branches/functions/lines per file, without ignores or threshold changes. Typecheck, build, build:test, lint, duplication and docstring checks pass; committed self-host acceptance passed for implementation commit 9046175. No hosted data or canonical fleet checkout was modified. Existing public tracker measurements remain applicable; the benchmark full-read path retains native zlib. Release CI will validate the final pushed head; PR and final summary carry its URL and counts."
-files[24]{path,scope}:
+  "2026-10-25T14:13:58.788Z",codex-agent,"Round-3 review: resumed the clean existing branch and in_progress item. Closing byte-level erasure verification for arbitrary object-store files and descriptor-only validation after pinning; earlier reader, durability and resource-lifetime classes remain unchanged. Adding randomized foreign/copy/partial storage cases and unchanged-generation external-retirement interleavings, with isolated revert proofs before exact-head CI."
+  "2026-10-25T14:46:51.303Z",codex-agent,"Round-3 implementation: byte-authoritative recursive object-store scanning covers every regular file regardless of name, including foreign pack copies, nested/renamed loose data, partial files, raw/typed frames, payload base64 and embedded zlib members at arbitrary offsets. Private erasure-verification.json stores only length/rolling/SHA-256 fingerprints before denial/deletion, allowing retries after canonical bytes are gone. Foreign files remain owned by their writer; harmless files receive receipt counts/classes and retained copies yield typed class/remedy refusals. No completion is published until the final no-exclusions scan passes. Descriptor validation after pinning now uses fstat/read only; ctime/link count changes from unlink are allowed while in-place size/mtime changes refuse."
+  "2026-10-25T14:46:53.091Z",codex-agent,"Round-3 evidence: 120 randomized non-git stores (10 raw/base64/loose/unpack/pack/copy/partial/checksum encodings x 6 locations x retained/clean), including scanner chunk crossings and genuinely compressed payloads without literal raw hits. Pinned reader matrix passed 406 actual boundary injections across the 25 APIs and loose/packed representations; external process retirement leaves generation plus lock inode/mtime unchanged, and erased reads remain denied. Crash tests passed 9 logical proof/scan/publication cuts and 66 native before/after proof/denial write cuts, each SIGKILL followed by convergence with one proof and one receipt. All 9 logical boundaries reject a real competing process on the same tracker; retry then truthfully reports the peer success. Scanner targeted coverage is 100/100/100/100; source inventory is now 85 with unchanged thresholds."
+  "2026-10-25T14:46:54.762Z",codex-agent,"Revert proofs: (1) disabled only scanErasureStorage, restoring inventory-only erasure; node --test --test-name-pattern=\"copied foreign backup.pack\" test/erasure-storage.test.ts failed 0/1 (missing expected refusal while backup remains), restored passed 1/1. (2) restored only readInventoryLocation from the prior pushed head; node --test --test-name-pattern=\"pinned inventory survives external unpack\" test/object-read-protocol.test.ts failed 0/1 with ENOENT lstat of retired pack despite retained fd and unchanged generation/lock, restored passed 1/1. (3) removed only completed-operation de-duplication; node --test --test-name-pattern=\"post-deletion foreign copy leaves\" test/erasure-storage.test.ts failed 0/1 with two receipts instead of one, restored passed 1/1. No revert remains."
+files[32]{path,scope}:
   .github/workflows/ci.yml,project
   engine/durability.ts,project
+  engine/erasure-scan.ts,project
   engine/erasure.ts,project
   engine/gc.ts,project
   engine/instances.ts,project
@@ -50,7 +57,13 @@ files[24]{path,scope}:
   index.ts,project
   scripts/pack-benchmark.ts,project
   test/durability.test.ts,project
+  test/erasure-fragment-repairs.test.ts,project
+  test/erasure-storage.test.ts,project
   test/fragments.test.ts,project
+  test/helpers/erasure-peer.ts,project
+  test/helpers/erasure-proof-crash.ts,project
+  test/helpers/erasure-scan-worker.ts,project
+  test/helpers/external-object-retirement.ts,project
   test/helpers/object-lifetime-soak.ts,project
   test/helpers/object-lifetime.ts,project
   test/helpers/pack-worker.ts,project
@@ -58,10 +71,11 @@ files[24]{path,scope}:
   test/object-read-protocol.test.ts,project
   test/packs.test.ts,project
   test/raw-coverage.test.ts,project
+  test/stream-erasure-legacy-fetch-repair.test.ts,project
   test/vcs-commands.test.ts,project
   test/worktree-races.test.ts,project
   vcs-commands.ts,project
-tests[8]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[9]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts,project,600,codex-agent,"2026-10-25T00:50:11.882Z",local_mutation,feat/indexed-pack-storage
   node --test --test-name-pattern=agent.compaction test/packs.test.ts,project,60,codex-agent,"2026-10-25T00:53:18.003Z",local_mutation,feat/indexed-pack-storage
   node --test --test-name-pattern=maintenance.rejects test/packs.test.ts,project,60,codex-agent,"2026-10-25T00:59:26.949Z",local_mutation,feat/indexed-pack-storage
@@ -70,6 +84,7 @@ tests[8]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
   "node --test --test-name-pattern=\"unlink refuses a concurrent leaf directory|pruning refuses content added|pruning refuses a directory recreated\" test/worktree-races.test.ts",project,120,codex-agent,"2026-10-25T04:26:21.623Z",local_mutation,feat/indexed-pack-storage
   "node --test --test-name-pattern=\"every pack data reader\" test/packs.test.ts",project,120,codex-agent,"2026-10-25T05:31:17.136Z",local_mutation,feat/indexed-pack-storage
   node --test test/object-lifetime.test.ts,project,300,codex-agent,"2026-10-25T09:23:52.753Z",local_mutation,feat/indexed-pack-storage
+  node --test test/erasure-storage.test.ts,project,600,codex-agent,"2026-10-25T14:46:59.037Z",local_mutation,feat/indexed-pack-storage
 docs[4]{path,scope}:
   docs/indexed-pack-benchmark.json,project
   docs/indexed-packs.md,project

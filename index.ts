@@ -1,3 +1,4 @@
+export { ErasureStorageRefusal, type ErasureFileClass, type ErasureStorageReport } from "./engine/erasure-scan.ts";
 export { PackRefusal, type PackRefusalCode, type PackReport } from "./engine/packs.ts";
 export { ObjectStore, ObjectStoreError, OBJECT_READ_RETRIES, type InventoryEntry } from "./engine/objects.ts";
 export { createSemanticCheckpoint, checkpointClaims, attachCheckpoint, inspectCheckpoints, loadCheckpointReceipt, parseCheckpointRequest, parseCheckpointRequirement, parseCheckpointPolicy, updateCheckpointPolicy, CheckpointRefusal, CHECKPOINT_POLICY_FILE, type CheckpointSelection, type CheckpointRequirement, type CheckpointReceipt, type CheckpointRequest, type SemanticCheckpoint, type CheckpointRefusalCode, type CheckpointStatus, type CheckpointReport } from "./engine/checkpoints.ts";

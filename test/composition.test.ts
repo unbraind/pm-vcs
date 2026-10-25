@@ -273,7 +273,7 @@ test("affected layers and untracked copies refuse erasure and preserve independe
   repo.obliterate(id, "erase-fixture", "incident", new Date());
 });
 
-test("unknown pack/cache storage and corrupt or incomplete inventory fail before erasure", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
+test("unsupported control and incomplete inventory refuse; harmless foreign object files are scanned and reported", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
   const { repo } = await fixture(); commit(repo, "secret.bin");
   const entry = repo.readIndex().find(entry => entry.path === "secret.bin")!;
   mkdirSync(join(repo.controlDirectory, "packs")); writeFileSync(join(repo.controlDirectory, "packs", "old.pack"), Buffer.from("opaque pack"));
@@ -283,13 +283,12 @@ test("unknown pack/cache storage and corrupt or incomplete inventory fail before
   refuses(() => repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date()), "incomplete_erasure_inventory");
   writeFileSync(objectPath(repo, entry.id), original);
   writeFileSync(join(repo.controlDirectory, "objects", "unknown.pack"), "opaque pack");
-  refuses(() => repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date()), "unsupported_erasure_storage");
-  rmSync(join(repo.controlDirectory, "objects", "unknown.pack"));
   writeFileSync(`${objectPath(repo, entry.id)}.tmp`, "unindexed temp copy");
-  refuses(() => repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date()), "unsupported_erasure_storage");
-  rmSync(`${objectPath(repo, entry.id)}.tmp`);
   assert.deepEqual(repo.objects.denials(), []);
-  repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date());
+  const receipt = repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date());
+  assert.equal(receipt.storage.foreign, 2);
+  assert.equal(readFileSync(join(repo.controlDirectory, "objects", "unknown.pack"),"utf8"), "opaque pack");
+  assert.equal(readFileSync(`${objectPath(repo, entry.id)}.tmp`,"utf8"), "unindexed temp copy");
 });
 
 test("typed reads and verification distinguish missing and corrupt from obliterated content", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
