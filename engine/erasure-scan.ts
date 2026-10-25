@@ -70,6 +70,8 @@ class Matcher {
   private readonly maximum: number;
   private readonly groups: { width: number; power: number; hashes: Map<number, ErasureFingerprint[]>; rolling: number }[] = [];
   private count = 0;
+  private lastByte = -1;
+  private constantRun = 0;
   /** Compile bounded suffix groups; zero-length payloads use their nonempty typed frames. */
   constructor(patterns: readonly ErasureFingerprint[], template?: Matcher) {
     this.maximum = patterns.reduce((maximum, pattern) => Math.max(maximum, pattern.length), 1);
@@ -88,17 +90,22 @@ class Matcher {
   }
   /** Inspect all windows, including matches crossing source/decompression chunk boundaries. */
   feed(bytes: Uint8Array): boolean {
+    const first = bytes[0];
+    const uniform = bytes.length > 8 && Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).equals(Buffer.alloc(bytes.length, first));
+    // Once a complete maximum-length window is constant, every remaining window is identical.
+    const inspect = uniform ? Math.min(bytes.length, Math.max(1, this.maximum - (this.lastByte === first ? this.constantRun : 0))) : bytes.length;
     const needed = Math.min(this.maximum, this.count + bytes.length);
     if (needed > this.ring.length) {
       const grown = Buffer.alloc(Math.min(this.maximum, Math.max(needed, this.ring.length * 2)));
       this.ring.copy(grown); this.ring = grown;
     }
-    for (const byte of bytes) {
+    for (const byte of bytes.subarray(0, inspect)) {
       for (const group of this.groups) {
         const old = this.count >= group.width ? this.ring[(this.count - group.width) % this.ring.length] + 1 : 0;
         group.rolling = (Math.imul(group.rolling - Math.imul(old, group.power), 257) + byte + 1) >>> 0;
       }
       this.ring[this.count % this.ring.length] = byte; this.count++;
+      this.constantRun = this.lastByte === byte ? this.constantRun + 1 : 1; this.lastByte = byte;
       for (const group of this.groups) {
         if (this.count < group.width) continue;
         // Short sequences use SHA-only matching; their polynomial value would directly encode their bytes.
@@ -114,6 +121,8 @@ class Matcher {
         }
       }
     }
+    const skipped = bytes.length - inspect;
+    if (skipped > 0) { this.ring.fill(first); this.count += skipped; this.constantRun += skipped; }
     return false;
   }
 }

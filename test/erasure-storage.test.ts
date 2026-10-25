@@ -337,3 +337,16 @@ test("scanner filter work stays bounded independently of selected representation
   assert.equal(matchesFingerprints(bytes,patterns),false);
   assert.ok(calls<=bytes.length*3+128,`rolling filter performed ${calls} operations for ${bytes.length} bytes and ${patterns.length} lengths`);
 });
+
+test("constant byte runs skip only equivalent windows and retain cross-chunk matches",async()=>{
+  const patterns=Array.from({length:40},(_,index)=>fingerprint(Buffer.alloc(100+index,65+index%10)));const bytes=Buffer.alloc(4096,255);
+  const imul=Math.imul;let calls=0;mock.method(Math,"imul",(a:number,b:number)=>{calls++;return imul(a,b);});
+  assert.equal(matchesFingerprints(bytes,patterns),false);assert.ok(calls<700,`${calls} operations over one constant run`);mock.restoreAll();
+  assert.ok(matchesFingerprints(bytes,[fingerprint(Buffer.alloc(139,255))]));
+  const f=await fixture();const root=join(f.dir.root,"constant-runs");const pattern=Buffer.from([255,255,255,254]);const path=place(root,"data",bytes);
+  assert.equal(scanErasureStorage(root,[fingerprint(pattern)]).files,1);
+  for(const boundary of [65_536,131_072]){
+    writeFileSync(path,Buffer.concat([Buffer.alloc(boundary,255),Buffer.from([254])]));
+    assert.throws(()=>scanErasureStorage(root,[fingerprint(pattern)]),{code:"erasure_retained_copy"});
+  }
+});
