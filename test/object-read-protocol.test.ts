@@ -1,6 +1,6 @@
 /** Every logical reader shares generation retries, pinned handles and terminal denial enforcement. */
 import assert from "node:assert/strict";
-import fs, { closeSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import fs, { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, mock, test } from "node:test";
 import ts from "typescript5";
@@ -13,6 +13,7 @@ import { objectPayloadChunks } from "../engine/object-stream.ts";
 import { SharedObjectStore } from "../engine/instances.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { Repository } from "../engine/repo.ts";
+import { lifetimeReaders } from "./helpers/object-lifetime.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const temporary: ReturnType<typeof makeTempDir>[] = [];
@@ -110,6 +111,7 @@ test("reader surface enumeration classifies every exported operation and prevent
   const sharedReaders = sharedDefinition.members.filter((member) => ts.isMethodDeclaration(member) && !member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword)).map((member) => member.name!.getText(sharedSource));
   assert.deepEqual(sharedReaders.sort(),readers.filter((reader) => reader.name.startsWith("SharedObjectStore.")).map((reader) => reader.name.slice(18)).sort());
   assert.equal(readers.length,25);
+  assert.deepEqual(Object.keys(lifetimeReaders).sort(),readers.map((reader) => reader.name).sort());
 });
 
 test("EVERY reader x EVERY compact/unpack/repack/GC boundary retains live bytes and never resurrects an erased object", async (t) => {
@@ -232,7 +234,7 @@ test("a pinned packed member refuses truncation without returning neighboring or
   const f = await fixture(); const store = f.repo.objects; store.compact();
   const pack = store.inventory().find((entry) => entry.id === f.live)!.path;
   assert.deepEqual(Buffer.concat([...objectPayloadChunks(pack,f.live,"blob")]),payload);
-  const location = store.resolveLocation(f.live)!; const length = location.length; closeSync(location.fd);
+  const location = store.resolveLocation(f.live)!; const length = location.length; location.close();
   const read = fs.readSync;
   mock.method(fs,"readSync",(fd: number, buffer: Buffer, offset: number, size: number, position: number) => { if (size === length) return 0; return read(fd,buffer,offset,size,position); }); syncBuiltinESMExports();
   assert.throws(() => store.read(f.live),{code:"corrupt_pack"});

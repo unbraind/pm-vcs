@@ -130,5 +130,8 @@
   "duplicationGate": {
     "threshold": 0,
     "minTokens": 50
+  },
+  "dependencies": {
+    "pako": "3.0.2"
   }
 }

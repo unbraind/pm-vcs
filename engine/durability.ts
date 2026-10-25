@@ -1,3 +1,4 @@
+import { objectFiles } from "./object-files.ts";
 /** Platform-aware durability policy shared by native publication and retirement. */
 import fs, { type RmOptions } from "node:fs";
 import { dirname } from "node:path";
@@ -12,13 +13,13 @@ export const durability = {
   /** Flush namespace metadata on POSIX; Windows has no Node directory-fsync operation and uses acknowledged synchronous mutations. */
   directory(path: string, _required = true, platform?: NodeJS.Platform): void {
     if (!(platform === undefined ? durabilityCapabilities.directorySync : platform !== "win32")) return;
-    const fd = fs.openSync(path, "r");
-    try { durability.file(fd); } finally { fs.closeSync(fd); }
+    const file = objectFiles.open(path, "r");
+    try { durability.file(file.fd); } finally { file.close(); }
   },
   /** Flush the source file before replacing its name, then complete the platform namespace barriers. */
   rename(source: string, destination: string): void {
-    const fd = fs.openSync(source, "r+");
-    try { durability.file(fd); } finally { fs.closeSync(fd); }
+    const file = objectFiles.open(source, "r+");
+    try { durability.file(file.fd); } finally { file.close(); }
     fs.renameSync(source, destination);
     durability.directory(dirname(source));
     if (dirname(source) !== dirname(destination)) durability.directory(dirname(destination));

@@ -1,3 +1,4 @@
+import { objectFiles, type ObjectFile } from "./object-files.ts";
 import { durability } from "./durability.ts";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -19,13 +20,11 @@ import { constants as zlibConstants, deflateSync, inflateSync } from "node:zlib"
 import { createHash, randomBytes } from "node:crypto";
 import {
   constants as fsConstants,
-  closeSync,
   fstatSync,
   existsSync,
   lstatSync,
   readdirSync,
   mkdirSync,
-  openSync,
   readFileSync,
   readSync,
   statSync,
@@ -49,9 +48,8 @@ const dirtyLeases = new Set<string>();
 export const OBJECT_READ_RETRIES = 8;
 /** Reader interleaving seam; ordinary consumers receive no hooks. @internal */
 export const objectReadBoundary: { visit(step: string, id: string, attempt: number): void } = { visit() {} };
-/** Pinned descriptor and exact compressed range; ownership transfers to a streaming worker until termination. @internal */
-export interface ObjectHandle {
-  readonly fd: number;
+/** Pinned descriptor and exact compressed range; ownership transfers to the consuming synchronous scope or iterator. @internal */
+export interface ObjectHandle extends ObjectFile {
   readonly path: string;
   readonly offset: number;
   readonly length: number;
@@ -312,15 +310,15 @@ export class ObjectStore {
 
   /** Open one exact loose representation without decoding its payload or following a leaf link. */
   private openLooseLocation(path: string): ObjectHandle | undefined {
-    let fd: number;
-    try { fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW); } catch (error) {
+    let file: ObjectFile;
+    try { file = objectFiles.open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW); } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw error;
     }
     try {
-      const stat = fstatSync(fd);
-      return { fd, path, offset: 0, length: stat.size, regular: stat.isFile() };
-    } catch (error) { closeSync(fd); throw error; }
+      const stat = fstatSync(file.fd);
+      return { ...file, path, offset: 0, length: stat.size, regular: stat.isFile() };
+    } catch (error) { file.close(); throw error; }
   }
 
   /**
@@ -348,7 +346,7 @@ export class ObjectStore {
         objectReadBoundary.visit("resolved", id, attempt);
         const after = options.standalone ? before : this.storageGeneration();
         if (!after.consistent || before.key !== after.key || (location === undefined && (before.active || after.active))) {
-          if (location !== undefined) closeSync(location.fd);
+          if (location !== undefined) location.close();
           continue;
         }
         if (location === undefined) return undefined;
@@ -365,7 +363,7 @@ export class ObjectStore {
           },
         };
       } catch (error) {
-        if (location !== undefined) closeSync(location.fd);
+        if (location !== undefined) location.close();
         const after = options.standalone ? before : this.storageGeneration();
         if (before.key !== after.key || !after.consistent) continue;
         throw error;
@@ -379,7 +377,7 @@ export class ObjectStore {
     let location = this.resolveLocation(id, options);
     if (location === undefined && options.hydrate === true) { this.hydrate(id); location = this.resolveLocation(id, options); }
     if (location === undefined) throw new ObjectStoreError("object_not_found", `No object ${id} in a stable storage generation; fetch a verified copy before retrying.`);
-    try { location.check(); const result = read(location); location.check(); return result; } finally { closeSync(location.fd); }
+    try { location.check(); const result = read(location); location.check(); return result; } finally { location.close(); }
   }
 
   /** Read an exact compressed member from its pinned descriptor, independent of subsequent namespace changes. */
@@ -425,7 +423,7 @@ export class ObjectStore {
     try {
       const location = this.resolveLocation(id);
       if (location === undefined) return false;
-      try { location.check(); return location.regular; } finally { closeSync(location.fd); }
+      try { location.check(); return location.regular; } finally { location.close(); }
     } catch (error) { if (error instanceof ObliteratedObjectError) return false; throw error; }
   }
 
@@ -479,13 +477,13 @@ export class ObjectStore {
     // compute one id, so both would otherwise target one temp path and could
     // rename a partially written file into place.
     const temporary = `${destination}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-    const handle = openSync(temporary, "wx");
+    const handle = objectFiles.open(temporary, "wx");
     try {
       try {
-        writeSync(handle, compressed);
-        durability.file(handle);
+        writeSync(handle.fd, compressed);
+        durability.file(handle.fd);
       } finally {
-        closeSync(handle);
+        handle.close();
       }
       durability.rename(temporary, destination);
     } catch (error) {
@@ -535,7 +533,7 @@ export class ObjectStore {
       try {
         const result = this.locationHasType(id, location, type, alternatives) ? this.readLocation(id, location) : undefined;
         location.check(); return result;
-      } finally { closeSync(location.fd); }
+      } finally { location.close(); }
     } catch (error) { if (error instanceof ObliteratedObjectError) return undefined; throw error; }
   }
 
@@ -544,7 +542,7 @@ export class ObjectStore {
     try {
       const location = this.resolveLocation(id);
       if (location === undefined) return false;
-      try { const result = this.locationHasType(id, location, type, alternatives); location.check(); return result; } finally { closeSync(location.fd); }
+      try { const result = this.locationHasType(id, location, type, alternatives); location.check(); return result; } finally { location.close(); }
     } catch (error) { if (error instanceof ObliteratedObjectError) return false; throw error; }
   }
 
@@ -623,7 +621,7 @@ export class ObjectStore {
     for (const line of objectPayloadLines(this.readChunks(id, type))) { this.assertVisible(id); yield line; }
   }
 
-  /** Stream a fully verified payload from one opened representation; the worker retains its descriptor through namespace transitions. */
+  /** Stream a fully verified payload from one opened representation; the iterator owns its descriptor through namespace transitions. */
   *readChunks(id: ObjectId, type: ObjectType, timeoutMs = 30_000): Generator<Buffer> {
     this.assertId(id);
     let location = this.resolveLocation(id);
@@ -868,7 +866,7 @@ export class ObjectStore {
         const key = `${location.path}:${entry.id}`; if (seen.has(key)) continue; seen.add(key);
         const object = this.readInventoryLocation(entry.id, location); location.check();
         yield { id: entry.id, path: location.path, object, bytes: location.bytes ?? location.length, ...(location.packed === undefined ? {} : { packed: location.packed }) };
-      } finally { closeSync(location.fd); }
+      } finally { location.close(); }
     }
   }
 
@@ -918,12 +916,14 @@ export class ObjectStore {
     if (!existsSync(dirname(this.root))) mkdirSync(dirname(this.root), { recursive: true });
     const path = join(dirname(this.root), "objects.lock");
     const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-    const fd = openSync(temporary, "wx", 0o600);
+    const file = objectFiles.open(temporary, "wx", 0o600);
+    const fd = file.fd;
     let acquired = false;
-    const locked = fstatSync(fd, { bigint: true });
+    let locked: ReturnType<typeof fstatSync> | undefined;
     let result: T;
     let lockChanged = false;
     try {
+      locked = fstatSync(fd, { bigint: true });
       writeFileSync(fd, String(process.pid));
       durability.file(fd);
       const deadline = performance.now() + 5000;
@@ -943,12 +943,12 @@ export class ObjectStore {
       result = action();
     } finally {
       activeLeases.delete(lease); activeRevisions.delete(lease); dirtyLeases.delete(lease);
-      closeSync(fd);
+      file.close();
       durability.remove(temporary, { force: true });
       // A moved root must neither hide the mutation refusal nor unlink a foreign lock.
       if (acquired) {
         const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-        if (observed !== undefined && observed.dev === locked.dev && observed.ino === locked.ino) durability.unlink(path);
+        if (observed !== undefined && observed.dev === locked!.dev && observed.ino === locked!.ino) durability.unlink(path);
         else lockChanged = true;
       }
     }

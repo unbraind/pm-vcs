@@ -1014,3 +1014,8 @@ signature and requires explicit signing again. Wall-clock expiry, package/backen
 freshness and review approval remain separate policies. Keep receiver
 administration trusted and retain the core history alongside native bundles for
 independent receipt auditing.
+
+Indexed-pack and loose readers close owned descriptors before returning or
+finishing iteration, including early consumer cancellation. Streaming reads use
+a bounded synchronous decoder; see the [descriptor ownership contract](docs/indexed-packs.md#descriptor-ownership)
+and its per-operation, low-descriptor-limit regression checks.

@@ -105,7 +105,7 @@ a retry remedy, including state inspection without falsely reporting corruption.
 Each successful resolution opens and retains one immutable descriptor and byte
 range. The location also carries the indexed kind and 16 MiB decoded-frame bound;
 full, bounded and streaming readers enforce both. Bounded reads additionally
-enforce the caller's exact payload-byte limit, independent of framing overhead. A stream retains that handle until its decompression worker terminates,
+enforce the caller's exact payload-byte limit, independent of framing overhead. A stream retains that handle until completion or consumer cancellation,
 so unpacking and repacking cannot invalidate its input. Logical reads enforce
 terminal denials before returning bytes and before each emitted chunk or line.
 Only explicit internal erasure inspection can access denied physical bytes, and
@@ -128,3 +128,32 @@ injects complete transitions between resolution stages. Separate crash tests
 kill each maintenance step and prove that a rerun converges without changing
 retained identities. Capability-forced durability tests exercise both policies
 on a real filesystem.
+
+### Descriptor ownership
+
+Every explicit file open in object storage, pack storage and durability uses
+`engine/object-files.ts`. The registered owner transfers with a resolved location
+and closes synchronously in `finally`; closing twice cannot close a reused fd.
+The synchronous streaming decoder uses pinned `pako@3.0.2` with 64-byte compressed
+pushes and 16 KiB decoded slots. It holds bounded JS buffers and creates no worker,
+file stream, or native decoder handle requiring an event-loop cleanup turn.
+Zlib checksums, framing, content hashes, pack bounds and terminal denials remain
+verified. `timeoutMs` bounds each synchronous input/decode step and excludes time
+the consumer spends between yields.
+
+Iterator `return()`, consumer exceptions and `for...of` break run the same close
+path. When adapting an iterator with `Readable.from`, await its `close`/`finished`
+settlement after `destroy()` or AbortController cancellation; that settlement
+includes iterator cleanup. Synchronous scalar readers have no mid-operation
+consumer-stop boundary and complete before returning.
+
+`test/object-lifetime.test.ts` checks all 25 reader adapters in complete, early
+stop, injected I/O error and abort modes for loose and packed representations
+(200 cells). Linux compares the actual descriptor count immediately after every
+operation; other platforms also enforce the ownership registry. Empty physical
+inventories have no handle to fault, and eager/scalar early stops are completion.
+Separate tests exercise native read/stat faults, explicit iterator return and
+throw, async stream destroy and AbortController cancellation. Eight Linux child
+processes with a 128-descriptor limit each perform 10,000 consecutive synchronous
+stream operations without an event-loop turn (80,000 total), checking descriptor
+and ownership baselines after every operation.

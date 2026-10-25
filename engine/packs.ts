@@ -1,7 +1,8 @@
+import { objectFiles, type ObjectFile } from "./object-files.ts";
 import { durability } from "./durability.ts";
 /** Immutable indexed packs: independently compressed frames keep their uncompressed addresses. */
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { constants, existsSync, fstatSync, lstatSync, mkdirSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { ObjectStoreError } from "./object-error.ts";
@@ -104,18 +105,19 @@ export class PackStorage {
     const paths = exactPath === undefined ? this.files() : [exactPath];
     objectReadBoundary.visit("pack-catalog", id, 0);
     for (const path of paths) {
-      let fd: number;
-      try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); } catch (error) {
+      let file: ObjectFile;
+      try { file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW); } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
         throw error;
       }
+      const fd = file.fd;
       let transferred = false;
       try {
         const index = this.index(fd, path); const entry = index.byId.get(id);
         if (entry === undefined) { if (exactPath !== undefined) corrupt(); continue; }
         const offset = index.start + entry[1]; transferred = true;
-        return { fd, path, offset, length: entry[2], regular: true, type: entry[3], maxFrameBytes: LIMIT, packed: { offset, length: entry[2] }, bytes: entry[2] + (entry === index.entries[0] ? index.start : 0) };
-      } finally { if (!transferred) closeSync(fd); }
+        return { ...file, path, offset, length: entry[2], regular: true, type: entry[3], maxFrameBytes: LIMIT, packed: { offset, length: entry[2] }, bytes: entry[2] + (entry === index.entries[0] ? index.start : 0) };
+      } finally { if (!transferred) file.close(); }
     }
     return undefined;
   }
@@ -146,12 +148,13 @@ export class PackStorage {
   locations(): { id: ObjectId; path: string }[] {
     const result: { id: ObjectId; path: string }[] = [];
     for (const path of this.files()) {
-      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const fd = file.fd;
       try {
         const index = this.index(fd, path);
         if (digest(range(fd, 0, index.bytes)) !== basename(path, ".pack")) corrupt();
         for (const entry of index.entries) result.push({ id: entry[0], path });
-      } finally { closeSync(fd); }
+      } finally { file.close(); }
     }
     return result;
   }
@@ -257,8 +260,9 @@ export class PackStorage {
 
   /** Persist one owned staging file and close it even if durability fails. */
   private durableFile(path: string, bytes: Buffer): void {
-    const fd = openSync(path, "wx", 0o600);
-    try { writeFileSync(fd, bytes); durability.file(fd); } finally { closeSync(fd); }
+    const file = objectFiles.open(path, "wx", 0o600);
+    const fd = file.fd;
+    try { writeFileSync(fd, bytes); durability.file(fd); } finally { file.close(); }
   }
 
   /** Materialize verified loose copies before retiring packs; erasure can then use its existing physical deletion proof. */
