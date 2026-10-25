@@ -198,12 +198,12 @@ for (const damage of ["corrupt-temp", "missing-history", "unknown-storage"] as c
   }
 });
 
-for (const change of ["new-copy", "lost-copy"] as const) test(`streaming second pass refuses a real ${change} before denial`, () => {
+for (const change of ["new-copy", "lost-copy", "new-native"] as const) test(`streaming second pass refuses a real ${change} before denial`, () => {
   const { repo, selected } = fixture(); const path = objectPath(repo, selected.id); const temporary = `${path}.123.abcdef123456.tmp`;
   const removed = change === "lost-copy" ? objectPath(repo, repo.objects.write("blob", Buffer.from("unrelated copy removed between inventories"))) : temporary;
   const original = ObjectStore.prototype.walkErasureInventory; let passes = 0;
   mock.method(repo.objects, "walkErasureInventory", function* (kind?: "all" | "pack") {
-    if (kind !== "pack" && ++passes === 2) { if (change === "new-copy") copyFileSync(path, temporary); else rmSync(removed); }
+    if (kind !== "pack" && ++passes === 2) { if (change === "new-copy") copyFileSync(path, temporary); else if (change === "new-native") repo.objects.write("blob", Buffer.from("new native arrival between inventories")); else rmSync(removed); }
     yield* original.call(repo.objects, kind);
   });
   const index = readFileSync(join(repo.controlDirectory, "index")); const refs = repo.refs.list("refs/"); const log = repo.operations.read();
@@ -271,4 +271,19 @@ test("legacy conflicting-only peer cannot exchange newly erased metadata without
   // The same real peer's supported endpoint delivers denial without fetching the conflicting history.
   const updated = await fetchFrom(local, "peer", new Date(4000)); assert.equal(updated.upToDate, false); assert.deepEqual(updated.added, []);
   assert.deepEqual(local.objects.denials(), peer.objects.denials()); assert.equal(local.objects.has(tip), false); assert.equal(local.refs.read("refs/tags/conflict"), own);
+});
+
+test("physical inventory skips damaged native temporaries and propagates their I/O errors", () => {
+  const { repo, selected } = fixture(); const canonical = objectPath(repo, selected.id); const temporary = `${canonical}.123.abcdef123456.tmp`;
+  const expected = repo.objects.inventory().length;
+  for (const bytes of [Buffer.from("invalid compressed copy"), deflateSync(Buffer.from("invalid native header\0bytes"))]) {
+    writeFileSync(temporary, bytes);
+    const entries = repo.objects.withWriteLock(() => [...repo.objects.walkErasureInventory()]);
+    assert.equal(entries.length, expected); assert.ok(entries.every(entry => entry.path !== temporary));
+    assert.deepEqual(readFileSync(temporary), bytes);
+  }
+  const open = fs.openSync; const read = fs.readSync; let target = -1;
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => { const fd = open(...args); if (String(args[0]) === temporary) target = fd; return fd; });
+  mock.method(fs, "readSync", (...args: Parameters<typeof fs.readSync>) => { if (args[0] === target) throw Object.assign(new Error("temporary read unavailable"), { code: "EIO" }); return read(...args); });
+  syncBuiltinESMExports(); assert.throws(() => repo.objects.withWriteLock(() => [...repo.objects.walkErasureInventory()]), { code: "EIO" });
 });

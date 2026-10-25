@@ -104,7 +104,7 @@ test("reader surface enumeration classifies every exported operation and prevent
   // Exported free functions above are validators, frame codecs and control metadata, not object-location readers.
   const packSource = ts.createSourceFile("packs.ts",readFileSync(join(packageRoot,"engine/packs.ts"),"utf8"),ts.ScriptTarget.Latest,true);
   const packDefinition = packSource.statements.find((node): node is ts.ClassDeclaration => ts.isClassDeclaration(node) && node.name?.text === "PackStorage")!;
-  const packExcluded = new Set(["constructor","files","locate","locations","compact","recover","unpack"]); // metadata, raw providers, or lease-owning writers
+  const packExcluded = new Set(["constructor","files","locate","locations","compact","recover","unpack","verifyFile"]); // metadata, raw providers, lease-owning writers, or caller-pinned physical certification (verifyFile)
   const packReaders = packDefinition.members.filter((member) => (ts.isMethodDeclaration(member) || ts.isConstructorDeclaration(member)) && !member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword)).map((member) => ts.isConstructorDeclaration(member) ? "constructor" : member.name!.getText(packSource)).filter((name) => !packExcluded.has(name));
   assert.deepEqual(packReaders.sort(),readers.filter((reader) => reader.name.startsWith("PackStorage.")).map((reader) => reader.name.slice(12)).sort());
   const streamSource = ts.createSourceFile("object-stream.ts",readFileSync(join(packageRoot,"engine/object-stream.ts"),"utf8"),ts.ScriptTarget.Latest,true);

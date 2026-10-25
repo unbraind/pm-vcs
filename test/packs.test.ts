@@ -369,7 +369,7 @@ test("cleanup preserves foreign additions at every staging boundary and reports 
   }
 });
 
-test("authorized erasure retires owned interrupted staging payloads even beside foreign records", async () => {
+test("authorized erasure requires explicit purge for interrupted staging and foreign records", async () => {
   const repo = await fresh(); writeFileSync(join(repo.root, "asset"), "selected-staging-payload-749681235-long-enough"); repo.stage(["asset"]);
   const selected = repo.readIndex()[0].id; repo.setAuthority("fixture", "read-fixture", "erase-fixture");
   let directory: string | undefined;
@@ -380,9 +380,12 @@ test("authorized erasure retires owned interrupted staging payloads even beside 
     throw new Error("interrupted owned staging");
   };
   assert.throws(() => repo.objects.compact(), /interrupted owned staging/); packBoundary.visit = () => {}; assert.ok(directory);
-  repo.obliterate("asset", "erase-fixture", "fixture-cleanup", new Date(1));
-  assert.equal(fs.existsSync(join(directory, "payload")), false); assert.equal(fs.existsSync(join(directory, "owner")), false);
+  assert.throws(() => repo.obliterate("asset", "erase-fixture", "fixture-cleanup", new Date(1)), { code: "unverifiable" });
   assert.equal(readFileSync(join(directory, "foreign.txt"), "utf8"), "preserve unrelated writer notes");
+  const receipt = repo.obliterate("asset", "erase-fixture", "fixture-cleanup", new Date(1), { purgeUnaccounted: true });
+  assert.equal(receipt.purge.deleted, 3);
+  assert.equal(fs.existsSync(join(directory, "payload")), false); assert.equal(fs.existsSync(join(directory, "owner")), false);
+  assert.equal(fs.existsSync(join(directory, "foreign.txt")), false);
   assert.throws(() => repo.objects.read(selected), { code: "object_obliterated" });
 });
 

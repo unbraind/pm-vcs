@@ -113,6 +113,8 @@ test("complete native framing rejects malformed, trailing, truncated and oversiz
  for(const frame of malformed){const id=createHash("sha256").update(frame).digest("hex");const path=place(root,`${id.slice(0,2)}/${id.slice(2)}`,deflateSync(frame));assert.throws(()=>accountErasureStorage(root,empty),{code:"unverifiable"});rmSync(path);}
  const payload=Buffer.alloc(16*1024*1024+1,97);const id=hashObject("blob",payload);const compressed=deflateSync(frameObject("blob",payload));
  const index=Buffer.from(JSON.stringify([[id,0,compressed.length,"blob"]]));const header=Buffer.alloc(12);header.write("PMVCSP1\n");header.writeUInt32BE(index.length,8);const pack=Buffer.concat([header,index,compressed]);
+ const native=new ObjectStore(join(f.dir.root,"checksum-source"));native.write("blob",Buffer.from("complete checksum fixture"));native.compact();const valid=readFileSync(native.inventory()[0].path);
+ const renamed=place(root,`packs/${"0".repeat(64)}.pack`,valid);assert.throws(()=>accountErasureStorage(root,empty),{code:"unverifiable"});rmSync(renamed);
  const path=place(root,`packs/${createHash("sha256").update(pack).digest("hex")}.pack`,pack);assert.throws(()=>accountErasureStorage(root,empty),{code:"unverifiable"});rmSync(path);
 });
 
