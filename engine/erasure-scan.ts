@@ -30,27 +30,27 @@ export class ErasureStorageRefusal extends ObjectStoreError {
 export const erasureScanBoundary: { visit(step: string): void } = { visit() {} };
 /** Forced decode-budget seam; ordinary scans allow six passes at the maximum DEFLATE expansion ratio. @internal */
 export const erasureScanLimits = { minimum: 16 * 1024 * 1024, ratio: 1032 * 6, depth: 6, streams: 32, contexts: 512, wordBytes: 16 * 1024 * 1024 };
-/** Produce a compact signature for one nonempty exact byte sequence. */
+/** Use one bounded suffix filter and a full SHA-256 proof, independent of the number of pattern lengths. */
 export function fingerprint(bytes: Buffer): ErasureFingerprint {
   let rolling = 0;
-  for (const byte of bytes) rolling = (Math.imul(rolling, 257) + byte + 1) >>> 0;
+  for (const byte of bytes.subarray(-8)) rolling = (Math.imul(rolling, 257) + byte + 1) >>> 0;
   return { length: bytes.length, rolling: bytes.length <= 4 ? 0 : rolling, digest: createHash("sha256").update(bytes).digest("hex") };
 }
 /** Versioned private journal binds all lookup signatures to one checksum, without retaining payload bytes. */
 export interface ErasureFingerprintJournal {
-  readonly format: "pm-vcs-erasure-byteproof-1";
+  readonly format: "pm-vcs-erasure-byteproof-2";
   readonly records: Readonly<Record<string, readonly ErasureFingerprint[]>>;
   readonly checksum: string;
 }
 /** Wrap trusted signatures in the exact package-written journal format. @internal */
 export function fingerprintJournal(records: Readonly<Record<string, readonly ErasureFingerprint[]>>): ErasureFingerprintJournal {
-  return { format: "pm-vcs-erasure-byteproof-1", records, checksum: createHash("sha256").update(JSON.stringify(records)).digest("hex") };
+  return { format: "pm-vcs-erasure-byteproof-2", records, checksum: createHash("sha256").update(JSON.stringify(records)).digest("hex") };
 }
 /** Reject unknown formats and checksum damage before any signature can influence a physical certificate. */
 export function readFingerprints(value: unknown): Record<string, ErasureFingerprint[]> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new ErasureStorageRefusal("unsupported_erasure_storage", "verification-metadata");
   const journal = value as ErasureFingerprintJournal;
-  if (Object.keys(journal).sort().join(",") !== "checksum,format,records" || journal.format !== "pm-vcs-erasure-byteproof-1"
+  if (Object.keys(journal).sort().join(",") !== "checksum,format,records" || journal.format !== "pm-vcs-erasure-byteproof-2"
     || journal.records === null || typeof journal.records !== "object" || Array.isArray(journal.records)
     || typeof journal.checksum !== "string" || !/^[0-9a-f]{64}$/.test(journal.checksum)
     || fingerprintJournal(journal.records).checksum !== journal.checksum) throw new ErasureStorageRefusal("unsupported_erasure_storage", "verification-metadata");
@@ -68,21 +68,22 @@ export function readFingerprints(value: unknown): Record<string, ErasureFingerpr
 class Matcher {
   private ring = Buffer.alloc(0);
   private readonly maximum: number;
-  private readonly groups: { length: number; power: number; hashes: Map<number, Set<string>>; rolling: number }[] = [];
+  private readonly groups: { width: number; power: number; hashes: Map<number, ErasureFingerprint[]>; rolling: number }[] = [];
   private count = 0;
-  /** Compile reusable length groups; zero-length payloads are represented by their nonempty typed frames. */
+  /** Compile bounded suffix groups; zero-length payloads use their nonempty typed frames. */
   constructor(patterns: readonly ErasureFingerprint[], template?: Matcher) {
     this.maximum = patterns.reduce((maximum, pattern) => Math.max(maximum, pattern.length), 1);
     if (template !== undefined) { this.groups.push(...template.groups.map((group) => ({ ...group, rolling: 0 }))); return; }
     for (const pattern of patterns) {
-      let group = this.groups.find((item) => item.length === pattern.length);
+      const width = Math.min(8, pattern.length);
+      let group = this.groups.find((item) => item.width === width);
       if (group === undefined) {
-        let power = 1; for (let i = 1; i < pattern.length; i++) power = Math.imul(power, 257) >>> 0;
-        group = { length: pattern.length, power, hashes: new Map(), rolling: 0 }; this.groups.push(group);
+        let power = 1; for (let i = 1; i < width; i++) power = Math.imul(power, 257) >>> 0;
+        group = { width, power, hashes: new Map(), rolling: 0 }; this.groups.push(group);
       }
-      let digests = group.hashes.get(pattern.rolling);
-      if (digests === undefined) { digests = new Set(); group.hashes.set(pattern.rolling, digests); }
-      digests.add(pattern.digest);
+      let candidates = group.hashes.get(pattern.rolling);
+      if (candidates === undefined) { candidates = []; group.hashes.set(pattern.rolling, candidates); }
+      candidates.push(pattern);
     }
   }
   /** Inspect all windows, including matches crossing source/decompression chunk boundaries. */
@@ -94,20 +95,23 @@ class Matcher {
     }
     for (const byte of bytes) {
       for (const group of this.groups) {
-        const old = this.count >= group.length ? this.ring[(this.count - group.length) % this.ring.length] + 1 : 0;
+        const old = this.count >= group.width ? this.ring[(this.count - group.width) % this.ring.length] + 1 : 0;
         group.rolling = (Math.imul(group.rolling - Math.imul(old, group.power), 257) + byte + 1) >>> 0;
       }
       this.ring[this.count % this.ring.length] = byte; this.count++;
       for (const group of this.groups) {
-        if (this.count < group.length) continue;
+        if (this.count < group.width) continue;
         // Short sequences use SHA-only matching; their polynomial value would directly encode their bytes.
-        const candidates = group.hashes.get(group.length <= 4 ? 0 : group.rolling); if (candidates === undefined) continue;
-        const start = (this.count - group.length) % this.ring.length;
-        const hash = createHash("sha256");
-        const end = Math.min(this.ring.length, start + group.length);
-        hash.update(this.ring.subarray(start, end));
-        if (end - start < group.length) hash.update(this.ring.subarray(0, group.length - (end - start)));
-        if (candidates.has(hash.digest("hex"))) return true;
+        const candidates = group.hashes.get(group.width <= 4 ? 0 : group.rolling); if (candidates === undefined) continue;
+        for (const candidate of candidates) {
+          if (this.count < candidate.length) continue;
+          const start = (this.count - candidate.length) % this.ring.length;
+          const hash = createHash("sha256");
+          const end = Math.min(this.ring.length, start + candidate.length);
+          hash.update(this.ring.subarray(start, end));
+          if (end - start < candidate.length) hash.update(this.ring.subarray(0, candidate.length - (end - start)));
+          if (hash.digest("hex") === candidate.digest) return true;
+        }
       }
     }
     return false;

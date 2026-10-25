@@ -311,3 +311,29 @@ test("streaming scanner preserves nested state across compressed input slots and
   writeFileSync(path,Buffer.from(deflateSync(selected).toString("base64").replace(/=+$/,"")));
   assert.throws(()=>scanErasureStorage(root,[fingerprint(selected)]),{code:"erasure_retained_copy"});
 });
+
+
+test("suffix filters share width while full SHA proofs distinguish lengths and content",()=>{
+  const long=Buffer.from("long-selected-suffix");const short=Buffer.from("d-suffix");const patterns=[fingerprint(long),fingerprint(short),fingerprint(long)];
+  assert.equal(patterns[0].rolling,patterns[1].rolling);
+  assert.equal(matchesFingerprints(short,[patterns[0]]),false);
+  assert.ok(matchesFingerprints(Buffer.concat([Buffer.from("padding"),long]),patterns));
+  assert.ok(matchesFingerprints(short,patterns));
+  assert.equal(matchesFingerprints(Buffer.from("long-modified-suffix"),[patterns[0]]),false);
+});
+
+test("strict physical inventory refuses unknown names while compaction preserves them with reasons",async()=>{
+  const f=await fixture();const root=f.repo.objects.storageRoot();const foreign=place(root,"foreign-record",Buffer.from("clean foreign bytes"));
+  assert.throws(()=>f.repo.objects.inventory(),{code:"unsupported_erasure_storage"});
+  assert.ok(f.repo.objects.compact().skippedCount>0);assert.ok(existsSync(foreign));rmSync(foreign);
+  const leaf=place(root,"aa/foreign-record",Buffer.from("clean foreign bytes"));
+  assert.throws(()=>f.repo.objects.inventory(),{code:"unsupported_erasure_storage"});
+  assert.ok(f.repo.objects.compact().skippedCount>0);assert.ok(existsSync(leaf));
+});
+
+test("scanner filter work stays bounded independently of selected representation lengths",()=>{
+  const patterns=Array.from({length:40},(_,index)=>fingerprint(Buffer.alloc(100+index,65+index%10)));const bytes=Buffer.alloc(1024,255);
+  const imul=Math.imul;let calls=0;mock.method(Math,"imul",(a:number,b:number)=>{calls++;return imul(a,b);});
+  assert.equal(matchesFingerprints(bytes,patterns),false);
+  assert.ok(calls<=bytes.length*3+128,`rolling filter performed ${calls} operations for ${bytes.length} bytes and ${patterns.length} lengths`);
+});

@@ -170,7 +170,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const frame = frameObject(object.type, object.payload);
       payloads.push(fingerprint(frame));
       // Payload denial is type-independent, including native members retyped before their wrappers were stripped.
-      for (const kind of OBJECT_TYPES) {
+      for (const kind of object.payload.length === 0 ? [object.type] : OBJECT_TYPES) {
         const member = frameObject(kind, object.payload);
         for (const level of [1, 6, 9]) payloads.push(fingerprint(deflateSync(member, { level }).subarray(2, -4)));
       }
@@ -189,16 +189,13 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       return { files, foreign, classes };
     };
     scanStorage(deleting);
-    // A second complete verified pass inspects copies without retaining unrelated leaves.
+    // A second complete verified pass checks identity/path stability without retaining unrelated leaves.
     const inspected = new Set<string>();
-    for (const { id, path, object } of store.walkErasureInventory()) {
+    for (const { path } of store.walkErasureInventory()) {
       if (!physical.has(path)) {
         throw new ObjectStoreError("incomplete_erasure_inventory", "Physical inventory changed between verified passes.");
       }
       inspected.add(path);
-      if (!selected.has(id) && containsSelectedBytes(object.payload, payloads)) {
-        throw new ObjectStoreError("erasure_retained_copy", "A surviving physical object retains selected bytes; remove the explicit copy before retrying.");
-      }
     }
     if (inspected.size !== physical.size) throw new ObjectStoreError("incomplete_erasure_inventory", "Physical inventory lost a copy between verified passes.");
     for (const instance of instances) {

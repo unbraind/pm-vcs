@@ -177,7 +177,10 @@ Four base64 alignments handle alphabetic prefixes and partial final words.
 Before deletion, the engine records only lengths, rolling signatures and SHA-256
 hashes in a versioned, checksummed private `erasure-verification.json` journal.
 Unknown formats and checksum damage refuse certification before lookup. No selected content is
-persisted there. These signatures let a retry verify raw copies at arbitrary
+persisted there. Format 2 uses an at-most-eight-byte rolling suffix filter and
+full SHA-256 confirmation, so filtering work does not grow with the number of
+selected representation lengths. Zero-byte erasure retains its typed identity;
+it does not select unrelated empty structural kinds. These signatures let a retry verify raw copies at arbitrary
 offsets after canonical objects have already disappeared. SHA-256 confirms every
 rolling-hash candidate. The same writer lease covers reading/updating this proof,
 publication of pending denial, deletion, final scan and completion. Interrupted
