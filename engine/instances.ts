@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 // Sparse linked instances over a shared immutable object store.
 //
 // A repository's control directory holds two very different kinds of state.
@@ -17,7 +18,7 @@
 // Nothing here writes instance state into the shared object store, and nothing
 // here trusts a hint where the filesystem can be asked instead.
 
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -219,9 +220,9 @@ function writeControlFile(path: string, contents: string): void {
   const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     writeFileSync(temporary, contents, { flag: "wx" });
-    renameSync(temporary, path);
+    durability.rename(temporary, path);
   } catch (error) {
-    rmSync(temporary, { force: true });
+    durability.remove(temporary, { force: true });
     throw error;
   }
 }
@@ -396,7 +397,7 @@ function updateInstances(
     return after;
   } finally {
     closeSync(descriptor);
-    unlinkSync(lockPath);
+    durability.unlink(lockPath);
   }
 }
 

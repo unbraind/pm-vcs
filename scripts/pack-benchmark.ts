@@ -1,6 +1,7 @@
+import { durability } from "../engine/durability.ts";
 /** Public-tracker-only benchmark; reports aggregate sizes and warm verified-read latency, never item contents. */
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { cpSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Repository } from "../engine/repo.ts";
@@ -41,5 +42,5 @@ export function benchmarkIndexedPacks(tracker: string, samples = 301) {
     const gc = collectGarbage(repo, true);
     for (const [id, expected] of original) assert.deepEqual(repo.objects.read(id), expected);
     return { trackerFiles: repo.readIndex().length, objects: ids.length, loose, packed, compaction: receipt, gcRemoved: gc.removed, verifiedReads: original.size * 2 };
-  } finally { rmSync(scratch, { recursive: true, force: true }); }
+  } finally { durability.remove(scratch, { recursive: true, force: true }); }
 }

@@ -1,3 +1,4 @@
+import { durability } from "../engine/durability.ts";
 // The self-hosting gate: pm-vcs versions its own source, and a CI gate proves it.
 //
 // A tracked text bundle (`selfhost.bundle`) holds a bounded pm-vcs archive of the
@@ -24,7 +25,7 @@
 // alone and the bundle is reproducible.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { isPair, isScalar, parseDocument, visit } from "yaml";
@@ -782,7 +783,7 @@ export function freshStore(): { store: ObjectStore; refs: RefStore; dir: string;
     refs: new RefStore(dir),
     dir,
     cleanup(): void {
-      rmSync(dir, { recursive: true, force: true });
+      durability.remove(dir, { recursive: true, force: true });
     },
   };
 }
@@ -888,7 +889,7 @@ export function main(root: string, args: readonly string[]): void {
     // is removing to still be there, and a stale registration left behind would
     // make the *next* run's `worktree add` fail on a path that no longer exists.
     removeWorktree?.();
-    rmSync(extractDir, { recursive: true, force: true });
+    durability.remove(extractDir, { recursive: true, force: true });
     cleanup();
   }
 }

@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 // Operation log and undo.
 //
 // Every command that moves a ref appends what it moved, before and after. That
@@ -9,7 +10,7 @@
 // payload bytes permanently; undo can restore a pointer but cannot restore its
 // intentionally absent content.
 
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync } from "node:fs";
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, } from "node:fs";
 import { dirname } from "node:path";
 
 import type { ObjectId } from "./objects.ts";
@@ -160,7 +161,7 @@ export class OperationLog {
       return operation;
     } finally {
       closeSync(descriptor);
-      unlinkSync(lockPath);
+      durability.unlink(lockPath);
     }
   }
 

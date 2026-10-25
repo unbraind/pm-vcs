@@ -146,6 +146,16 @@ test("foreign files, incomplete foreign jobs and loose write temporaries are ski
   assert.equal(readFileSync(join(directory, "foreign.json"), "utf8"), "{}"); equalReads(repo, entries);
 });
 
+test("compaction skips zero-byte and truncated recognized loose temporaries before decoding", async () => {
+  const repo = await fresh(); const entries = corpus(repo,2); const id = [...entries.keys()][0];
+  const loose = join(repo.objects.storageRoot(),id.slice(0,2),id.slice(2));
+  const empty = `${loose}.123.abcdef123456.tmp`; const truncated = `${loose}.456.abcdef123456.tmp`;
+  writeFileSync(empty,Buffer.alloc(0)); writeFileSync(truncated,Buffer.from([0x78,0x9c]));
+  const report = repo.objects.compact(); assert.equal(report.skippedCount,2);
+  assert.ok(report.skipped.every((record) => record.reason.includes("temporary")));
+  assert.equal(readFileSync(empty).length,0); assert.deepEqual(readFileSync(truncated),Buffer.from([0x78,0x9c])); equalReads(repo,entries);
+});
+
 test("corrupt pack fails before loose retirement or GC deletion; indexed range corruption never returns altered bytes", async () => {
   const repo = await fresh(); const entries = corpus(repo, 3); repo.objects.compact();
   const directory = join(repo.controlDirectory, "objects/packs"); const pack = join(directory, readdirSync(directory).find((name) => name.endsWith(".pack"))!);
@@ -306,35 +316,17 @@ test("mixed duplicate packed and loose garbage is collected once without losing 
   assert.equal(collectGarbage(repo, true).removed, 2); assert.ok(!repo.objects.has(garbage)); equalReads(repo, entries);
 });
 
-test("loose presence and retirement retries preserve operational errors and a peer's completed representation", async () => {
+test("loose presence preserves operational errors through the common descriptor resolver", async () => {
   const repo = await fresh(); const id = hashObject("blob", Buffer.from("retry survivor"));
   const directory = join(repo.controlDirectory, "objects", id.slice(0, 2)); mkdirSync(directory, { recursive: true });
-  const path = join(directory, id.slice(2)); const stat = fs.statSync;
-  for (const failureAt of [1, 2]) {
-    let calls = 0;
-    mock.method(fs, "statSync", (...args: Parameters<typeof fs.statSync>) => {
-      if (args[0] === path) throw Object.assign(new Error("operational stat failure"), { code: ++calls === failureAt ? "EACCES" : "ENOENT" });
-      return stat(...args);
-    }); syncBuiltinESMExports();
-    assert.throws(() => repo.objects.has(id), { code: "EACCES" }); mock.restoreAll(); syncBuiltinESMExports();
-  }
-  mkdirSync(path); assert.equal(repo.objects.has(id), false); rmSync(path, { recursive: true });
-  const read = fs.readFileSync;
-  for (const outcome of ["success", "failure"]) {
-    let once = false;
-    mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
-      if (args[0] === path && !once) {
-        once = true;
-        if (outcome === "success") writeFileSync(path, deflateSync(frameObject("blob", Buffer.from("retry survivor"))));
-        else mkdirSync(path);
-        throw Object.assign(new Error("representation retired"), { code: "ENOENT" });
-      }
-      return read(...args);
-    }); syncBuiltinESMExports();
-    if (outcome === "success") assert.deepEqual(repo.objects.read(id).payload, Buffer.from("retry survivor"));
-    else assert.throws(() => repo.objects.read(id), { code: "EISDIR" });
-    mock.restoreAll(); syncBuiltinESMExports(); rmSync(path, { recursive: true });
-  }
+  const path = join(directory, id.slice(2)); const open = fs.openSync;
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+    if (args[0] === path) throw Object.assign(new Error("operational open failure"), { code: "EACCES" });
+    return open(...args);
+  }); syncBuiltinESMExports();
+  assert.throws(() => repo.objects.has(id), { code: "EACCES" }); mock.restoreAll(); syncBuiltinESMExports();
+  mkdirSync(path); assert.equal(repo.objects.has(id), false);
+  assert.throws(() => repo.objects.read(id), { code: "EISDIR" }); rmSync(path, { recursive: true });
 });
 
 

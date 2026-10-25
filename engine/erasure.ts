@@ -1,6 +1,7 @@
+import { durability } from "./durability.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Authorized FileId-scoped erasure over the complete supported loose storage backend. */
-import { type BigIntStats, existsSync, lstatSync, readdirSync, rmSync, readFileSync } from "node:fs";
+import { type BigIntStats, existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { authorize, readLayers, assertCompositionPath, syncDirectory } from "./composition.ts";
 import { payloadDigest, encodeTombstone, type ErasureDenial } from "./lifecycle.ts";
@@ -53,9 +54,9 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, Inventory
 /** Refuse unsupported control storage and temporary metadata copies before reporting physical erasure. */
 function assertSupportedControl(control: string): void {
   const supported = new Set(["objects", "refs", "leases", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "remotes.json",
-    "partial.json", "upload-roots.json", "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
+    "partial.json", "upload-roots.json", "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "objects.generation", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
   for (const entry of readdirSync(control, { withFileTypes: true })) {
-    if ((!supported.has(entry.name) && !(entry.isFile() && /^objects\.lock\.[0-9]+\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
+    if ((!supported.has(entry.name) && !(entry.isFile() && /^objects\.(?:lock\.[0-9]+|generation)\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Unknown control storage or symlinks prevent a complete erasure receipt.");
     }
   }
@@ -110,7 +111,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     store.unpack();
     const physical = new Map<string, ObjectId>();
     const inventory = new Map<ObjectId, InventoryObject>();
-    for (const { id, path, object } of store.walkInventory()) {
+    for (const { id, path, object } of store.walkErasureInventory()) {
       const digest = payloadDigest(object.payload);
       physical.set(path, id);
       if (object.type === "manifest") {
@@ -158,13 +159,13 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     const loaded = new Set<ObjectId>();
     for (const [path, id] of physical) {
       if (!selected.has(id) || loaded.has(id)) continue;
-      const object = store.readInventoryObject(id, path);
+      const object = store.readErasureObject(id, path);
       loaded.add(id);
       if (object.type !== "manifest" && object.payload.length > 0) payloads.push(object.payload);
     }
     // A second complete verified pass inspects copies without retaining unrelated leaves.
     const inspected = new Set<string>();
-    for (const { id, path, object } of store.walkInventory()) {
+    for (const { id, path, object } of store.walkErasureInventory()) {
       if (!physical.has(path)) {
         throw new ObjectStoreError("incomplete_erasure_inventory", "Physical inventory changed between verified passes.");
       }
@@ -250,7 +251,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       }
       for (const [path, objectId] of physical) {
         if (!selected.has(objectId)) continue;
-        rmSync(path, { force: true });
+        durability.remove(path, { force: true });
         directories.add(dirname(path));
       }
       for (const directory of directories) syncDirectory(directory);

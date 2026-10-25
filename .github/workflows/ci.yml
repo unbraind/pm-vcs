@@ -119,3 +119,9 @@ jobs:
 
       - name: Verify the installed PM CLI launcher
         run: node scripts/accept-native-toon.ts --init-only
+
+      - name: Build Windows storage acceptance
+        run: npm run build
+
+      - name: Verify Windows GC apply on a non-git tracker
+        run: node --test --test-name-pattern="Windows GC" test/durability.test.ts

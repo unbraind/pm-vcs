@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readPartialState, type PartialState } from "./partial.ts";
@@ -19,19 +20,14 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   constants as fsConstants,
   closeSync,
-  fsyncSync,
   fstatSync,
   existsSync,
   lstatSync,
-  linkSync,
   readdirSync,
-  unlinkSync,
   mkdirSync,
   openSync,
   readFileSync,
   readSync,
-  renameSync,
-  rmSync,
   statSync,
   writeFileSync,
   writeSync,
@@ -41,10 +37,37 @@ import { resolveObjectsControl } from "./instance-link.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
 import { encodeTombstone, assertArrivalsAllowed, readDenials, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { writePrivateJson } from "./composition.ts";
-import { PackStorage, type PackReport } from "./packs.ts";
+import { PackStorage, PackRefusal, type PackReport, packBoundary } from "./packs.ts";
 
 /** Synchronous store handles addressing one root share reentrancy; independent processes still use the exclusive filesystem lease. */
 const activeLeases = new Set<string>();
+/** Nested synchronous mutations advance the owning process's transaction view without extra disk writes. */
+const activeRevisions = new Map<string, number>();
+/** Only a real representation or denial mutation publishes a persistent generation. */
+const dirtyLeases = new Set<string>();
+/** Maximum attempts to resolve a stable absence or a pinned immutable representation. */
+export const OBJECT_READ_RETRIES = 8;
+/** Reader interleaving seam; ordinary consumers receive no hooks. @internal */
+export const objectReadBoundary: { visit(step: string, id: string, attempt: number): void } = { visit() {} };
+/** Pinned descriptor and exact compressed range; ownership transfers to a streaming worker until termination. @internal */
+export interface ObjectHandle {
+  readonly fd: number;
+  readonly path: string;
+  readonly offset: number;
+  readonly length: number;
+  readonly regular: boolean;
+  readonly type?: ObjectType;
+  readonly packed?: { readonly offset: number; readonly length: number };
+  readonly bytes?: number;
+}
+/** A resolved handle carries its generation and a terminal-denial check. @internal */
+export interface ObjectLocation extends ObjectHandle {
+  readonly generation: string;
+  readonly check: () => void;
+}
+/** A lease generation covers both the pack catalog and every loose fan-out. */
+interface StorageGeneration { readonly key: string; readonly consistent: boolean; readonly active: boolean }
+
 
 /** The kinds of object the store can hold. */
 export const OBJECT_TYPES = ["blob", "tree", "commit", "record", "series", "manifest", "link", "tombstone", "conflict"] as const;
@@ -254,6 +277,132 @@ export class ObjectStore {
     return join(this.root, id.slice(0, 2), id.slice(2));
   }
 
+  /** Check current terminal absence immediately before returning bytes or emitting another stream chunk. */
+  private assertVisible(id: ObjectId): void {
+    const denial = this.denial(id);
+    if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
+  }
+
+  /** Publish a version before the first real object/denial mutation, retaining pure preflight and no-op behavior. @internal */
+  markStorageGeneration(): void {
+    const lease = resolve(this.root);
+    if (!activeLeases.has(lease)) throw new ObjectStoreError("store_locked", "A storage generation can change only inside its owning writer lease.");
+    activeRevisions.set(lease, activeRevisions.get(lease)! + 1);
+    if (dirtyLeases.has(lease)) return;
+    writePrivateJson(join(dirname(this.root), "objects.generation"), randomBytes(16).toString("hex"));
+    dirtyLeases.add(lease);
+    packBoundary.visit("storage-generation");
+  }
+
+  /** Read a consistent transaction marker; legacy stores start in an absent generation. */
+  private storageGeneration(): StorageGeneration {
+    const lease = resolve(this.root);
+    if (activeLeases.has(lease)) return { key: `owned:${activeRevisions.get(lease)}`, consistent: true, active: false };
+    const marker = join(dirname(this.root), "objects.generation");
+    const first = readControlJson(marker, "bad_storage_generation", "object storage generation", null);
+    const writer = lstatSync(join(dirname(this.root), "objects.lock"), { bigint: true, throwIfNoEntry: false });
+    objectReadBoundary.visit("generation-marker", "*", 0);
+    const last = readControlJson(marker, "bad_storage_generation", "object storage generation", null);
+    if (last !== null && (typeof last !== "string" || !/^[0-9a-f]{32}$/.test(last))) throw new ObjectStoreError("bad_storage_generation", "Storage generation is invalid; restore its verified metadata before retrying.");
+    return { key: `${String(last)}:${writer === undefined ? "idle" : `${writer.dev}:${writer.ino}`}`, consistent: first === last, active: writer !== undefined };
+  }
+
+  /** Open one exact loose representation without decoding its payload or following a leaf link. */
+  private openLooseLocation(path: string): ObjectHandle | undefined {
+    let fd: number;
+    try { fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    try {
+      const stat = fstatSync(fd);
+      return { fd, path, offset: 0, length: stat.size, regular: stat.isFile() };
+    } catch (error) { closeSync(fd); throw error; }
+  }
+
+  /**
+   * Resolve every reader through one generation protocol and transfer one opened immutable handle.
+   * Only an unchanged idle generation proves absence. A changing store gets at most eight full retries.
+   * Physical inventory may inspect denied bytes only inside the existing owning writer lease.
+   * @internal
+   */
+  resolveLocation(id: ObjectId, options: { path?: string; standalone?: boolean; physical?: boolean } = {}): ObjectLocation | undefined {
+    this.assertId(id);
+    const physical = options.physical === true && activeLeases.has(resolve(this.root));
+    if (options.physical === true && !physical) throw new ObjectStoreError("physical_read_requires_lease", "Physical erasure inspection requires the owning writer lease.");
+    for (let attempt = 0; attempt < OBJECT_READ_RETRIES; attempt++) {
+      const before = options.standalone ? { key: "standalone", consistent: true, active: false } : this.storageGeneration();
+      objectReadBoundary.visit("generation", id, attempt);
+      if (!physical && !options.standalone) this.assertVisible(id);
+      if (!before.consistent) continue;
+      let location: ObjectHandle | undefined;
+      try {
+        const exactPack = options.path !== undefined && dirname(options.path) === join(this.root, "packs") && /^[0-9a-f]{64}\.pack$/.test(basename(options.path));
+        location = exactPack ? this.packs.locate(id, options.path) : this.openLooseLocation(options.path ?? this.pathFor(id));
+        if (location === undefined && options.path !== undefined && !options.standalone && options.path !== this.pathFor(id)) location = this.openLooseLocation(this.pathFor(id));
+        objectReadBoundary.visit("loose", id, attempt);
+        if (location === undefined && !options.standalone) location = this.packs.locate(id);
+        objectReadBoundary.visit("resolved", id, attempt);
+        const after = options.standalone ? before : this.storageGeneration();
+        if (!after.consistent || before.key !== after.key || (location === undefined && (before.active || after.active))) {
+          if (location !== undefined) closeSync(location.fd);
+          continue;
+        }
+        if (location === undefined) return undefined;
+        const pinned = location;
+        const check = physical || options.standalone ? () => {} : () => this.assertVisible(id);
+        objectReadBoundary.visit("pinned", id, attempt);
+        check();
+        return { ...pinned, generation: after.key, check };
+      } catch (error) {
+        if (location !== undefined) closeSync(location.fd);
+        const after = options.standalone ? before : this.storageGeneration();
+        if (before.key !== after.key || !after.consistent) continue;
+        throw error;
+      }
+    }
+    throw new ObjectStoreError("object_store_changing", `Object location changed during ${OBJECT_READ_RETRIES} attempts; retry when storage maintenance completes. No stable absence was observed.`);
+  }
+
+  /** Consume one pinned location, enforcing terminal denials before and after the read. */
+  private withLocation<T>(id: ObjectId, read: (location: ObjectLocation) => T, options: { path?: string; physical?: boolean } = {}): T {
+    const location = this.resolveLocation(id, options);
+    if (location === undefined) throw new ObjectStoreError("object_not_found", `No object ${id} in a stable storage generation; fetch a verified copy before retrying.`);
+    try { location.check(); const result = read(location); location.check(); return result; } finally { closeSync(location.fd); }
+  }
+
+  /** Read an exact compressed member from its pinned descriptor, independent of subsequent namespace changes. */
+  private compressed(location: ObjectLocation): Buffer {
+    if (location.packed === undefined) return readFileSync(location.fd);
+    const bytes = Buffer.alloc(location.length); let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(location.fd, bytes, offset, bytes.length - offset, location.offset + offset);
+      if (count === 0) throw new ObjectStoreError("corrupt_object", "Pinned compressed object was truncated.");
+      offset += count;
+    }
+    return bytes;
+  }
+
+  /** Verify one complete immutable frame without performing a second path lookup. */
+  private readLocation(id: ObjectId, location: ObjectLocation): StoredObject {
+    try {
+      let framed: Buffer;
+      try { framed = inflateSync(this.compressed(location)); } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== undefined && !code.startsWith("Z_")) throw error;
+        throw new ObjectStoreError("corrupt_object", `Object ${id} could not be decompressed.`);
+      }
+      const parsed = parseFramedObject(framed);
+      if (location.type !== undefined && parsed.type !== location.type) throw new ObjectStoreError("corrupt_pack", "Pack member kind disagrees with its index.");
+      const actual = hashObject(parsed.type, parsed.payload);
+      if (actual !== id) throw new ObjectStoreError("corrupt_object", `Object ${id} contains content that hashes to ${actual}.`);
+      return parsed;
+    } catch (error) {
+      if (location.packed !== undefined && error instanceof ObjectStoreError) throw new PackRefusal("corrupt_pack", "Pack member failed verification.", "Restore a verified pack before retrying.");
+      throw error;
+    }
+  }
+
   /**
    * Whether the store already holds an object.
    *
@@ -262,17 +411,11 @@ export class ObjectStore {
    * @throws ObjectStoreError When the id is not well-formed.
    */
   has(id: ObjectId): boolean {
-    this.assertId(id);
     try {
-      if (statSync(this.pathFor(id)).isFile()) return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (this.packs.has(id)) return true;
-    try { return statSync(this.pathFor(id)).isFile(); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      return false;
-    }
+      const location = this.resolveLocation(id);
+      if (location === undefined) return false;
+      try { location.check(); return location.regular; } finally { closeSync(location.fd); }
+    } catch (error) { if (error instanceof ObliteratedObjectError) return false; throw error; }
   }
 
   /** Object storage root for representation backends; callers must retain the shared writer lease for mutations. */
@@ -316,6 +459,7 @@ export class ObjectStore {
   private writeRaw(type: ObjectType, payload: Buffer): ObjectId {
     const id = hashObject(type, payload);
     if (this.has(id)) return id;
+    this.markStorageGeneration();
     const destination = this.pathFor(id);
     const directory = join(this.root, id.slice(0, 2));
     mkdirSync(directory, { recursive: true });
@@ -328,13 +472,13 @@ export class ObjectStore {
     try {
       try {
         writeSync(handle, compressed);
-        fsyncSync(handle);
+        durability.file(handle);
       } finally {
         closeSync(handle);
       }
-      renameSync(temporary, destination);
+      durability.rename(temporary, destination);
     } catch (error) {
-      rmSync(temporary, { force: true });
+      durability.remove(temporary, { force: true });
       throw error;
     }
     return id;
@@ -362,35 +506,8 @@ export class ObjectStore {
    *   any reason other than being absent.
    */
   read(id: ObjectId): StoredObject {
-    this.assertId(id);
-    this.hydrate(id);
-    const denial = this.denial(id);
-    if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
-    let compressed: Buffer;
-    try {
-      compressed = readFileSync(this.pathFor(id));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      const packed = this.packs.read(id);
-      if (packed !== undefined) return packed;
-      // A concurrent unpack may have retired its pack after publishing this loose copy.
-      try { compressed = readFileSync(this.pathFor(id)); } catch (retry) {
-        if ((retry as NodeJS.ErrnoException).code !== "ENOENT") throw retry;
-        throw new ObjectStoreError("object_not_found", `No object ${id} in the store.`);
-      }
-    }
-    let framed: Buffer;
-    try {
-      framed = inflateSync(compressed);
-    } catch {
-      throw new ObjectStoreError("corrupt_object", `Object ${id} could not be decompressed.`);
-    }
-    const parsed = parseFramedObject(framed);
-    const actual = hashObject(parsed.type, parsed.payload);
-    if (actual !== id) {
-      throw new ObjectStoreError("corrupt_object", `Object ${id} contains content that hashes to ${actual}.`);
-    }
-    return parsed;
+    this.assertId(id); this.hydrate(id);
+    return this.withLocation(id, (location) => this.readLocation(id, location));
   }
 
   /**
@@ -401,28 +518,36 @@ export class ObjectStore {
    * operational I/O failures remain visible. Ordinary recognizable unrelated objects avoid full payload reads.
    */
   readIfType(id: ObjectId, type: ObjectType, alternatives: readonly ObjectType[] = []): StoredObject | undefined {
-    return this.hasType(id, type, alternatives) ? this.read(id) : undefined;
+    try {
+      const location = this.resolveLocation(id);
+      if (location === undefined) return undefined;
+      try {
+        const result = this.locationHasType(id, location, type, alternatives) ? this.readLocation(id, location) : undefined;
+        location.check(); return result;
+      } finally { closeSync(location.fd); }
+    } catch (error) { if (error instanceof ObliteratedObjectError) return undefined; throw error; }
   }
 
   /** Hint at an object's kind using bounded prefix decoding; never a substitute for verified object reads. */
   hasType(id: ObjectId, type: ObjectType, alternatives: readonly ObjectType[] = []): boolean {
-    this.assertId(id);
-    if (this.denial(id) !== undefined) return false;
-    let fd: number;
-    try { fd = openSync(this.pathFor(id), "r"); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        const packed = this.packs.type(id);
-        return packed !== undefined && [type, ...alternatives].includes(packed);
-      }
-      throw error;
-    }
-    let matching = false;
     try {
+      const location = this.resolveLocation(id);
+      if (location === undefined) return false;
+      try { const result = this.locationHasType(id, location, type, alternatives); location.check(); return result; } finally { closeSync(location.fd); }
+    } catch (error) { if (error instanceof ObliteratedObjectError) return false; throw error; }
+  }
+
+  /** Decode a bounded kind prefix from the same pinned range that later payload reads consume. */
+  private locationHasType(id: ObjectId, location: ObjectLocation, type: ObjectType, alternatives: readonly ObjectType[]): boolean {
+    if (location.type !== undefined) return [type, ...alternatives].includes(location.type);
+    const fd = location.fd;
+    let matching = false;
+    {
       const bytes = Buffer.alloc(64 * 1024);
       let length = 0;
       for (;;) {
         if (length === bytes.length) throw new ObjectStoreError("object_prefix_limit", `Object ${id} has no recognizable header within the compressed prefix budget.`);
-        const count = readSync(fd, bytes, length, Math.min(64, bytes.length - length), null);
+        const count = readSync(fd, bytes, length, Math.min(64, bytes.length - length, location.length - length), location.offset + length);
         if (count === 0) return false;
         length += count;
         let end = length;
@@ -444,39 +569,27 @@ export class ObjectStore {
         // Any valid frame header fits in 32 bytes: longest kind, a space, at most 16 decimal length digits and NUL.
         if (prefix.length >= 32) return false;
       }
-    } finally { closeSync(fd); }
+    }
     return matching;
   }
 
   /** Read a verified small object with bounded compressed input and inflation; larger payloads select streaming compatibility. */
   readBoundedTyped(id: ObjectId, type: ObjectType, limit = 16_384): Buffer {
-    this.assertId(id);
-    const denial = this.denial(id);
-    if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
-    const path = this.pathFor(id);
-    let fd: number;
-    try { fd = openSync(path, "r"); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        const object = this.read(id);
-        if (object.payload.length > limit) throw new ObjectStoreError("object_payload_limit", "Object requires bounded streaming decoding.");
-        if (object.type !== type) throw new ObjectStoreError("object_type_mismatch", "Object has the wrong kind.");
-        return object.payload;
-      }
-      throw error;
-    }
+    this.assertId(id); this.hydrate(id);
+    return this.withLocation(id, (location) => {
+    const fd = location.fd;
     let compressed: Buffer;
-    let size: number;
-    try {
-      size = fstatSync(fd).size;
+    const size = location.length;
+    {
       if (size > limit + 1024) throw new ObjectStoreError("object_payload_limit", "Object requires bounded streaming decoding.");
       compressed = Buffer.alloc(size);
       let offset = 0;
       while (offset < size) {
-        const count = readSync(fd, compressed, offset, size - offset, null);
+        const count = readSync(fd, compressed, offset, size - offset, location.offset + offset);
         if (count === 0) throw new ObjectStoreError("corrupt_object", "Compressed object was truncated during its bounded read.");
         offset += count;
       }
-    } finally { closeSync(fd); }
+    }
     let framed: Buffer;
     try { framed = inflateSync(compressed, { maxOutputLength: limit + 32 }); } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") throw new ObjectStoreError("object_payload_limit", "Object requires bounded streaming decoding.");
@@ -486,19 +599,20 @@ export class ObjectStore {
     if (hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("corrupt_object", "Object does not match its address.");
     if (object.type !== type) throw new ObjectStoreError("object_type_mismatch", "Object has the wrong kind.");
     return object.payload;
+    });
   }
 
   /** Stream newline-terminated metadata with bounded decompression, full frame/hash verification and erasure denial enforcement. */
   *readLines(id: ObjectId, type: ObjectType): Generator<string> {
-    this.assertId(id);
-    const denial = this.denial(id);
-    if (denial !== undefined) throw new ObliteratedObjectError(id, denial.id);
-    this.hydrate(id);
-    const packed = this.packs.read(id);
-    if (packed !== undefined) {
-      if (packed.type !== type) throw new ObjectStoreError("object_type_mismatch", "Object has the wrong kind.");
-      yield* objectPayloadLines([packed.payload]);
-    } else yield* objectPayloadLines(objectPayloadChunks(this.pathFor(id), id, type));
+    for (const line of objectPayloadLines(this.readChunks(id, type))) { this.assertVisible(id); yield line; }
+  }
+
+  /** Stream a fully verified payload from one opened representation; the worker retains its descriptor through namespace transitions. */
+  *readChunks(id: ObjectId, type: ObjectType, timeoutMs = 30_000): Generator<Buffer> {
+    this.assertId(id); this.hydrate(id);
+    const location = this.resolveLocation(id);
+    if (location === undefined) throw new ObjectStoreError("object_not_found", `No object ${id} in a stable storage generation; fetch a verified copy before retrying.`);
+    yield* objectPayloadChunks(location, id, type, timeoutMs);
   }
 
   /**
@@ -579,7 +693,7 @@ export class ObjectStore {
 
   /** Inspect present, intentionally absent, missing and damaged content without conflating states. */
   state(id: ObjectId, read: () => StoredObject = /** Default inspection verifies the loose object itself. */ () => this.read(id)): PayloadState {
-    try { return { kind: "present", object: read() }; } catch (error) {
+    try { this.hydrate(id); return { kind: "present", object: this.withLocation(id, () => read()) }; } catch (error) {
       if (error instanceof ObliteratedObjectError) return { kind: "obliterated", tombstone: error.tombstone };
       if (!(error instanceof ObjectStoreError)) throw error;
       return { kind: error.code === "object_not_found" || error.code === "missing_fragment" ? "missing" : "corrupt", code: error.code };
@@ -602,6 +716,7 @@ export class ObjectStore {
   /** Persist denial durably before deletion; pending cleanup closes every writer. */
   recordDenials(denials: readonly ErasureDenial[]): void {
     this.withWriteLock(/** The durable denial and canonical audit objects publish under the same store lease. */ () => {
+      this.markStorageGeneration();
       writePrivateJson(join(dirname(this.root), "denials.json"), denials);
       this.denialCache = undefined;
       for (const denial of denials) this.writeRaw("tombstone", encodeTombstone(denial.tombstone));
@@ -662,26 +777,31 @@ export class ObjectStore {
     });
   }
 
-  /** Materialize the verified physical inventory for callers that deliberately retain every payload. */
-  inventory(): InventoryEntry[] {
-    return [...this.walkInventory()];
+  /** Materialize verified physical copies through the same location resolver as individual reads. */
+  inventory(): InventoryEntry[] { return [...this.walkInventory()].filter((entry) => this.denial(entry.id) === undefined); }
+
+  /** Enumerate complete physical copies; callers planning mutation retain the writer lease across all passes. */
+  *walkInventory(): Generator<InventoryEntry> { yield* this.walkRepresentations("all"); }
+
+  /** Enumerate loose representations; recognized write temporaries are skipped before decoding during compaction. */
+  *walkLooseInventory(skipped?: { name: string; reason: string }[]): Generator<InventoryEntry> { yield* this.walkRepresentations("loose", skipped); }
+
+  /** Pack-only physical inventory is used by compaction without inspecting loose writer temporaries. @internal */
+  *walkPackedInventory(): Generator<InventoryEntry> { yield* this.walkRepresentations("pack"); }
+
+  /** Inspect intentionally denied physical copies only inside authorized maintenance's writer transaction. @internal */
+  *walkErasureInventory(kind: "all" | "pack" = "all"): Generator<InventoryEntry> {
+    if (!activeLeases.has(resolve(this.root))) throw new ObjectStoreError("physical_read_requires_lease", "Physical erasure inspection requires the owning writer lease.");
+    yield* this.walkRepresentations(kind, undefined, true);
   }
 
-  /**
-   * Yield one hash-checked loose object or recognized temporary copy at a time.
-   * The walker retains directory listings and its current decoded object, never
-   * prior leaf buffers. Consumers determine retention; inventory() still collects
-   * all payloads. Hold the store lease across multiple passes when planning erasure.
-   * Denied physical copies remain visible so pending authorized cleanup can resume.
-   */
-  *walkInventory(): Generator<InventoryEntry> {
-    yield* this.walkLooseInventory();
-    yield* this.packs.inventory();
-  }
+  /** Re-read one denied physical copy for an already authorized erasure plan. @internal */
+  readErasureObject(id: ObjectId, path: string): StoredObject { return this.inventoryObject(id, path, true); }
 
-  /** Walk verified loose copies independently of indexed packs; representation maintenance holds the writer lease. */
-  *walkLooseInventory(skipped?: { name: string; reason: string }[]): Generator<InventoryEntry> {
-    if (!existsSync(this.root)) return;
+  /** Collect names only, so incomplete recognized temporaries cannot reach a decoder on the compaction path. */
+  private looseLocations(skipped?: { name: string; reason: string }[]): { id: ObjectId; path: string }[] {
+    const result: { id: ObjectId; path: string }[] = [];
+    if (!existsSync(this.root)) return result;
     if (!lstatSync(this.root).isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Object storage cannot follow a symlink.");
     for (const directory of readdirSync(this.root, { withFileTypes: true })) {
       if (directory.name === "packs" && directory.isDirectory()) continue;
@@ -695,57 +815,89 @@ export class ObjectStore {
           throw new ObjectStoreError("unsupported_erasure_storage", "Unindexed storage artefacts prevent a complete erasure inventory.");
         }
         const id = directory.name + file.name.slice(0, 62);
-        const path = join(this.root, directory.name, file.name);
-        yield { id, path, bytes: lstatSync(path).size, object: this.readInventoryObject(id, path) };
+        if (skipped !== undefined && file.name.endsWith(".tmp")) { skipped.push({ name: id, reason: "loose write temporary; retained for its writer" }); continue; }
+        result.push({ id, path: join(this.root, directory.name, file.name) });
       }
+    }
+    return result;
+  }
+
+  /** Snapshot the loose set and pack indexes in one unchanged generation before yielding any representation. */
+  private representationLocations(kind: "all" | "loose" | "pack", skipped?: { name: string; reason: string }[]): { id: ObjectId; path: string }[] {
+    for (let attempt = 0; attempt < OBJECT_READ_RETRIES; attempt++) {
+      const before = this.storageGeneration(); const notes: { name: string; reason: string }[] | undefined = skipped === undefined ? undefined : [];
+      let result: { id: ObjectId; path: string }[];
+      objectReadBoundary.visit("inventory", "*", attempt);
+      try { result = [...(kind === "pack" ? [] : this.looseLocations(notes)), ...(kind === "loose" ? [] : this.packs.locations())]; }
+      catch (error) { const after = this.storageGeneration(); if (before.key !== after.key || !after.consistent) continue; throw error; }
+      const after = this.storageGeneration();
+      if (!before.consistent || !after.consistent || before.key !== after.key || before.active || after.active) continue;
+      if (notes !== undefined) skipped?.push(...notes);
+      return result;
+    }
+    throw new ObjectStoreError("object_store_changing", "Inventory changed during eight attempts; retry when storage maintenance completes.");
+  }
+
+  /** Verify each snapshot member using a pinned current location, deduplicating physical fallbacks after a transition. */
+  private *walkRepresentations(kind: "all" | "loose" | "pack", skipped?: { name: string; reason: string }[], physical = false): Generator<InventoryEntry> {
+    const seen = new Set<string>();
+    for (const entry of this.representationLocations(kind, skipped)) {
+      let location: ObjectLocation | undefined;
+      try { location = this.resolveLocation(entry.id, { path: entry.path, physical }); }
+      catch (error) { if (error instanceof ObliteratedObjectError) continue; throw error; }
+      if (location === undefined) continue;
+      try {
+        if ((kind === "loose" && location.packed !== undefined) || (kind === "pack" && location.packed === undefined)) continue;
+        const key = `${location.path}:${entry.id}`; if (seen.has(key)) continue; seen.add(key);
+        const object = this.readInventoryLocation(entry.id, location); location.check();
+        yield { id: entry.id, path: location.path, object, bytes: location.bytes ?? location.length, ...(location.packed === undefined ? {} : { packed: location.packed }) };
+      } finally { closeSync(location.fd); }
     }
   }
 
-  /**
-   * Re-read one inventoried physical location without hiding pending denied bytes.
-   * Only canonical or recognized temporary locations for this ID are accepted.
-   * Real directory/leaf identities, no-follow open, frame and hash checks precede
-   * return. Native I/O errors propagate; unsupported layout and corruption refuse.
-   */
-  readInventoryObject(id: ObjectId, path: string): StoredObject {
+  /** Validate the physical address scope before an exact-path hint reaches the shared resolver. */
+  readInventoryObject(id: ObjectId, path: string): StoredObject { return this.inventoryObject(id, path, false); }
+
+  /** Share path validation and pinned resolution between logical inventory reads and the explicit erasure-only scope. */
+  private inventoryObject(id: ObjectId, path: string, physical: boolean): StoredObject {
     this.assertId(id);
-    if (dirname(path) === join(this.root, "packs") && /^[0-9a-f]{64}\.pack$/.test(basename(path))) return this.packs.readAt(id, path);
     const canonical = this.pathFor(id);
-    if (dirname(path) !== dirname(canonical) || (basename(path) !== id.slice(2)
-      && !new RegExp(`^${id.slice(2)}\\.[0-9]+\\.[0-9a-f]{12}\\.tmp$`).test(basename(path)))) {
+    const pack = dirname(path) === join(this.root, "packs") && /^[0-9a-f]{64}\.pack$/.test(basename(path));
+    if (!pack && (dirname(path) !== dirname(canonical) || (basename(path) !== id.slice(2)
+      && !new RegExp(`^${id.slice(2)}\\.[0-9]+\\.[0-9a-f]{12}\\.tmp$`).test(basename(path))))) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory location does not belong to this object.");
     }
-    const root = lstatSync(this.root, { bigint: true });
-    const parent = lstatSync(dirname(path), { bigint: true });
-    const leaf = lstatSync(path, { bigint: true });
-    if (!root.isDirectory() || !parent.isDirectory() || !leaf.isFile()) {
-      throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory cannot follow directory or leaf links.");
+    for (const directory of [this.root, dirname(path)]) {
+      const stat = lstatSync(directory, { throwIfNoEntry: false });
+      if (stat !== undefined && !stat.isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory cannot follow directory or leaf links.");
     }
-    const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-    let compressed: Buffer;
-    try {
-      const opened = fstatSync(fd, { bigint: true });
-      compressed = readFileSync(fd);
-      const current = lstatSync(path, { bigint: true });
-      const currentRoot = lstatSync(this.root, { bigint: true });
-      const currentParent = lstatSync(dirname(path), { bigint: true });
-      if (opened.dev !== leaf.dev || opened.ino !== leaf.ino || current.dev !== leaf.dev || current.ino !== leaf.ino
-        || current.mtimeNs !== leaf.mtimeNs || current.ctimeNs !== leaf.ctimeNs || current.size !== leaf.size
-        || currentRoot.dev !== root.dev || currentRoot.ino !== root.ino || currentParent.dev !== parent.dev || currentParent.ino !== parent.ino) {
-        throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory identity changed during its verified read.");
-      }
-    } finally { closeSync(fd); }
-    let framed: Buffer;
-    try { framed = inflateSync(compressed); } catch { throw new ObjectStoreError("corrupt_object", "Inventory found an unreadable compressed object."); }
-    const object = parseFramedObject(framed);
-    if (hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("corrupt_object", "Inventory found a mismatched loose object.");
+    const leaf = lstatSync(path, { throwIfNoEntry: false });
+    if (leaf !== undefined && !leaf.isFile()) throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory cannot follow directory or leaf links.");
+    return this.withLocation(id, (location) => this.readInventoryLocation(id, location), { path, physical });
+  }
+
+  /** Keep strict physical identity checks inside a stable generation; legitimate representation retirement keeps its opened handle valid. */
+  private readInventoryLocation(id: ObjectId, location: ObjectLocation): StoredObject {
+    const root = lstatSync(this.root, { bigint: true });
+    const parent = lstatSync(dirname(location.path), { bigint: true });
+    const leaf = fstatSync(location.fd, { bigint: true });
+    if (!root.isDirectory() || !parent.isDirectory() || !leaf.isFile()) throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory cannot follow directory or leaf links.");
+    const object = this.readLocation(id, location);
+    if (location.generation === this.storageGeneration().key) {
+      const current = lstatSync(location.path, { bigint: true }); const currentRoot = lstatSync(this.root, { bigint: true }); const currentParent = lstatSync(dirname(location.path), { bigint: true });
+      if (current.dev !== leaf.dev || current.ino !== leaf.ino || current.mtimeNs !== leaf.mtimeNs || current.ctimeNs !== leaf.ctimeNs || current.size !== leaf.size
+        || currentRoot.dev !== root.dev || currentRoot.ino !== root.ino || currentParent.dev !== parent.dev || currentParent.ino !== parent.ino) throw new ObjectStoreError("unsupported_erasure_storage", "Physical inventory identity changed during its verified read.");
+    }
     return object;
   }
 
   /** Hold a synchronous, reentrant store transaction across publication, worktree mutation and physical erasure; callbacks must not return asynchronous work. */
   withWriteLock<T>(action: () => T): T {
     const lease = resolve(this.root);
-    if (activeLeases.has(lease)) return action();
+    if (activeLeases.has(lease)) {
+      activeRevisions.set(lease, activeRevisions.get(lease)! + 1);
+      return action();
+    }
     if (!existsSync(dirname(this.root))) mkdirSync(dirname(this.root), { recursive: true });
     const path = join(dirname(this.root), "objects.lock");
     const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
@@ -756,11 +908,11 @@ export class ObjectStore {
     let lockChanged = false;
     try {
       writeFileSync(fd, String(process.pid));
-      fsyncSync(fd);
+      durability.file(fd);
       const deadline = performance.now() + 5000;
       const sleeper = new Int32Array(new SharedArrayBuffer(4));
       for (;;) {
-        try { linkSync(temporary, path); acquired = true; break; } catch (error) {
+        try { durability.link(temporary, path); acquired = true; break; } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
           const remaining = deadline - performance.now();
           if (remaining <= 0) {
@@ -769,17 +921,17 @@ export class ObjectStore {
           Atomics.wait(sleeper, 0, 0, Math.min(25, remaining));
         }
       }
-      unlinkSync(temporary);
-      activeLeases.add(lease);
+      durability.unlink(temporary);
+      activeLeases.add(lease); activeRevisions.set(lease, 0);
       result = action();
     } finally {
-      activeLeases.delete(lease);
+      activeLeases.delete(lease); activeRevisions.delete(lease); dirtyLeases.delete(lease);
       closeSync(fd);
-      rmSync(temporary, { force: true });
+      durability.remove(temporary, { force: true });
       // A moved root must neither hide the mutation refusal nor unlink a foreign lock.
       if (acquired) {
         const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-        if (observed !== undefined && observed.dev === locked.dev && observed.ino === locked.ino) unlinkSync(path);
+        if (observed !== undefined && observed.dev === locked.dev && observed.ino === locked.ino) durability.unlink(path);
         else lockChanged = true;
       }
     }
@@ -814,7 +966,7 @@ export class ObjectStore {
     if (current === undefined) return;
     if (current.dev !== observed.dev || current.ino !== observed.ino || current.ctimeNs !== observed.ctimeNs
       || current.mtimeNs !== observed.mtimeNs || current.size !== observed.size) throw new ObjectStoreError("store_locked", "Lock owner changed during recovery.");
-    unlinkSync(path);
+    durability.unlink(path);
   }
 
   /**

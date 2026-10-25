@@ -1,5 +1,5 @@
+import { durability } from "./engine/durability.ts";
 /** Execute a recorded PM test after the parent publishes a durable worker receipt. */
-import { rmSync } from "node:fs";
 import { runTest, type TestRunResult } from "@unbrained/pm-cli/sdk";
 
 const [item, author, path, receipt, raw = "{}"] = process.argv.slice(2) as [string, string, string, string, string?];
@@ -29,5 +29,5 @@ try {
   }
   process.stdout.write(JSON.stringify(results));
 } finally {
-  rmSync(receipt, { force: true });
+  durability.remove(receipt, { force: true });
 }

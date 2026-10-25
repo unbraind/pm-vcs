@@ -1,11 +1,11 @@
 /** Bounded decompression worker used by synchronous legacy-compatible readers. */
-import { createReadStream } from "node:fs";
+import { createReadStream, read } from "node:fs";
 import { createInflate } from "node:zlib";
 import { workerData } from "node:worker_threads";
 
 /** Run one backpressured stream; errors cross the same bounded shared slot as bytes. */
 async function decompress(): Promise<void> {
-  const { path, shared } = workerData as { path: string; shared: SharedArrayBuffer };
+  const { fd, offset, length, shared } = workerData as { fd: number; offset: number; length: number; shared: SharedArrayBuffer };
   const state = new Int32Array(shared, 0, 2);
   const slot = new Uint8Array(shared, 8);
   /** Deliver one chunk and wait until the synchronous reader releases the slot. */
@@ -16,7 +16,11 @@ async function decompress(): Promise<void> {
     Atomics.notify(state, 0);
     if (status === 1) while (Atomics.load(state, 0) === 1) Atomics.wait(state, 0, 1);
   };
-  const source = createReadStream(path, { highWaterMark: 16_384 });
+  const source = createReadStream("", { fd, autoClose: false, start: offset, end: offset + Math.max(0, length - 1), highWaterMark: 16_384, fs: {
+    read,
+    /** Descriptor ownership remains in the parent until this worker has terminated. */
+    close(_fd, callback) { callback(null); },
+  } });
   const inflater = createInflate({ chunkSize: 16_384 });
   source.on("error", /** Preserve operational filesystem errors rather than calling them corruption. */ (error) => inflater.destroy(error));
   source.pipe(inflater);

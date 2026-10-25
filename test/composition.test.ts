@@ -545,7 +545,7 @@ test("strict erasure refuses structural payload ownership, merge state, metadata
   refuses(() => assertArrivalsAllowed([denial], [{ id: hashObject("manifest", manifest), type: "manifest", payload: manifest }], true), "object_obliterated");
   for (const encoded of [deflateSync(payload), Buffer.from(payload.toString("base64")), Buffer.from(Buffer.from(payload.toString("base64")).toString("base64"))]) refuses(() => repo.objects.write("blob", encoded, "b".repeat(32)), "object_obliterated");
   repo.objects.write("blob", Buffer.from(Buffer.from(Buffer.from("unrelated").toString("base64")).toString("base64")), "b".repeat(32));
-  syncDirectory(repo.controlDirectory, false, "win32"); refuses(() => syncDirectory(repo.controlDirectory, true, "win32"), "unsupported_durability");
+  syncDirectory(repo.controlDirectory, false, "win32"); syncDirectory(repo.controlDirectory, true, "win32");
   const alias = join(parent, "metadata-alias"); symlinkSync(repo.controlDirectory, alias); refuses(() => writePrivateJson(join(alias, "new.json"), {}), "unsafe_composition_path");
 });
 

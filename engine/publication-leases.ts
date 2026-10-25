@@ -1,6 +1,7 @@
+import { durability } from "./durability.ts";
 /** Receiver-owned stable FileId leases, fenced generations and durable audit. */
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ClosureMetadata } from "./closure.ts";
 import { syncDirectory } from "./composition.ts";
@@ -160,7 +161,7 @@ export class PublicationLeases {
     const fd = openSync(join(this.directory, `${lease.fileId}.jsonl`), "a", 0o600);
     try {
       writeFileSync(fd, JSON.stringify({ action, actor: this.principal.principal, at, lease }) + "\n");
-      fsyncSync(fd);
+      durability.file(fd);
     } finally { closeSync(fd); }
     syncDirectory(this.directory, false);
     return lease;

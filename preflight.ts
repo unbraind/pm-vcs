@@ -1,3 +1,4 @@
+import { durability } from "./engine/durability.ts";
 /**
  * Clone readiness: can *this* checkout merge tracker data field-aware?
  *
@@ -29,7 +30,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -444,7 +445,7 @@ export function checkDriverExecutable(repoRoot: string): PreflightCheck {
       remediation: null,
     };
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    durability.remove(scratch, { recursive: true, force: true });
   }
 }
 

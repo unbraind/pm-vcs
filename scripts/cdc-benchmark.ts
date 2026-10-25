@@ -1,3 +1,4 @@
+import { durability } from "../engine/durability.ts";
 // Content-defined chunking benchmark.
 //
 // Justifies the CDC parameters chosen in engine/fragments.ts by measuring:
@@ -16,7 +17,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { isMainInvocation } from "./main-invocation.ts";
 
 import { ObjectStore } from "../engine/objects.ts";
@@ -219,7 +220,7 @@ export function main(): void {
         `${name.padEnd(38)} | ${fmt(avgChunk).padStart(7)} | ${String(result.manifest.fragments.length).padStart(5)} | ` +
         `${reuse} | ${maxChunk}`,
       );
-      rmSync(dir, { recursive: true, force: true });
+      durability.remove(dir, { recursive: true, force: true });
     }
 
     console.log("\n--- Fixed-size controls ---");
@@ -237,7 +238,7 @@ export function main(): void {
         `${String(size).padStart(12)} | ${String(result.manifest.fragments.length).padStart(5)} | ` +
         reuse,
       );
-      rmSync(dir, { recursive: true, force: true });
+      durability.remove(dir, { recursive: true, force: true });
     }
 
     console.log("\n--- Write throughput ---");
@@ -256,7 +257,7 @@ export function main(): void {
       const elapsed = performance.now() - start;
       const mbPerSec = (1024 * 1024) / (elapsed / 1000) / (1024 * 1024);
       console.log(`${name}: ${fmt(elapsed)} ms (${fmt(mbPerSec)} MiB/s)`);
-      rmSync(dir, { recursive: true, force: true });
+      durability.remove(dir, { recursive: true, force: true });
     }
 
     {
@@ -267,7 +268,7 @@ export function main(): void {
       const elapsed = performance.now() - start;
       const mbPerSec = (1024 * 1024) / (elapsed / 1000) / (1024 * 1024);
       console.log(`Fixed 4K: ${fmt(elapsed)} ms (${fmt(mbPerSec)} MiB/s)`);
-      rmSync(dir, { recursive: true, force: true });
+      durability.remove(dir, { recursive: true, force: true });
     }
 
     // Object-count-based reuse (same method the tests use) for CDC default vs fixed-size.
@@ -291,7 +292,7 @@ export function main(): void {
         console.log(
           `${label.padEnd(12)} | ${posLabel.padEnd(5)} | ${String(totalFragments).padStart(9)} | ${String(newFragments).padStart(12)} | ${String(reused).padStart(6)} | ${fmt(reuseFraction * 100).padStart(13)}%`,
         );
-        rmSync(dir, { recursive: true, force: true });
+        durability.remove(dir, { recursive: true, force: true });
       }
     }
 
@@ -304,7 +305,7 @@ export function main(): void {
     console.log("DEFAULT_CDC_PARAMS: min=512, max=65536, mask=0x1fff (13-bit)");
     console.log("These give the best reuse-vs-fragment-count tradeoff on the test corpus.");
   } finally {
-    rmSync(tmpRoot, { recursive: true, force: true });
+    durability.remove(tmpRoot, { recursive: true, force: true });
   }
 }
 

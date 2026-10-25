@@ -1,11 +1,12 @@
+import { durability } from "./durability.ts";
 /** Immutable indexed packs: independently compressed frames keep their uncompressed addresses. */
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { deflateSync, inflateSync } from "node:zlib";
+import { deflateSync } from "node:zlib";
 import { ObjectStoreError } from "./object-error.ts";
 import { syncDirectory } from "./composition.ts";
-import { frameObject, hashObject, isObjectId, OBJECT_TYPES, parseFramedObject, type InventoryEntry, type ObjectId, type ObjectStore, type ObjectType, type StoredObject } from "./objects.ts";
+import { frameObject, isObjectId, OBJECT_TYPES, ObjectStore, objectReadBoundary, type ObjectHandle, type InventoryEntry, type ObjectId, type ObjectType, type StoredObject } from "./objects.ts";
 
 const MAGIC = Buffer.from("PMVCSP1\n");
 const LIMIT = 16 * 1024 * 1024;
@@ -98,62 +99,65 @@ export class PackStorage {
     this.indexes.set(path, index); return index;
   }
 
-  /** Pin an index/member lookup for presence hints and fully verified reads. */
-  private access<T>(id: ObjectId, use: (fd: number, index: Index, entry: Entry) => T): T | undefined {
-    for (const path of this.files()) {
+  /** Open one immutable indexed range; descriptor ownership transfers to the common resolver. @internal */
+  locate(id: ObjectId, exactPath?: string): ObjectHandle | undefined {
+    const paths = exactPath === undefined ? this.files() : [exactPath];
+    objectReadBoundary.visit("pack-catalog", id, 0);
+    for (const path of paths) {
       let fd: number;
       try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
         throw error;
       }
+      let transferred = false;
       try {
-        const index = this.index(fd, path);
-        const entry = index.byId.get(id);
-        if (entry !== undefined) return use(fd, index, entry);
-      } finally { closeSync(fd); }
+        const index = this.index(fd, path); const entry = index.byId.get(id);
+        if (entry === undefined) { if (exactPath !== undefined) corrupt(); continue; }
+        const offset = index.start + entry[1]; transferred = true;
+        return { fd, path, offset, length: entry[2], regular: true, type: entry[3], packed: { offset, length: entry[2] }, bytes: entry[2] + (entry === index.entries[0] ? index.start : 0) };
+      } finally { if (!transferred) closeSync(fd); }
     }
     return undefined;
   }
 
-  /** Presence is an indexed hint; callers needing integrity use read or the complete inventory. */
-  has(id: ObjectId): boolean { return this.access(id, () => true) === true; }
+  /** Presence goes through the same generation resolver as loose storage. */
+  has(id: ObjectId): boolean { return new ObjectStore(join(this.directory, "..")).has(id); }
 
-  /** Object kind is an index hint until a full member read verifies framing and digest. */
-  type(id: ObjectId): ObjectType | undefined { return this.access(id, (_fd, _index, entry) => entry[3]); }
-
-  /** Read only one pinned compressed range and verify its logical address. */
-  read(id: ObjectId): StoredObject | undefined { return this.access(id, (fd, index, entry) => this.member(fd, index, entry)); }
-
-  /** Re-read an exact inventoried representation, without applying logical erasure denials. */
-  readAt(id: ObjectId, path: string): StoredObject {
-    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const index = this.index(fd, path); const entry = index.byId.get(id);
-      if (entry === undefined) corrupt();
-      return this.member(fd, index, entry);
-    } finally { closeSync(fd); }
+  /** Kind probes use the common pinned-location protocol before reading the index hint. */
+  type(id: ObjectId): ObjectType | undefined {
+    try { return this.read(id)?.type; } catch (error) {
+      if (error instanceof ObjectStoreError && error.code === "object_obliterated") return undefined;
+      throw error;
+    }
   }
 
-  /** Inflate and hash a single indexed frame, bounding both compressed and uncompressed allocation. */
-  private member(fd: number, index: Index, entry: Entry): StoredObject {
-    let framed: Buffer;
-    try { framed = inflateSync(range(fd, index.start + entry[1], entry[2]), { maxOutputLength: LIMIT }); } catch { corrupt(); }
-    const object = parseFramedObject(framed);
-    if (object.type !== entry[3] || hashObject(object.type, object.payload) !== entry[0]) corrupt();
-    return object;
+  /** Read through the common logical resolver, preserving the optional-absence contract of this backend. */
+  read(id: ObjectId): StoredObject | undefined {
+    try { return new ObjectStore(join(this.directory, "..")).read(id); } catch (error) {
+      if (error instanceof ObjectStoreError && error.code === "object_not_found") return undefined;
+      throw error;
+    }
   }
 
-  /** Verify the physical pack digest and every member before inventory, GC or erasure relies on it. */
-  *inventory(): Generator<InventoryEntry> {
+  /** Exact inventory rereads also use the common generation and denial protocol. */
+  readAt(id: ObjectId, path: string): StoredObject { return new ObjectStore(join(this.directory, "..")).readInventoryObject(id, path); }
+
+  /** Enumerate verified pack metadata without decoding members or trusting paths after descriptor release. @internal */
+  locations(): { id: ObjectId; path: string }[] {
+    const result: { id: ObjectId; path: string }[] = [];
     for (const path of this.files()) {
       const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const index = this.index(fd, path);
         if (digest(range(fd, 0, index.bytes)) !== basename(path, ".pack")) corrupt();
-        for (const entry of index.entries) yield { id: entry[0], path, packed: { offset: index.start + entry[1], length: entry[2] }, bytes: entry[2] + (entry === index.entries[0] ? index.start : 0), object: this.member(fd, index, entry) };
+        for (const entry of index.entries) result.push({ id: entry[0], path });
       } finally { closeSync(fd); }
     }
+    return result;
   }
+
+  /** Verified physical pack inventory shares the logical resolver and never scans loose temporaries. */
+  *inventory(): Generator<InventoryEntry> { yield* new ObjectStore(join(this.directory, "..")).walkPackedInventory(); }
 
   /** Remove only recognized owned staging jobs; authoritative source representations always precede staging. */
   recover(): void {
@@ -177,14 +181,14 @@ export class PackStorage {
       const skipped: { name: string; reason: string }[] = [];
       const before = this.files(skipped);
       // Preflight all published storage, including members that have duplicate loose representations.
-      for (const item of this.inventory()) void item;
+      for (const item of store.walkErasureInventory("pack")) void item;
       let objects = 0; let looseBytes = 0;
       // Resume a published pack by retiring its duplicate loose copies, instead of building overlapping packs.
-      for (const item of this.inventory()) {
+      for (const item of store.walkErasureInventory("pack")) {
         const path = join(store.storageRoot(), item.id.slice(0, 2), item.id.slice(2));
         if (!existsSync(path)) continue;
         store.readInventoryObject(item.id, path);
-        looseBytes += lstatSync(path).size; unlinkSync(path); syncDirectory(join(store.storageRoot(), item.id.slice(0, 2))); objects++; packBoundary.visit("retired");
+        store.markStorageGeneration(); looseBytes += lstatSync(path).size; durability.unlink(path); syncDirectory(join(store.storageRoot(), item.id.slice(0, 2))); objects++; packBoundary.visit("retired");
       }
       let batch: { id: ObjectId; path: string; object: StoredObject }[] = []; let size = 0;
       const flush = (): void => {
@@ -198,12 +202,11 @@ export class PackStorage {
         const bytes = Buffer.concat([header, index, ...chunks]); const destination = join(this.directory, `${digest(bytes)}.pack`);
         const job = this.publish(bytes, destination, store);
         // The verified immutable destination is now the authority; interruptions merely leave duplicate sources.
-        for (const item of batch) { looseBytes += lstatSync(item.path).size; unlinkSync(item.path); syncDirectory(join(store.storageRoot(), item.id.slice(0, 2))); objects++; packBoundary.visit("retired"); }
+        for (const item of batch) { looseBytes += lstatSync(item.path).size; durability.unlink(item.path); syncDirectory(join(store.storageRoot(), item.id.slice(0, 2))); objects++; packBoundary.visit("retired"); }
         this.cleanupJob(job); packBoundary.visit("cleaned");
         batch = []; size = 0;
       };
       for (const item of store.walkLooseInventory(skipped)) {
-        if (item.path.endsWith(".tmp")) { skipped.push({ name: item.id, reason: "loose write temporary; retained for its writer" }); continue; }
         const cost = item.object.payload.length + 256;
         if (cost > LIMIT) { skipped.push({ name: item.id, reason: "object exceeds the 16 MiB pack bound; retained loose" }); continue; }
         if (size + cost > LIMIT) flush();
@@ -220,11 +223,12 @@ export class PackStorage {
 
   /** Write an owned staging job, then publish its payload by exclusive link; an existing verified peer result is success. */
   private publish(bytes: Buffer, destination: string, store: ObjectStore): string {
+    store.markStorageGeneration();
     mkdirSync(this.directory, { recursive: true }); syncDirectory(store.storageRoot()); packBoundary.visit("directory");
     const job = join(this.directory, `job-${randomBytes(12).toString("hex")}`); mkdirSync(job); packBoundary.visit("job");
     this.durableFile(join(job, "owner"), Buffer.from(`pm-vcs-pack-1 ${basename(job)}\n`)); syncDirectory(job); syncDirectory(this.directory); packBoundary.visit("owner");
     const staged = join(job, "payload"); this.durableFile(staged, bytes); syncDirectory(job); packBoundary.visit("staged");
-    try { linkSync(staged, destination); } catch (error) {
+    try { durability.link(staged, destination); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (!lstatSync(destination).isFile() || !readFileSync(destination).equals(bytes)) corrupt();
     }
@@ -237,9 +241,9 @@ export class PackStorage {
     // Payload goes first: a crash after marker retirement must never leave unmarked owned bytes.
     for (const name of ["payload", "owner"]) {
       const path = join(job, name);
-      if (lstatSync(path, { throwIfNoEntry: false })?.isFile() === true) { unlinkSync(path); syncDirectory(job); packBoundary.visit(`staging-${name}-retired`); }
+      if (lstatSync(path, { throwIfNoEntry: false })?.isFile() === true) { durability.unlink(path); syncDirectory(job); packBoundary.visit(`staging-${name}-retired`); }
     }
-    try { rmdirSync(job); packBoundary.visit("staging-job-retired"); } catch (error) {
+    try { durability.removeDirectory(job); packBoundary.visit("staging-job-retired"); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error;
     }
     syncDirectory(this.directory);
@@ -254,7 +258,7 @@ export class PackStorage {
   /** Persist one owned staging file and close it even if durability fails. */
   private durableFile(path: string, bytes: Buffer): void {
     const fd = openSync(path, "wx", 0o600);
-    try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+    try { writeFileSync(fd, bytes); durability.file(fd); } finally { closeSync(fd); }
   }
 
   /** Materialize verified loose copies before retiring packs; erasure can then use its existing physical deletion proof. */
@@ -263,8 +267,8 @@ export class PackStorage {
       this.assertRoot(store);
       this.recover();
       // Finish complete verification before representation changes, then retain only one leaf buffer per copy.
-      for (const item of this.inventory()) void item;
-      for (const item of this.inventory()) {
+      for (const item of store.walkErasureInventory("pack")) void item;
+      for (const item of store.walkErasureInventory("pack")) {
         const directory = join(store.storageRoot(), item.id.slice(0, 2)); mkdirSync(directory, { recursive: true });
         const destination = join(directory, item.id.slice(2));
         if (!existsSync(destination)) {
@@ -273,7 +277,7 @@ export class PackStorage {
         } else store.readInventoryObject(item.id, destination);
         syncDirectory(directory); packBoundary.visit("unpacked");
       }
-      for (const path of this.files()) { unlinkSync(path); this.indexes.delete(path); syncDirectory(this.directory); packBoundary.visit("pack-retired"); }
+      for (const path of this.files()) { store.markStorageGeneration(); durability.unlink(path); this.indexes.delete(path); syncDirectory(this.directory); packBoundary.visit("pack-retired"); }
     });
   }
 }

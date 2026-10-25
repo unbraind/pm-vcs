@@ -191,10 +191,10 @@ for (const damage of ["corrupt-temp", "missing-history", "unknown-storage"] as c
 for (const change of ["new-copy", "lost-copy"] as const) test(`streaming second pass refuses a real ${change} before denial`, () => {
   const { repo, selected } = fixture(); const path = objectPath(repo, selected.id); const temporary = `${path}.123.abcdef123456.tmp`;
   if (change === "lost-copy") copyFileSync(path, temporary);
-  const original = ObjectStore.prototype.walkInventory; let passes = 0;
-  mock.method(repo.objects, "walkInventory", function* () {
-    if (++passes === 2) { if (change === "new-copy") copyFileSync(path, temporary); else rmSync(temporary); }
-    yield* original.call(repo.objects);
+  const original = ObjectStore.prototype.walkErasureInventory; let passes = 0;
+  mock.method(repo.objects, "walkErasureInventory", function* (kind?: "all" | "pack") {
+    if (kind !== "pack" && ++passes === 2) { if (change === "new-copy") copyFileSync(path, temporary); else rmSync(temporary); }
+    yield* original.call(repo.objects, kind);
   });
   const index = readFileSync(join(repo.controlDirectory, "index")); const refs = repo.refs.list("refs/"); const log = repo.operations.read();
   assert.throws(() => repo.obliterate("selected", "erase-fixture", "incident", new Date(2000)), { code: "incomplete_erasure_inventory" });
@@ -232,7 +232,7 @@ test("physical inventory rejects actual directory and leaf aliases and preserves
   if (process.platform !== "win32" && process.getuid?.() !== 0) {
     chmodSync(path, 0); try { assert.throws(() => repo.objects.readInventoryObject(selected.id, path), { code: "EACCES" }); } finally { chmodSync(path, 0o600); }
   }
-  rmSync(path); assert.throws(() => repo.objects.readInventoryObject(selected.id, path), { code: "ENOENT" });
+  rmSync(path); assert.throws(() => repo.objects.readInventoryObject(selected.id, path), { code: "object_not_found" });
 });
 
 test("legacy skipped transfer still rejects held corruption, audit damage and pending denial", async () => {

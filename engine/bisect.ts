@@ -1,7 +1,8 @@
+import { durability } from "./durability.ts";
 /** Durable bisect sessions over stable change identities, driven by a recorded PM test. */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { collectCommitObjects } from "./bundle.ts";
@@ -181,9 +182,9 @@ export function writeBisectSession(repository: Repository, session: BisectSessio
   const temporary = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     writeFileSync(temporary, `${JSON.stringify(session)}\n`, { flag: "wx" });
-    renameSync(temporary, target);
+    durability.rename(temporary, target);
   } finally {
-    rmSync(temporary, { force: true });
+    durability.remove(temporary, { force: true });
   }
 }
 
@@ -198,7 +199,7 @@ function recoverOwner(path: string): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
-  rmSync(path);
+  durability.remove(path);
 }
 
 /** Refuse to remove a candidate directory while an orphaned SDK test process still uses it. */
@@ -214,14 +215,14 @@ export async function withBisectLease<T>(repository: Repository, action: () => P
     writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
   });
   try { return await action(); }
-  finally { rmSync(path); }
+  finally { durability.remove(path); }
 }
 
 /** Removes the session state, concluding or abandoning the walk. */
 export function clearBisectSession(repository: Repository): void {
   recoverBisectWorker(repository);
-  rmSync(statePath(repository), { force: true });
-  rmSync(join(repository.controlDirectory, "BISECT_WORKSPACE"), { recursive: true, force: true });
+  durability.remove(statePath(repository), { force: true });
+  durability.remove(join(repository.controlDirectory, "BISECT_WORKSPACE"), { recursive: true, force: true });
 }
 
 /** Ancestry is private to one candidate array and released with that walk. */
@@ -482,7 +483,7 @@ export async function runBisect(
       current = { ...current, pending: selected };
       writeBisectSession(repository, current);
       const workspaceRoot = join(repository.controlDirectory, "BISECT_WORKSPACE");
-      rmSync(workspaceRoot, { recursive: true, force: true });
+      durability.remove(workspaceRoot, { recursive: true, force: true });
       mkdirSync(workspaceRoot);
       const workspace = mkdtempSync(join(workspaceRoot, "candidate-"));
       let outcome: BisectRunOutcome | { readonly outcome: "conflicted"; readonly detail: string };
@@ -504,7 +505,7 @@ export async function runBisect(
           outcome = materializationError === undefined ? await runner(selected, workspace) : { outcome: "untestable", detail: materializationError };
         }
       } finally {
-        rmSync(workspaceRoot, { recursive: true, force: true });
+        durability.remove(workspaceRoot, { recursive: true, force: true });
       }
       const interrupted = signalled || ("interrupted" in outcome && outcome.interrupted === true);
       current = withStep({ ...current, pending: undefined }, { ...selected, outcome: interrupted ? "untestable" : outcome.outcome,

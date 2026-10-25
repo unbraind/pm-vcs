@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 import type { AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
 import { attachCheckpoint, createSemanticCheckpoint, type CheckpointRequest } from "./checkpoints.ts";
 import { signChange } from "./signatures.ts";
@@ -15,7 +16,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes, type KeyObject } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -497,15 +498,15 @@ export class Repository {
     const temporary = `${this.mergeStatePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
     try {
       writeFileSync(temporary, JSON.stringify(state), { flag: "wx" });
-      renameSync(temporary, this.mergeStatePath);
+      durability.rename(temporary, this.mergeStatePath);
     } finally {
-      rmSync(temporary, { force: true });
+      durability.remove(temporary, { force: true });
     }
   }
 
   /** Removes the in-progress merge state, completing or abandoning the merge. */
   private clearMergeState(): void {
-    rmSync(this.mergeStatePath, { force: true });
+    durability.remove(this.mergeStatePath, { force: true });
   }
 
   /**
@@ -619,13 +620,13 @@ export class Repository {
       if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
       temporary = `${this.indexPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
       writeFileSync(temporary, encodeIndex(entries), { flag: "wx" });
-      renameSync(temporary, this.indexPath);
+      durability.rename(temporary, this.indexPath);
       temporary = null;
       return true;
     } finally {
-      if (temporary !== null) rmSync(temporary, { force: true });
+      if (temporary !== null) durability.remove(temporary, { force: true });
       closeSync(descriptor);
-      rmSync(lockPath, { force: true });
+      durability.remove(lockPath, { force: true });
     }
   }
 
@@ -1370,10 +1371,10 @@ export class Repository {
           // Removing just the control directory would leave the caller with a
           // half-materialized tree in a directory they handed over empty.
           if (createdRoot) {
-            rmSync(instanceRoot, { recursive: true, force: true });
+            durability.remove(instanceRoot, { recursive: true, force: true });
           } else {
             for (const entry of readdirSync(instanceRoot)) {
-              rmSync(join(instanceRoot, entry), { recursive: true, force: true });
+              durability.remove(join(instanceRoot, entry), { recursive: true, force: true });
             }
           }
           if (registeredHere) unregisterInstance(this.sharedControlDirectory, name);
@@ -1538,7 +1539,7 @@ export class Repository {
         mutation.prune();
         if (view === null) {
           const viewPath = join(this.controlDirectory, VIEW_FILE);
-          if (existsSync(viewPath)) unlinkSync(viewPath);
+          if (existsSync(viewPath)) durability.unlink(viewPath);
         } else {
           writeView(this.controlDirectory, view);
         }

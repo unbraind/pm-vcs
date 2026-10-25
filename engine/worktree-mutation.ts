@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 /** Pinned or verified working-tree mutations; portable pathname checks cannot serialize a rename. */
 import fs, { type BigIntStats } from "node:fs";
 import { join } from "node:path";
@@ -154,7 +155,7 @@ export class WorktreeMutation {
   private unlink(parent: { path: string; address: string }, stat: BigIntStats, erasure = false): void {
     this.verifyLeaf(parent, stat, erasure);
     try {
-      fs.unlinkSync(parent.address);
+      durability.unlink(parent.address);
     } catch {
       this.changed();
     }
@@ -253,7 +254,7 @@ export class WorktreeMutation {
       const name = path.slice(slash + 1);
       this.verify(path);
       try {
-        fs.rmdirSync(join(this.directories.get(parent)!.address, name));
+        durability.removeDirectory(join(this.directories.get(parent)!.address, name));
       } catch {
         this.changed();
       }

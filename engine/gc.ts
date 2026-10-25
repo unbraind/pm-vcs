@@ -1,8 +1,9 @@
+import { durability } from "./durability.ts";
 import { packBoundary } from "./packs.ts";
 import { syncDirectory } from "./composition.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Conservative collection under the same interprocess transaction as writers. */
-import { lstatSync, readdirSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { decodeCommit, decodeManifest, decodeSeries, decodeTree } from "./model.ts";
 import { ObjectStoreError, isObjectId, readControlJson, type ObjectId } from "./objects.ts";
@@ -159,7 +160,7 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
       if (packed) store.unpack();
       for (const candidate of candidates) {
         const path = candidate.packed ? join(store.storageRoot(), candidate.id.slice(0, 2), candidate.id.slice(2)) : candidate.path;
-        if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) { unlinkSync(path); syncDirectory(dirname(path)); packBoundary.visit("collected"); }
+        if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) { store.markStorageGeneration(); durability.unlink(path); syncDirectory(dirname(path)); packBoundary.visit("collected"); }
       }
       if (inventory.some((item) => item.packed)) store.compact();
       store.releaseUploadRoots(visited); packBoundary.visit("released-pins");

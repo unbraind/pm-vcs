@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 // Fragment and range storage for large files.
 //
 // A file must never have to be resident in memory to be stored, read, or
@@ -20,10 +21,8 @@
 import {
   closeSync,
   fstatSync,
-  fsyncSync,
   openSync,
   readSync,
-  rmSync,
   writeSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -362,7 +361,7 @@ export function readFragmentedToFile(
         }
       }
       write(buffer.subarray(0, filled));
-      fsyncSync(fd);
+      durability.file(fd);
       complete = true;
     } finally {
       closeSync(fd);
@@ -372,7 +371,7 @@ export function readFragmentedToFile(
       // failure itself: the file looks like a restore, and a caller retrying
       // meets EEXIST from the exclusive open rather than a clean second attempt.
       // The destination only survives a run that completed.
-      if (!complete) rmSync(destinationPath, { force: true });
+      if (!complete) durability.remove(destinationPath, { force: true });
     }
   });
 }

@@ -1,6 +1,7 @@
+import { durability } from "./durability.ts";
 // Credentials are clone-local secrets; public remote locations never contain them.
 import { randomBytes } from "node:crypto";
-import { chmodSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { ObjectStoreError } from "./objects.ts";
 
 /** Remove URL userinfo even from malformed URLs and embedded diagnostic text. */
@@ -36,9 +37,9 @@ export function writeRemoteMap(path: string, map: Record<string, string>, privat
   const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     writeFileSync(temporary, `${JSON.stringify(map, null, 2)}\n`, { flag: "wx", mode: privateFile ? 0o600 : 0o666 });
-    renameSync(temporary, path);
+    durability.rename(temporary, path);
   } catch (error) {
-    rmSync(temporary, { force: true });
+    durability.remove(temporary, { force: true });
     throw error;
   }
 }

@@ -58,8 +58,8 @@ also exist in an authoritative loose object or published pack.
 After process death, run `pm vcs recover-lock` and retry `pm vcs compact`.
 Do not recover a live writer's lock. A peer that already published the exact
 same pack counts as success; a conflicting destination refuses before source
-retirement. A verified reader can use the loose copy after concurrent unpack
-retirement. Corruption raises `corrupt_pack` with a restore-and-retry remedy;
+retirement. A verified reader pins its opened representation or resolves again after concurrent
+unpack and repack. Corruption raises `corrupt_pack` with a restore-and-retry remedy;
 pending authorized erasure raises `pack_erasure_pending` with an obliterate remedy.
 
 GC retains the same roots across both representations: refs, both operation-log
@@ -88,3 +88,40 @@ The benchmark copies its input into a non-git scratch project, stages actual
 tracker files, verifies every logical object before and after GC, and reports
 compressed file bytes, filesystem allocation, file count and warm read median/p95.
 The input tracker is read only. It does not report item content or local paths.
+
+## Concurrent readers and platform durability
+
+All logical object readers share `ObjectStore.resolveLocation`: presence and
+kind probes, complete and bounded reads, typed reads, state inspection,
+hydration, inventories and both chunk and line iterators. Pack backend readers
+and the exported chunk decoder delegate to the same protocol. A generation
+marker covers the loose set and pack catalog under the existing writer lease.
+The resolver retries from the beginning when that generation changes, at most
+`OBJECT_READ_RETRIES` (8) times. Only an unchanged idle generation proves
+`object_not_found`; continued maintenance returns `object_store_changing` with
+a retry remedy. Operational I/O failures remain visible.
+
+Each successful resolution opens and retains one immutable descriptor and byte
+range. A stream retains that handle until its decompression worker terminates,
+so unpacking and repacking cannot invalidate its input. Logical reads enforce
+terminal denials before returning bytes and before each emitted chunk or line.
+Only explicit internal erasure inspection can access denied physical bytes, and
+it requires the owning writer lease. Recognized loose write temporaries are
+skipped before decoding during compaction, including empty and truncated files.
+
+`engine/durability.ts` owns every file flush and namespace mutation. On POSIX it
+flushes files before publication and synchronizes affected directories after
+namespace changes. Node does not support directory fsync on Windows: that policy
+keeps file fsync before atomic publication and uses acknowledgment of synchronous
+rename/link/unlink operations for namespace changes. This avoids a portability
+refusal after deletion; it does not claim POSIX directory-fsync power-loss
+semantics on Windows. CI runs the shipped `pm vcs gc --apply --json` command on
+Windows with Node 22 and 26 against a real non-git tracker, retaining live packed
+data while collecting a loose candidate.
+
+The reader regression enumerates the exported surface, runs every reader at
+every compaction, unpack, repack and GC boundary on one non-git tracker, and
+injects complete transitions between resolution stages. Separate crash tests
+kill each maintenance step and prove that a rerun converges without changing
+retained identities. Capability-forced durability tests exercise both policies
+on a real filesystem.

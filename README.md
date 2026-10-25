@@ -322,6 +322,11 @@ deletion proof. GC rewrites packed survivors when collecting packed members.
 
 See the [format, recovery and SDK example](docs/indexed-packs.md).
 
+Pack and loose reads share a generation protocol with up to eight retries. Streams
+retain an open representation through unpack/repack, and authorized denials stop
+subsequent output. The [pack storage guide](docs/indexed-packs.md#concurrent-readers-and-platform-durability)
+describes Windows durability and the real non-git GC acceptance test.
+
 ## Without git
 
 Native commits, refs, history, merges, capability-limited change bundles, transports, signing, annotation,

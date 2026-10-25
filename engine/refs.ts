@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 // Ref storage: branches, tags, and HEAD.
 //
 // The important property here is not where the files live, it is that every
@@ -11,14 +12,10 @@ import type { Dirent } from "node:fs";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
-  fsyncSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
-  renameSync,
-  rmSync,
-  unlinkSync,
   writeSync,
 } from "node:fs";
 import { dirname, join, posix, sep } from "node:path";
@@ -116,13 +113,13 @@ function writeAtomic(path: string, contents: string): void {
   try {
     try {
       writeSync(handle, `${contents}\n`);
-      fsyncSync(handle);
+      durability.file(handle);
     } finally {
       closeSync(handle);
     }
-    renameSync(temporary, path);
+    durability.rename(temporary, path);
   } catch (error) {
-    rmSync(temporary, { force: true });
+    durability.remove(temporary, { force: true });
     throw error;
   }
 }
@@ -260,13 +257,13 @@ export class RefStore {
       preflight?.();
       for (const update of ordered) {
         const path = this.pathFor(update.name);
-        if (update.next === null) rmSync(path, { force: true });
+        if (update.next === null) durability.remove(path, { force: true });
         else writeAtomic(path, update.next);
       }
     } finally {
       for (const lock of held) {
         closeSync(lock.descriptor);
-        unlinkSync(lock.lockPath);
+        durability.unlink(lock.lockPath);
       }
     }
   }
