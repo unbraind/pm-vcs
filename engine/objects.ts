@@ -59,11 +59,14 @@ export interface ObjectHandle {
   readonly type?: ObjectType;
   readonly packed?: { readonly offset: number; readonly length: number };
   readonly bytes?: number;
+  readonly maxFrameBytes?: number;
 }
 /** A resolved handle carries its generation and a terminal-denial check. @internal */
 export interface ObjectLocation extends ObjectHandle {
   readonly generation: string;
   readonly check: () => void;
+  /** Verify decoded kind and declared frame size against physical pack invariants. */
+  readonly validateFrame: (type: string, framedBytes: number) => void;
 }
 /** A lease generation covers both the pack catalog and every loose fan-out. */
 interface StorageGeneration { readonly key: string; readonly consistent: boolean; readonly active: boolean }
@@ -353,7 +356,14 @@ export class ObjectStore {
         const check = physical || options.standalone ? () => {} : () => this.assertVisible(id);
         objectReadBoundary.visit("pinned", id, attempt);
         check();
-        return { ...pinned, generation: after.key, check };
+        return { ...pinned, generation: after.key, check,
+          /** Apply the same physical invariants to full, bounded and streamed decoding. */
+          validateFrame(type, framedBytes) {
+            if ((pinned.type !== undefined && pinned.type !== type) || (pinned.maxFrameBytes !== undefined && framedBytes > pinned.maxFrameBytes)) {
+              throw new PackRefusal("corrupt_pack", "Pack member kind or decoded size disagrees with its format.", "Restore a verified pack before retrying.");
+            }
+          },
+        };
       } catch (error) {
         if (location !== undefined) closeSync(location.fd);
         const after = options.standalone ? before : this.storageGeneration();
@@ -388,13 +398,13 @@ export class ObjectStore {
   private readLocation(id: ObjectId, location: ObjectLocation): StoredObject {
     try {
       let framed: Buffer;
-      try { framed = inflateSync(this.compressed(location)); } catch (error) {
+      try { framed = inflateSync(this.compressed(location), { maxOutputLength: location.maxFrameBytes }); } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        if (code !== undefined && !code.startsWith("Z_")) throw error;
+        if (code !== undefined && !code.startsWith("Z_") && !(code === "ERR_BUFFER_TOO_LARGE" && location.maxFrameBytes !== undefined)) throw error;
         throw new ObjectStoreError("corrupt_object", `Object ${id} could not be decompressed.`);
       }
       const parsed = parseFramedObject(framed);
-      if (location.type !== undefined && parsed.type !== location.type) throw new ObjectStoreError("corrupt_pack", "Pack member kind disagrees with its index.");
+      location.validateFrame(parsed.type, framed.length);
       const actual = hashObject(parsed.type, parsed.payload);
       if (actual !== id) throw new ObjectStoreError("corrupt_object", `Object ${id} contains content that hashes to ${actual}.`);
       return parsed;
@@ -592,13 +602,18 @@ export class ObjectStore {
       }
     }
     let framed: Buffer;
-    try { framed = inflateSync(compressed, { maxOutputLength: limit + 32 }); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") throw new ObjectStoreError("object_payload_limit", "Object requires bounded streaming decoding.");
+    try { framed = inflateSync(compressed, { maxOutputLength: Math.min(limit + 32, location.maxFrameBytes ?? Number.MAX_SAFE_INTEGER) }); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") {
+        if (location.maxFrameBytes !== undefined && location.maxFrameBytes <= limit + 32) throw new PackRefusal("corrupt_pack", "Pack member exceeds its decoded frame bound.", "Restore a verified pack before retrying.");
+        throw new ObjectStoreError("object_payload_limit", "Object requires bounded streaming decoding.");
+      }
       throw new ObjectStoreError("corrupt_object", "Object could not be decompressed.");
     }
     const object = parseFramedObject(framed);
+    location.validateFrame(object.type, framed.length);
     if (hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("corrupt_object", "Object does not match its address.");
     if (object.type !== type) throw new ObjectStoreError("object_type_mismatch", "Object has the wrong kind.");
+    if (object.payload.length > limit) throw new ObjectStoreError("object_payload_limit", "Object requires bounded streaming decoding.");
     return object.payload;
     }, { hydrate: true });
   }

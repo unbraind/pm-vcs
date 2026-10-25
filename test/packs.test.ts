@@ -1,7 +1,7 @@
 /** Differential mixed-storage, crash recovery and multi-process interleaving on real non-git trackers. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { deflateSync } from "node:zlib";
+import zlib, { deflateSync } from "node:zlib";
 import { syncBuiltinESMExports } from "node:module";
 import { spawnSync } from "node:child_process";
 import fs, { symlinkSync, mkdirSync, readdirSync, readFileSync, writeFileSync, lstatSync, rmSync } from "node:fs";
@@ -394,4 +394,35 @@ test("cleanup preserves operational directory errors and retry keeps verified pu
   }); syncBuiltinESMExports();
   assert.throws(() => repo.objects.compact(), { code: "EACCES" }); mock.restoreAll(); syncBuiltinESMExports();
   equalReads(repo, entries); repo.objects.compact(); equalReads(repo, entries);
+});
+
+
+test("every pack data reader retains the decoded-size bound and checks the indexed kind", async () => {
+  const repo = await fresh();
+  for (const mode of ["oversized", "kind"] as const) {
+    const payload = mode === "oversized" ? Buffer.alloc(16 * 1024 * 1024 + 1) : Buffer.from("line\n");
+    const id = hashObject("blob",payload); const compressed = deflateSync(frameObject("blob",payload));
+    if (mode === "oversized") { repo.objects.write("blob",payload); assert.deepEqual(repo.objects.readTyped(id,"blob"),payload); rmSync(join(repo.objects.storageRoot(),id.slice(0,2),id.slice(2))); }
+    const pack = forgedPack(repo,JSON.stringify([[id,0,compressed.length,mode === "kind" ? "record" : "blob"]]),compressed);
+    const inflate = zlib.inflateSync;
+    mock.method(zlib,"inflateSync",(...args: Parameters<typeof zlib.inflateSync>) => {
+      const decoded = inflate(...args);
+      assert.ok(decoded.length <= 16 * 1024 * 1024,"a pack inflater returned an oversized allocation before rejecting it");
+      return decoded;
+    }); syncBuiltinESMExports();
+    for (const read of [
+      () => repo.objects.read(id), () => repo.objects.readTyped(id,"blob"), () => repo.objects.readIfType(id,mode === "kind" ? "record" : "blob"),
+      () => repo.objects.readBoundedTyped(id,"blob",32 * 1024 * 1024), () => [...repo.objects.readChunks(id,"blob")],
+      () => [...repo.objects.readLines(id,"blob")], () => repo.objects.readInventoryObject(id,pack),
+      () => [...new PackStorage(repo.objects.storageRoot()).inventory()],
+    ]) assert.throws(read,{code:"corrupt_pack"},mode);
+    assert.deepEqual(repo.objects.state(id),{kind:"corrupt",code:"corrupt_pack"});
+    mock.restoreAll(); syncBuiltinESMExports(); rmSync(pack);
+  }
+  const exact = repo.objects.write("blob",Buffer.from("12345678")); const extra = repo.objects.write("blob",Buffer.from("123456789"));
+  for (const packed of [false,true]) {
+    if (packed) repo.objects.compact();
+    assert.deepEqual(repo.objects.readBoundedTyped(exact,"blob",8),Buffer.from("12345678"));
+    assert.throws(() => repo.objects.readBoundedTyped(extra,"blob",8),{code:"object_payload_limit"});
+  }
 });

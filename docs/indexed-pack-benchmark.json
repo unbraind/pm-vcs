@@ -7,29 +7,29 @@
   "objects": 343,
   "loose": {
     "files": 343,
-    "bytes": 1357188,
+    "bytes": 1357191,
     "allocatedBytes": 2187264,
     "read": {
       "samples": 301,
-      "medianMs": 0.1851200000000972,
-      "p95Ms": 0.6365479999999479
+      "medianMs": 0.25566600000001927,
+      "p95Ms": 3.2509110000000874
     }
   },
   "packed": {
     "files": 1,
-    "bytes": 1262537,
+    "bytes": 1262523,
     "allocatedBytes": 1265664,
     "read": {
       "samples": 301,
-      "medianMs": 0.2779319999999643,
-      "p95Ms": 1.4139649999997346
+      "medianMs": 0.266631999999845,
+      "p95Ms": 1.2110959999999977
     }
   },
   "compaction": {
     "objects": 343,
     "packs": 1,
-    "looseBytes": 1357188,
-    "packBytes": 1262537,
+    "looseBytes": 1357191,
+    "packBytes": 1262523,
     "skippedCount": 0,
     "omittedSkipped": 0,
     "skipped": []

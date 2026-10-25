@@ -114,7 +114,7 @@ export class PackStorage {
         const index = this.index(fd, path); const entry = index.byId.get(id);
         if (entry === undefined) { if (exactPath !== undefined) corrupt(); continue; }
         const offset = index.start + entry[1]; transferred = true;
-        return { fd, path, offset, length: entry[2], regular: true, type: entry[3], packed: { offset, length: entry[2] }, bytes: entry[2] + (entry === index.entries[0] ? index.start : 0) };
+        return { fd, path, offset, length: entry[2], regular: true, type: entry[3], maxFrameBytes: LIMIT, packed: { offset, length: entry[2] }, bytes: entry[2] + (entry === index.entries[0] ? index.start : 0) };
       } finally { if (!transferred) closeSync(fd); }
     }
     return undefined;

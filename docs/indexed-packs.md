@@ -103,7 +103,9 @@ The resolver retries from the beginning when that generation changes, at most
 a retry remedy, including state inspection without falsely reporting corruption. Operational I/O failures remain visible.
 
 Each successful resolution opens and retains one immutable descriptor and byte
-range. A stream retains that handle until its decompression worker terminates,
+range. The location also carries the indexed kind and 16 MiB decoded-frame bound;
+full, bounded and streaming readers enforce both. Bounded reads additionally
+enforce the caller's exact payload-byte limit, independent of framing overhead. A stream retains that handle until its decompression worker terminates,
 so unpacking and repacking cannot invalidate its input. Logical reads enforce
 terminal denials before returning bytes and before each emitted chunk or line.
 Only explicit internal erasure inspection can access denied physical bytes, and

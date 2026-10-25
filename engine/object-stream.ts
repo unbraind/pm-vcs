@@ -52,6 +52,7 @@ export function* objectPayloadChunks(path: string | ObjectLocation, id: ObjectId
         header = Buffer.concat([header, chunk.subarray(0, end)]);
         const match = /^([a-z]+) (0|[1-9][0-9]*)$/.exec(header.toString("latin1"));
         if (match === null || !Number.isSafeInteger(Number(match[2]))) throw new ObjectStoreError("malformed_object", "Object stream has malformed framing.");
+        location.validateFrame(match[1], header.length + 1 + Number(match[2]));
         if (match[1] !== type) throw new ObjectStoreError("object_type_mismatch", "Object stream has the wrong kind.");
         length = Number(match[2]);
         payload = chunk.subarray(end + 1);
