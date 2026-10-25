@@ -365,8 +365,9 @@ export class ObjectStore {
   }
 
   /** Consume one pinned location, enforcing terminal denials before and after the read. */
-  private withLocation<T>(id: ObjectId, read: (location: ObjectLocation) => T, options: { path?: string; physical?: boolean } = {}): T {
-    const location = this.resolveLocation(id, options);
+  private withLocation<T>(id: ObjectId, read: (location: ObjectLocation) => T, options: { path?: string; physical?: boolean; hydrate?: boolean } = {}): T {
+    let location = this.resolveLocation(id, options);
+    if (location === undefined && options.hydrate === true) { this.hydrate(id); location = this.resolveLocation(id, options); }
     if (location === undefined) throw new ObjectStoreError("object_not_found", `No object ${id} in a stable storage generation; fetch a verified copy before retrying.`);
     try { location.check(); const result = read(location); location.check(); return result; } finally { closeSync(location.fd); }
   }
@@ -506,8 +507,8 @@ export class ObjectStore {
    *   any reason other than being absent.
    */
   read(id: ObjectId): StoredObject {
-    this.assertId(id); this.hydrate(id);
-    return this.withLocation(id, (location) => this.readLocation(id, location));
+    this.assertId(id);
+    return this.withLocation(id, (location) => this.readLocation(id, location), { hydrate: true });
   }
 
   /**
@@ -575,7 +576,7 @@ export class ObjectStore {
 
   /** Read a verified small object with bounded compressed input and inflation; larger payloads select streaming compatibility. */
   readBoundedTyped(id: ObjectId, type: ObjectType, limit = 16_384): Buffer {
-    this.assertId(id); this.hydrate(id);
+    this.assertId(id);
     return this.withLocation(id, (location) => {
     const fd = location.fd;
     let compressed: Buffer;
@@ -599,7 +600,7 @@ export class ObjectStore {
     if (hashObject(object.type, object.payload) !== id) throw new ObjectStoreError("corrupt_object", "Object does not match its address.");
     if (object.type !== type) throw new ObjectStoreError("object_type_mismatch", "Object has the wrong kind.");
     return object.payload;
-    });
+    }, { hydrate: true });
   }
 
   /** Stream newline-terminated metadata with bounded decompression, full frame/hash verification and erasure denial enforcement. */
@@ -609,8 +610,9 @@ export class ObjectStore {
 
   /** Stream a fully verified payload from one opened representation; the worker retains its descriptor through namespace transitions. */
   *readChunks(id: ObjectId, type: ObjectType, timeoutMs = 30_000): Generator<Buffer> {
-    this.assertId(id); this.hydrate(id);
-    const location = this.resolveLocation(id);
+    this.assertId(id);
+    let location = this.resolveLocation(id);
+    if (location === undefined) { this.hydrate(id); location = this.resolveLocation(id); }
     if (location === undefined) throw new ObjectStoreError("object_not_found", `No object ${id} in a stable storage generation; fetch a verified copy before retrying.`);
     yield* objectPayloadChunks(location, id, type, timeoutMs);
   }
@@ -692,8 +694,8 @@ export class ObjectStore {
   }
 
   /** Inspect present, intentionally absent, missing and damaged content without conflating states. */
-  state(id: ObjectId, read: () => StoredObject = /** Default inspection verifies the loose object itself. */ () => this.read(id)): PayloadState {
-    try { this.hydrate(id); return { kind: "present", object: this.withLocation(id, () => read()) }; } catch (error) {
+  state(id: ObjectId, read?: () => StoredObject): PayloadState {
+    try { return { kind: "present", object: this.withLocation(id, (location) => read === undefined ? this.readLocation(id, location) : read(), { hydrate: true }) }; } catch (error) {
       if (error instanceof ObliteratedObjectError) return { kind: "obliterated", tombstone: error.tombstone };
       if (!(error instanceof ObjectStoreError)) throw error;
       return { kind: error.code === "object_not_found" || error.code === "missing_fragment" ? "missing" : "corrupt", code: error.code };

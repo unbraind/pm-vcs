@@ -1366,7 +1366,7 @@ test("renewed no-op fetch validates held closure with one bounded process-byte p
   const sync = pathToFileURL(join(process.cwd(), "engine/sync.ts")).href;
   const program = `import { Repository } from ${JSON.stringify(url)}; import { fetchFrom } from ${JSON.stringify(sync)}; const repo=Repository.open(process.argv[1]); const report=await fetchFrom(repo,"origin",new Date()); process.stdout.write(JSON.stringify(report));`;
   const trace = join(parent, "noop.strace");
-  const child = spawnSync("strace", ["-f", "-yy", "-e", "trace=openat,read", "-o", trace, process.execPath, "--input-type=module", "-e", program, root], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-f", "-yy", "-e", "trace=openat,read,pread64", "-o", trace, process.execPath, "--input-type=module", "-e", program, root], { encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr);
   const report = JSON.parse(child.stdout) as { upToDate: boolean; added: string[] };
   assert.equal(report.upToDate, true); assert.deepEqual(report.added, []);
@@ -1380,7 +1380,7 @@ test("renewed no-op fetch validates held closure with one bounded process-byte p
   }
   assert.ok(paths.size > 0);
   assert.equal([...paths.values()].every(count => count === 1), true, "held closure repeated disk reads");
-  const readBytes = objects.filter(line => line.includes("read(")).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  const readBytes = objects.filter(line => /\b(?:read|pread64)\(/.test(line)).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
   const clone = Repository.open(root);
   const compressedBytes = clone.objects.inventory().reduce((total, entry) => total + readFileSync(entry.path).length, 0);
   assert.ok(readBytes >= 4 * 1024 * 1024 && readBytes <= compressedBytes, `${readBytes} read bytes exceeds ${compressedBytes} held bytes`);
@@ -1396,7 +1396,7 @@ test("renewed links read only bounded unrelated prefixes and preserve link valid
   const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
   const program = `import { Repository } from ${JSON.stringify(url)}; process.stdout.write(JSON.stringify(Repository.open(process.argv[1]).links()));`;
   const trace = join(parent, "links.strace");
-  const child = spawnSync("strace", ["-yy", "-e", "trace=read", "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-yy", "-e", "trace=read,pread64", "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr); assert.equal(JSON.parse(child.stdout)[0].id, link);
   const events = readFileSync(trace, "utf8").split("\n").filter(line => line.includes(objectPath(repo, large.id)));
   const bytes = events.reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
@@ -1477,12 +1477,12 @@ test("renewed import closes shared payloads and standalone series once before re
   const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href; const bundle = pathToFileURL(join(process.cwd(), "engine/bundle.ts")).href;
   const program = `import { readFileSync } from "node:fs"; import { Repository } from ${JSON.stringify(url)}; import { importBundle } from ${JSON.stringify(bundle)}; const r=Repository.open(process.argv[1]); process.stdout.write(JSON.stringify(importBundle(r.objects,r.refs,readFileSync(process.argv[2]))));`;
   const trace = join(parent, "import.strace");
-  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read", "-P", objectPath(repo, id), "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root, bundlePath], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read,pread64", "-P", objectPath(repo, id), "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root, bundlePath], { encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr);
   assert.deepEqual(JSON.parse(child.stdout).added, [seriesId]); assert.equal(repo.refs.read("refs/heads/imported"), target);
   const events = readFileSync(trace, "utf8").split("\n");
   assert.equal(events.filter(line => line.includes("openat(")).length, 1);
-  const bytes = events.filter(line => line.includes("read(")).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  const bytes = events.filter(line => /\b(?:read|pread64)\(/.test(line)).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
   assert.equal(bytes, readFileSync(objectPath(repo, id)).length);
   console.log(`renewed shared import trace: 2 FileIds, series base/patch and ref, 1 payload open, ${bytes} compressed bytes`);
 });
@@ -1627,9 +1627,9 @@ test("renewal export discovers manifests with bounded prefixes and hashes all se
   const bundleUrl = pathToFileURL(join(process.cwd(), "engine/bundle.ts")).href;
   const trace = join(parent, "export.strace");
   const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { exportBundle,parseBundle } from ${JSON.stringify(bundleUrl)}; const r=Repository.open(process.argv[1]); const bundle=exportBundle(r.objects,r.refs,[]); process.stdout.write(JSON.stringify(parseBundle(bundle).header.objects));`;
-  const exported = spawnSync("strace", ["-yy", "-e", "trace=read", "-P", path, "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
+  const exported = spawnSync("strace", ["-yy", "-e", "trace=read,pread64", "-P", path, "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(exported.status, 0, exported.stderr); assert.ok((JSON.parse(exported.stdout) as string[]).includes(id));
-  const bytes = readFileSync(trace, "utf8").split("\n").filter(line => line.includes("read(")).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  const bytes = readFileSync(trace, "utf8").split("\n").filter(line => /\b(?:read|pread64)\(/.test(line)).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
   assert.equal(bytes, compressed.length + 64, "export fully read the payload again during discovery");
   console.log(`renewal export: ${bytes} compressed bytes = ${compressed.length} serialized hash pass + 64 discovery bytes`);
   writeFileSync(path, deflateSync(frameObject("blob", Buffer.from("different valid framed content"))));
@@ -1671,14 +1671,14 @@ test("renewal closure discards leaf bytes with native memory and one physical ha
   const closureUrl = pathToFileURL(join(process.cwd(), "engine/closure.ts")).href;
   const trace = join(parent, "memory.strace");
   const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { inspectClosure } from ${JSON.stringify(closureUrl)}; const r=Repository.open(process.argv[1]); global.gc(); const before=process.memoryUsage(); const peakBefore=process.resourceUsage().maxRSS*1024; const report=r.objects.withWriteLock(()=>inspectClosure(r.objects,[process.argv[2],process.argv[2]])); const after=process.memoryUsage(); process.stdout.write(JSON.stringify({report,before,after,peakBefore,peakAfter:process.resourceUsage().maxRSS*1024}));`;
-  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read", "-o", trace, process.execPath, "--expose-gc", "--max-old-space-size=32", "--input-type=module", "-e", program, repo.root, target], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read,pread64", "-o", trace, process.execPath, "--expose-gc", "--max-old-space-size=32", "--input-type=module", "-e", program, repo.root, target], { encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr);
   const result = JSON.parse(child.stdout) as { report: ReturnType<typeof inspectClosure>; before: NodeJS.MemoryUsage; after: NodeJS.MemoryUsage; peakBefore: number; peakAfter: number };
   assert.deepEqual(result.report.missing, []); assert.deepEqual(result.report.corrupt, []);
   const events = readFileSync(trace, "utf8").split("\n");
   for (const [path, size] of compressed) {
     assert.equal(events.filter(line => line.includes("openat(") && line.includes(`"${path}"`)).length, 1);
-    assert.equal(events.filter(line => line.includes("read(") && line.includes(`<${path}>`)).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0), size);
+    assert.equal(events.filter(line => /\b(?:read|pread64)\(/.test(line) && line.includes(`<${path}>`)).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0), size);
   }
   const retained = result.after.arrayBuffers - result.before.arrayBuffers; const peakGrowth = result.peakAfter - result.peakBefore;
   const compressedBytes = [...compressed.values()].reduce((sum, bytes) => sum + bytes, 0);
@@ -1733,7 +1733,8 @@ test("renewal uploads hash the entire batch before denial decoding or publicatio
   assert.equal(repo.objects.has(healthy.id), false);
   writeFileSync(join(repo.controlDirectory, "denials.json"), "null");
   await assert.rejects(() => transport.uploadObjects([healthy, late]), (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_object");
-  assert.equal(repo.objects.has(healthy.id), false);
+  assert.throws(() => repo.objects.has(healthy.id), { code: "bad_tombstone" });
+  assert.equal(existsSync(objectPath(repo, healthy.id)), false);
   await assert.rejects(() => transport.uploadObjects([healthy]), (error: unknown) => error instanceof ObjectStoreError && error.code === "bad_tombstone");
   writeFileSync(join(repo.controlDirectory, "denials.json"), denialBytes);
   const clean = Repository.init(join(repo.root, "clean-upload"));

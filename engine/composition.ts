@@ -129,7 +129,7 @@ export function writeAtomicJson(path: string, value: unknown, mode: number): voi
   const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     writeFileSync(temporary, JSON.stringify(value), { flag: "wx", mode });
-    const fd = openSync(temporary, "r");
+    const fd = openSync(temporary, "r+");
     try { durability.file(fd); } finally { closeSync(fd); }
     durability.rename(temporary, path);
     syncDirectory(dirname(path), false);

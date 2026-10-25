@@ -7,6 +7,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { afterEach, mock, test } from "node:test";
 import ts from "typescript5";
 import { PmClient } from "@unbrained/pm-cli/sdk";
+import { writePrivateJson } from "../engine/composition.ts";
 import { durability, durabilityCapabilities } from "../engine/durability.ts";
 import { Repository } from "../engine/repo.ts";
 import { collectGarbage } from "../engine/gc.ts";
@@ -91,4 +92,16 @@ test("Windows GC applies the shipped CLI to a real non-git tracker and retains l
   assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).gc.applied, true);
   assert.equal(repo.objects.has(garbage), false); assert.deepEqual(repo.objects.readTyped(live, "blob"), Buffer.from("retained cross-platform CLI payload"));
   assert.ok(!existsSync(join(repo.root, ".git")));
+});
+
+
+test("metadata durability opens writable file handles for Windows flushes", async () => {
+  const repo = await fixture(); const flags = new Map<number,string | number>(); const open = fs.openSync; const sync = fs.fsyncSync;
+  mock.method(fs,"openSync",(...args: Parameters<typeof fs.openSync>) => { const fd = open(...args); flags.set(fd,args[1]); return fd; });
+  mock.method(fs,"fsyncSync",(fd: number) => {
+    if (!fstatSync(fd).isDirectory() && flags.get(fd) === "r") throw Object.assign(new Error("Windows requires a writable flush handle"),{code:"EPERM"});
+    return sync(fd);
+  }); syncBuiltinESMExports();
+  const path = join(repo.controlDirectory,"writable-flush.json"); writePrivateJson(path,{verified:true});
+  assert.deepEqual(JSON.parse(readFileSync(path,"utf8")),{verified:true});
 });
