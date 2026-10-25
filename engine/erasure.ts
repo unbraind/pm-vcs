@@ -1,4 +1,5 @@
-import { fingerprint, matchesFingerprints, readFingerprints, scanErasureStorage, erasureScanBoundary, type ErasureFingerprint, type ErasureStorageReport } from "./erasure-scan.ts";
+import { deflateSync } from "node:zlib";
+import { fingerprint, matchesFingerprints, readFingerprints, scanErasureStorage, erasureScanBoundary, type ErasureFingerprint, type ErasureFileClass, type ErasureStorageReport } from "./erasure-scan.ts";
 import { durability } from "./durability.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Authorized FileId-scoped erasure over the complete supported loose storage backend. */
@@ -166,12 +167,25 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       if (!selected.has(id) || loaded.has(id)) continue;
       const object = store.readErasureObject(id, path);
       loaded.add(id);
-      payloads.push(fingerprint(frameObject(object.type, object.payload)));
+      const frame = frameObject(object.type, object.payload);
+      payloads.push(fingerprint(frame));
+      // A copied native member remains recoverable after its zlib wrapper is stripped.
+      for (const level of [1, 6, 9]) payloads.push(fingerprint(deflateSync(frame, { level }).subarray(2, -4)));
       if (object.type !== "manifest" && object.payload.length > 0) payloads.push(fingerprint(object.payload), fingerprint(Buffer.from(object.payload.toString("base64"))));
     }
-    if (payloads.length === 0) throw new ObjectStoreError("incomplete_erasure_inventory", "No persisted byte proof is available; restore a verified selected representation before retrying.");
+    if (payloads.length === 0) throw new ObjectStoreError("incomplete_erasure_inventory", "No byte-proof metadata is available; restore verified erasure evidence from its source before retrying. No physical-erasure success was certified.");
     const deleting = new Set([...physical].filter(([_path,id]) => selected.has(id)).map(([path]) => path));
-    scanErasureStorage(store.storageRoot(), payloads, deleting);
+    /** Include dormant object trees inside every registered instance's physical erasure scope. */
+    const scanStorage = (excluded: ReadonlySet<string> = new Set()): ErasureStorageReport => {
+      const roots = new Set([store.storageRoot(), ...instances.map((instance) => join(instance.controlDirectory, "objects")).filter((path) => existsSync(path))]);
+      const classes: Partial<Record<ErasureFileClass, number>> = {}; let files = 0; let foreign = 0;
+      for (const root of roots) {
+        const report = scanErasureStorage(root, payloads, excluded); files += report.files; foreign += root === store.storageRoot() ? report.foreign : report.files;
+        for (const kind of Object.keys(report.classes) as ErasureFileClass[]) classes[kind] = (classes[kind] ?? 0) + (report.classes[kind] ?? 0);
+      }
+      return { files, foreign, classes };
+    };
+    scanStorage(deleting);
     // A second complete verified pass inspects copies without retaining unrelated leaves.
     const inspected = new Set<string>();
     for (const { id, path, object } of store.walkErasureInventory()) {
@@ -271,7 +285,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         erasureScanBoundary.visit("object-deleted");
       }
       for (const directory of directories) syncDirectory(directory);
-      const storage = scanErasureStorage(store.storageRoot(), signatures);
+      const storage = scanStorage();
       erasureScanBoundary.visit("storage-verified");
       store.recordDenials(completed);
       erasureScanBoundary.visit("completed");

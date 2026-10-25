@@ -43,7 +43,7 @@ test("copied foreign backup.pack blocks erasure without deleting the foreign cop
 test("random stores succeed iff no retained raw, encoded, copied, renamed or partial payload remains", async (t) => {
   let cases=0;
   const paths=["backup.pack","packs/copy.bin","aa/renamed.data","temporary/job/partial.tmp","packs/foreign/deep/member","other/cache/record"];
-  for (let encoding=0;encoding<10;encoding++) for (const path of paths) for (const retained of [false,true]) {
+  for (let encoding=0;encoding<12;encoding++) for (const path of paths) for (const retained of [false,true]) {
     const f=await fixture(); const frame=frameObject("blob",f.bytes); const root=f.repo.objects.storageRoot();
     let encoded:Buffer;
     if (encoding===0) encoded=f.bytes;
@@ -54,6 +54,8 @@ test("random stores succeed iff no retained raw, encoded, copied, renamed or par
       const slice=pack.subarray(entry.packed!.offset,entry.packed!.offset+entry.packed!.length);
       encoded=encoding===5?pack:encoding===6?pack.subarray(0,pack.length-1):encoding===7?slice:encoding===8?slice.subarray(0,slice.length-3):Buffer.from(slice);
       if(encoding===9) encoded[encoded.length-1]^=1;
+      if(encoding===10) encoded=slice.subarray(2,-4);
+      if(encoding===11) encoded=deflateSync(frame,{level:1}).subarray(2,-4);
     }
     if(!retained) encoded=Buffer.from(`unrelated-${number()}-clean-storage`);
     const offset=cases%3===0?65_520:number()%129;
@@ -65,7 +67,7 @@ test("random stores succeed iff no retained raw, encoded, copied, renamed or par
     if(retained) { rmSync(foreign); f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)); }
     cases++;
   }
-  assert.equal(cases,120); t.diagnostic("120 randomized non-git stores: 10 encodings x 6 locations x retained/clean; random offsets include scanner chunk crossings");
+  assert.equal(cases,144); t.diagnostic("144 randomized non-git stores: 12 encodings x 6 locations x retained/clean; random offsets include scanner chunk crossings");
 });
 
 test("a post-deletion foreign copy leaves denial pending and persisted fingerprints detect it on every retry", async () => {
@@ -159,6 +161,9 @@ test("scanner refuses native open/read failures and namespace arrivals without l
 test("embedded compressed payloads are detected without a literal raw hit and full decoded slots drain after input exhaustion",async()=>{
   const selected=Buffer.from("selected-compressed-unique-marker-736294".repeat(64)); const f=await fixture(selected);
   const encoded=deflateSync(frameObject("blob",selected),{level:9});assert.equal(encoded.includes(selected),false);
+  const generic=join(f.dir.root,"generic-zlib");place(generic,"arbitrary.data",Buffer.concat([Buffer.alloc(65_535,7),encoded.subarray(0,encoded.length-2)]));
+  assert.throws(()=>scanErasureStorage(generic,[fingerprint(selected)]),{code:"erasure_retained_copy"});
+  rmSync(join(generic,"arbitrary.data"));
   const path=place(f.repo.objects.storageRoot(),"packs/renamed.data",Buffer.concat([Buffer.alloc(65_535,7),encoded.subarray(0,encoded.length-2)]));
   assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),{code:"erasure_retained_copy"});
   rmSync(path);f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));
@@ -190,4 +195,34 @@ test("one non-git tracker serializes a competing erasure at EVERY proof/scan/pub
   assert.equal(attempts,9);const peer=run("complete");assert.equal(peer.status,0,peer.stderr);const receipt=JSON.parse(peer.stdout) as {tombstone:string};assert.equal(receipt.tombstone,own.tombstone);
   assert.equal(f.repo.operations.read().filter((entry)=>entry.command==="obliterate").length,1);assert.equal(objectFiles.active.size,0);
   t.diagnostic(`${attempts} competing transitions on the same non-git tracker, followed by truthful idempotent peer success`);
+});
+
+
+test("missing historic/imported proof refuses certification until verified evidence is restored",async()=>{
+  const f=await fixture();f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));
+  const proofPath=join(f.repo.controlDirectory,"erasure-verification.json");const proof=readFileSync(proofPath);rmSync(proofPath);
+  const ghost=place(f.repo.objects.storageRoot(),"packs/foreign-copy",Buffer.concat([Buffer.alloc(31,5),f.bytes]));
+  assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),{code:"incomplete_erasure_inventory"});assert.ok(readFileSync(ghost).includes(f.bytes));
+  writeFileSync(proofPath,proof);assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),{code:"erasure_retained_copy"});
+  rmSync(ghost);f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));assert.equal(f.repo.operations.read().filter((entry)=>entry.command==="obliterate").length,1);
+});
+
+
+test("headerless native compressed member copies block erasure",async()=>{
+  const selected=Buffer.from("headerless-compressed-marker-739168".repeat(64));const f=await fixture(selected);f.repo.objects.compact();
+  const entry=f.repo.objects.inventory().find((entry)=>entry.id===f.id)!;const pack=readFileSync(entry.path);
+  const body=pack.subarray(entry.packed!.offset+2,entry.packed!.offset+entry.packed!.length-4);assert.equal(body.includes(selected),false);
+  place(f.repo.objects.storageRoot(),"temporary/copied-body",Buffer.concat([Buffer.alloc(17,7),body]));
+  assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),{code:"erasure_retained_copy"});assert.equal(f.repo.objects.denials().length,0);
+});
+
+
+test("physical proof includes dormant object directories in every registered instance",async()=>{
+  const f=await fixture();f.repo.commit({message:"selected",author:{name:"Fixture",email:"fixture@example.invalid",timestamp:1,timezoneOffsetMinutes:0}},new Date(1));
+  const instance=makeTempDir();temporary.push(instance);f.repo.linkInstance("secondary",instance.root);
+  const local=join(Repository.open(instance.root).controlDirectory,"objects");
+  const ghost=place(local,"packs/backup.pack",deflateSync(frameObject("blob",f.bytes)));
+  assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(2)),{code:"erasure_retained_copy"});assert.equal(f.repo.objects.denials().length,0);
+  writeFileSync(ghost,"harmless foreign instance cache");place(local,"packs/"+"f".repeat(64)+".pack",Buffer.from("harmless inactive native-looking record"));const receipt=f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(2));
+  assert.ok(receipt.storage.foreign>=2);assert.equal(readFileSync(ghost,"utf8"),"harmless foreign instance cache");assert.equal(existsSync(join(instance.root,"asset")),false);
 });

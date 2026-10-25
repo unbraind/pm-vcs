@@ -1,0 +1,19 @@
+id: pm-vcs-erasureprooftransport
+title: Carry physical-erasure verification evidence across transports
+description: "Logical erasure denials carry tombstone IDs and payload digests but not the new local byte-window verification evidence. A legacy/imported denial with missing canonical bytes must refuse a fresh physical-erasure certificate until verified source evidence is supplied. Add capability-negotiated transport and validation of fingerprints without changing existing tombstone identities or transporting erased bytes. This is a follow-up to pm-vcs-phase6packs, whose local scanner and resume path already fail closed."
+type: Feature
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-25T14:52:31.224Z"
+updated_at: "2026-10-25T14:52:34.681Z"
+author: codex-agent
+acceptance_criteria: A metadata-only clone can obtain and validate source byte-proof metadata without payload bytes; corrupt or foreign evidence refuses; existing denial identities and logical policy remain compatible; file and HTTP transports work outside Git.
+parent: pm-vcs-b7cb
+files[3]{path,scope}:
+  engine/erasure-scan.ts,project
+  engine/erasure.ts,project
+  engine/lifecycle.ts,project
+docs[1]{path,scope}:
+  docs/indexed-packs.md,project
+body: ""

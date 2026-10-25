@@ -162,10 +162,12 @@ and ownership baselines after every operation.
 
 Obliteration independently scans **every regular file** below the object-storage
 root, including pack, loose, temporary and arbitrary foreign subdirectories.
+Dormant object directories in registered instances are included too.
 Names, extensions, pack magic and recognized inventory entries do not define the
 proof boundary. It detects raw payloads, typed frames, canonical payload base64
 (as written by bundles), and embedded zlib streams at any byte offset, including
-pack members and recoverable data with a truncated or invalid checksum. All
+pack members and recoverable data with a truncated or invalid checksum. Native compressed-member bodies stripped of their zlib headers/checksums are
+fingerprinted too. All
 compression levels written by loose storage, unpacking and packs are covered.
 
 Before deletion, the engine records only lengths, rolling signatures and SHA-256
@@ -198,7 +200,14 @@ before pinning. Namespace retirement does not invalidate verified immutable
 bytes; in-place size/mtime changes still refuse. Link count and ctime are not
 content identities because unlinking changes them.
 
-Regression evidence: 120 seeded stores across ten encodings and six locations,
+Regression evidence: 144 seeded stores across twelve encodings and six locations,
 406 actual pinned/native I/O boundary injections across all 25 reader APIs, nine
 logical SIGKILL cuts, 66 native proof/denial publication cuts, and a competing
 process at every logical erasure boundary on one non-git tracker.
+
+Older or imported denials can lack the byte-window evidence needed for a new
+physical certificate after source bytes are gone. This refuses with
+`incomplete_erasure_inventory` until verified source evidence is restored; it
+never treats a policy-only denial as a byte-deletion proof. Automatic transport
+of this additional evidence is tracked separately. Existing logical denials
+continue to block reads and arrivals.

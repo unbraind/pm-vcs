@@ -904,7 +904,7 @@ export class ObjectStore {
     const object = this.readLocation(id, location);
     const after = fstatSync(location.fd, { bigint: true });
     // Unlinking changes ctime/link count, but leaves this descriptor and its verified bytes intact.
-    if (before.dev !== after.dev || before.ino !== after.ino || before.mtimeNs !== after.mtimeNs || before.size !== after.size) throw new ObjectStoreError("unsupported_erasure_storage", "Pinned inventory bytes changed during verification.");
+    if (before.size !== after.size || before.mtimeNs !== after.mtimeNs) throw new ObjectStoreError("unsupported_erasure_storage", "Pinned inventory bytes changed during verification.");
     return object;
   }
 

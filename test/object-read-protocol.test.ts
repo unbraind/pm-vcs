@@ -326,3 +326,15 @@ test("pinned inventory survives external unpack with identical generation and wr
     assert.deepEqual(readFileSync(join(f.repo.controlDirectory,"objects.generation")),marker);assert.equal(fs.lstatSync(join(f.repo.controlDirectory,"objects.lock"),{bigint:true}).ino,lock.ino);
   });
 });
+
+
+test("pinned inventory rejects in-place same-size mutation and a directory substituted before pinning",async()=>{
+  const f=await fixture();const store=f.repo.objects;const path=join(store.storageRoot(),f.live.slice(0,2),f.live.slice(2));
+  const read=fs.readFileSync;let once=false;
+  mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{
+    const value=read(...args);if(typeof args[0]==="number"&&!once){once=true;const bytes=read(path);bytes[0]^=1;writeFileSync(path,bytes);fs.utimesSync(path,1,2);}return value;
+  });syncBuiltinESMExports();assert.throws(()=>store.readInventoryObject(f.live,path),{code:"unsupported_erasure_storage"});mock.restoreAll();syncBuiltinESMExports();
+  writeFileSync(path,deflateSync(frameObject("blob",payload)));
+  objectReadBoundary.visit=(step)=>{if(step==="generation"){objectReadBoundary.visit=()=>{};fs.unlinkSync(path);mkdirSync(path);}};
+  assert.throws(()=>store.readInventoryObject(f.live,path),{code:"unsupported_erasure_storage"});
+});
