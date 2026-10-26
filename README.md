@@ -810,7 +810,9 @@ Every test entrypoint installs the session allowlist before importing the SDK. T
 children select operational environment keys with `testEnvironment()` and supply
 agent identity only as an explicit fixture override; ambient Claude Code, Codex,
 `AI_AGENT` and `PM_AGENT_*` state cannot change provenance. Parent V8 instrumentation
-is retained, while child coverage is disabled. The environment regression runs the
+is retained in the allowlist for production tools; disposable fixtures explicitly
+disable child coverage. A real tool regression checks that instrumentation reaches
+the child. The environment regression runs the
 three provenance cases in clean and contaminated sessions and audits every child
 launch. Annotation fixtures settle their owned tasks, children and watchers before
 retry-bounded recursive removal; persistent teardown failures remain test failures.

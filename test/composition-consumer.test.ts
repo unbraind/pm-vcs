@@ -17,6 +17,7 @@ assert.match(pinnedSdk, /^\d+\.\d+\.\d+(?:-\d+)?$/, `the @unbrained/pm-cli devDe
 
 /** Identical consumer program exercises the built CLI harness and engine through package-owned imports. */
 const consumer = `
+import { testEnvironment } from ${JSON.stringify(new URL("./helpers/test-environment.ts", import.meta.url).href)};
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -40,7 +41,7 @@ const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).reso
 assert.equal(installedSdk.version, ${JSON.stringify(pinnedSdk)});
 const cliExecutable = process.argv[4];
 if (process.argv[2] === "node-project-cli") {
-  const version = spawnSync(process.execPath, [cliExecutable, "--version"], { encoding: "utf8" });
+  const version = spawnSync(process.execPath, [cliExecutable, "--version"], { env: testEnvironment(), encoding: "utf8" });
   assert.equal(version.status, 0, "Project-installed PM CLI unavailable before fixture setup: " + (version.error?.message ?? version.stderr + version.stdout));
   assert.equal(version.stdout.trim(), installedSdk.version, "Project-installed PM CLI version mismatch before fixture setup: expected " + installedSdk.version + ", got " + version.stdout.trim());
 }
@@ -100,7 +101,7 @@ assert.equal(rotation.errorMessage, undefined); assert.equal(authorize(repo.cont
 repo.setAuthority("fixture", "consumer-read", "consumer-erase", { currentEraseCredential: "consumer-erase-next" });
 repo.addLayer("ordinary-path", new Map([["src/search/a.txt", { content: Buffer.from("ordinary path overlay"), executable: false }]]));
 assert.equal(readFileSync(join(root, "src/search/a.txt"), "utf8"), "ordinary path overlay"); repo.removeLayer("ordinary-path");
-const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }); assert.equal(dead.status, 0);
+const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { env: testEnvironment(), encoding: "utf8" }); assert.equal(dead.status, 0);
 writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout);
 const recovered = await harness.runCommand({ command: "vcs recover-lock", pmRoot: root }); assert.equal(recovered.errorMessage, undefined); assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
 const legacy = Repository.init(join(process.cwd(), process.argv[2] + "-legacy"));
@@ -258,15 +259,15 @@ for (const caller of ["hub", "linked"]) {
   for (const root of [tracker, siblingTracker]) for (const path of runtimePaths) assert.deepEqual(readFileSync(join(root, path)), selected);
 }
 if (process.argv[2] === "node-project-cli") {
-  const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { cwd: root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
+  const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { env: testEnvironment(), cwd: root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
   for (const input of [JSON.stringify(link, null, 2), encodeLink(link).toString() + "\\n"]) {
     writeFileSync(spec, input);
-    const linked = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "operator.link", "--spec", spec], { cwd: root, encoding: "utf8" });
+    const linked = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "operator.link", "--spec", spec], { env: testEnvironment(), cwd: root, encoding: "utf8" });
     assert.equal(linked.status, 0, linked.stderr + linked.stdout); assert.deepEqual(readFileSync(join(root, "operator.link")), encodeLink(link));
   }
   const cliIndex = readFileSync(join(repo.controlDirectory, "index")); const cliObjects = repo.objects.inventory();
   writeFileSync(spec, "null");
-  const invalidLink = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "invalid.link", "--spec", spec], { cwd: root, encoding: "utf8" });
+  const invalidLink = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "invalid.link", "--spec", spec], { env: testEnvironment(), cwd: root, encoding: "utf8" });
   assert.notEqual(invalidLink.status, 0); assert.match(invalidLink.stderr + invalidLink.stdout, /bad_link/);
   assert.deepEqual(readFileSync(join(root, "operator.link")), encodeLink(link)); assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), cliIndex); assert.deepEqual(repo.objects.inventory(), cliObjects);
 }
@@ -291,8 +292,8 @@ for (const deniedSide of ["base", "ours", "theirs"]) {
   mergedRepo.switchTo("left", new Date()); const ours = mergedRepo.readIndex().find(entry => entry.path === "p");
   let result;
   if (process.argv[2] === "node-project-cli") {
-    const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { cwd: mergedRepo.root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
-    const merged = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "merge", "right", "--message", "denied merge"], { cwd: mergedRepo.root, encoding: "utf8" });
+    const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { env: testEnvironment(), cwd: mergedRepo.root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
+    const merged = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "merge", "right", "--message", "denied merge"], { env: testEnvironment(), cwd: mergedRepo.root, encoding: "utf8" });
     assert.equal(merged.status, 0, merged.stderr + merged.stdout); result = JSON.parse(merged.stdout).merge;
   } else result = mergedRepo.merge("right", { message: "denied merge", author }, new Date());
   assert.equal(result.clean, false); assert.ok(result.conflicts.some(conflict => conflict.path === "p" && conflict.reason === "content"));

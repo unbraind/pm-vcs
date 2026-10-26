@@ -1760,22 +1760,23 @@ test("bisect explicit registration survives a real early worker exit and can be 
 
 test("bisect SDK process policy blocks Git and preserves real callback promise and spawn behavior", () => {
   const script = `
+    import { testEnvironment } from ${JSON.stringify(new URL("./helpers/test-environment.ts", import.meta.url).href)};
     import assert from "node:assert/strict";
     import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
     import { promisify } from "node:util";
     for (const method of [execFile, execFileSync, spawn, spawnSync]) {
-      assert.throws(() => method("git", ["status"]), {code:"ENOTSUP"});
-      assert.throws(() => method("git.exe", ["status"]), {code:"ENOTSUP"});
+      assert.throws(() => method("git", ["status"], {env:testEnvironment()}), {code:"ENOTSUP"});
+      assert.throws(() => method("git.exe", ["status"], {env:testEnvironment()}), {code:"ENOTSUP"});
     }
-    assert.throws(() => execFile(null), {code:"ERR_INVALID_ARG_TYPE"});
-    await assert.rejects(async () => promisify(execFile)("git", ["status"]), {code:"ENOTSUP"});
+    assert.throws(() => execFile(null, [], {env:testEnvironment()}), {code:"ERR_INVALID_ARG_TYPE"});
+    await assert.rejects(async () => promisify(execFile)("git", ["status"], {env:testEnvironment()}), {code:"ENOTSUP"});
     const program = 'process.stdout.write("out");process.stderr.write("err")';
-    const callback = await new Promise((resolve, reject) => execFile(process.execPath, ["-e",program], (error, stdout, stderr) => error ? reject(error) : resolve({stdout,stderr})));
+    const callback = await new Promise((resolve, reject) => execFile(process.execPath, ["-e",program], {env:testEnvironment()}, (error, stdout, stderr) => error ? reject(error) : resolve({stdout,stderr})));
     assert.deepEqual(callback,{stdout:"out",stderr:"err"});
-    assert.deepEqual(await promisify(execFile)(process.execPath,["-e",program]),{stdout:"out",stderr:"err"});
-    assert.equal(execFileSync(process.execPath,["-e",program],{encoding:"utf8",stdio:["ignore","pipe","ignore"]}),"out");
-    assert.equal(spawnSync(process.execPath,["-e",program],{encoding:"utf8"}).stdout,"out");
-    const child = spawn(process.execPath,["-e",program]);
+    assert.deepEqual(await promisify(execFile)(process.execPath,["-e",program],{env:testEnvironment()}),{stdout:"out",stderr:"err"});
+    assert.equal(execFileSync(process.execPath,["-e",program],{env:testEnvironment(),encoding:"utf8",stdio:["ignore","pipe","ignore"]}),"out");
+    assert.equal(spawnSync(process.execPath,["-e",program],{env:testEnvironment(),encoding:"utf8"}).stdout,"out");
+    const child = spawn(process.execPath,["-e",program],{env:testEnvironment()});
     let output = "";
     child.stdout.on("data", chunk => output += chunk);
     await new Promise((resolve,reject) => {child.on("error",reject);child.on("close",resolve);});
