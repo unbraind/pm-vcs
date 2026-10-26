@@ -85,6 +85,10 @@ the original inode still refuses. Fresh empty requests never replay paths from
 a completed nonempty set. Guarded worktree planning, retirement and receipt
 failures preserve the public `worktree_path_changed` refusal and leave their
 recorded sets available for recovery.
+An interrupted owner-temporary retirement retries its recorded set and refreshes
+the pinned owner stamp after removing its own hardlink; changed owner bytes remain
+foreign and are preserved. Pending pruning resumes already-retired directories
+without capturing later arrivals.
 
 The namespace audit covers these paths:
 

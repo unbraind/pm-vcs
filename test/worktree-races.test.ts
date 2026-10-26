@@ -12,6 +12,7 @@ import { ObjectStoreError, type ObjectStore } from "../engine/objects.ts";
 import { Repository } from "../engine/repo.ts";
 import { buildTree, materializeTree } from "../engine/worktree.ts";
 import { destructionBoundary } from "../engine/destruction.ts";
+import { durability } from "../engine/durability.ts";
 import { WorktreeMutation, worktreeMutationCapabilities } from "../engine/worktree-mutation.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
@@ -633,4 +634,16 @@ test("erasure removal errors retain a replayable plan and the public worktree re
 test("a prune planning race preserves foreign directories and the public worktree refusal", () => {
  const {repo,destination}=setup();const mutation=new WorktreeMutation(repo.root,".pmvcs");let changed=false;
  try{mutation.write("fresh/deep/temporary",Buffer.from("owned"),0o600);mutation.remove("fresh/deep/temporary");destructionBoundary.visit=step=>{if(step==="owner-published"&&!changed){changed=true;renameSync(join(repo.root,"fresh"),join(repo.root,"parked"));symlinkSync(destination,join(repo.root,"fresh"),"dir");}};assert.throws(()=>mutation.prune(),{code:"worktree_path_changed"});assert.ok(changed);assert.equal(readFileSync(join(destination,"leaf.txt"),"utf8"),"sentinel\n");}finally{destructionBoundary.visit=()=>{};mutation.close();}
+});
+
+test("a leaf arriving after completed retirement is preserved by the final worktree check", () => {
+  const {repo}=setup(); const mutation=new WorktreeMutation(repo.root,".pmvcs"); const unlink=durability.unlink; let arrived=false;
+  mock.method(durability,"unlink",(...args:Parameters<typeof durability.unlink>)=>{const receipt=unlink(...args);if(args[0].endsWith("/leaf.txt")){writeFileSync(args[0],"peer arrival");arrived=true;}return receipt;});
+  try { assert.throws(()=>mutation.remove("branch/leaf.txt"),{code:"worktree_path_changed"});assert.ok(arrived);assert.equal(readFileSync(join(repo.root,"branch/leaf.txt"),"utf8"),"peer arrival"); } finally { mutation.close(); }
+});
+
+test("a pending prune resumes its retired directories without capturing new arrivals", () => {
+  const {repo}=setup(); const first=new WorktreeMutation(repo.root,".pmvcs"); let interrupted=false;
+  try { first.write("fresh/deep/temporary",Buffer.from("owned"),0o600);first.remove("fresh/deep/temporary");destructionBoundary.visit=(step,path)=>{if(step==="progress-persisted"&&path.endsWith("/fresh")){interrupted=true;throw new Error("prune acknowledgment interrupted");}};assert.throws(()=>first.prune(),{code:"worktree_path_changed"});assert.ok(interrupted); } finally { destructionBoundary.visit=()=>{};first.close(); }
+  const next=new WorktreeMutation(repo.root,".pmvcs");try { assert.equal(next.prune(),false);assert.equal(existsSync(join(repo.root,"fresh")),false);assert.equal(readFileSync(join(repo.root,"branch/leaf.txt"),"utf8"),"sentinel\n"); } finally { next.close(); }
 });

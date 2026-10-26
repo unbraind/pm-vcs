@@ -970,7 +970,12 @@ export class ObjectStore {
           if (!acquired && locked !== undefined) durability.discardUnpublished(temporary, fd, locked);
           else {
             const candidate = lstatSync(temporary, { bigint: true, throwIfNoEntry: false });
-            if (candidate !== undefined && locked !== undefined && candidate.dev === locked.dev && candidate.ino === locked.ino && candidate.size === locked.size && candidate.mtimeNs === locked.mtimeNs && candidate.ctimeNs === locked.ctimeNs) durability.unlink(temporary, locked);
+            if (candidate !== undefined && locked !== undefined && candidate.dev === locked.dev && candidate.ino === locked.ino && candidate.size === locked.size && candidate.mtimeNs === locked.mtimeNs && candidate.ctimeNs === locked.ctimeNs) {
+              durability.unlink(temporary, locked);
+              // Retiring our extra hardlink changes ctime; retain the original byte stamp before acknowledging it.
+              const retired = fstatSync(fd, { bigint: true });
+              if (retired.size === locked.size && retired.mtimeNs === locked.mtimeNs) locked = retired;
+            }
           }
         } finally {
           // A moved root must neither hide the mutation refusal nor unlink a foreign lock.

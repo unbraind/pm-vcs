@@ -87,3 +87,33 @@ test("atomic ref publication removes temps after repeated native rename refusals
     assert.equal(refs.resolveHead(), "a".repeat(64));
   } finally { directory.cleanup(); }
 });
+
+test("an interrupted writer temporary retirement retries its exact intent and releases the published owner", context => {
+  const directory = makeTempDir(); const root = join(directory.root, ".pmvcs"); const store = new ObjectStore(join(root, "objects"));
+  const unlink = fs.unlinkSync; const failure = Object.assign(new Error("temporary retirement interrupted"), { code: "EIO" }); let interrupted = false;
+  context.mock.method(fs, "unlinkSync", (...args: Parameters<typeof fs.unlinkSync>) => {
+    if (!interrupted && String(args[0]).startsWith(join(root, "objects.lock.")) && String(args[0]).endsWith(".tmp")) { interrupted = true; throw failure; }
+    return unlink(...args);
+  }); syncBuiltinESMExports();
+  try {
+    assert.throws(() => store.withWriteLock(() => assert.fail("publication must finish before the callback")), error => error === failure);
+    context.mock.restoreAll(); syncBuiltinESMExports(); assert.ok(interrupted);
+    assert.deepEqual(readdirSync(root).filter(name => name.startsWith("objects.lock")), []);
+    assert.equal(store.withWriteLock(() => "retry completed"), "retry completed");
+  } finally { context.mock.restoreAll(); syncBuiltinESMExports(); directory.cleanup(); }
+});
+
+test("retrying temporary retirement preserves owner bytes changed before its descriptor stamp refresh", context => {
+  for (const sameLength of [false,true]) {
+    const directory=makeTempDir();const root=join(directory.root,".pmvcs");const store=new ObjectStore(join(root,"objects"));const owner=join(root,"objects.lock");
+    const unlink=fs.unlinkSync;const failure=Object.assign(new Error("temporary retirement interrupted"),{code:"EIO"});let interrupted=false;let changed=false;
+    const peer=sameLength?"x".repeat(String(process.pid).length):"peer changed owner bytes";
+    context.mock.method(fs,"unlinkSync",(...args:Parameters<typeof fs.unlinkSync>)=>{
+      const selected=String(args[0]).startsWith(join(root,"objects.lock."))&&String(args[0]).endsWith(".tmp");
+      if(selected&&!interrupted){interrupted=true;throw failure;}unlink(...args);
+      if(selected){writeFileSync(owner,peer);fs.utimesSync(owner,1,1);changed=true;}
+    });syncBuiltinESMExports();
+    try { assert.throws(()=>store.withWriteLock(()=>assert.fail("publication interrupted")),error=>error===failure);assert.ok(changed);assert.equal(readFileSync(owner,"utf8"),peer);assert.deepEqual(readdirSync(root).filter(name=>name.startsWith("objects.lock.")),[]); }
+    finally { context.mock.restoreAll();syncBuiltinESMExports();directory.cleanup(); }
+  }
+});
