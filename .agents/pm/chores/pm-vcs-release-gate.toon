@@ -1,0 +1,27 @@
+id: pm-vcs-release-gate
+title: Release readiness behind PM_RELEASE_APPROVED
+description: "Prepare daily OIDC publishing behind one repository approval variable. Verify metadata, allowlisted packed files, privacy, regression checks, npm and Bun release gates. The owner performs the first npm publish and trusted-publisher setup; keep approval unset."
+type: Chore
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-10-25T23:24:17.719Z"
+updated_at: "2026-10-26T01:04:02.277Z"
+assignee: codex-agent
+claim_principal: codex-agent
+author: codex-agent
+comments[3]{created_at,author,text}:
+  "2026-10-25T23:24:26.154Z",codex-agent,"Normalize daily scheduling and PM_RELEASE_APPROVED job gates while preserving release decisions, generated changelogs and release notes. Verify OIDC publishing without a stored npm token, manifest metadata, packed allowlists and private-data scans. No open homepage/author PR was found during orientation. No publishing, trust setup, approval variable changes or merges are authorized."
+  "2026-10-25T23:29:54.109Z",codex-agent,"Release simulation inspection found two existing blockers after a calendar version bump: changelog scripts fixed the bootstrap date, and release metadata commits omitted a refreshed self-host archive. Removed the fixed date override while preserving --date-from-version and the existing decide step. The commit step now regenerates and stages selfhost.bundle after staging release metadata. A real temporary Git repository verifies that the committed archive covers the newly staged changelog. Independently restoring either the old workflow step or manifest date makes its regression fail; restored preparation tests pass 2/2."
+  "2026-10-26T01:04:02.270Z",codex-agent,"Opening the release-readiness PR after package allowlist/privacy verification and focused regression proofs so complete npm and Bun CI can run in parallel with local full-gate verification. Pending checks are explicitly not treated as passing evidence. No timeout, threshold, dependency pin or test case is being relaxed."
+files[4]{path,scope}:
+  .github/workflows/release.yml,project
+  package.json,project
+  test/release-approval.test.ts,project
+  test/release-preparation.test.ts,project
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/release-approval.test.ts,project,codex-agent,"2026-10-25T23:24:35.908Z",local_mutation,chore/release-gate-approval
+  node --test test/release-preparation.test.ts,project,codex-agent,"2026-10-25T23:29:56.116Z",local_mutation,chore/release-gate-approval
+docs[1]{path,scope}:
+  README.md,project
+body: ""

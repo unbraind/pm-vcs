@@ -35,11 +35,11 @@
     "accept:self-host": "node scripts/self-host.ts",
     "self-host:write": "node scripts/self-host.ts --write",
     "pack:dry-run": "npm pack --dry-run",
-    "changelog:full": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999",
+    "changelog:full": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999",
     "changelog:check": "npm run changelog:full -- --check",
     "release:check": "npm run typecheck && npm run build && npm run lint && npm run duplicates && npm run docstring && npm run coverage && npm run accept:native-toon && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run changelog:check && npm run verify:release-changelog-date && npm run verify:release-publish-attestation",
     "prepublishOnly": "npm run release:check",
-    "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date-from-version --date 2026-07-30 --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999 --github-step-summary",
+    "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999 --github-step-summary",
     "prepare": "node scripts/prepare-merge-driver.ts",
     "merge:install": "pm merge install",
     "benchmark:cdc": "node scripts/cdc-benchmark.ts",
@@ -65,7 +65,10 @@
     "jujutsu",
     "git-alternative"
   ],
-  "author": "@unbraind",
+  "author": {
+    "name": "unbrained",
+    "url": "https://unbrained.dev/about"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -74,7 +77,7 @@
   "bugs": {
     "url": "https://github.com/unbraind/pm-vcs/issues"
   },
-  "homepage": "https://github.com/unbraind/pm-vcs#readme",
+  "homepage": "https://pm-cli.unbrained.dev/packages/pm-vcs",
   "devDependencies": {
     "@babel/core": "8.0.7",
     "@babel/eslint-parser": "8.0.7",
@@ -130,5 +133,9 @@
   "duplicationGate": {
     "threshold": 0,
     "minTokens": 50
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
