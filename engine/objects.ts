@@ -976,7 +976,7 @@ export class ObjectStore {
           // A moved root must neither hide the mutation refusal nor unlink a foreign lock.
           if (acquired) {
             const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-            if (observed !== undefined && observed.dev === locked!.dev && observed.ino === locked!.ino && observed.size === locked!.size && observed.mtimeNs === locked!.mtimeNs && observed.ctimeNs === locked!.ctimeNs) durability.unlink(path, locked);
+            if (observed !== undefined && observed.dev === locked!.dev && observed.ino === locked!.ino && observed.size === locked!.size && observed.mtimeNs === locked!.mtimeNs && observed.ctimeNs === locked!.ctimeNs) durability.unlinkOwner(path, locked!);
             else lockChanged = true;
           }
         }
@@ -1012,7 +1012,7 @@ export class ObjectStore {
           const abandoned = recoveryOwners.get(guardPath);
           const self = pid === process.pid && !recoveryLeases.has(lease) && abandoned !== undefined && abandoned.dev === oldGuard.dev && abandoned.ino === oldGuard.ino && abandoned.size === oldGuard.size && abandoned.mtimeNs === oldGuard.mtimeNs && abandoned.ctimeNs === oldGuard.ctimeNs;
           if (!self) { try { process.kill(pid, 0); throw new ObjectStoreError("store_locked", "A live recovery owner was preserved."); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
-          durability.unlink(guardPath, oldGuard);
+          durability.unlinkOwner(guardPath, oldGuard);
         }
         const temporary = `${guardPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
         const guard = objectFiles.open(temporary, "wx", 0o600); let published = false;
@@ -1030,7 +1030,7 @@ export class ObjectStore {
         } finally {
           recoveryLeases.delete(lease);
           try {
-            const current = lstatSync(guardPath, { bigint: true, throwIfNoEntry: false }); if (published && owned !== undefined && current !== undefined && current.dev === owned.dev && current.ino === owned.ino && current.size === owned.size && current.mtimeNs === owned.mtimeNs && current.ctimeNs === owned.ctimeNs) durability.unlink(guardPath, owned);
+            const current = lstatSync(guardPath, { bigint: true, throwIfNoEntry: false }); if (published && owned !== undefined && current !== undefined && current.dev === owned.dev && current.ino === owned.ino && current.size === owned.size && current.mtimeNs === owned.mtimeNs && current.ctimeNs === owned.ctimeNs) durability.unlinkOwner(guardPath, owned);
             const candidate = lstatSync(temporary, { bigint: true, throwIfNoEntry: false }); if (owned !== undefined && candidate !== undefined && candidate.dev === owned.dev && candidate.ino === owned.ino) durability.unlink(temporary, candidate);
           } finally {
             guard.close();
@@ -1071,7 +1071,7 @@ export class ObjectStore {
     if (current === undefined) return;
     if (current.dev !== observed.dev || current.ino !== observed.ino || current.ctimeNs !== observed.ctimeNs
       || current.mtimeNs !== observed.mtimeNs || current.size !== observed.size) throw new ObjectStoreError("store_locked", "Lock owner changed during recovery.");
-    durability.unlink(path, current);
+    durability.unlinkOwner(path, current);
   }
 
   /**

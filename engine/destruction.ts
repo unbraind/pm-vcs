@@ -227,7 +227,7 @@ function receipt(intent: Intent): DestructionReceipt { return { id: intent.id, r
 /** One exact-set handle is reusable after every deletion/progress crash without adding newly arrived files. */
 export interface DestructionPlan { readonly paths: readonly string[]; readonly resumed: boolean; remove(path: string): void; finish(): DestructionReceipt }
 /** Persist a revision-bound set after caller preflight; per-intent leases also serialize independent recovery drainers. */
-export function prepareDestruction(control: string, key: string, requests: readonly DestructionRequest[], resumeCompleted = false, journalDirectory?: string): DestructionPlan {
+export function prepareDestruction(control: string, key: string, requests: readonly DestructionRequest[], resumeCompleted = false, journalDirectory?: string, completedIsHistorical = false): DestructionPlan {
   if (typeof key !== "string" || key === "" || key.includes("\0")) throw new DestructionRefusal("conflicting_destructive_requests", "A deletion intent requires a stable nonempty operation key.");
   const requestedRoot = resolve(control); canonical(join(requestedRoot, ".intent-root")); mkdirSync(requestedRoot, { recursive: true, mode: 0o700 }); const root = realpathSync(requestedRoot); const rootStat = lstatSync(root, { bigint: true }); const rootIdentity = birth(rootStat);
   const directory = journalDirectory ?? join(root, "destruction"); const metadata = lstatSync(directory, { throwIfNoEntry: false }); if (metadata !== undefined && !metadata.isDirectory()) throw new DestructionRefusal("foreign_destructive_intent", "A foreign receipt-directory entry was preserved."); mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -292,7 +292,7 @@ export function prepareDestruction(control: string, key: string, requests: reado
       if (current.entries.some(entry => entry.status === "planned" && lstatSync(resolve(root, entry.path), { throwIfNoEntry: false }) !== undefined && !requested.has(`${entry.path}:${entry.kind}:${entry.destination ?? ""}`))) throw new DestructionRefusal("destructive_plan_conflict", "Recovery cannot replace the original set with a different request.", receipt(current));
       resumed = true; return current;
     }
-    if (current?.status === "completed" && entries.length === 0) { resumed = true; return current; }
+    if (current?.status === "completed" && entries.length === 0 && (requests.length > 0 || current.entries.length === 0)) { resumed = true; return current; }
     const revision = journalDirectory === undefined ? storeRevision(root) : createHash("sha256").update(identity(rootStat)).update(JSON.stringify(entries)).digest("hex");
     const next: Intent = { format: "pm-vcs-destruction-1", id: randomBytes(16).toString("hex"), root, rootIdentity, revision, entries, status: "pending" };
     if (current !== undefined) backend.write(join(directory, `${name}.${current.id}.receipt`), Buffer.from(JSON.stringify(current)));
@@ -324,7 +324,14 @@ export function prepareDestruction(control: string, key: string, requests: reado
       try { const state = progressState(progressPath, intent, index); if (state !== undefined) Object.assign(entry, state); }
       catch (error) { if (!(error instanceof DestructionRefusal) || lstatSync(resolve(root, entry.path), { throwIfNoEntry: false }) !== undefined) throw error; entry.status = "absent"; }
     }
-    if (["deleted", "absent", "moved"].includes(entry.status) && hasLeaf(resolve(root, entry.path))) throw new DestructionRefusal("destructive_target_changed", "A new leaf occupies a retired name; the original completed outcome remains historical.", receipt(intent));
+    if (["deleted", "absent", "moved"].includes(entry.status)) {
+      const source = resolve(root, entry.path);
+      if (completedIsHistorical) {
+        const current = lstatSync(source, { bigint: true, throwIfNoEntry: false });
+        if (current === undefined || birth(current) !== entry.identity.split(":").slice(0, 3).join(":")) return;
+      } else if (!hasLeaf(source)) return;
+      throw new DestructionRefusal("destructive_target_changed", "A retired name still requires attention; the original completed outcome remains historical.", receipt(intent));
+    }
   };
   /** Never follow an entry into a removed/recreated scope or a replaced parent. */
   const perform = (entry: DestructionEntry): void => {
@@ -379,13 +386,13 @@ export function prepareDestruction(control: string, key: string, requests: reado
 function hasLeaf(path: string): boolean { try { return lstatSync(path, { throwIfNoEntry: false }) !== undefined; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return false; throw error; } }
 
 /** Every namespace primitive uses the same frozen-set journal, including owned temporaries and lease cleanup. @internal */
-export function retireNamespace(request: DestructionRequest): DestructionReceipt {
+export function retireNamespace(request: DestructionRequest, completedIsHistorical = false): DestructionReceipt {
   if (typeof request.path !== "string" || request.path === "" || request.path.includes("\0")) canonical(request.path);
   const selected = scope(resolve(request.path));
-  return inScope(selected, () => retireScoped(request, selected));
+  return inScope(selected, () => retireScoped(request, selected, completedIsHistorical));
 }
 /** Preserve namespace receipts independently of the data whose root may itself be retired. */
-function retireScoped(request: DestructionRequest, selected: Scope): DestructionReceipt {
+function retireScoped(request: DestructionRequest, selected: Scope, completedIsHistorical: boolean): DestructionReceipt {
   const path = canonical(request.path); const destination = request.destination === undefined ? undefined : canonical(request.destination);
   const control = (request.recursive || request.directory) && (selected.control === path || selected.control.startsWith(`${path}${sep}`)) ? dirname(path) : selected.control;
   const ledger = join(namespaceLedger(control), "destruction");
@@ -399,7 +406,7 @@ function retireScoped(request: DestructionRequest, selected: Scope): Destruction
       return { id: intentName(root, key).slice(0, 32), revision: "absent", status: "completed", planned: 0, deleted: 0, moved: 0, observedAbsent: 0, skipped: 0, omitted: 0, entries: [] };
     }
   }
-  const plan = prepareDestruction(control, key, [{ ...request, path, address: request.address ?? request.path, ...(destination === undefined ? {} : { destination, destinationAddress: request.destinationAddress ?? request.destination }) }], false, ledger);
+  const plan = prepareDestruction(control, key, [{ ...request, path, address: request.address ?? request.path, ...(destination === undefined ? {} : { destination, destinationAddress: request.destinationAddress ?? request.destination }) }], false, ledger, completedIsHistorical);
   for (const member of plan.paths) plan.remove(member);
   return plan.finish();
 }

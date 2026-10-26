@@ -202,7 +202,7 @@ function recoverOwner(path: string): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
-  durability.unlink(path, observed);
+  durability.unlinkOwner(path, observed);
 }
 
 /** Refuse to remove a candidate directory while an orphaned SDK test process still uses it. */
@@ -221,7 +221,7 @@ export async function withBisectLease<T>(repository: Repository, action: () => P
   try { return await action(); }
   finally {
     const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-    if (current !== undefined && current.dev === owned.dev && current.ino === owned.ino && current.size === owned.size && current.mtimeNs === owned.mtimeNs) durability.unlink(path, current);
+    if (current !== undefined && current.dev === owned.dev && current.ino === owned.ino && current.size === owned.size && current.mtimeNs === owned.mtimeNs) durability.unlinkOwner(path, current);
   }
 }
 

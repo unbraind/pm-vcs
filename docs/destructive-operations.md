@@ -79,7 +79,12 @@ malformed or changing journal records are preserved and reported. Owned lease
 cleanup keys include the captured owner stamp, so an unlink/acknowledgment crash
 cannot transfer an old cleanup set to a new lock at the same pathname. Read-only
 inspection reports absent or replaced member lifetimes as historical and never
-uses those records to delete their successors.
+uses those records to delete their successors. An owner release finishes truthfully
+when a distinct peer acquires the lock name during receipt completion; reattaching
+the original inode still refuses. Fresh empty requests never replay paths from
+a completed nonempty set. Guarded worktree planning, retirement and receipt
+failures preserve the public `worktree_path_changed` refusal and leave their
+recorded sets available for recovery.
 
 The namespace audit covers these paths:
 

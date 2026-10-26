@@ -993,6 +993,9 @@ test("bisect leases reject live and unknown owners and recover a dead owner", as
   await withBisectLease(fixture.repository, async () => {
     await assert.rejects(withBisectLease(fixture.repository, async () => true), /Another bisect command/);
   });
+  mkdirSync(path);
+  await assert.rejects(withBisectLease(fixture.repository, async () => true), { code: "bisect_locked" });
+  assert.ok(existsSync(path)); rmSync(path, { recursive: true });
   writeFileSync(path, "unknown");
   await assert.rejects(withBisectLease(fixture.repository, async () => true), /Unknown bisect lock/);
   writeFileSync(path, "0");

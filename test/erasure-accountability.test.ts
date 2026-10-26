@@ -199,7 +199,8 @@ test("empty roots, missing roots and namespace arrivals are revalidated as one s
 
 test("I/O errors and unknown purge journals refuse without deleting native files or leaking descriptors",async()=>{
  const f=await fixture();const root=f.repo.objects.storageRoot();const before=f.repo.objects.inventory().map(x=>x.id);const read=fs.readSync;
- mock.method(fs,"readSync",()=>{throw Object.assign(new Error("private contents"),{code:"EIO"});});syncBuiltinESMExports();
+ const inodes=new Set(f.repo.objects.inventory().map(item=>{const stat=fs.statSync(item.path,{bigint:true});return `${stat.dev}:${stat.ino}`;}));
+ mock.method(fs,"readSync",(...args:Parameters<typeof fs.readSync>)=>{const stat=fs.fstatSync(args[0],{bigint:true});if(inodes.has(`${stat.dev}:${stat.ino}`))throw Object.assign(new Error("private contents"),{code:"EIO"});return Reflect.apply(read,fs,args);});syncBuiltinESMExports();
  assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true}),(error:unknown)=>error instanceof Error&&!error.message.includes("private contents"));mock.restoreAll();syncBuiltinESMExports();assert.deepEqual(f.repo.objects.inventory().map(x=>x.id),before);assert.equal(typeof read,"function");assert.equal(objectFiles.active.size,0);
  const path=join(f.repo.controlDirectory,"erasure-purge.json");
  const base={format:"pm-vcs-erasure-purge-1",operations:{}};

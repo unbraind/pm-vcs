@@ -783,12 +783,14 @@ test("owned writer PID bytes cannot masquerade as zlib, while raw matches and fo
         assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /Control metadata retains selected payload/);
         assert.deepEqual(readFileSync(join(repo.root, "secret")), secret); assert.equal(repo.objects.denials().length, 0);
       } else {
-        repo.objects.withWriteLock(() => {
+        assert.throws(() => repo.objects.withWriteLock(() => {
           const lock = join(repo.controlDirectory, "objects.lock"); const owner = readFileSync(lock);
           writeFileSync(lock, deflateSync(secret));
           try { assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /Control metadata retains selected payload/); }
           finally { writeFileSync(lock, owner); }
-        });
+        }), { code: "worktree_path_changed" });
+        assert.equal(readFileSync(join(repo.controlDirectory, "objects.lock"), "utf8"), String(pid));
+        rmSync(join(repo.controlDirectory, "objects.lock"));
         writeFileSync(join(repo.controlDirectory, "dirty.json"), String(pid));
         assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /zlib data/);
         rmSync(join(repo.controlDirectory, "dirty.json"));

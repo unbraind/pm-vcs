@@ -154,7 +154,7 @@ test("recovery rejects a different set, superseded intent or missing checkpoint 
   assert.equal(first.finish().status, "pending"); for (const path of first.paths) first.remove(path); const completed = first.finish(); assert.equal(completed.status, "completed");
   writeFileSync(f.paths[0], "new owner"); const second = prepareDestruction(f.control, "same", [{ path: f.paths[0] }]); assert.throws(() => first.remove(f.paths[1]), { code: "destructive_intent_changed" });
   const path = recordPath(f.control); const checkpoint = readFileSync(path); rmSync(path); assert.throws(() => second.finish(), { code: "destructive_intent_changed" }); writeFileSync(path, checkpoint); second.remove(f.paths[0]); second.finish();
-  const resumed = prepareDestruction(f.control, "same", []); assert.equal(resumed.resumed, true); writeFileSync(f.paths[0], "retained after retirement"); assert.throws(() => resumed.finish(), error => error instanceof DestructionRefusal && error.receipt?.planned === 1 && error.receipt.deleted === 1); assert.equal(readFileSync(f.paths[0], "utf8"), "retained after retirement");
+  const resumed = prepareDestruction(f.control, "same", [], true); assert.equal(resumed.resumed, true); writeFileSync(f.paths[0], "retained after retirement"); assert.throws(() => resumed.finish(), error => error instanceof DestructionRefusal && error.receipt?.planned === 1 && error.receipt.deleted === 1); assert.equal(readFileSync(f.paths[0], "utf8"), "retained after retirement");
 });
 
 test("root and parent retirement cancel pending authority while terminal receipts remain historical", () => {
@@ -342,7 +342,7 @@ test("terminal skipped receipts become historical when peer leaves disappear and
     writeFileSync(f.paths[0], "foreign replacement"); if (mode === "acknowledged") assert.throws(() => plan.remove(f.paths[0]), { code: "destructive_target_changed" });
     else { for (const path of plan.paths) plan.remove(path); assert.throws(() => plan.finish(), { code: "destructive_target_changed" }); }
     rmSync(f.paths[0]); if (mode === "parent-file") { rmSync(f.data, { recursive: true }); writeFileSync(f.data, "new unrelated parent leaf"); }
-    const resumed = prepareDestruction(f.control, "history", mode === "parent-file" ? [] : f.paths.filter(path => existsSync(path)).map(path => ({ path }))); for (const path of resumed.paths) resumed.remove(path); const receipt = resumed.finish(); assert.equal(receipt.status, "completed"); assert.equal(receipt.planned, 3);
+    const resumed = prepareDestruction(f.control, "history", mode === "parent-file" ? [] : f.paths.filter(path => existsSync(path)).map(path => ({ path })), true); for (const path of resumed.paths) resumed.remove(path); const receipt = resumed.finish(); assert.equal(receipt.status, "completed"); assert.equal(receipt.planned, 3);
     assert.equal(readFileSync(join(f.tripwire, "guard"), "utf8"), "untouched sentinel");
   }
 });
@@ -410,4 +410,21 @@ test("an unlink crash cannot transfer a prior owner's cleanup intent to a new ow
 test("observational receipts distinguish current directory, retired directory and unfinished rename lifetimes", () => {
  const f=fixture();const directory=join(f.data,"directory");mkdirSync(directory);prepareDestruction(f.control,"directory-life",[{path:directory,directory:true}]);assert.equal(inspectDestructions(f.control).pending,1);renameSync(directory,`${directory}.old`);mkdirSync(directory);assert.equal(inspectDestructions(f.control).pending,0);assert.ok(lstatSync(directory).isDirectory());
  prepareDestruction(f.control,"rename-life",[{path:f.paths[0],destination:join(f.data,"renamed")}]);assert.equal(inspectDestructions(f.control).pending,1);assert.ok(existsSync(f.paths[0]));
+});
+
+
+test("a completed owner release truthfully succeeds when a peer acquires the pathname before receipt completion", () => {
+ for(const boundary of ["deleted","progress-persisted","receipt-persisted"]){const f=fixture();const path=join(f.control,"owner.lock");const fd=openSync(path,"wx");writeFileSync(fd,"original owner");const original=fstatSync(fd,{bigint:true});let successor=false;
+ destructionBoundary.visit=step=>{if(step===boundary&&!successor){successor=true;writeFileSync(path,"peer owner");}};const result=durability.scoped(f.control,()=>durability.release(path,fd,original));destructionBoundary.visit=()=>{};assert.ok(successor);assert.ok("deleted"in result&&result.deleted===1);assert.equal(readFileSync(path,"utf8"),"peer owner");assert.throws(()=>fstatSync(fd),{code:"EBADF"});}
+});
+
+test("a fresh empty request cannot replay the nonempty paths of a completed intent", () => {
+ const f=fixture();const old=prepareDestruction(f.control,"fresh-empty",[{path:f.paths[0]}]);old.remove(f.paths[0]);const original=old.finish();const replay=prepareDestruction(f.control,"fresh-empty",[{path:f.paths[0]}]);assert.equal(replay.finish().id,original.id);
+ const empty=prepareDestruction(f.control,"fresh-empty",[]);assert.deepEqual(empty.paths,[]);const receipt=empty.finish();assert.equal(receipt.planned,0);const repeated=prepareDestruction(f.control,"fresh-empty",[]);assert.deepEqual(repeated.paths,[]);assert.equal(repeated.finish().id,receipt.id);
+});
+
+
+test("owner completion cannot mistake a reattached original inode for a distinct successor lifetime", () => {
+ const f=fixture();const path=join(f.control,"owner.lock");const alias=join(f.control,"retained-owner");const fd=openSync(path,"wx");writeFileSync(fd,"original owner");fs.linkSync(path,alias);const original=fstatSync(fd,{bigint:true});
+ destructionBoundary.visit=step=>{if(step==="deleted")fs.linkSync(alias,path);};assert.throws(()=>durability.scoped(f.control,()=>durability.release(path,fd,original)),{code:"destructive_target_changed"});destructionBoundary.visit=()=>{};assert.equal(readFileSync(path,"utf8"),"original owner");assert.throws(()=>fstatSync(fd),{code:"EBADF"});
 });

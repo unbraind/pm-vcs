@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { scryptSync, createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -1992,4 +1992,11 @@ test("grant repair installed CLI parses separate current and legacy flags and pr
   const erased = spawnSync(process.execPath, [...eraseArgs, "--purge-unaccounted"], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
   assert.equal(erased.status, 0, erased.stderr + erased.stdout); assert.equal(existsSync(foreign), false);
   assert.equal(JSON.parse(erased.stdout).erasure.purge.deleted, 1); assert.equal(existsSync(join(repo.root, "secret.bin")), false); assert.equal(readFileSync(join(repo.root, "src/search/a.txt"), "utf8"), "unrelated CLI source\n");
+});
+
+
+test("sparse-view CLI retains native publication failures after guarded worktree mutation", async t => {
+ const {repo}=await fixture();const harness=await createExtensionTestHarness(extension,{capabilities:["commands","schema"]});const before=repo.readIndex();const rename=fs.renameSync;const destination=join(repo.controlDirectory,"view.json");const failure=Object.assign(new Error("native view publication failed"),{code:"EIO"});
+ t.mock.method(fs,"renameSync",(...args:Parameters<typeof fs.renameSync>)=>{if(args[1]===destination)throw failure;return rename(...args);});
+ try{const result=await harness.runCommand({command:"vcs view",args:["**"],pmRoot:repo.root});assert.match(String(result.errorMessage),/native view publication failed/);assert.deepEqual(repo.readIndex(),before);assert.equal(existsSync(join(repo.controlDirectory,"objects.lock")),false);}finally{t.mock.restoreAll();}
 });

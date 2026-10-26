@@ -30,6 +30,8 @@ export const durability = {
   },
   /** Unlink one owned leaf and acknowledge the namespace change without a platform refusal after deletion. */
   unlink(path: string, expected?: fs.BigIntStats): DestructionReceipt { return retireNamespace({ path, expected }); },
+  /** A completed owner unlink stays historical when a peer immediately acquires the same lock name. */
+  unlinkOwner(path: string, expected: fs.BigIntStats): DestructionReceipt { return retireNamespace({ path, expected }, true); },
   /** Remove a caller-owned temporary tree, retaining native force and error semantics. */
   remove(path: string, options?: Pick<RmOptions, "recursive" | "force">): DestructionReceipt {
     if (options !== undefined && (options === null || typeof options !== "object" || Array.isArray(options) || Object.keys(options).some(key => !["recursive", "force"].includes(key)) || [options.recursive, options.force].some(value => value !== undefined && typeof value !== "boolean"))) throw new DestructionRefusal("conflicting_destructive_requests", "Deletion accepts only explicit recursive and force booleans.");
@@ -51,7 +53,7 @@ export const durability = {
       const owned = expected ?? fs.fstatSync(descriptor, { bigint: true }); const current = fs.lstatSync(path, { bigint: true, throwIfNoEntry: false });
       if (current === undefined) return { released: false, reason: "absent" };
       if (current.dev !== owned.dev || current.ino !== owned.ino || current.size !== owned.size || current.mtimeNs !== owned.mtimeNs) return { released: false, reason: "foreign_owner" };
-      return retireNamespace({ path, expected: owned });
+      return durability.unlinkOwner(path, owned);
     } finally { fs.closeSync(descriptor); }
   },
   /** Preserve one explicit journal scope through nested synchronous writer callbacks. */

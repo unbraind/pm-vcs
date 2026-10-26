@@ -138,6 +138,9 @@ test("SDK and agent CLI expose bounded read-only destructive receipts and typed 
   assert.throws(() => inspectDestructions(f.repo.controlDirectory, 0), { code: "invalid_receipt_limit" });
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs destructive-receipts", pmRoot: f.root, options: {} }); assert.equal(result.errorMessage, undefined); assert.ok(result.result); assert.equal(treeHash(f.repo.controlDirectory), before);
+  f.repo.commit({ message: "receipt setup", author: { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 } }, new Date(1));
+  const linked = join(f.dir.root, "linked-receipts"); f.repo.linkInstance("receipts", linked);
+  const sharedBefore = treeHash(f.repo.controlDirectory); const linkedResult = await harness.runCommand({ command: "vcs destructive-receipts", pmRoot: linked, options: {} }); assert.equal(linkedResult.errorMessage, undefined); assert.ok(linkedResult.result); assert.equal(treeHash(f.repo.controlDirectory), sharedBefore);
 });
 
 test("native recovery preflight crashes at every boundary before and after retiring a stale writer converge on the same FileId", async t => {
@@ -218,4 +221,20 @@ test("pending erasure resumes after a skipped replacement disappears instead of 
   destructionBoundary.visit = (step, path) => { if (step === "before-delete" && path.replaceAll("\\", "/") === "../asset" && !injected) { injected = true; rmSync(asset); writeFileSync(asset, "foreign replacement with no selected bytes"); } };
   assert.throws(() => f.repo.obliterate(id, "erase-fixture", "incident", new Date(1), { purgeUnaccounted: true })); destructionBoundary.visit = () => {}; assert.equal(injected, true); assert.ok(f.repo.objects.denials().some(entry => entry.pending)); rmSync(asset);
   const receipt = f.repo.obliterate(id, "erase-fixture", "incident", new Date(1), { purgeUnaccounted: true }); assert.equal(receipt.storage.accountable, true); assert.ok(f.repo.objects.denials().every(entry => !entry.pending)); assert.ok(receipt.destruction.worktrees.some(entry => entry.skipped > 0));
+});
+
+
+test("malformed timestamps and conflicting proposed recovery metadata refuse before any purge or owner retirement", async () => {
+ const f=await fixture();const before=treeHash(f.repo.objects.storageRoot());
+ for(const now of [null,{},"invalid",new Date(NaN)]){assert.throws(()=>f.repo.obliterate("asset","erase-fixture","incident",now as never,{purgeUnaccounted:true}),{code:"bad_tombstone"});assert.equal(treeHash(f.repo.objects.storageRoot()),before);}
+ const fakePid=1357913579;writeFileSync(join(f.root,"asset"),String(fakePid));f.repo.stage(["asset"]);const selected=treeHash(f.repo.objects.storageRoot());const descriptor=Object.getOwnPropertyDescriptor(process,"pid")!;Object.defineProperty(process,"pid",{configurable:true,value:fakePid});
+ try{assert.throws(()=>f.repo.obliterate("asset","erase-fixture","incident",new Date(1),{purgeUnaccounted:true,recoverLock:true}),{code:"erasure_audit_conflict"});}finally{Object.defineProperty(process,"pid",descriptor);}
+ assert.equal(treeHash(f.repo.objects.storageRoot()),selected);assert.equal(readFileSync(join(f.root,"asset"),"utf8"),String(fakePid));assert.ok(existsSync(f.foreign));assert.equal(existsSync(join(f.repo.controlDirectory,"objects.lock")),false);
+});
+
+
+test("revoking a pending purge between preflight and authorization reread preserves all storage bytes", async () => {
+ const f=await fixture();const root=f.repo.objects.storageRoot();const id=f.repo.readIndex()[0].fileId!;f.repo.objects.withWriteLock(()=>erasurePurge(f.repo.controlDirectory,id,[root],true).begin(planErasureStorage([root])));const before=treeHash(root);const path=join(f.repo.controlDirectory,"erasure-purge.json");const read=fs.readFileSync;let reads=0;
+ mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{if(args[0]===path&&(args[1] as unknown)==="utf8"&&++reads===2)writeFileSync(path,JSON.stringify({format:"pm-vcs-erasure-purge-2",operations:{},plans:{}}));return Reflect.apply(read,fs,args);});syncBuiltinESMExports();
+ assert.throws(()=>f.repo.obliterate("asset","erase-fixture","incident",new Date(1)),{code:"unverifiable"});mock.restoreAll();syncBuiltinESMExports();assert.equal(reads,2);assert.equal(treeHash(root),before);assert.ok(existsSync(f.foreign));assert.deepEqual(f.repo.objects.denials(),[]);
 });
