@@ -63,7 +63,7 @@ passed native TOON, stat-cache, committed self-host, production audit, identity,
 pack, changelog/date and publish-attestation gates. Exact runner: `npx pm test
 pm-vcs-bcgs --run --only-index 4 --progress --pm-context tracker
 --override-linked-pm-context`, executing `flock
-/tmp/claude-1000/heavy-gate.lock npm run release:check`. CI's locked
+$TMPDIR/heavy-gate.lock npm run release:check`. CI's locked
 `bun install --no-save` also passed. Final PM evidence is bundled again before
 the final committed self-host verification. Existing
 coverage excludes the benchmark script; that separate source-inventory boundary

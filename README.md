@@ -774,6 +774,7 @@ npm ci
 npm run check        # typecheck, strict lint, and zero-duplication gate
 npm run docstring    # every production API declaration is documented
 npm run coverage     # all production TypeScript at 100/100/100/100
+npm run pack:check   # inspect the real npm tarball for private data
 npm run release:check
 ```
 
@@ -798,6 +799,13 @@ uses built-in `node:fs` globbing and does not require the `fast-glob` peer.
 sources, untested branches, forbidden syntax, short clones and hostile configuration fail
 closed. It also invokes the operational scripts directly. `release:check` includes lint,
 duplication, docstrings and coverage; `prepublishOnly` requires that complete release gate.
+
+`pack:check` also runs in `release:check`. It packs without lifecycle scripts (the
+release gate builds first), scans every archive member's name and contents for private
+paths and credential-shaped strings, and reports categories and line numbers without
+echoing matched values. It requires npm and tar. Package documentation is allowlisted
+to README-linked guides and examples; certification, audit and receipt records stay
+in the repository.
 
 Tests run against real repositories and real filesystems. There are no mocks and no
 hand-built `api` doubles: this is filesystem and merge code, and a fake of either would only

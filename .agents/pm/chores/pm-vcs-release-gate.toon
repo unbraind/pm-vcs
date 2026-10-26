@@ -6,26 +6,34 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-25T23:24:17.719Z"
-updated_at: "2026-10-26T02:25:40.172Z"
+updated_at: "2026-10-26T03:41:45.580Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
-comments[5]{created_at,author,text}:
+comments[7]{created_at,author,text}:
   "2026-10-25T23:24:26.154Z",codex-agent,"Normalize daily scheduling and PM_RELEASE_APPROVED job gates while preserving release decisions, generated changelogs and release notes. Verify OIDC publishing without a stored npm token, manifest metadata, packed allowlists and private-data scans. No open homepage/author PR was found during orientation. No publishing, trust setup, approval variable changes or merges are authorized."
   "2026-10-25T23:29:54.109Z",codex-agent,"Release simulation inspection found two existing blockers after a calendar version bump: changelog scripts fixed the bootstrap date, and release metadata commits omitted a refreshed self-host archive. Removed the fixed date override while preserving --date-from-version and the existing decide step. The commit step now regenerates and stages selfhost.bundle after staging release metadata. A real temporary Git repository verifies that the committed archive covers the newly staged changelog. Independently restoring either the old workflow step or manifest date makes its regression fail; restored preparation tests pass 2/2."
   "2026-10-26T01:04:02.270Z",codex-agent,"Opening the release-readiness PR after package allowlist/privacy verification and focused regression proofs so complete npm and Bun CI can run in parallel with local full-gate verification. Pending checks are explicitly not treated as passing evidence. No timeout, threshold, dependency pin or test case is being relaxed."
   "2026-10-26T01:37:26.244Z",codex-agent,"Read-only GitHub workflow inspection found release.yml manually disabled. Added a narrowly scoped setup workflow that runs on main when release workflow files change (or on manual main dispatch), verifies the existing approval/provenance/manifest contract, confirms main has not advanced, and only then enables release.yml. It never publishes, configures npm trust or changes a repository variable. This activates the guarded schedule automatically after the owner merges, without enabling the older main workflow now. Missing the setup workflow or removing its main-only guard fails the regression; restored check passes 1/1."
   "2026-10-26T02:25:34.636Z",codex-agent,"Required complete npm run release:check and bun run release:check both PASS in isolated GitHub CI at a894f6c03cef736cc52aeedfa4745fc22bc7e433. Main suite counts: npm 1887/1887, Bun 1887/1887; every required matrix job succeeded. Evidence: https://github.com/unbraind/pm-vcs/actions/runs/40255206749. The complete gates were verified in isolated CI; they were not duplicated on the already contended local host after that success. Committed-source self-host verification also passed locally. No timeout, case, threshold or dependency pin was changed. Packed artifact allowlist/privacy checks and linked regressions passed. Final tracker evidence is being committed and CI will recheck that final head. Keep the item in progress for orchestrator verification."
-files[7]{path,scope}:
+  "2026-10-26T03:35:43.695Z",codex-agent,"PR 152 follow-up: restrict shipped documentation to README-linked guides and examples, scrub machine-specific paths from repository docs, and add a real tarball privacy gate with negative packed-doc regressions. Branch is current with main; no merge needed."
+  "2026-10-26T03:41:45.579Z",codex-agent,"Packaging fix: replace broad docs directory inclusion with eleven explicit consumer guides/examples, reducing the packed inventory from 290 to 286 files. Keep certification, audit, receipt and unlinked semantics records in the repository. Neutralized the certification lock path using a TMPDIR placeholder without altering the recorded claim. New pack:check packs with lifecycle scripts disabled, then scans every actual tar member name and contents, including compiled maps, for private paths, hosted-data names and credential shapes; diagnostics omit matched values. Negative real-pack tests cover 19 contamination variants, excluded internal docs, source maps and archive names. Behavioral revert proof: disabling only the classifier makes the packed-guide regression fail (exit 1, missing absolute-home-path finding); restored scanner passes. Initial targeted tests 10/10; new verifier coverage 100/100/100/100; linked pm commands 4/4; typecheck, lint, duplication, docstrings and the 286-file package scan pass. Final checks and CI will verify the committed result."
+files[9]{path,scope}:
   .github/workflows/ci.yml,project
   .github/workflows/release-gate-setup.yml,project
   .github/workflows/release.yml,project
   package.json,project
+  scripts/verify-pack-privacy.ts,project
   test/release-approval.test.ts,project
   test/release-preparation.test.ts,project
   test/release-setup.test.ts,project
-tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  test/verify-pack-privacy.test.ts,project
+tests[4]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/release-approval.test.ts,project,codex-agent,"2026-10-25T23:24:35.908Z",local_mutation,chore/release-gate-approval
   node --test test/release-preparation.test.ts,project,codex-agent,"2026-10-25T23:29:56.116Z",local_mutation,chore/release-gate-approval
   node --test test/release-setup.test.ts,project,codex-agent,"2026-10-26T01:37:29.512Z",local_mutation,chore/release-gate-approval
-docs[1]{path,scope}:
+  node --test test/verify-pack-privacy.test.ts test/release-approval.test.ts,project,codex-agent,"2026-10-26T03:38:32.848Z",local_mutation,chore/release-gate-approval
+docs[2]{path,scope}:
+  docs/certification-2026.10.4.md,project
   README.md,project
 body: ""
