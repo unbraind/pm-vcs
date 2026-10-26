@@ -1,8 +1,9 @@
 import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import fs, { existsSync, fstatSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
-import { afterEach, test } from "node:test";
+import { afterEach, mock, test } from "node:test";
 
 import { ObjectStoreError } from "../engine/objects.ts";
 import {
@@ -28,6 +29,7 @@ function freshRefs(): { refs: RefStore; root: string } {
 }
 
 afterEach(() => {
+  mock.restoreAll(); syncBuiltinESMExports();
   dir?.cleanup();
   dir = null;
 });
@@ -240,4 +242,19 @@ test("compareAndSwap reports a held lock", () => {
     () => refs.compareAndSwap(name, null, id),
     (error: unknown) => error instanceof ObjectStoreError && error.code === "ref_locked",
   );
+});
+
+test("ref lock descriptors close after owner inspection fails and after an earlier cleanup fails", () => {
+  const f = freshRefs(); const open = fs.openSync; const stat = fs.fstatSync; const unlink = fs.unlinkSync; const descriptors: number[] = [];
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => { const fd = Reflect.apply(open, fs, args) as number; if (String(args[0]).endsWith(".lock")) descriptors.push(fd); return fd; });
+  let inspectFailure = true; mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => { if (inspectFailure && descriptors.includes(args[0])) { inspectFailure = false; throw Object.assign(new Error("owner inspection failed"), { code: "EIO" }); } return Reflect.apply(stat, fs, args); }); syncBuiltinESMExports();
+  assert.throws(() => f.refs.transaction([{ name: "refs/heads/a", expected: null, next: id }]), { code: "EIO" }); for (const fd of descriptors.splice(0)) assert.throws(() => stat(fd), { code: "EBADF" });
+  mock.method(fs, "unlinkSync", (path: fs.PathLike) => { if (String(path).endsWith("a.lock")) throw Object.assign(new Error("cleanup failed"), { code: "EACCES" }); return unlink(path); }); syncBuiltinESMExports();
+  assert.throws(() => f.refs.transaction([{ name: "refs/heads/a", expected: null, next: id }, { name: "refs/heads/b", expected: null, next: id }]), { code: "destructive_operation_pending" }); for (const fd of descriptors) assert.throws(() => stat(fd), { code: "EBADF" }); assert.equal(existsSync(join(f.root, "refs/heads/b.lock")), false);
+});
+
+test("ref cleanup preserves a competing owner that replaced the original process lock", () => {
+  const f = freshRefs(); const lock = join(f.root, "refs/heads/a.lock");
+  f.refs.transaction([{ name: "refs/heads/a", expected: null, next: id }], () => { renameSync(lock, `${lock}.retired`); writeFileSync(lock, "peer owner"); });
+  assert.equal(readFileSync(lock, "utf8"), "peer owner"); assert.equal(f.refs.read("refs/heads/a"), id);
 });

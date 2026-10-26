@@ -18,7 +18,7 @@ import { durability } from "./durability.ts";
 // Nothing here writes instance state into the shared object store, and nothing
 // here trusts a hint where the filesystem can be asked instead.
 
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { type BigIntStats, closeSync, fstatSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -393,7 +393,9 @@ function updateInstances(
       `The instance registry is locked by another process (${lockPath}); retry after that pm-vcs command completes.`,
     );
   }
+  let owner: BigIntStats | undefined;
   try {
+    owner = fstatSync(descriptor, { bigint: true });
     const before = readInstances(controlDirectory);
     const after = mutate(before);
     if (after !== before) {
@@ -401,8 +403,7 @@ function updateInstances(
     }
     return after;
   } finally {
-    closeSync(descriptor);
-    durability.unlink(lockPath);
+    durability.release(lockPath, descriptor, owner);
   }
 }
 

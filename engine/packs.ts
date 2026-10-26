@@ -1,9 +1,10 @@
 import { objectFiles, type ObjectFile } from "./object-files.ts";
+import { prepareDestruction, type DestructionReceipt } from "./destruction.ts";
 import { durability } from "./durability.ts";
 /** Immutable indexed packs: independently compressed frames keep their uncompressed addresses. */
 import { createHash, randomBytes } from "node:crypto";
 import { constants, existsSync, fstatSync, lstatSync, mkdirSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { ObjectStoreError } from "./object-error.ts";
 import { syncDirectory } from "./composition.ts";
@@ -17,6 +18,7 @@ type Entry = readonly [ObjectId, number, number, ObjectType];
 interface Index { readonly entries: readonly Entry[]; readonly byId: ReadonlyMap<ObjectId, Entry>; readonly start: number; readonly bytes: number; readonly signature: string }
 /** Agent-sized compaction receipt; physical paths and address lists are deliberately omitted. */
 export interface PackReport {
+  readonly destruction: DestructionReceipt;
   readonly objects: number;
   readonly packs: number;
   readonly looseBytes: number;
@@ -152,9 +154,10 @@ export class PackStorage {
   readAt(id: ObjectId, path: string): StoredObject { return new ObjectStore(join(this.directory, "..")).readInventoryObject(id, path); }
 
   /** Enumerate verified pack metadata without decoding members or trusting paths after descriptor release. @internal */
-  locations(): { id: ObjectId; path: string }[] {
+  locations(excluded: ReadonlySet<string> = new Set()): { id: ObjectId; path: string }[] {
     const result: { id: ObjectId; path: string }[] = [];
     for (const path of this.files()) {
+      if (excluded.has(path)) continue;
       const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
       const fd = file.fd;
       try {
@@ -187,18 +190,27 @@ export class PackStorage {
     return store.withWriteLock(() => {
       this.assertRoot(store);
       if (store.denials().some((denial) => denial.pending)) throw new PackRefusal("pack_erasure_pending", "Authorized erasure is incomplete.", "Resume the authorized obliterate command before compacting.");
-      this.recover();
       const skipped: { name: string; reason: string }[] = [];
       const before = this.files(skipped);
-      // Preflight all published storage, including members that have duplicate loose representations.
-      for (const item of store.walkErasureInventory("pack")) void item;
-      let objects = 0; let looseBytes = 0;
-      // Resume a published pack by retiring its duplicate loose copies, instead of building overlapping packs.
+      const duplicates = new Map<string, ObjectId>();
       for (const item of store.walkErasureInventory("pack")) {
         const path = join(store.storageRoot(), item.id.slice(0, 2), item.id.slice(2));
-        if (!existsSync(path)) continue;
-        store.readInventoryObject(item.id, path);
-        store.markStorageGeneration(); looseBytes += lstatSync(path).size; durability.unlink(path); syncDirectory(join(store.storageRoot(), item.id.slice(0, 2))); objects++; packBoundary.visit("retired");
+        if (existsSync(path)) { store.readInventoryObject(item.id, path); duplicates.set(path, item.id); }
+      }
+      const eligible: { id: ObjectId; path: string; cost: number }[] = [];
+      for (const item of store.walkLooseInventory(skipped)) {
+        const cost = item.object.payload.length + 256;
+        if (cost > LIMIT) skipped.push({ name: item.id, reason: "object exceeds the 16 MiB pack bound; retained loose" });
+        else eligible.push({ id: item.id, path: item.path, cost });
+      }
+      // Validate all published and loose sources before even retiring a duplicate or staging job.
+      const deletion = prepareDestruction(dirname(store.storageRoot()), "compact-loose", [...new Set([...duplicates.keys(), ...eligible.map(item => item.path)])].map(path => ({ path })));
+      const planned = new Set(deletion.paths);
+      this.recover();
+      let objects = 0; let looseBytes = 0;
+      for (const [path] of duplicates) {
+        if (!planned.has(path)) continue;
+        store.markStorageGeneration(); const bytes = lstatSync(path).size; deletion.remove(path); syncDirectory(dirname(path)); if (!existsSync(path)) { looseBytes += bytes; objects++; } else skipped.push({ name: duplicates.get(path)!, reason: "new representation after recorded retirement; preserved" }); packBoundary.visit("retired");
       }
       let batch: { id: ObjectId; path: string; object: StoredObject }[] = []; let size = 0;
       const flush = (): void => {
@@ -212,22 +224,21 @@ export class PackStorage {
         const bytes = Buffer.concat([header, index, ...chunks]); const destination = join(this.directory, `${digest(bytes)}.pack`);
         const job = this.publish(bytes, destination, store);
         // The verified immutable destination is now the authority; interruptions merely leave duplicate sources.
-        for (const item of batch) { looseBytes += lstatSync(item.path).size; durability.unlink(item.path); syncDirectory(join(store.storageRoot(), item.id.slice(0, 2))); objects++; packBoundary.visit("retired"); }
+        for (const item of batch) { const bytes = lstatSync(item.path).size; deletion.remove(item.path); syncDirectory(join(store.storageRoot(), item.id.slice(0, 2))); if (!existsSync(item.path)) { looseBytes += bytes; objects++; } else skipped.push({ name: item.id, reason: "new representation after recorded retirement; preserved" }); packBoundary.visit("retired"); }
         this.cleanupJob(job); packBoundary.visit("cleaned");
         batch = []; size = 0;
       };
-      for (const item of store.walkLooseInventory(skipped)) {
-        const cost = item.object.payload.length + 256;
-        if (cost > LIMIT) { skipped.push({ name: item.id, reason: "object exceeds the 16 MiB pack bound; retained loose" }); continue; }
-        if (size + cost > LIMIT) flush();
-        batch.push(item); size += cost;
+      for (const item of eligible) {
+        if (!planned.has(item.path) || !existsSync(item.path)) continue;
+        if (size + item.cost > LIMIT) flush();
+        batch.push({ id: item.id, path: item.path, object: store.readInventoryObject(item.id, item.path) }); size += item.cost;
       }
       flush();
       const late: { name: string; reason: string }[] = [];
       const after = this.files(late);
       const known = new Set(skipped.map((entry) => entry.name));
       for (const entry of late) if (!known.has(entry.name)) { skipped.push(entry); known.add(entry.name); }
-      return { objects, packs: after.length - before.length, looseBytes, packBytes: after.filter((path) => !before.includes(path)).reduce((sum, path) => sum + lstatSync(path).size, 0), skippedCount: skipped.length, omittedSkipped: Math.max(0, skipped.length - 20), skipped: skipped.slice(0, 20) };
+      return { destruction: deletion.finish(), objects, packs: after.length - before.length, looseBytes, packBytes: after.filter((path) => !before.includes(path)).reduce((sum, path) => sum + lstatSync(path).size, 0), skippedCount: skipped.length, omittedSkipped: Math.max(0, skipped.length - 20), skipped: skipped.slice(0, 20) };
     });
   }
 
@@ -276,9 +287,10 @@ export class PackStorage {
   unpack(store: ObjectStore): void {
     store.withWriteLock(() => {
       this.assertRoot(store);
-      this.recover();
       // Finish complete verification before representation changes, then retain only one leaf buffer per copy.
       for (const item of store.walkErasureInventory("pack")) void item;
+      const deletion = prepareDestruction(dirname(store.storageRoot()), "unpack-packs", this.files().map(path => ({ path })));
+      this.recover();
       for (const item of store.walkErasureInventory("pack")) {
         const directory = join(store.storageRoot(), item.id.slice(0, 2)); mkdirSync(directory, { recursive: true });
         const destination = join(directory, item.id.slice(2));
@@ -288,7 +300,8 @@ export class PackStorage {
         } else store.readInventoryObject(item.id, destination);
         syncDirectory(directory); packBoundary.visit("unpacked");
       }
-      for (const path of this.files()) { store.markStorageGeneration(); durability.unlink(path); this.indexes.delete(path); syncDirectory(this.directory); packBoundary.visit("pack-retired"); }
+      for (const path of deletion.paths) { store.markStorageGeneration(); deletion.remove(path); this.indexes.delete(path); syncDirectory(this.directory); packBoundary.visit("pack-retired"); }
+      deletion.finish();
     });
   }
 }

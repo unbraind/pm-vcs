@@ -79,11 +79,12 @@ function physicalDigest(fd: number, size: number): string {
   return hash.digest("hex");
 }
 /** Verify every regular file, retrying a replaced file and then the whole catalogue before certification. */
-export function accountErasureStorage(scope: string | readonly string[], options: AccountabilityOptions): ErasureAccountabilityReport {
+function inspectStorage(scope: string | readonly string[], options: AccountabilityOptions, planning?: Map<string, UnaccountedFile>): ErasureAccountabilityReport {
   const roots = typeof scope === "string" ? [scope] : scope;
   const packs = new Map(roots.map((root) => [root, new PackStorage(root)]));
   const root = roots[0] ?? ".";
   for (let pass = 0; pass < ACCOUNTABILITY_ATTEMPTS; pass++) {
+    planning?.clear();
     const snapshots = new Map<string, string>(); const directories = new Map<string, string>();
     const classes: Partial<Record<ErasureFileClass, number>> = {}; let files = 0; let objects = 0; let purged = false;
     const missing = new Set<string>();
@@ -121,10 +122,11 @@ export function accountErasureStorage(scope: string | readonly string[], options
           accountabilityBoundary.visit("file-check", path, attempt);
           if (!same()) continue;
           if (!parsed) {
-            if (options.purge === undefined) throw new ErasureStorageRefusal("unverifiable", kind);
+            if (options.purge === undefined && planning === undefined) throw new ErasureStorageRefusal("unverifiable", kind);
             const candidate: UnaccountedFile = { path, fileClass: kind, sha256: physicalDigest(file.fd, Number(before.size)), bytes: Number(before.size), identity: stamp };
             if (!same()) continue;
-            const removed = options.purge(candidate, () => {
+            if (planning !== undefined) { planning.set(path, candidate); snapshots.set(path, stamp); return; }
+            const removed = options.purge!(candidate, () => {
               accountabilityBoundary.visit("purge-check", path, attempt);
               if (!same()) throw new Changed();
               durability.unlink(path); accountabilityBoundary.visit("purge-deleted", path, attempt);
@@ -184,6 +186,16 @@ export function accountErasureStorage(scope: string | readonly string[], options
   throw new ErasureStorageRefusal("unverifiable", "object-root");
 }
 
+/** Certify only a fully accounted, payload-free generation; planning never grants a certificate. */
+export function accountErasureStorage(scope: string | readonly string[], options: AccountabilityOptions): ErasureAccountabilityReport { return inspectStorage(scope, options); }
+
+/** Snapshot every unaccounted file without changing bytes, before request validation or deletion authorization. */
+export function planErasureStorage(scope: readonly string[]): readonly UnaccountedFile[] {
+  const files = new Map<string, UnaccountedFile>();
+  inspectStorage(scope, { forbiddenIds: new Set(), forbiddenPayloads: new Set() }, files);
+  return [...files.values()];
+}
+
 /** Pending authority ends with its exact storage-root lifetime, with a safe machine-readable audit reason. */
 export type ErasurePurgeCancellation = "root_retired" | "root_missing" | "root_replaced" | "legacy_authorization";
 /** Terminal entries are immutable historical facts, not membership claims about the current root set. */
@@ -196,7 +208,7 @@ export interface ErasurePurgeEntry {
 /** Agent-sized purge receipt preserves historical counts and explicitly reports cancelled pending authority. */
 export interface ErasurePurgeReceipt { readonly deleted: number; readonly observedAbsent: number; readonly replaced: number; readonly cancelled: number; readonly bytes: number; readonly omitted: number; readonly files: readonly ErasurePurgeEntry[] }
 /** Recover only package-written authorization under the caller's owning writer lease. */
-export function erasurePurge(control: string, fileId: string, roots: readonly string[], authorized: boolean): { readonly canPurge: boolean; purge: NonNullable<AccountabilityOptions["purge"]>; receipt(): ErasurePurgeReceipt } {
+export function erasurePurge(control: string, fileId: string, roots: readonly string[], authorized: boolean, readOnly = false): { readonly canPurge: boolean; purge: NonNullable<AccountabilityOptions["purge"]>; plan(files: readonly UnaccountedFile[], resume?: boolean): void; receipt(): ErasurePurgeReceipt } {
   const path = join(control, "erasure-purge.json");
   let raw: unknown;
   try { raw = readControlJson(path, "unverifiable", "purge journal", { format: "pm-vcs-erasure-purge-1", operations: {} }); }
@@ -242,7 +254,7 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
       const reason = cancellation(entry);
       if (reason !== undefined) { entry.status = "cancelled"; entry.reason = reason; changed = true; }
     }
-    if (changed) {
+    if (changed && !readOnly) {
       accountabilityBoundary.visit("purge-lifecycle-planned", path, 0);
       writePrivateJson(path, journal);
       accountabilityBoundary.visit("purge-lifecycle-recorded", path, 0);
@@ -250,9 +262,26 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
   };
   retire();
   const entries = journal.operations[fileId] ?? []; journal.operations[fileId] = entries;
+  let sealed = false;
   return {
     /** Only current pending authority can permit automatic replay. */
     get canPurge() { return authorized || entries.some((entry) => entry.status === "planned"); },
+    /** Freeze the whole authorized purge set before removing its first member; replay never adds fresh authority. */
+    plan(files, resume = false) {
+      sealed = true;
+      if (!authorized || (resume && entries.length > 0)) return;
+      let changed = false;
+      for (const file of files) {
+        const name = relative(control, file.path); const root = scoped(name);
+        if (root === undefined) throw new ErasureStorageRefusal("unverifiable", file.fileClass);
+        const stamp = rootStamp(root); if (stamp === undefined) throw new Changed();
+        const rootName = relative(control, root);
+        if (!entries.some(entry => entry.status === "planned" && entry.file === name && entry.identity === file.identity && entry.sha256 === file.sha256 && entry.root === rootName && entry.rootIdentity === stamp)) {
+          entries.push({ file: name, fileClass: file.fileClass, sha256: file.sha256, bytes: file.bytes, identity: file.identity, root: rootName, rootIdentity: stamp, status: "planned" }); changed = true;
+        }
+      }
+      if (changed) writePrivateJson(path, journal);
+    },
     /** Persist current root and file identity before removal; historical entries never become fresh authority. */
     purge(file, remove) {
       const name = relative(control, file.path); const root = scoped(name);
@@ -260,7 +289,7 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
       const stamp = rootStamp(root); if (stamp === undefined) throw new Changed();
       const rootName = relative(control, root);
       const existing = entries.find((entry) => entry.status === "planned" && entry.file === name && entry.identity === file.identity && entry.sha256 === file.sha256 && entry.root === rootName && entry.rootIdentity === stamp);
-      if (!authorized && existing === undefined) return false;
+      if ((!authorized || sealed) && existing === undefined) return false;
       const entry: ErasurePurgeEntry = existing ?? { file: name, fileClass: file.fileClass, sha256: file.sha256, bytes: file.bytes, identity: file.identity, root: rootName, rootIdentity: stamp, status: "planned" };
       if (existing === undefined) { entries.push(entry); writePrivateJson(path, journal); }
       accountabilityBoundary.visit("purge-planned", file.path, 0);

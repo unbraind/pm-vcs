@@ -330,3 +330,5 @@ export default defineExtension({
     setupCommands(api);
   },
 });
+
+export { inspectDestructions, DestructionRefusal, type DestructionInventory, type DestructionRefusalCode, type DestructionReceipt, type DestructionPlan } from "./engine/durability.ts";

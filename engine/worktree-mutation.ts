@@ -1,7 +1,8 @@
+import { prepareNamespaceDestruction, type DestructionPlan } from "./destruction.ts";
 import { durability } from "./durability.ts";
 /** Pinned or verified working-tree mutations; portable pathname checks cannot serialize a rename. */
 import fs, { type BigIntStats } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { isControlPath, isPrunableDirectory } from "./ignore.ts";
 import { ObjectStoreError } from "./objects.ts";
@@ -241,20 +242,37 @@ export class WorktreeMutation {
     this.unlink(parent, expected, true);
   }
 
+  /** Freeze all FileId-owned leaves under captured parents before removing the first working-tree member. */
+  planErasure(fileId: string, paths: ReadonlyMap<string, BigIntStats>, resume = false): DestructionPlan {
+    const requests = [...paths].map(([path, expected]) => { const parent = this.parent(path, false); if (parent === undefined) this.changed(); this.verifyLeaf(parent, expected, true); return { path: join(this.root, ...path.split("/")), address: parent.address, expected }; });
+    const plan = prepareNamespaceDestruction(join(this.root, ".erasure-anchor"), `obliterate-worktree:${fileId}`, requests, resume);
+    return { ...plan, remove: (absolute) => {
+      try { plan.remove(absolute); } catch { this.changed(); }
+    } };
+  }
+
   /** Prune only captured empty ordinary directories with non-recursive, verified rmdir. */
   prune(directory: string = ""): boolean {
     if (!this.directories.has(directory)) this.changed();
     const paths = [...this.directories.keys()].filter((path) => path !== directory && (directory === "" || path.startsWith(`${directory}/`)))
       .sort((left, right) => right.split("/").length - left.split("/").length);
+    const selected = new Set<string>();
     for (const path of paths) {
       this.verify(path);
-      if (fs.readdirSync(this.directories.get(path)!.address).length !== 0) continue;
+      if (fs.readdirSync(this.directories.get(path)!.address).every(name => selected.has(`${path}/${name}`))) selected.add(path);
+    }
+    const requests = [...selected].map(path => { const slash = path.lastIndexOf("/"); const parent = slash === -1 ? "" : path.slice(0, slash); return { path: join(this.root, ...path.split("/")), address: join(this.directories.get(parent)!.address, path.slice(slash + 1)), directory: true }; });
+    const deletion = prepareNamespaceDestruction(join(this.root, ".prune-anchor"), `prune:${directory}`, requests);
+    for (const absolute of deletion.paths) {
+      const path = relative(this.root, absolute).split(sep).join("/");
+      if (!this.directories.has(path)) { deletion.remove(absolute); continue; }
+      this.verify(path);
       const slash = path.lastIndexOf("/");
       const parent = slash === -1 ? "" : path.slice(0, slash);
       const name = path.slice(slash + 1);
       this.verify(path);
       try {
-        durability.removeDirectory(join(this.directories.get(parent)!.address, name));
+        deletion.remove(absolute);
       } catch {
         this.changed();
       }
@@ -264,6 +282,7 @@ export class WorktreeMutation {
       if (fd !== undefined) fs.closeSync(fd);
       this.directories.delete(path);
     }
+    deletion.finish();
     this.verify(directory);
     return fs.readdirSync(this.directories.get(directory)!.address).length === 0;
   }

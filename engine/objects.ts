@@ -1,3 +1,4 @@
+import { destructionBoundary, measureDestructionRevision } from "./destruction.ts";
 import { objectFiles, type ObjectFile } from "./object-files.ts";
 import { durability } from "./durability.ts";
 import { spawnSync } from "node:child_process";
@@ -19,6 +20,7 @@ import { objectPayloadChunks, objectPayloadLines } from "./object-stream.ts";
 import { constants as zlibConstants, deflateSync, inflateSync } from "node:zlib";
 import { createHash, randomBytes } from "node:crypto";
 import {
+  type BigIntStats,
   constants as fsConstants,
   fstatSync,
   existsSync,
@@ -40,6 +42,12 @@ import { PackStorage, PackRefusal, type PackReport, packBoundary } from "./packs
 
 /** Synchronous store handles addressing one root share reentrancy; independent processes still use the exclusive filesystem lease. */
 const activeLeases = new Set<string>();
+/** Read-only recovery views may inspect physical storage, but cannot publish a generation. */
+const validationLeases = new Set<string>();
+/** An acquired recovery guard excludes ordinary writers until its validated action releases last. */
+const recoveryLeases = new Set<string>();
+/** A failed local cleanup may leave a closed, provably self-owned guard while its process remains alive. */
+const recoveryOwners = new Map<string, BigIntStats>();
 /** Nested synchronous mutations advance the owning process's transaction view without extra disk writes. */
 const activeRevisions = new Map<string, number>();
 /** Only a real representation or denial mutation publishes a persistent generation. */
@@ -287,6 +295,7 @@ export class ObjectStore {
   /** Publish a version before the first real object/denial mutation, retaining pure preflight and no-op behavior. @internal */
   markStorageGeneration(): void {
     const lease = resolve(this.root);
+    if (validationLeases.has(lease)) throw new ObjectStoreError("destructive_preflight_write", "A recovery preflight cannot publish or delete storage.");
     if (!activeLeases.has(lease)) throw new ObjectStoreError("store_locked", "A storage generation can change only inside its owning writer lease.");
     activeRevisions.set(lease, activeRevisions.get(lease)! + 1);
     if (dirtyLeases.has(lease)) return;
@@ -805,9 +814,9 @@ export class ObjectStore {
   *walkPackedInventory(): Generator<InventoryEntry> { yield* this.walkRepresentations("pack"); }
 
   /** Inspect intentionally denied physical copies only inside authorized maintenance's writer transaction. @internal */
-  *walkErasureInventory(kind: "all" | "pack" = "all"): Generator<InventoryEntry> {
+  *walkErasureInventory(kind: "all" | "pack" = "all", excluded: ReadonlySet<string> = new Set()): Generator<InventoryEntry> {
     if (!activeLeases.has(resolve(this.root))) throw new ObjectStoreError("physical_read_requires_lease", "Physical erasure inspection requires the owning writer lease.");
-    yield* this.walkRepresentations(kind, [], true);
+    yield* this.walkRepresentations(kind, [], true, excluded);
   }
 
   /** Re-read one denied physical copy for an already authorized erasure plan. @internal */
@@ -838,12 +847,12 @@ export class ObjectStore {
   }
 
   /** Snapshot the loose set and pack indexes in one unchanged generation before yielding any representation. */
-  private representationLocations(kind: "all" | "loose" | "pack", skipped?: { name: string; reason: string }[], physical = false): { id: ObjectId; path: string }[] {
+  private representationLocations(kind: "all" | "loose" | "pack", skipped?: { name: string; reason: string }[], physical = false, excluded: ReadonlySet<string> = new Set()): { id: ObjectId; path: string }[] {
     for (let attempt = 0; attempt < OBJECT_READ_RETRIES; attempt++) {
       const before = this.storageGeneration(); const notes: { name: string; reason: string }[] | undefined = skipped === undefined ? undefined : [];
       let result: { id: ObjectId; path: string }[];
       objectReadBoundary.visit("inventory", "*", attempt);
-      try { result = [...(kind === "pack" ? [] : this.looseLocations(notes, physical)), ...(kind === "loose" ? [] : this.packs.locations())]; }
+      try { result = [...(kind === "pack" ? [] : this.looseLocations(notes, physical).filter(entry => !excluded.has(entry.path))), ...(kind === "loose" ? [] : this.packs.locations(excluded))]; }
       catch (error) { const after = this.storageGeneration(); if (before.key !== after.key || !after.consistent) continue; throw error; }
       const after = this.storageGeneration();
       if (!before.consistent || !after.consistent || before.key !== after.key || before.active || after.active) continue;
@@ -854,9 +863,9 @@ export class ObjectStore {
   }
 
   /** Verify each snapshot member using a pinned current location, deduplicating physical fallbacks after a transition. */
-  private *walkRepresentations(kind: "all" | "loose" | "pack", skipped?: { name: string; reason: string }[], physical = false): Generator<InventoryEntry> {
+  private *walkRepresentations(kind: "all" | "loose" | "pack", skipped?: { name: string; reason: string }[], physical = false, excluded: ReadonlySet<string> = new Set()): Generator<InventoryEntry> {
     const seen = new Set<string>();
-    for (const entry of this.representationLocations(kind, skipped, physical)) {
+    for (const entry of this.representationLocations(kind, skipped, physical, excluded)) {
       let location: ObjectLocation | undefined;
       try { location = this.resolveLocation(entry.id, { path: entry.path, physical }); }
       catch (error) { if (error instanceof ObliteratedObjectError) continue; throw error; }
@@ -909,8 +918,12 @@ export class ObjectStore {
   }
 
   /** Hold a synchronous, reentrant store transaction across publication, worktree mutation and physical erasure; callbacks must not return asynchronous work. */
-  withWriteLock<T>(action: () => T): T {
+  withWriteLock<T>(action: () => T): T { return durability.scoped(dirname(this.root), () => this.writerLease(action)); }
+
+  /** Own the store lease until every namespace receipt and descriptor cleanup has settled. */
+  private writerLease<T>(action: () => T): T {
     const lease = resolve(this.root);
+    if (!recoveryLeases.has(lease) && existsSync(join(dirname(this.root), "objects.recovery.lock"))) throw new ObjectStoreError("store_locked", "A recovery validator owns the store; retry after it releases its guard.");
     if (activeLeases.has(lease)) {
       activeRevisions.set(lease, activeRevisions.get(lease)! + 1);
       return action();
@@ -921,13 +934,14 @@ export class ObjectStore {
     const file = objectFiles.open(temporary, "wx", 0o600);
     const fd = file.fd;
     let acquired = false;
-    let locked: ReturnType<typeof fstatSync> | undefined;
+    let locked: BigIntStats | undefined;
     let result: T;
     let lockChanged = false;
     try {
       locked = fstatSync(fd, { bigint: true });
       writeFileSync(fd, String(process.pid));
       durability.file(fd);
+      locked = fstatSync(fd, { bigint: true });
       const deadline = performance.now() + 5000;
       const sleeper = new Int32Array(new SharedArrayBuffer(4));
       for (;;) {
@@ -940,22 +954,91 @@ export class ObjectStore {
           Atomics.wait(sleeper, 0, 0, Math.min(25, remaining));
         }
       }
-      durability.unlink(temporary);
+      const linked = fstatSync(fd, { bigint: true });
+      if (linked.size !== locked.size || linked.mtimeNs !== locked.mtimeNs) throw new ObjectStoreError("worktree_path_changed", "Store owner bytes changed during publication.");
+      locked = linked;
+      durability.unlink(temporary, locked);
+      const published = fstatSync(fd, { bigint: true });
+      if (published.size !== locked.size || published.mtimeNs !== locked.mtimeNs) throw new ObjectStoreError("worktree_path_changed", "Store owner bytes changed during temporary retirement.");
+      locked = published;
       activeLeases.add(lease); activeRevisions.set(lease, 0);
       result = action();
     } finally {
       activeLeases.delete(lease); activeRevisions.delete(lease); dirtyLeases.delete(lease);
-      file.close();
-      durability.remove(temporary, { force: true });
-      // A moved root must neither hide the mutation refusal nor unlink a foreign lock.
-      if (acquired) {
-        const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-        if (observed !== undefined && observed.dev === locked!.dev && observed.ino === locked!.ino) durability.unlink(path);
-        else lockChanged = true;
-      }
+      try {
+        try {
+          const candidate = lstatSync(temporary, { bigint: true, throwIfNoEntry: false });
+          if (candidate !== undefined && locked !== undefined && candidate.dev === locked.dev && candidate.ino === locked.ino && candidate.size === locked.size && candidate.mtimeNs === locked.mtimeNs && candidate.ctimeNs === locked.ctimeNs) durability.unlink(temporary, locked);
+        } finally {
+          // A moved root must neither hide the mutation refusal nor unlink a foreign lock.
+          if (acquired) {
+            const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+            if (observed !== undefined && observed.dev === locked!.dev && observed.ino === locked!.ino && observed.size === locked!.size && observed.mtimeNs === locked!.mtimeNs && observed.ctimeNs === locked!.ctimeNs) durability.unlink(path, locked);
+            else lockChanged = true;
+          }
+        }
+      } finally { file.close(); }
     }
     if (lockChanged) throw new ObjectStoreError("worktree_path_changed", "Store lock identity changed during mutation.");
     return result;
+  }
+
+  /** Validate a read-only request under a bounded revision CAS before retiring any stale recovery or writer lease. */
+  withRecoveryValidation<T>(validate: () => void, action: () => T): T {
+    const lease = resolve(this.root); const control = dirname(this.root); const guardPath = join(control, "objects.recovery.lock");
+    return durability.scoped(control, () => {
+      /** Lock identity is part of the CAS even when no payload generation changed. */
+      const state = (): string | undefined => {
+        try { const lock = lstatSync(join(control, "objects.lock"), { bigint: true, throwIfNoEntry: false });
+        return `${measureDestructionRevision(control)}:${lock === undefined ? "absent" : `${lock.dev}:${lock.ino}:${lock.size}:${lock.mtimeNs}`}`; } catch (error) { if (["ENOENT", "ESTALE"].includes((error as NodeJS.ErrnoException).code!)) return undefined; throw error; }
+      };
+      for (let attempt = 0; attempt < OBJECT_READ_RETRIES; attempt++) {
+        destructionBoundary.visit("recovery-view-start", control);
+        const before = state(); if (before === undefined) continue; let failed = false; let failure: unknown;
+        activeLeases.add(lease); activeRevisions.set(lease, 0); validationLeases.add(lease);
+        try { validate(); } catch (error) { failed = true; failure = error; }
+        finally { activeLeases.delete(lease); activeRevisions.delete(lease); validationLeases.delete(lease); }
+        if (state() !== before) continue;
+        if (failed) throw failure;
+        destructionBoundary.visit("recovery-view-validated", control);
+        const oldGuard = lstatSync(guardPath, { bigint: true, throwIfNoEntry: false });
+        if (oldGuard !== undefined) {
+          if (!oldGuard.isFile()) throw new ObjectStoreError("store_locked", "An unknown recovery owner was preserved.");
+          const owner = readFileSync(guardPath, "utf8"); const pid = Number(owner);
+          if (!/^[1-9][0-9]*$/.test(owner) || !Number.isSafeInteger(pid) || pid > 2_147_483_647) throw new ObjectStoreError("store_locked", "A foreign recovery owner was preserved.");
+          const abandoned = recoveryOwners.get(guardPath);
+          const self = pid === process.pid && !recoveryLeases.has(lease) && abandoned !== undefined && abandoned.dev === oldGuard.dev && abandoned.ino === oldGuard.ino && abandoned.size === oldGuard.size && abandoned.mtimeNs === oldGuard.mtimeNs && abandoned.ctimeNs === oldGuard.ctimeNs;
+          if (!self) { try { process.kill(pid, 0); throw new ObjectStoreError("store_locked", "A live recovery owner was preserved."); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
+          durability.unlink(guardPath, oldGuard);
+        }
+        const temporary = `${guardPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+        const guard = objectFiles.open(temporary, "wx", 0o600); let published = false;
+        let owned: BigIntStats | undefined;
+        try {
+          destructionBoundary.visit("recovery-owner-opened", temporary);
+          writeFileSync(guard.fd, String(process.pid)); destructionBoundary.visit("recovery-owner-written", temporary); durability.file(guard.fd); destructionBoundary.visit("recovery-owner-flushed", temporary); owned = fstatSync(guard.fd, { bigint: true });
+          try { durability.link(temporary, guardPath); published = true; owned = fstatSync(guard.fd, { bigint: true }); recoveryOwners.set(guardPath, owned); recoveryLeases.add(lease); destructionBoundary.visit("recovery-owner-published", guardPath); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; throw new ObjectStoreError("store_locked", "A peer acquired the recovery guard; no payload deletion was attempted."); }
+          durability.unlink(temporary, owned);
+          owned = fstatSync(guard.fd, { bigint: true }); recoveryOwners.set(guardPath, owned);
+          recoveryLeases.add(lease);
+          if (state() !== before) throw new ObjectStoreError("store_locked", "The validated store revision changed before recovery; retry the original request.");
+          this.recoverWriterLock(); destructionBoundary.visit("recovery-old-lock-retired", control);
+          const result = action(); destructionBoundary.visit("recovery-action-completed", control); return result;
+        } finally {
+          recoveryLeases.delete(lease);
+          try {
+            const current = lstatSync(guardPath, { bigint: true, throwIfNoEntry: false }); if (published && owned !== undefined && current !== undefined && current.dev === owned.dev && current.ino === owned.ino && current.size === owned.size && current.mtimeNs === owned.mtimeNs && current.ctimeNs === owned.ctimeNs) durability.unlink(guardPath, owned);
+            const candidate = lstatSync(temporary, { bigint: true, throwIfNoEntry: false }); if (owned !== undefined && candidate !== undefined && candidate.dev === owned.dev && candidate.ino === owned.ino) durability.unlink(temporary, candidate);
+          } finally {
+            guard.close();
+            const registered = recoveryOwners.get(guardPath); const current = lstatSync(guardPath, { bigint: true, throwIfNoEntry: false });
+            if (registered !== undefined && owned !== undefined && registered.dev === owned.dev && registered.ino === owned.ino && (current === undefined || current.dev !== owned.dev || current.ino !== owned.ino || current.size !== owned.size || current.mtimeNs !== owned.mtimeNs || current.ctimeNs !== owned.ctimeNs)) recoveryOwners.delete(guardPath);
+            destructionBoundary.visit("recovery-owner-retired", control);
+          }
+        }
+      }
+      throw new ObjectStoreError("object_store_changing", "Recovery preflight could not observe a stable revision in eight attempts.");
+    });
   }
 
   /** Recover a dead writer or an empty legacy lock older than one minute; live and unidentified owners refuse. */
@@ -985,7 +1068,7 @@ export class ObjectStore {
     if (current === undefined) return;
     if (current.dev !== observed.dev || current.ino !== observed.ino || current.ctimeNs !== observed.ctimeNs
       || current.mtimeNs !== observed.mtimeNs || current.size !== observed.size) throw new ObjectStoreError("store_locked", "Lock owner changed during recovery.");
-    durability.unlink(path);
+    durability.unlink(path, current);
   }
 
   /**

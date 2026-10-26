@@ -357,6 +357,7 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
         const mutation = new WorktreeMutation(repo.root, ".pmvcs");
         const unlink = fs.unlinkSync;
         mock.method(fs, "unlinkSync", (path: fs.PathLike) => {
+          if (!String(path).endsWith("leaf.txt")) return unlink(path);
           unlink(path);
           mkdirSync(path);
           writeFileSync(join(String(path), "sentinel"), "concurrent\n");

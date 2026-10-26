@@ -10,7 +10,7 @@ import { durability } from "./durability.ts";
 // payload bytes permanently; undo can restore a pointer but cannot restore its
 // intentionally absent content.
 
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, } from "node:fs";
+import { type BigIntStats, appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, } from "node:fs";
 import { dirname } from "node:path";
 
 import type { ObjectId } from "./objects.ts";
@@ -147,7 +147,9 @@ export class OperationLog {
     } catch {
       throw new ObjectStoreError("oplog_locked", `The operation log is locked by another process (${lockPath}).`);
     }
+    let owner: BigIntStats | undefined;
     try {
+      owner = fstatSync(descriptor, { bigint: true });
       const operation: Operation = {
         sequence: this.read().length + 1,
         command,
@@ -160,8 +162,7 @@ export class OperationLog {
       appendFileSync(this.path, `${JSON.stringify(operation)}\n`);
       return operation;
     } finally {
-      closeSync(descriptor);
-      durability.unlink(lockPath);
+      durability.release(lockPath, descriptor, owner);
     }
   }
 

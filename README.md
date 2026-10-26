@@ -296,6 +296,12 @@ are recorded as evidence on the item. See [the full bisect contract](docs/bisect
 
 ## Indexed pack storage
 
+Destructive operations validate the complete request before recording an exact
+deletion set. Crashes retain recoverable receipts; recovery never adds fresh
+files to an old set. Inspect bounded TOON/JSON status with
+`pm vcs destructive-receipts --json`. See [destructive operation receipts](docs/destructive-operations.md)
+for recovery, typed SDK refusals and the engine path audit.
+
 `pm vcs compact` durably replaces loose objects with bounded indexed packs.
 SHA-256 identities still name the uncompressed typed frame, so refs, bundles,
 manifest ranges and upload pins keep the same addresses. Independently compressed

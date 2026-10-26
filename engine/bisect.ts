@@ -1,8 +1,9 @@
+import { prepareNamespaceDestruction } from "./destruction.ts";
 import { durability } from "./durability.ts";
 /** Durable bisect sessions over stable change identities, driven by a recorded PM test. */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { collectCommitObjects } from "./bundle.ts";
@@ -190,7 +191,9 @@ export function writeBisectSession(repository: Repository, session: BisectSessio
 
 /** Remove a process receipt only when its owner is provably dead; unknown owners refuse recovery. */
 function recoverOwner(path: string): void {
-  if (!existsSync(path)) return;
+  const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  if (observed === undefined) return;
+  if (!observed.isFile()) throw new ObjectStoreError("bisect_locked", "Unknown bisect lock owner; inspect its namespace entry before recovery.");
   const pid = Number(readFileSync(path, "utf8"));
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new ObjectStoreError("bisect_locked", "Unknown bisect lock owner; inspect the private process receipt before recovery.");
   try {
@@ -199,7 +202,7 @@ function recoverOwner(path: string): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
-  durability.remove(path);
+  durability.unlink(path, observed);
 }
 
 /** Refuse to remove a candidate directory while an orphaned SDK test process still uses it. */
@@ -210,19 +213,24 @@ export function recoverBisectWorker(repository: Repository): void {
 /** Serialize asynchronous bisect mutations; only a proven dead process permits automatic recovery. */
 export async function withBisectLease<T>(repository: Repository, action: () => Promise<T>): Promise<T> {
   const path = join(repository.controlDirectory, "BISECT_LOCK");
-  repository.objects.withWriteLock(() => {
+  const owned = repository.objects.withWriteLock(() => {
     recoverOwner(path);
     writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
+    return lstatSync(path, { bigint: true });
   });
   try { return await action(); }
-  finally { durability.remove(path); }
+  finally {
+    const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    if (current !== undefined && current.dev === owned.dev && current.ino === owned.ino && current.size === owned.size && current.mtimeNs === owned.mtimeNs) durability.unlink(path, current);
+  }
 }
 
 /** Removes the session state, concluding or abandoning the walk. */
 export function clearBisectSession(repository: Repository): void {
   recoverBisectWorker(repository);
-  durability.remove(statePath(repository), { force: true });
-  durability.remove(join(repository.controlDirectory, "BISECT_WORKSPACE"), { recursive: true, force: true });
+  const plan = prepareNamespaceDestruction(statePath(repository), "bisect-reset", [{ path: statePath(repository) }, { path: join(repository.controlDirectory, "BISECT_WORKSPACE"), recursive: true }]);
+  for (const path of plan.paths) plan.remove(path);
+  plan.finish();
 }
 
 /** Ancestry is private to one candidate array and released with that walk. */

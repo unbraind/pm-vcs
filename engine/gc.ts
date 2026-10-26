@@ -1,4 +1,4 @@
-import { durability } from "./durability.ts";
+import { prepareDestruction, type DestructionReceipt } from "./destruction.ts";
 import { packBoundary } from "./packs.ts";
 import { syncDirectory } from "./composition.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
@@ -13,6 +13,7 @@ import { CONTROL_DIRECTORY, Repository } from "./repo.ts";
 
 /** Exact sweep receipt: candidate addresses are informational until an explicit apply. */
 export interface GcReport {
+  readonly destruction?: DestructionReceipt;
   readonly applied: boolean;
   readonly retained: number;
   readonly candidates: readonly ObjectId[];
@@ -100,8 +101,10 @@ function storageInstances(repository: Repository): Repository[] {
 
 /** Plan and optionally sweep only after all roots and all physical objects validate under one writer lock. */
 export function collectGarbage(repository: Repository, apply = false): GcReport {
+  if (typeof apply !== "boolean") throw new ObjectStoreError("invalid_gc_options", "Collection apply must be an explicit boolean.");
   return repository.objects.withWriteLock(/** Never reuse a stale plan across a publication or a retry. */ () => {
     const store = repository.objects;
+    if (apply && store.denials().some(entry => entry.pending)) throw new ObjectStoreError("pack_erasure_pending", "Resume authorized erasure before applying collection; no source was retired.");
     const shared = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
     const roots = new Set(refRoots(join(shared, "refs"), shared));
     for (const instance of storageInstances(repository)) {
@@ -154,18 +157,20 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
     const candidates = inventory.filter(/** Physical copies of a retained address remain retained. */ (item) => !retained.has(item.id));
     const candidateBytes = candidates.reduce(/** Count physical bytes rather than logical uncompressed payloads. */ (sum, item) => sum + item.bytes, 0);
     const physicalBefore = inventory.reduce((sum, item) => sum + item.bytes, 0);
-    let reclaimedBytes = 0;
+    let reclaimedBytes = 0; let removed = 0; let destruction: DestructionReceipt | undefined;
     if (apply) {
       const packed = candidates.some((candidate) => candidate.packed);
       if (packed) store.unpack();
-      for (const candidate of candidates) {
-        const path = candidate.packed ? join(store.storageRoot(), candidate.id.slice(0, 2), candidate.id.slice(2)) : candidate.path;
-        if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) { store.markStorageGeneration(); durability.unlink(path); syncDirectory(dirname(path)); packBoundary.visit("collected"); }
+      const deletion = prepareDestruction(shared, "gc-candidates", candidates.map(candidate => ({ path: candidate.packed ? join(store.storageRoot(), candidate.id.slice(0, 2), candidate.id.slice(2)) : candidate.path })));
+      for (const path of deletion.paths) {
+        const before = lstatSync(path, { throwIfNoEntry: false });
+        store.markStorageGeneration(); deletion.remove(path); if (before !== undefined && lstatSync(path, { throwIfNoEntry: false }) === undefined) removed++; syncDirectory(dirname(path)); packBoundary.visit("collected");
       }
+      destruction = deletion.finish();
       if (inventory.some((item) => item.packed)) store.compact();
       store.releaseUploadRoots(visited); packBoundary.visit("released-pins");
       reclaimedBytes = Math.max(0, physicalBefore - [...store.walkInventory()].reduce((sum, item) => sum + item.bytes, 0));
     }
-    return { applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed: apply ? candidates.length : 0, candidateBytes, reclaimedBytes, activeLeases };
+    return { ...(destruction === undefined ? {} : { destruction }), applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed, candidateBytes, reclaimedBytes, activeLeases };
   });
 }

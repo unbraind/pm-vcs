@@ -270,3 +270,8 @@ This certificate covers the inspected filesystem namespace under the native writ
 lease. It does not promise secure sector wiping, external backup removal, or
 protection against mutation after the final barrier by an actor bypassing that
 lease. Windows uses the documented namespace acknowledgment policy above.
+
+Pack rewrite, GC, purge and owned lease cleanup share the [three-phase destructive
+operation protocol](destructive-operations.md). Complete source validation precedes
+staging recovery or duplicate retirement. `PackReport.destruction` records the
+exact frozen source set; interrupted recovery preserves newly arrived files.

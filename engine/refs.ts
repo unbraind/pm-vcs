@@ -1,3 +1,4 @@
+import { prepareDestruction } from "./destruction.ts";
 import { durability } from "./durability.ts";
 // Ref storage: branches, tags, and HEAD.
 //
@@ -8,10 +9,11 @@ import { durability } from "./durability.ts";
 // both read the same tip, both commit on top of it, both write their own commit
 // as the new tip, and the second write silently discards the first.
 
-import type { Dirent } from "node:fs";
+import type { BigIntStats, Dirent } from "node:fs";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
+  fstatSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -230,7 +232,8 @@ export class RefStore {
         throw new ObjectStoreError("duplicate_ref_update", `Ref ${ordered[index]!.name} appears twice in one transaction.`);
       }
     }
-    const held: Array<{ descriptor: number; lockPath: string }> = [];
+    const held: Array<{ descriptor: number; lockPath: string; owner?: BigIntStats }> = [];
+    let failure: unknown;
     try {
       for (const update of ordered) {
         const path = this.pathFor(update.name);
@@ -243,6 +246,7 @@ export class RefStore {
           throw new ObjectStoreError("ref_locked", `Ref ${update.name} is locked by another process (${lockPath}).`);
         }
         held.push({ descriptor, lockPath });
+        held[held.length - 1]!.owner = fstatSync(descriptor, { bigint: true });
       }
       for (const update of ordered) {
         const current = readTrimmed(this.pathFor(update.name));
@@ -255,17 +259,19 @@ export class RefStore {
         }
       }
       preflight?.();
-      for (const update of ordered) {
-        const path = this.pathFor(update.name);
-        if (update.next === null) durability.remove(path, { force: true });
-        else writeAtomic(path, update.next);
+      const removals = ordered.filter(update => update.next === null);
+      if (removals.length > 0) {
+        const plan = prepareDestruction(this.root, `ref-retirement:${JSON.stringify(ordered)}`, removals.map(update => ({ path: this.pathFor(update.name) })));
+        for (const path of plan.paths) plan.remove(path);
+        plan.finish();
       }
+      for (const update of ordered) if (update.next !== null) writeAtomic(this.pathFor(update.name), update.next);
     } finally {
       for (const lock of held) {
-        closeSync(lock.descriptor);
-        durability.unlink(lock.lockPath);
+        try { durability.release(lock.lockPath, lock.descriptor, lock.owner); } catch (error) { failure ??= error; }
       }
     }
+    if (failure !== undefined) throw failure;
   }
 
   /**

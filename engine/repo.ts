@@ -1,3 +1,4 @@
+import type { BigIntStats } from "node:fs";
 import { durability } from "./durability.ts";
 import type { AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
 import { attachCheckpoint, createSemanticCheckpoint, type CheckpointRequest } from "./checkpoints.ts";
@@ -16,7 +17,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes, type KeyObject } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -40,7 +41,7 @@ import {
 import { type ObjectId, type PayloadState, ObjectStore, ObjectStoreError, hashObject, isObjectId, assertRegistryName, readControlJson } from "./objects.ts";
 
 import { assertCompositionPath, assertSafeFilePath, authorize, configureAuthority, decodeLink, encodeLink, pathsOverlap, readLayers, writePrivateJson, type AuthorityChangeAuthorization, type LocalLayer, type RepositoryLink } from "./composition.ts";
-import { eraseFile, type ErasureReceipt, type ErasureOptions } from "./erasure.ts";
+import { eraseFile, validateErasureRequest, assertErasureOptions, type ErasureReceipt, type ErasureOptions } from "./erasure.ts";
 import { CDC_STAGING_THRESHOLD, STAGING_CDC_PARAMS, blobFileContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmented, writeCdcFragmentedFile } from "./fragments.ts";
 
 
@@ -616,7 +617,9 @@ export class Repository {
       );
     }
     let temporary: string | null = null;
+    let lockOwner: BigIntStats | undefined;
     try {
+      lockOwner = fstatSync(descriptor, { bigint: true });
       if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
       temporary = `${this.indexPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
       writeFileSync(temporary, encodeIndex(entries), { flag: "wx" });
@@ -625,8 +628,7 @@ export class Repository {
       return true;
     } finally {
       if (temporary !== null) durability.remove(temporary, { force: true });
-      closeSync(descriptor);
-      durability.remove(lockPath, { force: true });
+      durability.release(lockPath, descriptor, lockOwner);
     }
   }
 
@@ -1199,7 +1201,19 @@ export class Repository {
 
   /** Permanently erase all payloads of a FileId, including every shared instance. */
   obliterate(selector: string, credential: string, reason: string, now: Date, options: ErasureOptions = {}): ErasureReceipt {
-    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+    assertErasureOptions(options);
+    if (options.recoverLock === true) {
+      const requested = { purgeUnaccounted: options.purgeUnaccounted };
+      return this.objects.withRecoveryValidation(
+        () => validateErasureRequest(this, this.erasureScopes(), selector, credential, reason, now, requested),
+        () => this.obliterate(selector, credential, reason, now, requested),
+      );
+    }
+    return this.objects.withWriteLock(() => eraseFile(this, this.erasureScopes(), selector, credential, reason, now, options));
+  }
+
+  /** Resolve every currently accountable instance scope inside the writer lease or read-only recovery CAS. */
+  private erasureScopes(): Repository[] {
       let pmRoot = this.pmRoot;
       if (pmRoot !== undefined && pmRoot !== "") {
         const absolute = resolve(this.root, pmRoot);
@@ -1210,12 +1224,10 @@ export class Repository {
       }
       const paths = [this.hubRoot, ...readInstances(this.sharedControlDirectory).map(/** Registered instances share this denial and physical cleanup scope. */ (entry) => resolve(this.hubRoot, entry.path))];
       paths.push(...this.retiredInstances().map(/** Unlink never silently relinquishes held private or working bytes. */ (path) => resolve(this.hubRoot, path)));
-      const instances = [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
+      return [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
         if (path !== this.hubRoot && !this.instanceIsBound(path)) throw new ObjectStoreError("unbound_instance", "An inventoried instance is missing or no longer linked to this hub; explicitly prune retired paths before erasure.");
         return Repository.open(path, pmRoot);
       });
-      return eraseFile(this, instances, selector, credential, reason, now, options);
-    });
   }
 
   /**
