@@ -90,6 +90,11 @@ the pinned owner stamp after removing its own hardlink; changed owner bytes rema
 foreign and are preserved. Pending pruning resumes already-retired directories
 without capturing later arrivals.
 
+CI gives each full release gate an owned scratch root and removes that root after
+all gate commands exit. Disposable fixture receipts stay inside that root, so the
+npm and Bun suites do not accumulate each other's audit files. Production receipt
+retention is unchanged.
+
 The namespace audit covers these paths:
 
 | Engine paths | Validation and intent |

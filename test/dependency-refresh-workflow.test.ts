@@ -2,7 +2,7 @@ import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -109,11 +109,25 @@ import { writeFileSync } from "node:fs";
 import { test } from "node:test";
 test("runtime witness", () => { assert.ok(process.versions.bun); writeFileSync("bun-ran", process.versions.bun); });
 `);
-    const result = spawnSync("bash", ["-e", "-c", script], { env: testEnvironment(), cwd: root, encoding: "utf8", timeout: 120_000 });
+    const result = spawnSync("bash", ["-e", "-c", script], { env: testEnvironment({ RUNNER_TEMP: root }), cwd: root, encoding: "utf8", timeout: 120_000 });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(join(root, "gate-ran"), "utf8"), "yes");
     assert.ok(readFileSync(join(root, "bun-ran"), "utf8"), "workflow must execute tests under Bun");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("release gates retire only their own scratch receipts after success and failure", () => {
+  const root=mkdtempSync(join(tmpdir(),"pm-vcs-gate-scratch-"));const runner=join(root,"runner");const outside=join(root,"outside");mkdirSync(runner);mkdirSync(outside);writeFileSync(join(runner,"foreign"),"unrelated runner file");writeFileSync(join(outside,"foreign"),"unrelated audit file");
+  const ci=readFileSync(new URL("../.github/workflows/ci.yml",import.meta.url),"utf8");
+  const probe=`import assert from 'node:assert/strict';import {mkdtempSync,readdirSync,writeFileSync} from 'node:fs';import {tmpdir} from 'node:os';import {join,sep} from 'node:path';import {ObjectStore} from ${JSON.stringify(new URL("../engine/objects.ts",import.meta.url).href)};assert.ok(tmpdir().startsWith(process.env.RUNNER_TEMP+sep));const root=mkdtempSync(join(tmpdir(),'native-store-'));new ObjectStore(join(root,'objects')).write('blob',Buffer.from('fixture'));assert.ok(readdirSync(tmpdir()).some(name=>name.startsWith('pm-vcs-namespace-')));writeFileSync(join(tmpdir(),'owned-receipt'),'fixture');process.exit(Number(process.env.GATE_FAILURE));`;
+  try {
+    for(const gate of ["npm","Bun"])for(const status of [0,7]){
+      const tail=ci.slice(ci.indexOf(`      - name: Full ${gate} release gate`));const step=tail.slice(0,tail.indexOf("\n\n"));const marker="        run: |\n";const script=step.includes(marker)?step.slice(step.indexOf(marker)+marker.length).split("\n").filter(line=>line.startsWith("          ")).map(line=>line.slice(10)).join("\n"):step.match(/run: ([^\n]+)/u)![1]!;
+      const command='npm() { "$GATE_NODE" --input-type=module -e "$GATE_PROBE"; }; bun() { npm; };\n'+script;
+      const result=spawnSync("bash",["-c",command],{env:testEnvironment({RUNNER_TEMP:runner,TMPDIR:outside,GATE_NODE:process.execPath,GATE_PROBE:probe,GATE_FAILURE:String(status)}),encoding:"utf8",timeout:60_000});
+      assert.equal(result.status,status,result.stderr);assert.deepEqual(readdirSync(runner),["foreign"]);assert.equal(readFileSync(join(runner,"foreign"),"utf8"),"unrelated runner file");assert.deepEqual(readdirSync(outside),["foreign"]);assert.equal(readFileSync(join(outside,"foreign"),"utf8"),"unrelated audit file");
+    }
+  } finally {rmSync(root,{recursive:true,force:true});}
 });
 
 test("Bun witness skips when either optional tool is unavailable", () => {

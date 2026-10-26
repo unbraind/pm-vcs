@@ -75,10 +75,21 @@ jobs:
           ./node_modules/.bin/pm health --check-only --strict-exit --require-merge-drivers
 
       - name: Full npm release gate
-        run: npm run release:check
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate_tmp="$(mktemp -d "${RUNNER_TEMP}/pm-vcs-npm.XXXXXXXX")"
+          trap 'rm -rf -- "${gate_tmp}"' EXIT
+          export TMPDIR="${gate_tmp}"
+          npm run release:check
 
       - name: Full Bun release gate
+        shell: bash
         run: |
+          set -euo pipefail
+          gate_tmp="$(mktemp -d "${RUNNER_TEMP}/pm-vcs-bun.XXXXXXXX")"
+          trap 'rm -rf -- "${gate_tmp}"' EXIT
+          export TMPDIR="${gate_tmp}"
           bun run release:check
           bun test --timeout 120000 ./test/tracker-lenses.test.ts ./test/change-bundles.test.ts
 
