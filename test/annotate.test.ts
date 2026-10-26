@@ -15,14 +15,18 @@ import { effectiveChangeId, encodeManifest, encodeRecord, readCommit, writeCommi
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { type ObjectId } from "../engine/objects.ts";
 import { cloneFrom } from "../engine/sync.ts";
-import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
+import { packageRoot } from "./helpers/tmp.ts";
+import { makeManagedTempDir as makeTempDir } from "./helpers/managed-temp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
 
+// Use the SDK foreground mode so refresh work is awaited rather than detached.
+process.env.PM_SEARCH_REFRESH_INLINE = "1";
+process.env.NODE_ENV = "test";
 const owned: ReturnType<typeof makeTempDir>[] = [];
 const author: Signature = { name: "fixture", email: "fixture@example.invalid", timestamp: 1000, timezoneOffsetMinutes: 0 };
 const now = new Date(1000);
-afterEach(() => { for (const dir of owned.splice(0)) dir.cleanup(); });
+afterEach(async () => { for (const dir of owned.splice(0)) await dir.cleanup(); });
 /** Allocate a real filesystem repository. */
 function temp() { const dir = makeTempDir(); owned.push(dir); return dir.root; }
 /** Commit actual working bytes, optionally with Phase 6 item links. */
@@ -317,7 +321,7 @@ test("PM provenance stays absent without a matching recorded event, and unsafe i
   await client.init("unrecorded", { defaults: true, author: "fixture" });
   const first = (await client.create({ type: "Task", title: "One item", author: "different-author" })).item;
   const second = (await client.create({ type: "Task", title: "Another item", author: "different-author" })).item;
-  const env = { PATH: process.env.PATH, HOME: root, PM_AUTHOR: "fixture", PM_AGENT_PROBES: "0" };
+  const env = { PATH: process.env.PATH, HOME: root, NODE_ENV: "test", PM_SEARCH_REFRESH_INLINE: "1", PM_AUTHOR: "fixture", PM_AGENT_PROBES: "0" };
   for (const item of [first, second]) execFileSync(process.execPath, [pmExecutable, "--no-extensions", "update", item.id, "--description", "no inferred provenance"], { cwd: root, env });
   const repo = Repository.init(root, "main", { recordPaths: ["**/*.toon"], recordPolicy: {} }); repo.stage([]); repo.commit({ message: "tracker", author }, now);
   const plain = edit(repo, "text.txt", "plain\n", author, ["../unsafe", "missing-item", first.id, second.id]);
