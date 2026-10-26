@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";

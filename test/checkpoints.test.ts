@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Semantic validation on actual core trackers, immutable native snapshots and receiver publication. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -18,7 +20,7 @@ import { startRepositoryServer } from "../engine/serve.ts";
 import { signChange, verifyChangeSignature } from "../engine/signatures.ts";
 import { LeasedFileTransport, LeasedHttpTransport } from "./helpers/publication-consumers.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
-import { withoutPmContext, installPackedExtension } from "../scripts/pm-environment.ts";
+import { installPackedExtension } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 
 const owned: ReturnType<typeof makeTempDir>[] = [];
@@ -321,7 +323,7 @@ test("installed CLI attaches and inspects JSON and TOON in a non-git tracker wit
   const input = join(root, "checkpoint.json"); writeFileSync(input, JSON.stringify(request));
   installPackedExtension(root);
   const cli = join(packageRoot, "node_modules/@unbrained/pm-cli/dist/cli.js");
-  const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(root), PM_AUTHOR: "fixture" };
+  const env = { ...testEnvironment(), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(root), PM_AUTHOR: "fixture" };
   const run = (args: string[]) => execFileSync(process.execPath, [cli, ...args], { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const attached = JSON.parse(run(["vcs", "checkpoint", "attach", "HEAD", "--input", "checkpoint.json", "--json"])) as { ok: boolean };
   assert.equal(attached.ok, true);

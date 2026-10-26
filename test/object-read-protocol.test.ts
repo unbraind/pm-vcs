@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Every logical reader shares generation retries, pinned handles and terminal denial enforcement. */
 import assert from "node:assert/strict";
 import fs, { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -269,7 +271,7 @@ test("EVERY pinned reader boundary tolerates an external retirement with unchang
       trace.push(name);
       if(ordinal===0 || trace.length!==ordinal) return;
       const marker=readFileSync(join(f.repo.controlDirectory,"objects.generation")); const lock=fs.lstatSync(join(f.repo.controlDirectory,"objects.lock"),{bigint:true});
-      const child=spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/external-object-retirement.ts"),plan],{env:{...process.env,...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.repo.root)},encoding:"utf8",timeout:30_000});
+      const child=spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/external-object-retirement.ts"),plan],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.repo.root)},encoding:"utf8",timeout:30_000});
       assert.equal(child.status,0,child.stderr); assert.deepEqual(readFileSync(join(f.repo.controlDirectory,"objects.generation")),marker);
       const same=fs.lstatSync(join(f.repo.controlDirectory,"objects.lock"),{bigint:true}); assert.equal(same.ino,lock.ino); assert.equal(same.mtimeNs,lock.mtimeNs); injected=true;
     };
@@ -320,7 +322,7 @@ test("pinned inventory survives external unpack with identical generation and wr
   store.withWriteLock(()=>{
     const marker=readFileSync(join(f.repo.controlDirectory,"objects.generation"));const lock=fs.lstatSync(join(f.repo.controlDirectory,"objects.lock"),{bigint:true});let once=false;
     objectReadBoundary.visit=(step)=>{if(step!=="pinned"||once)return;once=true;objectReadBoundary.visit=()=>{};
-      const child=spawnSync(process.execPath,[join(packageRoot,"test/helpers/external-object-retirement.ts"),plan],{env:{...process.env,...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.repo.root)},encoding:"utf8",timeout:30_000});assert.equal(child.status,0,child.stderr);
+      const child=spawnSync(process.execPath,[join(packageRoot,"test/helpers/external-object-retirement.ts"),plan],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.repo.root)},encoding:"utf8",timeout:30_000});assert.equal(child.status,0,child.stderr);
     };
     assert.deepEqual(store.readInventoryObject(f.live,pack).payload,payload);assert.ok(once);
     assert.deepEqual(readFileSync(join(f.repo.controlDirectory,"objects.generation")),marker);assert.equal(fs.lstatSync(join(f.repo.controlDirectory,"objects.lock"),{bigint:true}).ino,lock.ino);

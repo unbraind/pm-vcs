@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Capability contracts on real native repositories and SDK-created, non-Git trackers. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -16,7 +18,7 @@ import { keyFingerprint, publicKeyText } from "../engine/signatures.ts";
 import { configureAuthority, writePrivateJson } from "../engine/composition.ts";
 import { updateTrustedKeys } from "../engine/signature-policy.ts";
 import { DEFAULT_CONFIG } from "../engine/config.ts";
-import { withoutPmContext, installPackedExtension } from "../scripts/pm-environment.ts";
+import { installPackedExtension } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
@@ -457,7 +459,7 @@ test("CLI handlers use explicit input, external signing keys and independent imp
 
 test("installed CLI emits compact JSON and TOON and imports in non-Git trackers with no git executable", async () => {
   const f = await fixture(); const external = temp(); const bins = temp();
-  const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(f.receiver.root), PM_AUTHOR: "fixture" };
+  const env = { ...testEnvironment(), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(f.receiver.root), PM_AUTHOR: "fixture" };
   const cli = join(packageRoot, "node_modules/@unbrained/pm-cli/dist/cli.js");
   const receiverPm = join(f.receiver.root, ".agents/pm");
   await new PmClient({ cwd: f.receiver.root, pmRoot: receiverPm, noExtensions: true }).init("receiver", { defaults: true, author: "fixture" });

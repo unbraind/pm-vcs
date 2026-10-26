@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { deflateSync, inflateSync } from "node:zlib";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";

@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { join } from "node:path";

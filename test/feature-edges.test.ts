@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import { createServer } from "node:http";
 import { HttpTransport } from "../engine/http-transport.ts";
 import { FileTransport } from "../engine/transport.ts";

@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Real-tracker regressions for nested control state, filesystem aliases and hostile stored trees. */
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";

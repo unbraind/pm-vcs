@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // Fragment and range storage tests.
 //
 // A file must never have to be resident in memory to be stored, read, or

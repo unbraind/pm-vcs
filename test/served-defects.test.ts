@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import { grantRemoteLeases } from "./helpers/publication-consumers.ts";
 /** Packed, globally installed CLI regression with real PM mutations on Node and Bun. */
 import assert from "node:assert/strict";
@@ -7,11 +9,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { startRepositoryServer, TokenGrants } from "../engine/serve.ts";
 import { Repository } from "../engine/repo.ts";
-import { pmExecutable, withoutPmContext, npmPackArguments, npmPackExecutable } from "../scripts/pm-environment.ts";
+import { pmExecutable, npmPackArguments, npmPackExecutable } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
-const bunAvailable = spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
+const bunAvailable = spawnSync("bun", ["--version"], { env: testEnvironment(), stdio: "ignore" }).status === 0;
 for (const runtime of [process.execPath, "bun"]) {
   // Bun is a required runtime where CI runs, so a missing Bun there must fail
   // rather than skip. Everywhere else the Node-only development setup keeps
@@ -25,7 +27,7 @@ for (const runtime of [process.execPath, "bun"]) {
     const password = "regression-password-secret";
     // A VCS token inherited from the developer's shell would outrank the
     // fixture's credential URL and make the server refuse the clone.
-    const inherited = Object.fromEntries(Object.entries(withoutPmContext(process.env))
+    const inherited = Object.fromEntries(Object.entries(testEnvironment())
       .filter(([key]) => key !== "PM_VCS_TOKEN" && !key.startsWith("PM_VCS_TOKEN_")));
     const env = { ...inherited, ...discardChildCoverage(), HOME: join(fixture.root, "home"), PM_AUTHOR: "acceptance",
       // pm otherwise spawns a detached telemetry flusher that keeps writing under HOME after each
@@ -130,7 +132,7 @@ for (const runtime of [process.execPath, "bun"]) {
 test("missing Bun skips locally and fails explicitly on CI", () => {
   const fixture = makeTempDir();
   try {
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: fixture.root };
+    const env: NodeJS.ProcessEnv = { ...testEnvironment(), PATH: fixture.root };
     delete env.CI;
     delete env.NODE_TEST_CONTEXT;
     const args = ["--test", "--test-reporter=tap", "--test-name-pattern=^packed global.*\\(bun\\)$", import.meta.filename];

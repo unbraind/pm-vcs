@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Immutable attribution through ordinary PM records, branch merges, renames and bounded histories. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -18,7 +20,7 @@ import { cloneFrom } from "../engine/sync.ts";
 import { packageRoot } from "./helpers/tmp.ts";
 import { makeManagedTempDir as makeTempDir } from "./helpers/managed-temp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
-import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { installPackedExtension, pmExecutable } from "../scripts/pm-environment.ts";
 
 // Use the SDK foreground mode so refresh work is awaited rather than detached.
 process.env.PM_SEARCH_REFRESH_INLINE = "1";
@@ -95,7 +97,7 @@ test("fragmented PM history retains recorded agent provenance during annotation"
   const item = (await client.create({ type: "Task", title: "Large immutable history", author: "fixture" })).item.id;
   await client.update(item, { description: "x".repeat(1_048_576), author: "fixture" });
   execFileSync(process.execPath, [pmExecutable, "--no-extensions", "--json", "update", item, "--description", "Captured provenance"],
-    { cwd: root, env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "fixture", CODEX_CI: "1", CODEX_MODEL: "fixture-model", PM_AGENT_MODEL: "fixture-model", PM_AGENT_PROBES: "0" } });
+    { cwd: root, env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "fixture", CODEX_CI: "1", CODEX_MODEL: "fixture-model", PM_AGENT_MODEL: "fixture-model", PM_AGENT_PROBES: "0" } });
   const repo = Repository.init(root, "main", { recordPaths: ["**/*.toon"], recordPolicy: {} });
   repo.stage([]); const snapshot = repo.commit({ message: "fragmented tracker history", author }, now);
   const history = flattenTree(repo.objects, readCommit(repo.objects, snapshot).tree).get(`.agents/pm/history/${item}.jsonl`)!;
@@ -183,7 +185,7 @@ test("native PM snapshots supply item links and recorded harness/model provenanc
   const item = (await client.create({ type: "Task", title: "Native attribution", author: "fixture" })).item;
   const path = `.agents/pm/tasks/${item.id}.toon`;
   execFileSync(join(packageRoot, "node_modules/.bin/pm"), ["--no-extensions", "--json", "update", item.id, "--description", "Captured provenance"],
-    { cwd: root, env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "fixture", CODEX_CI: "1", CODEX_MODEL: "fixture-model", PM_AGENT_MODEL: "fixture-model", PM_AGENT_PROBES: "0" } });
+    { cwd: root, env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "fixture", CODEX_CI: "1", CODEX_MODEL: "fixture-model", PM_AGENT_MODEL: "fixture-model", PM_AGENT_PROBES: "0" } });
   const repo = Repository.init(root, "main", { recordPaths: ["**/*.toon"], recordPolicy: {} });
   repo.stage([]); const snapshot = repo.commit({ message: "native item", author, items: [item.id] }, now);
   const before = readFileSync(join(root, path), "utf8");
@@ -258,7 +260,7 @@ test("packed host emits grouped TOON and full JSON annotation at a selected chan
   await installPackedExtension(root);
   const repo = Repository.init(root); const first = edit(repo, "text.txt", "one\ntwo\nthree\n");
   edit(repo, "text.txt", "one\nchanged\nthree\n");
-  const pm = (args: string[]) => execFileSync(process.execPath, [pmExecutable, ...args], { cwd: root, env: { ...withoutPmContext(process.env), ...discardChildCoverage() }, encoding: "utf8" });
+  const pm = (args: string[]) => execFileSync(process.execPath, [pmExecutable, ...args], { cwd: root, env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8" });
   const toon = pm(["vcs", "annotate", "text.txt", "--at", first]);
   assert.match(toon, /annotations\[1\]/); assert.match(toon, /one/);
   const full = JSON.parse(pm(["--json", "vcs", "annotate", "text.txt", "--at", first, "--full"]));

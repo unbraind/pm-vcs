@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Real failure contracts and a guard against suppressing production coverage. */
 import assert from "node:assert/strict";
 import { once } from "node:events";

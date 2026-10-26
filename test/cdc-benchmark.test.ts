@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real benchmark and boundary fixtures keep the coverage contract over all scripts. */
 import assert from "node:assert/strict";
 import { cpSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
@@ -15,7 +17,7 @@ test("the complete benchmark measures real CDC and fixed-size stores", () => {
   main();
   // A URL's pathname keeps its percent escapes, so a checkout path with a space
   // in it would name a file that does not exist; the path conversion resolves it.
-  const output = execFileSync(process.execPath, [fileURLToPath(new URL("../scripts/cdc-benchmark.ts", import.meta.url))], { encoding: "utf8" });
+  const output = execFileSync(process.execPath, [fileURLToPath(new URL("../scripts/cdc-benchmark.ts", import.meta.url))], { env: testEnvironment(), encoding: "utf8" });
   assert.match(output, /Measured fixed-size reuse/);
 });
 test("benchmark empty stores, directory noise and invocation identity are measured", () => {
@@ -43,12 +45,12 @@ test("the benchmark test runs from a checkout path containing spaces", () => {
     const alias = join(fixture.root, "checkout with spaces");
     mkdirSync(join(alias, "test/helpers"), { recursive: true });
     mkdirSync(join(alias, "scripts"));
-    for (const path of ["package.json", "test/cdc-benchmark.test.ts", "test/helpers/tmp.ts", "scripts/cdc-benchmark.ts", "scripts/pm-environment.ts", "scripts/main-invocation.ts"]) {
+    for (const path of ["package.json", "test/cdc-benchmark.test.ts", "test/helpers/tmp.ts", "test/helpers/test-environment.ts", "test/helpers/isolate-session.ts", "scripts/cdc-benchmark.ts", "scripts/pm-environment.ts", "scripts/main-invocation.ts"]) {
       cpSync(join(packageRoot, path), join(alias, path));
     }
     symlinkSync(join(packageRoot, "engine"), join(alias, "engine"), "dir");
     symlinkSync(join(packageRoot, "node_modules"), join(alias, "node_modules"), "dir");
-    const env = { ...process.env };
+    const env = { ...testEnvironment() };
     delete env.NODE_TEST_CONTEXT;
     env.NODE_V8_COVERAGE = "";
     const output = execFileSync(process.execPath, ["--test", "--test-reporter=tap", "--test-name-pattern=^the complete benchmark", join(alias, "test/cdc-benchmark.test.ts")], { env, encoding: "utf8" });

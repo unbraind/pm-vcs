@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Linked-test-driven bisect sessions over real temporary repositories and trackers. */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -19,7 +21,7 @@ import { cloneFrom } from "../engine/sync.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
-import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { installPackedExtension, pmExecutable } from "../scripts/pm-environment.ts";
 
 /** Every fixture directory created by this suite, torn down once at the end. */
 const owned: ReturnType<typeof makeTempDir>[] = [];
@@ -505,7 +507,7 @@ test("a walk killed mid-flight resumes from the durable state without retesting 
   const child = spawn(process.execPath, [pmExecutable, "vcs", "bisect", "run"], {
     cwd: fixture.root,
     stdio: "ignore",
-    env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "child-agent", PM_SOURCE_WORKSPACE_ROOT: fixture.root },
+    env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "child-agent", PM_SOURCE_WORKSPACE_ROOT: fixture.root },
   });
   const statePath = join(fixture.root, ".pmvcs", "BISECT_STATE");
   const deadline = Date.now() + 120_000;
@@ -872,7 +874,7 @@ test("tracked and root trackers keep authoritative history while candidate trees
   writeFileSync(join(fixture.pmRoot, "fixture.txt"), "tracker content that is tracked\n");
   const base = edit(fixture, "state.txt", "ok", "base");
   execFileSync(process.execPath, [pmExecutable, "--no-extensions", "update", item, "--description", "Historical provenance"], {
-    cwd: fixture.root, env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "fixture", CODEX_CI: "1", PM_AGENT_MODEL: "fixture-model", PM_AGENT_PROBES: "0" },
+    cwd: fixture.root, env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "fixture", CODEX_CI: "1", PM_AGENT_MODEL: "fixture-model", PM_AGENT_PROBES: "0" },
   });
   commitFiles(fixture, [], "base with the complete tracker tracked");
   edit(fixture, "state.txt", "ok interior", "interior");
@@ -997,7 +999,7 @@ test("bisect leases reject live and unknown owners and recover a dead owner", as
   await assert.rejects(withBisectLease(fixture.repository, async () => true), /Unknown bisect lock/);
   writeFileSync(path, "9007199254740991");
   await assert.rejects(withBisectLease(fixture.repository, async () => true), /range|integer|pid/i);
-  const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+  const child = spawn(process.execPath, ["-e", ""], { env: testEnvironment(), stdio: "ignore" });
   await new Promise<void>((resolve) => { child.once("exit", () => { resolve(); }); });
   writeFileSync(path, String(child.pid));
   assert.equal(await withBisectLease(fixture.repository, async () => "recovered"), "recovered");
@@ -1061,7 +1063,7 @@ test("installed CLI emits complete JSON and budgeted TOON reports for the linked
   edit(fixture, "state.txt", "broken tip", "tip");
   installPackedExtension(fixture.root);
   const run = (args: string[]) => execFileSync(process.execPath, [pmExecutable, ...args], {
-    cwd: fixture.root, encoding: "utf8", env: { ...withoutPmContext(process.env), PM_AUTHOR: "installed-agent" },
+    cwd: fixture.root, encoding: "utf8", env: { ...testEnvironment(), PM_AUTHOR: "installed-agent" },
   });
   run(["vcs", "bisect", "start", base, "main", "--item", item, "--json"]);
   const result = JSON.parse(run(["vcs", "bisect", "run", "--json", "--full"])) as { bisect: { verdict: { commit: string; items: string[] } } };
@@ -1187,7 +1189,7 @@ test("a worker cannot run before its owner receipt is published", async () => {
   assert.match(failure.detail ?? "", /ENOENT/);
   assert.equal(runsRecorded(count), 0);
   assert.throws(() => execFileSync(process.execPath, [join(packageRoot, "bisect-test-runner.ts"), item, "agent", fixture.pmRoot, join(fixture.root, "receipt")],
-    { input: "", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, PM_SOURCE_WORKSPACE_ROOT: fixture.root } }), /not authorized/);
+    { input: "", stdio: ["pipe", "pipe", "pipe"], env: { ...testEnvironment(), PM_SOURCE_WORKSPACE_ROOT: fixture.root } }), /not authorized/);
 });
 
 test("an early worker exit with a broken stdin pipe is untestable without crashing the parent", async () => {
@@ -1209,7 +1211,7 @@ test("an early worker exit with a broken stdin pipe is untestable without crashi
     process.env.NODE_OPTIONS = "--import=data:text/javascript,process.exit(42)";
     console.log(JSON.stringify(await runCandidateTest(...process.argv.slice(1))));
   `;
-  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script, item, "fixture", fixture.pmRoot, fixture.root, fixture.repository.controlDirectory], {
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script, item, "fixture", fixture.pmRoot, fixture.root, fixture.repository.controlDirectory], { env: testEnvironment(),
     cwd: fixture.root, encoding: "utf8", timeout: 30_000,
   });
   const result = JSON.parse(output) as { outcome: string; detail: string };
@@ -1576,7 +1578,7 @@ test("installed bisect runs linked and explicit predicates without git and resum
     const git = mode === "git-linked";
     const fixture = await setup();
     const item = (await fixture.client.create({ type: "Task", title: "Plain directory diagnosis", author: "agent-a" })).item.id;
-    if (git) execFileSync("git", ["init", "-q", "-b", "fixture-main", fixture.root]);
+    if (git) execFileSync("git", ["init", "-q", "-b", "fixture-main", fixture.root], { env: testEnvironment() });
     if (!explicit) await runTest(item, { addJson: [JSON.stringify({ command: "node probe.js", ...(git ? { env_set: { GITHUB_HEAD_REF: "configured-for-test" } } : {}) })] }, { author: "agent-a", path: fixture.pmRoot });
     const environmentCheck = git
       ? 'if (process.env.GITHUB_HEAD_REF !== "configured-for-test") throw new Error("linked environment changed");\n'
@@ -1591,7 +1593,7 @@ test("installed bisect runs linked and explicit predicates without git and resum
     const bin = join(fixture.root, "tools");
     mkdirSync(bin);
     copyFileSync(process.execPath, join(bin, process.platform === "win32" ? "node.exe" : "node"));
-    const environment = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bin,
+    const environment = { ...testEnvironment(), ...discardChildCoverage(), PATH: bin,
       GIT_CEILING_DIRECTORIES: dirname(fixture.root), PM_AUTHOR: "bisector",
       NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${new URL("./helpers/forbid-git.ts", import.meta.url).href}`,
     };
@@ -1672,16 +1674,16 @@ test("bisect SDK source refs use hosted context or read real Git metadata withou
     process.env.GITHUB_REF_NAME = "merge";
     assert.equal(bisectTestSourceRef(fixture.repository), native);
     delete process.env.GITHUB_REF_NAME;
-    execFileSync("git", ["init", "-q", "-b", "fixture-main", fixture.root]);
+    execFileSync("git", ["init", "-q", "-b", "fixture-main", fixture.root], { env: testEnvironment() });
     assert.equal(bisectTestSourceRef(fixture.repository), "fixture-main");
     const nested = Repository.init(join(fixture.root, "nested"));
     assert.equal(bisectTestSourceRef(nested), "fixture-main");
     process.env.GIT_CEILING_DIRECTORIES = fixture.root;
     assert.equal(bisectTestSourceRef(nested), `pm-vcs:${nested.identity()}`);
     delete process.env.GIT_CEILING_DIRECTORIES;
-    execFileSync("git", ["-C", fixture.root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-q", "-m", "fixture"]);
+    execFileSync("git", ["-C", fixture.root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-q", "-m", "fixture"], { env: testEnvironment() });
     const linked = join(fixture.root, "linked-git");
-    execFileSync("git", ["-C", fixture.root, "worktree", "add", "-q", "-b", "fixture-linked", linked]);
+    execFileSync("git", ["-C", fixture.root, "worktree", "add", "-q", "-b", "fixture-linked", linked], { env: testEnvironment() });
     const linkedNative = Repository.init(linked);
     assert.equal(bisectTestSourceRef(linkedNative), "fixture-linked");
     writeFileSync(join(linked, ".git"), "invalid pointer\n");
@@ -1780,7 +1782,7 @@ test("bisect SDK process policy blocks Git and preserves real callback promise a
     assert.equal(output,"out");
     console.log("worker policy passed");
   `;
-  const result = execFileSync(process.execPath, ["--import", new URL("../bisect-sdk-policy.ts", import.meta.url).href, "--input-type=module", "-e", script], { encoding: "utf8", timeout: 30_000 });
+  const result = execFileSync(process.execPath, ["--import", new URL("../bisect-sdk-policy.ts", import.meta.url).href, "--input-type=module", "-e", script], { env: testEnvironment(), encoding: "utf8", timeout: 30_000 });
   assert.match(result, /worker policy passed/);
 });
 

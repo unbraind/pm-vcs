@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -77,7 +79,7 @@ test("preview predicts exactly what a real merge produces", () => {
     execFileSync("git", ["merge", "--no-edit", "agent-b"], {
       cwd: sandbox.root,
       encoding: "utf8",
-      env: { ...process.env, GIT_PAGER: "cat" },
+      env: { ...testEnvironment(), GIT_PAGER: "cat" },
     });
   } catch {
     mergeFailed = true;

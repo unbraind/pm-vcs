@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Capability-forced durability and real Windows-compatible CLI collection on a non-git tracker. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -11,7 +13,7 @@ import { writePrivateJson } from "../engine/composition.ts";
 import { durability, durabilityCapabilities } from "../engine/durability.ts";
 import { Repository } from "../engine/repo.ts";
 import { collectGarbage } from "../engine/gc.ts";
-import { installPackedExtension, withoutPmContext, pmExecutable } from "../scripts/pm-environment.ts";
+import { installPackedExtension, pmExecutable } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
@@ -86,7 +88,7 @@ test("Windows GC applies the shipped CLI to a real non-git tracker and retains l
   const live = repo.objects.write("blob", Buffer.from("retained cross-platform CLI payload")); repo.refs.compareAndSwap("refs/metadata/live", null, live);
   repo.objects.compact();
   const garbage = repo.objects.write("blob", Buffer.from("unreachable cross-platform CLI payload"));
-  const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), GIT_CEILING_DIRECTORIES: dirname(repo.root),
+  const env = { ...testEnvironment(), ...discardChildCoverage(), GIT_CEILING_DIRECTORIES: dirname(repo.root),
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${new URL("./helpers/forbid-git.ts", import.meta.url).href}` };
   const result = spawnSync(process.execPath, [pmExecutable, "vcs", "gc", "--apply", "--json"], { cwd: repo.root, env, encoding: "utf8", timeout: 120_000 });
   assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).gc.applied, true);

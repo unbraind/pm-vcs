@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Bounded publication regressions over real SDK repositories and original physical reads. */
 import assert from "node:assert/strict";
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";

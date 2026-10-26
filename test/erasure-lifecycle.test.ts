@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Durable purge authority follows owned file/root lifetimes on real non-git repositories. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -100,7 +102,7 @@ test("root-bound journals retain strict validation and do not read historical pa
 test("SIGKILL at every native lifecycle-journal publication step resumes after retiring the referenced instance", async t => {
   const prepare = retiredPending;
   /** Kill at real before/after filesystem operations, not a simulated successful write. */
-  const run = (f: Awaited<ReturnType<typeof prepare>>, ordinal: number) => spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-purge-worker.ts"), f.repo.root, f.second, String(ordinal)], { env: { ...process.env, ...discardChildCoverage() }, encoding: "utf8", timeout: 30_000 });
+  const run = (f: Awaited<ReturnType<typeof prepare>>, ordinal: number) => spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-purge-worker.ts"), f.repo.root, f.second, String(ordinal)], { env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8", timeout: 30_000 });
   const probe = await prepare(); const listed = run(probe, 0); assert.equal(listed.status, 0, listed.stderr); const steps = JSON.parse(listed.stdout) as string[]; assert.ok(steps.length >= 20);
   for (let ordinal = 1; ordinal <= steps.length; ordinal++) {
     const f = await prepare(); const child = run(f, ordinal); assert.equal(child.signal, "SIGKILL", `${ordinal}/${steps[ordinal - 1]} ${child.stderr}`);
@@ -114,7 +116,7 @@ test("SIGKILL at every native lifecycle-journal publication step resumes after r
 test("a competing process at both retirement boundaries is excluded until the owning erasure releases last", async t => {
   const f = await retiredPending(); let attempts = 0;
   /** The child reports either the actual held lease or the real idempotent completion receipt. */
-  const run = (mode: string) => spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-peer.ts"), f.repo.root, f.second, mode], { env: { ...process.env, ...discardChildCoverage() }, encoding: "utf8", timeout: 30_000 });
+  const run = (mode: string) => spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-peer.ts"), f.repo.root, f.second, mode], { env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8", timeout: 30_000 });
   accountabilityBoundary.visit = step => { if (step.startsWith("purge-lifecycle-")) { const peer = run("blocked"); assert.equal(peer.status, 0, peer.stderr); assert.equal(peer.stdout.trim(), "store_locked"); attempts++; } };
   const receipt = f.repo.obliterate(f.second, "erase-fixture", "incident", new Date(1)); accountabilityBoundary.visit = () => {}; assert.equal(attempts, 2);
   const peer = run("complete"); assert.equal(peer.status, 0, peer.stderr); assert.equal((JSON.parse(peer.stdout) as { tombstone: string }).tombstone, receipt.tombstone); assert.equal(f.repo.operations.read().filter(entry => entry.command === "obliterate").length, 1);

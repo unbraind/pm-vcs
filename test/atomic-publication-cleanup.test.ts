@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Real plain-directory publication with faults restricted to the owned temporary descriptor. */
 import assert from "node:assert/strict";
 import fs, { existsSync, fstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";

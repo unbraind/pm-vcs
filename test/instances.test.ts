@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 // Sparse linked instances over a shared immutable object store.
 //
 // Every test here runs against real directories and real child processes:
@@ -382,7 +384,7 @@ test("concurrent instances share objects but never overwrite each other's state"
       [worker, instanceRoot, goFile, label, "30"],
       // Child coverage is discarded, as everywhere in this suite: c8 would
       // otherwise merge per-child V8 output and make the gate flaky.
-      { env: { ...process.env, NODE_V8_COVERAGE: "" } },
+      { env: { ...testEnvironment(), NODE_V8_COVERAGE: "" } },
       (error) => (error === null ? resolveRun() : rejectRun(error)),
     );
   });

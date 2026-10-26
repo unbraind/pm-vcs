@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // Patch series round-trip tests: produce, transfer, apply, re-derive.
 //
 // The acceptance criteria require that a patch series can be produced from a

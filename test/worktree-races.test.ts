@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Shared between-step race scenarios plus Linux descriptor-pinned syscall-boundary protection. */
 import assert from "node:assert/strict";
 import fs, { existsSync, mkdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";

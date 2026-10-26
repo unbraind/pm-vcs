@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 // Real tests for the self-hosting gate.
 //
 // The gate's claim is mechanical: a bundle's tip tree must be byte-identical to
@@ -675,7 +677,7 @@ function fixture(): Fixture {
   const git = (args: string[]): string => execFileSync("git", args, {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+    env: { ...testEnvironment(), NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
   }).trim();
   git(["init", "-q", "-b", "main"]);
   git(["config", "user.email", "test@pm-vcs.local"]);

@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real process controls for production coverage, lint policy and scan completeness. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -9,7 +11,7 @@ import test from "node:test";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 /** Run a repository-owned JavaScript or TypeScript tool in a disposable project. */
-function tool(root: string, entry: string, args: readonly string[], environment: NodeJS.ProcessEnv = process.env): SpawnSyncReturns<string> {
+function tool(root: string, entry: string, args: readonly string[], environment: NodeJS.ProcessEnv = testEnvironment()): SpawnSyncReturns<string> {
   const env = { ...environment };
   // A nested real test runner must start independently of the parent runner.
   delete env.NODE_TEST_CONTEXT;
@@ -58,7 +60,7 @@ test("computed fixture answers", () => {
     // collection directory, even though c8 cleans its own directory on startup.
     const parentCoverage = join(fixture.root, "parent-coverage");
     source(fixture.root, "parent-coverage/marker.txt", "Earlier parent data must survive.\n");
-    passed(tool(fixture.root, "node_modules/c8/bin/c8.js", args, { ...process.env, NODE_V8_COVERAGE: parentCoverage }));
+    passed(tool(fixture.root, "node_modules/c8/bin/c8.js", args, { ...testEnvironment(), NODE_V8_COVERAGE: parentCoverage }));
     assert.equal(readFileSync(join(parentCoverage, "marker.txt"), "utf8"), "Earlier parent data must survive.\n");
     const lcov = readFileSync(join(fixture.root, "coverage/lcov.info"), "utf8");
     for (const path of paths) assert.ok(lcov.replaceAll("\\", "/").includes(path), path);
@@ -205,7 +207,7 @@ test("the identity gate runs through a symlinked checkout and rejects a seeded v
     }
     // The actual gate reads a real Git object database in a disposable copy.
     // No launcher or guard is replaced by a test fixture.
-    const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" };
+    const env: NodeJS.ProcessEnv = { ...testEnvironment(), GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" };
     delete env.NODE_TEST_CONTEXT;
     /** Run a real Git fixture command with global and system configuration disabled. */
     const git = (args: readonly string[]): void => {
@@ -235,7 +237,7 @@ test("the identity gate runs through a symlinked checkout and rejects a seeded v
 
 test("the direct self-host entry point accepts action bumps but requires committed snapshots for test changes", () => {
   const fixture = makeTempDir();
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" };
+  const env: NodeJS.ProcessEnv = { ...testEnvironment(), GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" };
   delete env.NODE_TEST_CONTEXT;
   /** Run a real isolated Git command without relying on the caller identity. */
   const git = (args: readonly string[]): void => {

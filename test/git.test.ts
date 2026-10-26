@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { after, test } from "node:test";

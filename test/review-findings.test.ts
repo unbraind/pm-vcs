@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // Behaviour a review round exposed, and the behaviour that replaced it.
 //
 // Every test here pins a defect that shipped in the first draft of the engine and

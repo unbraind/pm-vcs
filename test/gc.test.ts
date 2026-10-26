@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import { exportBundle } from "../engine/bundle.ts";
 import { FileTransport } from "../engine/transport.ts";
 import { acquirePublicationLeases } from "./helpers/publication-consumers.ts";
@@ -39,7 +41,7 @@ function commit(repo: Repository, text: string) {
 
 /** Start one preloaded worker with IPC and bounded lifetime, surfacing its real failures. */
 function worker(action: string, root: string, remote = "") {
-  const child = fork(join(packageRoot, "test/helpers/gc-worker.ts"), [action, root, remote], { env: { ...process.env, ...discardChildCoverage() }, stdio: ["ignore", "ignore", "pipe", "ipc"], timeout: 90_000, execArgv: [] });
+  const child = fork(join(packageRoot, "test/helpers/gc-worker.ts"), [action, root, remote], { env: { ...testEnvironment(), ...discardChildCoverage() }, stdio: ["ignore", "ignore", "pipe", "ipc"], timeout: 90_000, execArgv: [] });
   let errors = ""; child.stderr?.on("data", data => { errors += String(data); });
   const closed = once(child, "close").then(([code, signal]) => ({ code, signal, errors }));
   const message = () => Promise.race([once(child, "message").then(([value]) => value), closed.then(result => { throw new Error(JSON.stringify(result)); })]);

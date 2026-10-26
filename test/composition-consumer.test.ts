@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Built and npm-packed acceptance against real SDK trackers under Node and Bun. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -7,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
-import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { pmExecutable } from "../scripts/pm-environment.ts";
 
 /** The exact SDK version this repository pins. Dependency updates move the pin, so the consumers assert the pin rather than a literal that every bump would break. */
 const pinnedSdk: string = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).devDependencies["@unbrained/pm-cli"];
@@ -305,7 +307,7 @@ process.stdout.write(JSON.stringify({ runtime: process.argv[2], sdk: installedSd
 test("built and npm-packed SDK10 Node/native Bun consumers and project-installed CLI execute composition and denied merges", /** Use a packed artifact and real peer dependency instead of SDK doubles. */ async (t) => {
   const temporary = makeTempDir();
   try {
-    const npmEnvironment = { ...process.env, ...discardChildCoverage() };
+    const npmEnvironment = { ...testEnvironment(), ...discardChildCoverage() };
     for (const key of Object.keys(npmEnvironment)) if (key.toLowerCase() === "npm_config_allow_scripts") delete npmEnvironment[key];
     const packed = spawnSync("npm", ["pack", "--ignore-scripts", "--pack-destination", temporary.root], { cwd: packageRoot, env: npmEnvironment, encoding: "utf8", timeout: 120_000 });
     assert.equal(packed.status, 0, packed.stderr);
@@ -320,7 +322,7 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     assert.match(design, /--current-erase-token-file/); assert.doesNotMatch(design, /PR[0-9]+|Review ID|Verified disposition|Renewed finding|source-only/);
     const built = consumer.replace('from "pm-vcs"', `from ${JSON.stringify(pathToFileURL(join(packageRoot, "dist", "index.js")).href)}`).replaceAll(/"pm-vcs\/dist\/([^" ]+)"/g, /** Bind the same consumer to built files for direct built-package acceptance. */ (_match, path: string) => JSON.stringify(pathToFileURL(join(packageRoot, "dist", path)).href));
     writeFileSync(join(project, "built.mjs"), built); writeFileSync(join(project, "packed.mjs"), consumer);
-    const environment = { ...withoutPmContext(process.env), ...discardChildCoverage() };
+    const environment = { ...testEnvironment(), ...discardChildCoverage() };
     const unavailable = spawnSync(process.execPath, ["packed.mjs", "node-project-cli", archive, join(project, "missing-cli.js")], { cwd: project, env: environment, encoding: "utf8", timeout: 120_000 });
     assert.equal(unavailable.status, 1); assert.match(unavailable.stderr, /Project-installed PM CLI unavailable before fixture setup/);
     console.log("consumer prerequisite: unavailable CLI, actual exit 1 before fixture setup");
@@ -330,7 +332,7 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     assert.equal(wrongVersion.status, 1); assert.match(wrongVersion.stderr, /Project-installed PM CLI version mismatch before fixture setup/);
     console.log("consumer prerequisite: mismatched CLI version, actual exit 1 before fixture setup");
     assert.equal(existsSync(join(project, "node-project-cli")), false);
-    const bunAvailable = spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
+    const bunAvailable = spawnSync("bun", ["--version"], { env: testEnvironment(), stdio: "ignore" }).status === 0;
     for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-project-cli"]]) {
       const skip = runtime === "bun" && !bunAvailable ? "Bun is unavailable (bun --version failed)" : false;
       await t.test(scenario, { skip }, () => {

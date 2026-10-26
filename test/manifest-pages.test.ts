@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Measured real-filesystem metadata bounds, canonical nodes and closure compatibility. */
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";

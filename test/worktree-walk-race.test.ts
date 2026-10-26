@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real filesystem regressions for vanishing children and installation runtime fences, without Git. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -129,7 +131,7 @@ test("native staging excludes installation runtime and removes visible legacy in
   const url = pathToFileURL(join(packageRoot, "engine/repo.ts")).href;
   const program = `import {Repository} from ${JSON.stringify(url)}; const repo=Repository.open(process.argv[1],process.argv[2]); repo.stage([]); process.stdout.write(JSON.stringify(repo.readIndex().map(entry=>entry.path)));`;
   const output = execFileSync(process.execPath, ["--input-type=module", "-e", program, root, pmRoot], {
-    cwd: root, encoding: "utf8", env: { ...process.env, NODE_V8_COVERAGE: "", PATH: temp(), GIT_CEILING_DIRECTORIES: dirname(root), PM_PATH: pmRoot, PM_GLOBAL_PATH: temp() },
+    cwd: root, encoding: "utf8", env: { ...testEnvironment(), NODE_V8_COVERAGE: "", PATH: temp(), GIT_CEILING_DIRECTORIES: dirname(root), PM_PATH: pmRoot, PM_GLOBAL_PATH: temp() },
   });
   const paths = JSON.parse(output) as string[];
   assert.ok(paths.includes("keep.txt")); assert.ok(!paths.some(path => path.startsWith(".pm-cli/runtime/")));

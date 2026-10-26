@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Differential mixed-storage, crash recovery and multi-process interleaving on real non-git trackers. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -9,7 +11,7 @@ import { dirname, join } from "node:path";
 import { afterEach, mock, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
-import { installPackedExtension, withoutPmContext } from "../scripts/pm-environment.ts";
+import { installPackedExtension } from "../scripts/pm-environment.ts";
 import extension from "../index.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { ObjectStore, frameObject, hashObject } from "../engine/objects.ts";
@@ -52,7 +54,7 @@ function equalReads(repo: Repository, entries: ReadonlyMap<string, Buffer>) {
 /** Run the installed engine in an independent process with Git discovery explicitly disabled. */
 function worker(action: string, repo: Repository, boundary = 0) {
   return spawnSync(process.execPath, [join(packageRoot, "test/helpers/pack-worker.ts"), action, repo.root, String(boundary)], {
-    env: { ...process.env, ...discardChildCoverage(), GIT_CEILING_DIRECTORIES: dirname(repo.root) }, encoding: "utf8", timeout: 30_000,
+    env: { ...testEnvironment(), ...discardChildCoverage(), GIT_CEILING_DIRECTORIES: dirname(repo.root) }, encoding: "utf8", timeout: 30_000,
   });
 }
 /** Small fixture makes exhaustive boundary schedules fast while retaining both live and unreachable objects. */
@@ -190,7 +192,7 @@ test("bounded and streamed typed readers consume packs; compact SDK and command 
 test("shipped compact command reads and collects packs with no Git executable or subprocess", async () => {
   const repo = await fresh(); const entries = corpus(repo, 4); installPackedExtension(repo.root);
   const nodeOnly = join(repo.root, "node-only"); mkdirSync(nodeOnly); symlinkSync(process.execPath, join(nodeOnly, "node"));
-  const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: nodeOnly, GIT_CEILING_DIRECTORIES: dirname(repo.root),
+  const env = { ...testEnvironment(), ...discardChildCoverage(), PATH: nodeOnly, GIT_CEILING_DIRECTORIES: dirname(repo.root),
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${new URL("./helpers/forbid-git.ts", import.meta.url).href}` };
   const cli = join(packageRoot, "node_modules/@unbrained/pm-cli/dist/cli.js");
   const json = spawnSync(process.execPath, [cli, "vcs", "compact", "--json"], { cwd: repo.root, env, encoding: "utf8" });

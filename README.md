@@ -806,6 +806,15 @@ sources, untested branches, forbidden syntax, short clones and hostile configura
 closed. It also invokes the operational scripts directly. `release:check` includes lint,
 duplication, docstrings and coverage; `prepublishOnly` requires that complete release gate.
 
+Every test entrypoint installs the session allowlist before importing the SDK. Test
+children select operational environment keys with `testEnvironment()` and supply
+agent identity only as an explicit fixture override; ambient Claude Code, Codex,
+`AI_AGENT` and `PM_AGENT_*` state cannot change provenance. Parent V8 instrumentation
+is retained, while child coverage is disabled. The environment regression runs the
+three provenance cases in clean and contaminated sessions and audits every child
+launch. Annotation fixtures settle their owned tasks, children and watchers before
+retry-bounded recursive removal; persistent teardown failures remain test failures.
+
 Tests run against real repositories and real filesystems. There are no mocks and no
 hand-built `api` doubles: this is filesystem and merge code, and a fake of either would only
 assert against the suite's own assumptions.

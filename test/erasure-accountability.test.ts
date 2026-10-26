@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Accountable storage, exact purge receipts and namespace replacement regressions on real non-git trackers. */
 import assert from "node:assert/strict";
 import { syncBuiltinESMExports } from "node:module";
@@ -130,7 +132,7 @@ test("fingerprint evidence is optional diagnostics and cannot certify unknown fi
 test("SIGKILL at EVERY purge journal and unlink boundary converges with one bounded receipt",async(t)=>{
  /** Every case uses an independently initialized SDK tracker and the actual SDK/engine command path. */
  const fresh=async()=>{const f=await fixture();place(f.repo.objects.storageRoot(),"unaccounted-purge",Buffer.from("foreign bytes to purge"));return f;};
- const run=(f:Awaited<ReturnType<typeof fixture>>,ordinal:number)=>spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-purge-worker.ts"),f.repo.root,f.entry.fileId!,String(ordinal)],{env:{...process.env,...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
+ const run=(f:Awaited<ReturnType<typeof fixture>>,ordinal:number)=>spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-purge-worker.ts"),f.repo.root,f.entry.fileId!,String(ordinal)],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
  const probe=await fresh();const listed=run(probe,0);assert.equal(listed.status,0,listed.stderr);const steps=JSON.parse(listed.stdout) as string[];assert.ok(steps.length>=40);
  for(let index=1;index<=steps.length;index++){
   const f=await fresh();const child=run(f,index);assert.equal(child.signal,"SIGKILL",`${index}/${steps[index-1]} ${child.stderr}`);f.repo.objects.recoverWriterLock();
@@ -142,7 +144,7 @@ test("SIGKILL at EVERY purge journal and unlink boundary converges with one boun
 
 test("one tracker serializes a competing purger at EVERY accountability boundary and reports peer success",async(t)=>{
  const f=await fixture();place(f.repo.objects.storageRoot(),"unaccounted-purge",Buffer.from("unknown peer fixture"));let attempts=0;
- const run=(mode:string)=>spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-peer.ts"),f.repo.root,f.entry.fileId!,mode],{env:{...process.env,...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
+ const run=(mode:string)=>spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-peer.ts"),f.repo.root,f.entry.fileId!,mode],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
  accountabilityBoundary.visit=()=>{const child=run("blocked");assert.equal(child.status,0,child.stderr);assert.equal(child.stdout.trim(),"store_locked");attempts++;};
  const receipt=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true});accountabilityBoundary.visit=()=>{};
  const peer=run("complete");assert.equal(peer.status,0,peer.stderr);const result=JSON.parse(peer.stdout) as {tombstone:string;purge:{deleted:number}};assert.equal(result.tombstone,receipt.tombstone);assert.equal(result.purge.deleted,1);assert.equal(f.repo.operations.read().filter(x=>x.command==="obliterate").length,1);assert.ok(attempts>=30);t.diagnostic(`${attempts} real-process competing transitions on one non-git tracker`);

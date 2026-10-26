@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Native fixture cleanup waits for its owners and retries transient nonempty directories. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -26,7 +28,7 @@ test("fixture cleanup retries a real transient native ENOTEMPTY without hiding p
 test("fixture teardown joins child close, stops watchers and drains queued writers before removal", async () => {
   const fixture = makeManagedTempDir(); let closed = false;
   fixture.watcher(watch(fixture.root)).once("close", () => { closed = true; });
-  const child = fixture.child(spawn(process.execPath, ["-e", "process.send('ready');process.on('message',()=>{require('node:fs').mkdirSync(process.argv[1]+'/.pm-cli/locks',{recursive:true});process.exit(0)})", fixture.root], { stdio: ["ignore", "ignore", "ignore", "ipc"] }));
+  const child = fixture.child(spawn(process.execPath, ["-e", "process.send('ready');process.on('message',()=>{require('node:fs').mkdirSync(process.argv[1]+'/.pm-cli/locks',{recursive:true});process.exit(0)})", fixture.root], { env: testEnvironment(), stdio: ["ignore", "ignore", "ignore", "ipc"] }));
   await once(child, "message");
   const childClosed = once(child, "close");
   fixture.task(new Promise<void>((resolve, reject) => { setTimeout(() => { try { writeFileSync(join(fixture.root, "pending"), "settled"); resolve(); } catch (error) { reject(error); } }, 20); }));

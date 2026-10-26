@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -9,7 +11,7 @@ import { discardChildCoverage } from "./helpers/sandbox.ts";
 
 /** Check optional witness tools without making them prerequisites for Node tests. */
 function commandAvailable(command: string): boolean {
-  const result = spawnSync(command, ["--version"], { stdio: "ignore" });
+  const result = spawnSync(command, ["--version"], { env: testEnvironment(), stdio: "ignore" });
   return result.error === undefined && result.status === 0;
 }
 
@@ -32,7 +34,7 @@ function runCreationStep(failPr: boolean): { status: number | null; calls: strin
       cwd: root,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...testEnvironment(),
         PATH: `${root}${delimiter}${process.env.PATH ?? ""}`,
         GITHUB_REPOSITORY: "unbraind/pm-vcs",
         GITHUB_RUN_ID: "123",
@@ -107,7 +109,7 @@ import { writeFileSync } from "node:fs";
 import { test } from "node:test";
 test("runtime witness", () => { assert.ok(process.versions.bun); writeFileSync("bun-ran", process.versions.bun); });
 `);
-    const result = spawnSync("bash", ["-e", "-c", script], { cwd: root, encoding: "utf8", timeout: 120_000 });
+    const result = spawnSync("bash", ["-e", "-c", script], { env: testEnvironment(), cwd: root, encoding: "utf8", timeout: 120_000 });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(join(root, "gate-ran"), "utf8"), "yes");
     assert.ok(readFileSync(join(root, "bun-ran"), "utf8"), "workflow must execute tests under Bun");
@@ -125,7 +127,7 @@ test("Bun witness skips when either optional tool is unavailable", () => {
       const tool = join(bin, available);
       writeFileSync(tool, `#!${process.execPath}\nprocess.exit(process.argv[2] === "--version" ? 0 : 17);\n`);
       chmodSync(tool, 0o755);
-      const env: NodeJS.ProcessEnv = { ...process.env, ...discardChildCoverage(), PATH: bin };
+      const env: NodeJS.ProcessEnv = { ...testEnvironment(), ...discardChildCoverage(), PATH: bin };
       delete env.NODE_TEST_CONTEXT;
       const result = spawnSync(process.execPath, [
         "--test", "--test-reporter=tap",
