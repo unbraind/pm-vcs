@@ -242,6 +242,8 @@ test("erasure replacement after durable denial refuses completion and preserves 
   assert.equal(swapped, true); assert.equal(repo.objects.denials()[0]!.pending, true); assert.equal(readlinkSync(leaf), external);
   assert.equal(readFileSync(external, "utf8"), "outside sentinel"); assert.equal(repo.readFileState(tip, "owned").kind, "obliterated");
   assert.equal(repo.operations.read().at(-1)!.command, "commit");
+  assert.throws(() => repo.obliterate("owned", "erase-fixture", "incident", new Date()), { code: "worktree_path_changed" });
+  rmSync(leaf); // A replacement is foreign; recovery cannot extend the original deletion set.
   repo.obliterate("owned", "erase-fixture", "incident", new Date()); assert.equal(lstatSync(leaf, { throwIfNoEntry: false }), undefined);
   assert.equal(repo.objects.denials()[0]!.pending, false); assert.equal(readFileSync(external, "utf8"), "outside sentinel");
 });

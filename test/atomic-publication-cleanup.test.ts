@@ -24,7 +24,7 @@ for (const kind of ["ref", "object"] as const) {
       const sentinel = join(dirname(destination), "unrelated.lock"); writeFileSync(sentinel, "other writer");
       const before = readdirSync(dirname(destination)).sort();
       const open = fs.openSync; const write = fs.writeSync; const sync = fs.fsyncSync; const close = fs.closeSync; const rename = fs.renameSync;
-      let descriptor: number | undefined;
+      let descriptor: number | undefined; let retired = false;
       const failure = Object.assign(new Error(`injected ${stage} failure`), { code: stage === "writeSync" ? "ENOSPC" : "EIO" });
       /** Observe the actual exclusive temp open without intercepting lease metadata writes. */
       context.mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
@@ -33,16 +33,16 @@ for (const kind of ["ref", "object"] as const) {
         return handle;
       });
       context.mock.method(fs, "writeSync", (...args: Parameters<typeof fs.writeSync>) => {
-        if (stage === "writeSync" && args[0] === descriptor) throw failure;
+        if (stage === "writeSync" && !retired && args[0] === descriptor) throw failure;
         return write(...args);
       });
       context.mock.method(fs, "fsyncSync", (handle: number) => {
-        if (stage === "fsyncSync" && handle === descriptor) throw failure;
+        if (stage === "fsyncSync" && !retired && handle === descriptor) throw failure;
         return sync(handle);
       });
       context.mock.method(fs, "closeSync", (handle: number) => {
-        close(handle);
-        if (stage === "closeSync" && handle === descriptor) throw failure;
+        const owned = !retired && handle === descriptor; close(handle); if (owned) retired = true;
+        if (stage === "closeSync" && owned) throw failure;
       });
       context.mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => {
         if (stage === "renameSync" && args[1] === destination) throw failure;

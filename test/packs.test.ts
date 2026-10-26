@@ -14,6 +14,7 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { installPackedExtension } from "../scripts/pm-environment.ts";
 import extension from "../index.ts";
 import { collectGarbage } from "../engine/gc.ts";
+import { destructionBoundary } from "../engine/destruction.ts";
 import { ObjectStore, frameObject, hashObject } from "../engine/objects.ts";
 import { PackStorage, PackRefusal, packBoundary } from "../engine/packs.ts";
 import { Repository } from "../engine/repo.ts";
@@ -23,7 +24,7 @@ import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 
 const temporary: ReturnType<typeof makeTempDir>[] = [];
-afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); packBoundary.visit = () => {}; for (const dir of temporary.splice(0)) dir.cleanup(); });
+afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); packBoundary.visit = () => {}; destructionBoundary.visit = () => {}; for (const dir of temporary.splice(0)) dir.cleanup(); });
 /** Initialize a real tracker outside Git, using the pinned SDK rather than manufacturing PM records. */
 async function fresh() {
   const dir = makeTempDir(); temporary.push(dir);
@@ -430,4 +431,22 @@ test("every pack data reader retains the decoded-size bound and checks the index
     assert.deepEqual(repo.objects.readBoundedTyped(exact,"blob",8),Buffer.from("12345678"));
     assert.throws(() => repo.objects.readBoundedTyped(extra,"blob",8),{code:"object_payload_limit"});
   }
+});
+
+
+test("compaction recovery preserves a newly arrived duplicate outside its recorded set until a fresh request", async () => {
+ const repo=await fresh();const first=Buffer.from("first packed live source");const firstId=repo.objects.write("blob",first);repo.objects.compact();const second=Buffer.from("interrupted compaction source");const secondId=repo.objects.write("blob",second);
+ packBoundary.visit=step=>{if(step==="published")throw new Error("interrupted published compaction");};assert.throws(()=>repo.objects.compact(),/interrupted published compaction/);packBoundary.visit=()=>{};
+ const path=join(repo.objects.storageRoot(),firstId.slice(0,2),firstId.slice(2));mkdirSync(dirname(path),{recursive:true});writeFileSync(path,deflateSync(frameObject("blob",first)));
+ const result=repo.objects.compact();assert.ok(lstatSync(path).isFile());assert.equal(result.destruction.planned,1);equalReads(repo,new Map([[firstId,first],[secondId,second]]));
+ const backend=new PackStorage(repo.objects.storageRoot());assert.deepEqual(backend.locations(new Set(backend.files())),[]);
+ repo.objects.compact();assert.equal(lstatSync(path,{throwIfNoEntry:false}),undefined);equalReads(repo,new Map([[firstId,first],[secondId,second]]));
+});
+
+test("compaction preserves a peer replacement of either a duplicate or newly packed loose source", async () => {
+ for(const duplicate of [false,true]){
+  const repo=await fresh();const bytes=Buffer.from(`peer representation ${duplicate}`);const id=repo.objects.write("blob",bytes);if(duplicate)repo.objects.compact();const path=join(repo.objects.storageRoot(),id.slice(0,2),id.slice(2));mkdirSync(dirname(path),{recursive:true});if(duplicate)writeFileSync(path,deflateSync(frameObject("blob",bytes)));
+  let changed=false;destructionBoundary.visit=(step,name)=>{if(step==="before-delete"&&name===`objects/${id.slice(0,2)}/${id.slice(2)}`&&!changed){changed=true;fs.renameSync(path,join(repo.root,"retained-original"));writeFileSync(path,deflateSync(frameObject("blob",bytes)));}};
+  assert.throws(()=>repo.objects.compact(),error=>error instanceof Error&&"code"in error&&error.code==="destructive_target_changed"&&"receipt"in error&&(error.receipt as {skipped:number}).skipped===1);destructionBoundary.visit=()=>{};assert.ok(changed);assert.ok(lstatSync(path).isFile());assert.deepEqual(repo.objects.readTyped(id,"blob"),bytes);
+ }
 });

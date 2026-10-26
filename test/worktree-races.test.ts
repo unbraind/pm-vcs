@@ -18,6 +18,13 @@ let betweenSteps = false;
 let fixture: ReturnType<typeof makeTempDir> | undefined;
 const author: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
 
+/** Restrict syscall injection to leaf descriptor lifetimes; receipt and lease descriptors are independent operations. */
+function watchLeaf(): (fd: number) => boolean {
+  const open = fs.openSync; const stat = fs.fstatSync; const handles = new Map<number, { dev: bigint; ino: bigint }>();
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => { const fd = open(...args); if (String(args[0]).split(/[\\/]/).at(-1) === "leaf.txt") { const value = stat(fd, { bigint: true }); handles.set(fd, { dev: value.dev, ino: value.ino }); } return fd; });
+  return fd => { const expected = handles.get(fd); if (expected === undefined) return false; const value = stat(fd, { bigint: true }); return value.dev === expected.dev && value.ino === expected.ino; };
+}
+
 afterEach(() => {
   mock.restoreAll();
   syncBuiltinESMExports();
@@ -379,10 +386,10 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
             if (boundary === "chmod") symlinkSync(join(destination, "leaf.txt"), join(repo.root, "branch/leaf.txt"));
           };
           if (boundary === "fstat") {
-            const fstat = fs.fstatSync;
+            const fstat = fs.fstatSync; const ownedLeaf = watchLeaf();
             mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => {
               const stat = fstat(...args);
-              if (!swapped && stat.isFile()) swap();
+              if (!swapped && stat.isFile() && ownedLeaf(args[0])) swap();
               return stat;
             });
           } else {
@@ -400,10 +407,10 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
         for (const replacement of ["ancestor", "leaf"] as const) {
           test(`${operation} refuses a ${replacement} symlink swap and preserves its outside target`, () => {
             const { repo, destination, tip } = setup();
-            const original = fs[operation];
+            const original = fs[operation]; const ownedLeaf = watchLeaf();
             let swapped = false;
             mock.method(fs, operation, (...args: Parameters<typeof original>) => {
-              if (typeof args[0] === "number" && !swapped) {
+              if (typeof args[0] === "number" && !swapped && ownedLeaf(args[0])) {
                 swapped = true;
                 const path = replacement === "ancestor" ? join(repo.root, "branch") : join(repo.root, "branch/leaf.txt");
                 renameSync(path, `${path}-parked`);

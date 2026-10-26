@@ -225,7 +225,7 @@ test("upload partial native failure records no failed-batch acceptance and retry
   const blocked = join(repo.controlDirectory, "objects", second.id.slice(0, 2), second.id.slice(2)); mkdirSync(blocked, { recursive: true });
   const rename = fs.renameSync; let native: unknown;
   mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => { try { return rename(...args); } catch (error) { native = error; throw error; } }); syncBuiltinESMExports();
-  await assert.rejects(transport.uploadObjects([first, second]), error => error === native && error instanceof Error);
+  await assert.rejects(transport.uploadObjects([first, second]), error => error instanceof Error && "code" in error && error.code === "EISDIR"); assert.equal(native, undefined, "a known directory destination must refuse before native rename");
   assert.equal(repo.objects.has(first.id), true); assert.equal(repo.objects.has(second.id), false); assert.equal(lease(repo), undefined);
   assert.deepEqual((await transport.publish([], false, new Date())).added, [earlier.id], "a failed native batch leaked optimistic arrival IDs into a publication receipt");
   mock.restoreAll(); syncBuiltinESMExports(); rmSync(blocked, { recursive: true });

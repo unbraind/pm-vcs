@@ -37,6 +37,14 @@ export const durability = {
   },
   /** Remove only an empty owned directory; ENOTEMPTY remains available to foreign-record preservation. */
   removeDirectory(path: string): DestructionReceipt { return retireNamespace({ path, directory: true }); },
+  /** An unpublished process-owner record is bootstrap state: retire only its exclusive descriptor's original inode. */
+  discardUnpublished(path: string, descriptor: number, original: fs.BigIntStats): { readonly released: boolean; readonly reason: "owned_bootstrap" | "foreign_owner" | "absent" } {
+    const current = fs.lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    if (current === undefined) return { released: false, reason: "absent" };
+    const held = fs.fstatSync(descriptor, { bigint: true });
+    if (held.dev !== original.dev || held.ino !== original.ino || held.birthtimeNs !== original.birthtimeNs || current.dev !== held.dev || current.ino !== held.ino || current.birthtimeNs !== held.birthtimeNs) return { released: false, reason: "foreign_owner" };
+    fs.unlinkSync(path); durability.directory(dirname(path)); return { released: true, reason: "owned_bootstrap" };
+  },
   /** Close a raw lock descriptor last and retire only its original inode and bytes; peer owners are preserved. */
   release(path: string, descriptor: number, expected?: fs.BigIntStats): DestructionReceipt | { readonly released: false; readonly reason: "foreign_owner" | "absent" } {
     try {

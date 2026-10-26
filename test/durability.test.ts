@@ -3,7 +3,7 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 /** Capability-forced durability and real Windows-compatible CLI collection on a non-git tracker. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import fs, { closeSync, existsSync, fstatSync, globSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import fs, { closeSync, existsSync, fstatSync, globSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { afterEach, mock, test } from "node:test";
@@ -106,4 +106,20 @@ test("metadata durability opens writable file handles for Windows flushes", asyn
   }); syncBuiltinESMExports();
   const path = join(repo.controlDirectory,"writable-flush.json"); writePrivateJson(path,{verified:true});
   assert.deepEqual(JSON.parse(readFileSync(path,"utf8")),{verified:true});
+});
+
+
+test("unpublished owner bootstrap cleanup requires the exclusive descriptor lifetime and preserves absent or foreign owners", () => {
+ const temp=makeTempDir();temporary.push(temp);
+ for(const mode of ["owned","absent","replacement","held-dev","held-ino","held-birth","path-dev","path-birth"]){
+  const path=join(temp.root,mode);const fd=openSync(path,"wx");const original=fstatSync(fd,{bigint:true});
+  try{
+   if(mode==="absent")rmSync(path);
+   if(mode==="replacement"){renameSync(path,`${path}.old`);writeFileSync(path,"foreign owner");}
+   let expected=original;
+   if(mode.startsWith("held-")){const field=mode==="held-dev"?"dev":mode==="held-ino"?"ino":"birthtimeNs";expected={...original,[field]:original[field]+1n};}
+   if(mode.startsWith("path-")){const stat=fs.lstatSync;mock.method(fs,"lstatSync",(...args:Parameters<typeof fs.lstatSync>)=>{const value=stat(...args);if(args[0]!==path)return value;const field=mode==="path-dev"?"dev":"birthtimeNs";return{...value,[field]:(value as fs.BigIntStats)[field]+1n};});syncBuiltinESMExports();}
+   const result=durability.discardUnpublished(path,fd,expected);assert.equal(result.released,mode==="owned");assert.equal(result.reason,mode==="owned"?"owned_bootstrap":mode==="absent"?"absent":"foreign_owner");mock.restoreAll();syncBuiltinESMExports();if(mode!=="owned"&&mode!=="absent")assert.ok(existsSync(path));
+  }finally{mock.restoreAll();syncBuiltinESMExports();closeSync(fd);}
+ }
 });

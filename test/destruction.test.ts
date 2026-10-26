@@ -4,11 +4,12 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import fs, { existsSync, fstatSync, openSync, symlinkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import fs, { cpSync, existsSync, fstatSync, openSync, symlinkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, mock, test } from "node:test";
 import { durability } from "../engine/durability.ts";
-import { destructionBoundary, prepareDestruction, inspectDestructions, retireNamespace, measureDestructionRevision, DestructionRefusal } from "../engine/destruction.ts";
+import { destructionBoundary, prepareDestruction, prepareNamespaceDestruction, inspectDestructions, retireNamespace, measureDestructionRevision, DestructionRefusal } from "../engine/destruction.ts";
 import { syncBuiltinESMExports } from "node:module";
 import { objectFiles } from "../engine/object-files.ts";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -129,6 +130,7 @@ test("invalid flags, paths, destination types and expected identities refuse the
   assert.throws(() => prepareDestruction(f.control, "duplicates", [{ path: f.paths[0] }, { path: f.paths[0], destination: f.paths[1] }]), { code: "conflicting_destructive_requests" });
   for (const key of ["", "bad\0key", undefined]) assert.throws(() => prepareDestruction(f.control, key as never, []), { code: "conflicting_destructive_requests" });
   for (const options of [null, [], { force: 1 }, { recursive: "yes" }, { extra: true }]) assert.throws(() => durability.remove(f.paths[0], options as never), { code: "conflicting_destructive_requests" });
+  assert.throws(() => retireNamespace({ path: f.paths[0], expected: null as never }), { code: "conflicting_destructive_requests" });
   assert.equal(readFileSync(join(f.tripwire, "guard"), "utf8"), "untouched sentinel");
 });
 
@@ -348,4 +350,64 @@ test("terminal skipped receipts become historical when peer leaves disappear and
 test("an IO failure while checking an active skipped leaf preserves the finalized receipt for a later clean retry", () => {
   const f = fixture(); const plan = prepareDestruction(f.control, "skip-io", [{ path: f.paths[0] }]); renameSync(f.paths[0], `${f.paths[0]}.old`); writeFileSync(f.paths[0], "foreign"); plan.remove(f.paths[0]); const stat = fs.lstatSync;
   mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => { if (args[0] === f.paths[0]) throw Object.assign(new Error("leaf unreadable"), { code: "EIO" }); return Reflect.apply(stat, fs, args); }); syncBuiltinESMExports(); assert.throws(() => plan.finish(), { code: "EIO" }); mock.restoreAll(); syncBuiltinESMExports(); rmSync(f.paths[0]); assert.equal(plan.finish().status, "completed");
+});
+
+test("a same-id foreign checkpoint cannot replace the immutable deletion set during handle refresh", () => {
+  const f = fixture(); const plan = prepareDestruction(f.control, "original-authority", f.paths.map(path => ({ path }))); const originalName = join(f.control, "destruction", `${createHash("sha256").update(`${f.control}\0original-authority`).digest("hex")}.json`); const original = JSON.parse(readFileSync(originalName, "utf8")) as { entries: unknown[] };
+  prepareDestruction(f.control, "other-authority", [{ path: join(f.tripwire, "guard") }]); const otherName = join(f.control, "destruction", `${createHash("sha256").update(`${f.control}\0other-authority`).digest("hex")}.json`); const other = JSON.parse(readFileSync(otherName, "utf8")) as { entries: unknown[] };
+  writeFileSync(originalName, JSON.stringify({ ...original, entries: other.entries }));
+  let failure: unknown; try { plan.remove(f.paths[0]); } catch (error) { failure = error; }
+  assert.equal(readFileSync(join(f.tripwire, "guard"), "utf8"), "untouched sentinel"); assert.ok(failure instanceof DestructionRefusal && failure.code === "destructive_intent_changed"); for (const path of f.paths) assert.ok(existsSync(path));
+});
+
+test("descriptor aliases cannot name foreign leaves at validation or after a request object is reused", () => {
+  const f = fixture(); const guard = join(f.tripwire, "guard");
+  assert.throws(() => prepareDestruction(f.control, "foreign-address", [{ path: f.paths[0], address: guard }]), { code: "conflicting_destructive_requests" });
+  assert.throws(() => prepareDestruction(f.control, "missing-destination", [{ path: f.paths[0], destinationAddress: guard }]), { code: "conflicting_destructive_requests" });
+  assert.throws(() => prepareDestruction(f.control, "foreign-destination", [{ path: f.paths[0], destination: f.paths[1], destinationAddress: guard }]), { code: "conflicting_destructive_requests" });
+  const request = { path: f.paths[0], address: f.paths[0] }; const plan = prepareDestruction(f.control, "mutated-address", [request]); request.address = guard; let failure: unknown; try { plan.remove(f.paths[0]); } catch (error) { failure = error; } assert.equal(readFileSync(guard, "utf8"), "untouched sentinel"); assert.ok(failure instanceof DestructionRefusal && failure.code === "conflicting_destructive_requests"); assert.ok(existsSync(f.paths[0]));
+});
+
+
+test("a publication source lost before intent validation cannot report empty success or replace an unrelated destination", () => {
+ const f=fixture();const destination=join(f.tripwire,"guard");rmSync(f.paths[0]);
+ assert.throws(()=>durability.scoped(f.control,()=>retireNamespace({path:f.paths[0],destination})),{code:"destructive_target_changed"});assert.equal(readFileSync(destination,"utf8"),"untouched sentinel");
+});
+
+
+test("verified repository aliases resolve to the owned root while descendant links never gain authority", () => {
+ for(const ancestor of [false,true]){const f=fixture();const alias=join(f.dir.root,"alias");symlinkSync(ancestor?f.dir.root:f.control,alias,"dir");const control=ancestor?join(alias,"control"):alias;const leaf=join(f.control,"leaf");writeFileSync(leaf,"owned");assert.equal(durability.scoped(control,()=>durability.unlink(join(control,"leaf"))).deleted,1);assert.ok(!existsSync(leaf));}
+ const f=fixture();const alias=join(f.dir.root,"file-alias");symlinkSync(join(f.tripwire,"guard"),alias);assert.throws(()=>durability.scoped(alias,()=>retireNamespace({path:join(alias,"leaf")})),{code:"destructive_target_changed"});
+});
+
+test("whole namespace plans use repository or standalone scope and never retire their own private ledger", () => {
+ for(const repository of [false,true]){const f=fixture();if(repository)writeFileSync(join(f.control,"format"),"pmvcs-1\n");const leaf=join(f.control,"leaf");writeFileSync(leaf,"owned");const plan=prepareNamespaceDestruction(join(f.control,"anchor"),"scope",[{path:leaf}]);plan.remove(leaf);assert.equal(plan.finish().deleted,1);}
+ const f=fixture();const untrusted=join(f.dir.root,"untrusted");symlinkSync(f.data,untrusted,"dir");assert.throws(()=>prepareNamespaceDestruction(join(untrusted,"anchor"),"untrusted",[{path:join(untrusted,"a")}]),{code:"destructive_target_changed"});
+ const privateLedger=join(tmpdir(),`pm-vcs-namespace-${createHash("sha256").update(f.control).digest("hex")}`,"destruction");
+ assert.throws(()=>durability.scoped(f.control,()=>retireNamespace({path:privateLedger,recursive:true})),{code:"destructive_target_unsupported"});
+ assert.equal(inspectDestructions(join(f.control,"missing")).pending,0);
+});
+
+test("receipt inspection treats a recreated root as historical without modifying its retained audit bytes", () => {
+ const f=fixture();const plan=prepareDestruction(f.control,"historical",f.paths.map(path=>({path})));plan.remove(f.paths[0]);renameSync(f.control,`${f.control}.old`);mkdirSync(f.control);cpSync(join(`${f.control}.old`,"destruction"),join(f.control,"destruction"),{recursive:true});
+ const record=recordPath(f.control);const before=readFileSync(record);const report=inspectDestructions(f.control);assert.equal(report.pending,0);assert.equal(report.completed,1);assert.ok(report.skipped.some(entry=>entry.reason.includes("root_retired")));assert.deepEqual(readFileSync(record),before);assert.ok(existsSync(f.paths[1]));
+});
+
+
+test("a special publication destination refuses before retiring either namespace member", () => {
+ const f=fixture();const destination=join(f.data,"destination-fifo");const created=spawnSync("mkfifo",[destination],{env:testEnvironment(),encoding:"utf8"});assert.equal(created.status,0,created.stderr);
+ assert.throws(()=>prepareDestruction(f.control,"special-destination",[{path:f.paths[0],destination}]),{code:"destructive_target_unsupported"});assert.ok(lstatSync(destination).isFIFO());assert.ok(existsSync(f.paths[0]));assert.equal(readFileSync(join(f.tripwire,"guard"),"utf8"),"untouched sentinel");
+});
+
+
+test("an unlink crash cannot transfer a prior owner's cleanup intent to a new owner at the same pathname", () => {
+ const f=fixture();const path=join(f.control,"objects.lock");writeFileSync(path,"old owner");const original=lstatSync(path,{bigint:true});
+ destructionBoundary.visit=step=>{if(step==="deleted")throw new Error("crash after owner unlink");};assert.throws(()=>durability.scoped(f.control,()=>durability.unlink(path,original)));destructionBoundary.visit=()=>{};assert.ok(!existsSync(path));
+ writeFileSync(path,"new owner");const replacement=lstatSync(path,{bigint:true});const historical=inspectDestructions(f.control);assert.equal(historical.pending,0);assert.ok(historical.skipped.some(entry=>entry.reason.includes("member_lifetime_ended")));assert.equal(readFileSync(path,"utf8"),"new owner");
+ const receipt=durability.scoped(f.control,()=>durability.unlink(path,replacement));assert.equal(receipt.deleted,1);assert.equal(inspectDestructions(f.control).pending,0);
+});
+
+test("observational receipts distinguish current directory, retired directory and unfinished rename lifetimes", () => {
+ const f=fixture();const directory=join(f.data,"directory");mkdirSync(directory);prepareDestruction(f.control,"directory-life",[{path:directory,directory:true}]);assert.equal(inspectDestructions(f.control).pending,1);renameSync(directory,`${directory}.old`);mkdirSync(directory);assert.equal(inspectDestructions(f.control).pending,0);assert.ok(lstatSync(directory).isDirectory());
+ prepareDestruction(f.control,"rename-life",[{path:f.paths[0],destination:join(f.data,"renamed")}]);assert.equal(inspectDestructions(f.control).pending,1);assert.ok(existsSync(f.paths[0]));
 });

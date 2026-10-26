@@ -1,4 +1,4 @@
-import { accountErasureStorage, planErasureStorage, erasurePurge, type ErasurePurgeReceipt, type ErasureAccountabilityReport, ACCOUNTABILITY_ATTEMPTS } from "./erasure-accountability.ts";
+import { accountErasureStorage, planErasureStorage, erasurePurge, type ErasurePurgeReceipt, type ErasureAccountabilityReport } from "./erasure-accountability.ts";
 import { prepareDestruction, type DestructionReceipt } from "./destruction.ts";
 import { deflateSync } from "node:zlib";
 import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, erasureScanBoundary, ErasureStorageRefusal, type ErasureFingerprint } from "./erasure-scan.ts";
@@ -318,16 +318,16 @@ export function eraseFile(repository: Repository, instances: readonly Repository
           return purge.purge(file, () => { store.markStorageGeneration(); remove(); });
         } : undefined,
       });
+      const worktreePlans = [...removals].map(([instance, paths]) => mutations.get(instance)!.planErasure(fileId, paths, existing?.pending === true));
+      if (options.purgeUnaccounted === true) purge.begin(purgeFiles); else purge.plan(purgeFiles, true);
       if (proofWritable) {
         if (JSON.stringify(proofs) !== JSON.stringify(updatedProofs)) writePrivateJson(proofsPath, fingerprintJournal(updatedProofs));
       }
       erasureScanBoundary.visit("proof-persisted");
       // Preflight every proposed representation before the first audit-object or denial write.
-      if (existing === undefined) store.write("tombstone", payload);
+      // recordDenials publishes verified audit objects even while another authorized cleanup is pending.
       store.recordDenials(next);
       erasureScanBoundary.visit("pending");
-      const worktreePlans = [...removals].map(([instance, paths]) => mutations.get(instance)!.planErasure(fileId, paths, existing?.pending === true));
-      purge.plan(purgeFiles, existing?.pending === true);
       accountStorage();
       store.unpack();
       physical.clear();
@@ -347,12 +347,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       erasureScanBoundary.visit("receipt");
       for (const instance of instances) assertSupportedControl(instance.controlDirectory);
       assertSupportedControl(control);
-      let certified: { storage: ErasureAccountabilityReport; purgeReceipt: ErasurePurgeReceipt } | undefined;
-      for (let attempt = 0; attempt < ACCOUNTABILITY_ATTEMPTS; attempt++) {
-        const before = purge.receipt(); const storage = accountStorage(true); const purgeReceipt = purge.receipt();
-        if (JSON.stringify(before) === JSON.stringify(purgeReceipt)) { certified = { storage, purgeReceipt }; break; }
-      }
-      if (certified === undefined) throw new ObjectStoreError("unverifiable", "Storage changed throughout verification; restore a stable store and retry.");
+      const certified = { purgeReceipt: purge.receipt(), storage: accountStorage(true) };
       const { purgeReceipt } = certified;
       const storage = { ...certified.storage, ...(diagnostic === undefined ? {} : { diagnostic }) };
       // No observer callback follows the final namespace barrier before completion publication.

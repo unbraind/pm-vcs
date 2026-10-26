@@ -7,13 +7,13 @@ import { spawnSync } from "node:child_process";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import fs, { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createHash } from "node:crypto";
+import crypto, { createHash } from "node:crypto";
 import { deflateSync, inflateSync, inflateRawSync, constants as zlibConstants } from "node:zlib";
 import { afterEach, test, mock } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { ObjectStore, frameObject, hashObject } from "../engine/objects.ts";
-import { accountErasureStorage, accountabilityBoundary, erasurePurge, ACCOUNTABILITY_ATTEMPTS } from "../engine/erasure-accountability.ts";
+import { accountErasureStorage, accountabilityBoundary, erasurePurge, planErasureStorage, ACCOUNTABILITY_ATTEMPTS } from "../engine/erasure-accountability.ts";
 import { erasureScanBoundary, erasureScanLimits } from "../engine/erasure-scan.ts";
 import { objectFiles } from "../engine/object-files.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -230,10 +230,42 @@ test("invalid audit arguments refuse before an explicitly authorized purge",asyn
  assert.equal(readFileSync(path,"utf8"),"preserve invalid request");assert.equal(existsSync(join(f.repo.controlDirectory,"erasure-purge.json")),false);
 });
 
-test("receipt changes restart final verification and bounded churn never publishes completion",async()=>{
- const f=await fixture();let starts=0;let additions=0;
- accountabilityBoundary.visit=(step,path,attempt)=>{if(step==="pass-start"&&attempt===0&&++starts>=3){place(path,`unaccounted-final-${additions++}`,Buffer.from("late unaccounted bytes"));}};
+test("late unplanned files refuse the frozen purge and a fresh explicit request records a separate immutable batch",async()=>{
+ const f=await fixture();let starts=0;let additions=0;let late="";
+ accountabilityBoundary.visit=(step,path,attempt)=>{if(step==="pass-start"&&attempt===0&&++starts===3){late=place(path,`unaccounted-final-${additions++}`,Buffer.from("late unaccounted bytes"));}};
  assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true}),{code:"unverifiable"});
- assert.equal(additions,ACCOUNTABILITY_ATTEMPTS);assert.ok(f.repo.objects.denials()[0].pending);assert.equal(f.repo.operations.read().filter(x=>x.command==="obliterate").length,0);
- accountabilityBoundary.visit=()=>{};const receipt=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1));assert.equal(receipt.purge.deleted,ACCOUNTABILITY_ATTEMPTS);assert.equal(receipt.storage.accountable,true);
+ assert.equal(additions,1);assert.ok(existsSync(late));assert.ok(f.repo.objects.denials()[0].pending);assert.equal(f.repo.operations.read().filter(x=>x.command==="obliterate").length,0);
+ accountabilityBoundary.visit=()=>{};assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),{code:"unverifiable"});assert.ok(existsSync(late));
+ const receipt=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true});assert.equal(receipt.purge.deleted,1);assert.equal(receipt.purge.intents.length,2);assert.deepEqual(receipt.purge.intents.map(plan=>plan.planned),[0,1]);assert.equal(receipt.storage.accountable,true);
+});
+
+test("accountability namespace churn remains bounded without extending any purge batch",async()=>{
+ const f=await fixture();let additions=0;
+ accountabilityBoundary.visit=(step,path)=>{if(step==="pass-check"){const body=Buffer.from(`unrelated accounted object ${additions++}`);const id=hashObject("blob",body);place(path,`${id.slice(0,2)}/${id.slice(2)}`,deflateSync(frameObject("blob",body)));}};
+ assert.throws(()=>accountErasureStorage(f.repo.objects.storageRoot(),empty),{code:"unverifiable"});assert.equal(additions,ACCOUNTABILITY_ATTEMPTS);
+ accountabilityBoundary.visit=()=>{};assert.equal(accountErasureStorage(f.repo.objects.storageRoot(),empty).accountable,true);
+});
+
+
+test("purge batch schema preserves legacy audit facts and refuses invalid authority before deletion", async () => {
+ const f=await fixture();const control=f.repo.controlDirectory;const roots=[f.repo.objects.storageRoot()];const id=f.entry.fileId!;const path=join(control,"erasure-purge.json");const revision="a".repeat(64);
+ const valid={format:"pm-vcs-erasure-purge-2",operations:{[id]:[]},plans:{[id]:[{id,revision}]}};
+ for(const plans of [null,[],{bad:[]},{[id]:null},{[id]:[null]},{[id]:[{id,revision,extra:true}]},{[id]:[{id:"bad",revision}]},{[id]:[{id,revision:"bad"}]},{[id]:[{id:"b".repeat(32),revision}]},{[id]:[{id,revision},{id,revision}]},{}]){
+  writeFileSync(path,JSON.stringify({...valid,plans}));assert.throws(()=>erasurePurge(control,id,roots,true),{code:"unverifiable"});
+ }
+ writeFileSync(path,JSON.stringify({format:"pm-vcs-erasure-purge-1",operations:{[id]:[]}}));assert.equal(erasurePurge(control,id,roots,false).receipt().intents.length,1);
+ writeFileSync(path,JSON.stringify(valid));const readOnly=erasurePurge(control,"c".repeat(32),roots,true,true);assert.throws(()=>readOnly.begin([]),{code:"unverifiable"});
+ const other=place(roots[0],"foreign-batch",Buffer.from("unrelated batch"));const candidates=planErasureStorage(roots);
+ const before=readFileSync(path);assert.throws(()=>erasurePurge(control,id,roots,true).begin([{...candidates[0],path:join(f.dir.root,"outside")}]),{code:"unverifiable"});assert.deepEqual(readFileSync(path),before);
+ const unauthorized=erasurePurge(control,id,roots,false);unauthorized.begin(candidates);assert.deepEqual(readFileSync(path),before);
+ const fresh=erasurePurge(control,id,roots,true);let calls=0;const random=crypto.randomBytes;mock.method(crypto,"randomBytes",(size:number)=>size===16&&++calls===1?Buffer.from(id,"hex"):Reflect.apply(random,crypto,[size]));syncBuiltinESMExports();fresh.begin(candidates);fresh.begin(candidates);fresh.plan(candidates);mock.restoreAll();syncBuiltinESMExports();assert.ok(calls>=2);
+ const journal=JSON.parse(readFileSync(path,"utf8")) as typeof valid;assert.equal(Object.keys(journal.operations).length,2);assert.ok(existsSync(other));
+ const resumed=erasurePurge(control,id,roots,false);assert.equal(resumed.canPurge,true);assert.equal(resumed.purge(candidates[0],()=>rmSync(other)),true);assert.equal(resumed.receipt().deleted,1);
+});
+
+
+test("a fresh purge batch cannot overwrite an operation id already owned by another FileId", async () => {
+ const f=await fixture();const id=f.entry.fileId!;const other="d".repeat(32);const path=join(f.repo.controlDirectory,"erasure-purge.json");const roots=[f.repo.objects.storageRoot()];
+ writeFileSync(path,JSON.stringify({format:"pm-vcs-erasure-purge-2",operations:{[id]:[]},plans:{[other]:[{id,revision:"a".repeat(64)}]}}));
+ erasurePurge(f.repo.controlDirectory,id,roots,true).begin([]);const journal=JSON.parse(readFileSync(path,"utf8")) as {operations:Record<string,unknown[]>;plans:Record<string,{id:string}[]>};assert.deepEqual(journal.operations[id],[]);assert.notEqual(journal.plans[id][0].id,id);assert.equal(journal.plans[other][0].id,id);
 });

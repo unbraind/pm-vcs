@@ -31,7 +31,7 @@ export interface DestructionReceipt {
   readonly omitted: number; readonly entries: readonly DestructionEntry[];
 }
 /** Stable refusal codes cover validation, ownership, conflict and recoverable partial execution. */
-export type DestructionRefusalCode = "invalid_receipt_limit" | "destructive_target_changed" | "destructive_target_unsupported" | "ENOTEMPTY" | "conflicting_destructive_requests" | "foreign_destructive_intent" | "destructive_intent_changed" | "destructive_intent_locked" | "destructive_plan_conflict" | "unplanned_deletion" | "destructive_operation_pending";
+export type DestructionRefusalCode = "EISDIR" | "invalid_receipt_limit" | "destructive_target_changed" | "destructive_target_unsupported" | "ENOTEMPTY" | "conflicting_destructive_requests" | "foreign_destructive_intent" | "destructive_intent_changed" | "destructive_intent_locked" | "destructive_plan_conflict" | "unplanned_deletion" | "destructive_operation_pending";
 /** Recoverable partial failure always names its frozen receipt and an actionable remedy. */
 export class DestructionRefusal extends ObjectStoreError {
   /** Narrow discriminator for exhaustive SDK handling. */
@@ -46,13 +46,15 @@ export class DestructionRefusal extends ObjectStoreError {
 /** Boundary callbacks run before the next identity check, including after each durable progress update. @internal */
 export const destructionBoundary: { visit(step: string, path: string): void } = { visit() {} };
 interface Intent { format: "pm-vcs-destruction-1"; id: string; revision: string; root: string; rootIdentity: string; entries: DestructionEntry[]; status: "pending" | "completed" }
-interface Scope { control: string; revision?: string }
+interface Scope { control: string; repository: boolean; revision?: string }
 let backend: DestructionBackend;
 const scopes: Scope[] = [];
 /** Install only the durability helper's platform-aware primitives. @internal */
 export function configureDestruction(value: DestructionBackend): void { backend = value; }
 /** Keep synchronous namespace mutations within their store's already-owned writer lease. @internal */
-export function withDestructionScope<T>(control: string, action: () => T): T { scopes.push({ control: resolve(control) }); try { return action(); } finally { scopes.pop(); } }
+export function withDestructionScope<T>(control: string, action: () => T): T { return inScope({ control: resolve(control), repository: true }, action); }
+/** Preserve the verified repository boundary without trusting arbitrary standalone parent links. */
+function inScope<T>(scope: Scope, action: () => T): T { scopes.push(scope); try { return action(); } finally { scopes.pop(); } }
 /** Only stable device/inode/birth identity grants authority across a directory lifetime. */
 function birth(stat: BigIntStats): string { return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`; }
 /** A mutation stamp includes ctime so an in-place rewrite cannot retain deletion authority. */
@@ -76,11 +78,20 @@ function canonical(path: string): string {
   const absolute = resolve(path); const parent = dirname(absolute);
   if (absolute === parent) throw new DestructionRefusal("destructive_target_unsupported", "A filesystem root is never a deletion target.");
   if (!/^\/proc\/self\/fd\/[0-9]+$/.test(parent)) {
-    let current = parent;
-    for (;;) { const stat = lstatSync(current, { throwIfNoEntry: false }); if (stat !== undefined && !stat.isDirectory()) throw new DestructionRefusal("destructive_target_changed", "A namespace parent is not an ordinary directory."); const next = dirname(current); if (next === current) break; current = next; }
-    return absolute;
+    let current = parent; let alias = false;
+    for (;;) { const stat = lstatSync(current, { throwIfNoEntry: false }); if (stat !== undefined && !stat.isDirectory()) {
+      if (!stat.isSymbolicLink() || !scopes.some(scope => scope.repository && (scope.control === current || scope.control.startsWith(`${current}${sep}`))) || !lstatSync(realpathSync(current)).isDirectory()) throw new DestructionRefusal("destructive_target_changed", "A namespace parent is not an ordinary directory.");
+      alias = true;
+    } const next = dirname(current); if (next === current) break; current = next; }
+    return alias ? join(realpathSync(parent), absolute.split(/[\\/]/).at(-1)!) : absolute;
   }
   return join(realpathSync(parent), absolute.split(/[\\/]/).at(-1)!);
+}
+/** A runtime descriptor alias may only address its recorded namespace member, including after caller object reuse. */
+function addressFor(path: string, address?: string): string {
+  if (address === undefined || address === path) return path;
+  if (canonical(address) !== path) throw new DestructionRefusal("conflicting_destructive_requests", "A descriptor alias must name its recorded namespace member.");
+  return address;
 }
 /** A format marker is required before an inferred scope may modify repository-private receipt state. */
 function packageControl(path: string): boolean {
@@ -93,12 +104,21 @@ function scope(path: string): Scope {
   if (scopes.length > 0) return scopes.at(-1)!;
   let current = dirname(path);
   for (;;) {
-    if (packageControl(current)) return { control: current };
-    const nested = join(current, ".pmvcs"); if (packageControl(nested)) return { control: nested };
+    if (packageControl(current)) return { control: current, repository: true };
+    const nested = join(current, ".pmvcs"); if (packageControl(nested)) return { control: nested, repository: true };
     const parent = dirname(current); if (parent === current) break; current = parent;
   }
-  return { control: join(tmpdir(), `pm-vcs-destruction-${createHash("sha256").update(dirname(path)).digest("hex")}`) };
+  return { control: dirname(path), repository: false };
 }
+/** Namespace publication/cleanup receipts stay outside logical control data, keyed by their real owning root. */
+function namespaceLedger(control: string): string {
+  const absolute = resolve(control); const stat = lstatSync(absolute, { throwIfNoEntry: false });
+  const root = stat?.isDirectory() ? realpathSync(absolute) : absolute;
+  return join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(root).digest("hex")}`);
+}
+/** Bind one operation key to its real root; copied journals cannot become authority in a new clone. */
+function intentName(root: string, key: string): string { return createHash("sha256").update(`${root}\0${key}`).digest("hex"); }
+
 /** Bind intents to reachability and authority; fresh recovery CAS also inventories payload namespace stamps without hashing payload bytes. */
 function storeRevision(root: string, fresh = false): string {
   const active = fresh ? undefined : scopes.find(scope => scope.control === root); if (active?.revision !== undefined) return active.revision;
@@ -138,12 +158,17 @@ function snapshot(root: string, requests: readonly DestructionRequest[]): Destru
     }
     const parent = dirname(path); const parentStat = lstatSync(parent, { bigint: true }); if (!parentStat.isDirectory()) throw new DestructionRefusal("destructive_target_changed", "A deletion parent must be an ordinary directory.");
     let target: string | undefined; let destinationParentIdentity: string | undefined;
-    if (request.destination !== undefined) { if (canonical(request.destination) === path) throw new DestructionRefusal("conflicting_destructive_requests", "A publication cannot retire its own destination."); const directory = lstatSync(dirname(request.destination), { bigint: true, throwIfNoEntry: false }); if (!directory?.isDirectory()) throw new DestructionRefusal("destructive_target_changed", "Publication requires an existing ordinary destination directory."); const dest = lstatSync(request.destination, { bigint: true, throwIfNoEntry: false }); if (dest !== undefined && !dest.isFile()) throw new DestructionRefusal("destructive_target_unsupported", "Publication cannot replace a directory or link."); target = dest === undefined ? "absent" : identity(dest); destinationParentIdentity = birth(directory); }
+    if (request.destination !== undefined) { if (canonical(request.destination) === path) throw new DestructionRefusal("conflicting_destructive_requests", "A publication cannot retire its own destination."); const directory = lstatSync(dirname(request.destination), { bigint: true, throwIfNoEntry: false }); if (!directory?.isDirectory()) throw new DestructionRefusal("destructive_target_changed", "Publication requires an existing ordinary destination directory."); const dest = lstatSync(request.destination, { bigint: true, throwIfNoEntry: false }); if (dest !== undefined && !dest.isFile() && !dest.isSymbolicLink()) throw new DestructionRefusal(dest.isDirectory() ? "EISDIR" : "destructive_target_unsupported", "EISDIR: Publication destination is not a regular file or literal link."); target = dest === undefined ? "absent" : identity(dest); destinationParentIdentity = birth(directory); }
     const previous = result.get(path);
     if (previous !== undefined && previous.destination !== (request.destination === undefined ? undefined : coordinate(root, request.destination))) throw new DestructionRefusal("conflicting_destructive_requests", "Two requests assign incompatible actions to one leaf.");
     result.set(path, { path: coordinate(root, path), ...(request.destination === undefined ? {} : { destination: coordinate(root, request.destination), target, destinationParentIdentity }), kind: request.destination !== undefined ? "rename" : stat.isDirectory() ? "directory" : stat.isSymbolicLink() ? "link" : "file", identity: identity(stat), digest: digest(path, stat), parent: coordinate(root, parent), parentIdentity: birth(parentStat), status: "planned" });
   };
-  for (const request of requests) capture(canonical(request.path), { ...request, ...(request.destination === undefined ? {} : { destination: canonical(request.destination) }) });
+  for (const request of requests) {
+    const path = canonical(request.path); const destination = request.destination === undefined ? undefined : canonical(request.destination);
+    addressFor(path, request.address);
+    if (request.destinationAddress !== undefined) { if (destination === undefined) throw new DestructionRefusal("conflicting_destructive_requests", "A destination alias requires a publication destination."); addressFor(destination, request.destinationAddress); }
+    capture(path, { ...request, ...(destination === undefined ? {} : { destination }) });
+  }
   return [...result.values()];
 }
 /** Parse only package-owned intent records; foreign or malformed metadata never grants deletion authority. */
@@ -190,16 +215,23 @@ function progressState(path: string, intent: Intent, index: number): { status: D
   } finally { file.close(); }
 }
 
+/** Progress may change outcomes, never the revision, root lifetime, ordered members or their captured identities. */
+function authorityOf(intent: Intent): string {
+  const hash = createHash("sha256").update(JSON.stringify([intent.id, intent.root, intent.rootIdentity, intent.revision]));
+  for (const entry of intent.entries) hash.update(JSON.stringify([entry.path, entry.destination, entry.kind, entry.identity, entry.digest, entry.parent, entry.parentIdentity, entry.target, entry.destinationParentIdentity]));
+  return hash.digest("hex");
+}
+
 /** Keep full private plans but bound every SDK/CLI refusal and success receipt to twenty members. */
 function receipt(intent: Intent): DestructionReceipt { return { id: intent.id, revision: intent.revision, status: intent.status, planned: intent.entries.length, deleted: intent.entries.filter(entry => entry.status === "deleted").length, moved: intent.entries.filter(entry => entry.status === "moved").length, observedAbsent: intent.entries.filter(entry => entry.status === "absent").length, skipped: intent.entries.filter(entry => entry.status === "foreign" || entry.status === "cancelled").length, omitted: Math.max(0, intent.entries.length - 20), entries: intent.entries.slice(0, 20).map(entry => ({ ...entry })) }; }
 /** One exact-set handle is reusable after every deletion/progress crash without adding newly arrived files. */
 export interface DestructionPlan { readonly paths: readonly string[]; readonly resumed: boolean; remove(path: string): void; finish(): DestructionReceipt }
 /** Persist a revision-bound set after caller preflight; per-intent leases also serialize independent recovery drainers. */
-export function prepareDestruction(control: string, key: string, requests: readonly DestructionRequest[], resumeCompleted = false): DestructionPlan {
+export function prepareDestruction(control: string, key: string, requests: readonly DestructionRequest[], resumeCompleted = false, journalDirectory?: string): DestructionPlan {
   if (typeof key !== "string" || key === "" || key.includes("\0")) throw new DestructionRefusal("conflicting_destructive_requests", "A deletion intent requires a stable nonempty operation key.");
-  const root = resolve(control); canonical(join(root, ".intent-root")); mkdirSync(root, { recursive: true, mode: 0o700 }); const rootIdentity = birth(lstatSync(root, { bigint: true }));
-  const directory = join(root, "destruction"); const metadata = lstatSync(directory, { throwIfNoEntry: false }); if (metadata !== undefined && !metadata.isDirectory()) throw new DestructionRefusal("foreign_destructive_intent", "A foreign receipt-directory entry was preserved."); mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const name = createHash("sha256").update(key).digest("hex"); const path = join(directory, `${name}.json`);
+  const requestedRoot = resolve(control); canonical(join(requestedRoot, ".intent-root")); mkdirSync(requestedRoot, { recursive: true, mode: 0o700 }); const root = realpathSync(requestedRoot); const rootStat = lstatSync(root, { bigint: true }); const rootIdentity = birth(rootStat);
+  const directory = journalDirectory ?? join(root, "destruction"); const metadata = lstatSync(directory, { throwIfNoEntry: false }); if (metadata !== undefined && !metadata.isDirectory()) throw new DestructionRefusal("foreign_destructive_intent", "A foreign receipt-directory entry was preserved."); mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const name = intentName(root, key); const path = join(directory, `${name}.json`);
   let held = false; let captured: Intent | undefined = undefined;
   /** Publish a fully flushed owner record exclusively; no empty lock can survive a crash before publication. */
   const claim = (): { file: ObjectFile; stat: BigIntStats } => {
@@ -261,12 +293,13 @@ export function prepareDestruction(control: string, key: string, requests: reado
       resumed = true; return current;
     }
     if (current?.status === "completed" && entries.length === 0) { resumed = true; return current; }
-    const revision = storeRevision(root);
+    const revision = journalDirectory === undefined ? storeRevision(root) : createHash("sha256").update(identity(rootStat)).update(JSON.stringify(entries)).digest("hex");
     const next: Intent = { format: "pm-vcs-destruction-1", id: randomBytes(16).toString("hex"), root, rootIdentity, revision, entries, status: "pending" };
     if (current !== undefined) backend.write(join(directory, `${name}.${current.id}.receipt`), Buffer.from(JSON.stringify(current)));
     backend.write(path, Buffer.from(JSON.stringify(next))); destructionBoundary.visit("intent-persisted", path); return next;
   });
   captured = intent;
+  const frozenAuthority = authorityOf(intent);
   let checkpoint = identity(lstatSync(path, { bigint: true }));
   const addresses = new Map(requests.map(request => [canonical(request.path), request]));
   const indexes = new Map(intent.entries.map((entry, index) => [resolve(root, entry.path), index]));
@@ -276,7 +309,7 @@ export function prepareDestruction(control: string, key: string, requests: reado
     const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
     if (current === undefined) throw new DestructionRefusal("destructive_intent_changed", "The recorded intent disappeared.", receipt(intent));
     if (identity(current) === checkpoint) return;
-    const fresh = load(path); if (fresh?.id !== intent.id) throw new DestructionRefusal("destructive_intent_changed", "The intent was replaced; no new deletion was attempted.", receipt(intent));
+    const fresh = load(path); if (fresh?.id !== intent.id || authorityOf(fresh) !== frozenAuthority) throw new DestructionRefusal("destructive_intent_changed", "The immutable intent authority changed; no new deletion was attempted.", receipt(intent));
     Object.assign(intent, fresh); checkpoint = identity(current);
   };
   /** Each acknowledgment flushes one bounded byte; an interrupted update leaves the original exact set authoritative. */
@@ -298,7 +331,7 @@ export function prepareDestruction(control: string, key: string, requests: reado
     destructionBoundary.visit("before-delete", entry.path);
     const rootStat = lstatSync(root, { bigint: true, throwIfNoEntry: false }); const parent = resolve(root, entry.parent); const parentStat = lstatSync(parent, { bigint: true, throwIfNoEntry: false });
     if (!rootStat?.isDirectory() || birth(rootStat) !== intent.rootIdentity || !parentStat?.isDirectory() || birth(parentStat) !== entry.parentIdentity) { entry.status = "cancelled"; entry.reason = "root_or_parent_retired"; save(entry); return; }
-    const source = canonical(resolve(root, entry.path)); const selected = addresses.get(source); const address = selected?.address ?? source;
+    const source = canonical(resolve(root, entry.path)); const selected = addresses.get(source); const address = addressFor(source, selected?.address);
     const stat = lstatSync(source, { bigint: true, throwIfNoEntry: false });
     if (stat === undefined) {
       if (entry.destination !== undefined) { const dest = resolve(root, entry.destination); const observed = lstatSync(dest, { bigint: true, throwIfNoEntry: false }); if (observed?.isFile() && identity(observed).split(":").slice(0, 5).join(":") === entry.identity.split(":").slice(0, 5).join(":") && digest(dest, observed) === entry.digest) { entry.status = "moved"; save(entry); return; } }
@@ -310,7 +343,7 @@ export function prepareDestruction(control: string, key: string, requests: reado
       if (!destinationParent?.isDirectory() || birth(destinationParent) !== entry.destinationParentIdentity) { entry.status = "foreign"; entry.reason = "destination_replaced"; save(entry); return; }
       const observed = lstatSync(destination, { bigint: true, throwIfNoEntry: false });
       if ((observed === undefined ? "absent" : identity(observed)) !== entry.target) { entry.status = "foreign"; entry.reason = "destination_replaced"; save(entry); return; }
-      backend.rename(address, selected?.destinationAddress ?? destination); entry.status = "moved";
+      backend.rename(address, addressFor(destination, selected?.destinationAddress)); entry.status = "moved";
     } else if (entry.kind === "directory") {
       if (readdirSync(source).length > 0) { entry.status = "foreign"; entry.reason = "unplanned_child"; save(entry); return; }
       backend.rmdir(address); entry.status = "deleted";
@@ -323,7 +356,7 @@ export function prepareDestruction(control: string, key: string, requests: reado
       locked(() => {
         refresh(); const index = indexes.get(resolve(target)); const entry = index === undefined ? undefined : intent.entries[index];
         if (entry === undefined) throw new DestructionRefusal("unplanned_deletion", "This path is not a member of the recorded deletion set.", receipt(intent));
-        try { observe(entry, index!); if (entry.status !== "planned") return; perform(entry); } catch (error) { if (error instanceof DestructionRefusal) throw error.receipt === undefined ? new DestructionRefusal(error.code, "Intent progress publication was refused; the original set remains recorded.", receipt(intent)) : error; throw new DestructionRefusal("destructive_operation_pending", "Deletion stopped; its exact intent and progress remain recoverable.", receipt(intent)); }
+        try { observe(entry, index!); if (entry.status !== "planned") return; perform(entry); } catch (error) { if (error instanceof DestructionRefusal) throw error.receipt === undefined ? new DestructionRefusal(error.code, "Intent progress publication was refused; the original set remains recorded.", receipt(intent)) : error; if (error instanceof Error && typeof (error as NodeJS.ErrnoException).code === "string") { if (!("receipt" in error)) Object.defineProperties(error, { receipt: { value: receipt(intent), enumerable: true }, remedy: { value: "Retry the original recorded operation after the native filesystem failure is resolved.", enumerable: true } }); throw error; } throw new DestructionRefusal("destructive_operation_pending", "Deletion stopped; its exact intent and progress remain recoverable.", receipt(intent)); }
       });
     },
     finish() {
@@ -347,23 +380,34 @@ function hasLeaf(path: string): boolean { try { return lstatSync(path, { throwIf
 
 /** Every namespace primitive uses the same frozen-set journal, including owned temporaries and lease cleanup. @internal */
 export function retireNamespace(request: DestructionRequest): DestructionReceipt {
+  if (typeof request.path !== "string" || request.path === "" || request.path.includes("\0")) canonical(request.path);
+  const selected = scope(resolve(request.path));
+  return inScope(selected, () => retireScoped(request, selected));
+}
+/** Preserve namespace receipts independently of the data whose root may itself be retired. */
+function retireScoped(request: DestructionRequest, selected: Scope): DestructionReceipt {
   const path = canonical(request.path); const destination = request.destination === undefined ? undefined : canonical(request.destination);
-  let selected = scope(path);
-  if (request.recursive && (selected.control === path || selected.control.startsWith(`${path}${sep}`))) selected = { control: join(tmpdir(), `pm-vcs-destruction-${createHash("sha256").update(dirname(path)).digest("hex")}`) };
-  const key = `${destination === undefined ? request.directory ? "rmdir" : "remove" : "rename"}:${path}:${destination ?? ""}`;
+  const control = (request.recursive || request.directory) && (selected.control === path || selected.control.startsWith(`${path}${sep}`)) ? dirname(path) : selected.control;
+  const ledger = join(namespaceLedger(control), "destruction");
+  if (ledger === path || ledger.startsWith(`${path}${sep}`)) throw new DestructionRefusal("destructive_target_unsupported", "The receipt ledger cannot be inside its own deletion set.");
+  const owner = request.expected === undefined || request.expected === null ? "" : `:${identity(request.expected)}`;
+  const key = `${destination === undefined ? request.directory ? "rmdir" : "remove" : "rename"}:${path}:${destination ?? ""}${owner}`;
   if (lstatSync(path, { throwIfNoEntry: false }) === undefined) {
-    const intentPath = join(selected.control, "destruction", `${createHash("sha256").update(key).digest("hex")}.json`);
-    if (load(intentPath) === undefined) return { id: createHash("sha256").update(key).digest("hex").slice(0, 32), revision: "absent", status: "completed", planned: 0, deleted: 0, moved: 0, observedAbsent: 0, skipped: 0, omitted: 0, entries: [] };
+    const root = lstatSync(control, { throwIfNoEntry: false })?.isDirectory() ? realpathSync(control) : resolve(control);
+    if (load(join(ledger, `${intentName(root, key)}.json`)) === undefined) {
+      if (destination !== undefined) throw new DestructionRefusal("destructive_target_changed", "An unplanned publication source disappeared; no destination was replaced.");
+      return { id: intentName(root, key).slice(0, 32), revision: "absent", status: "completed", planned: 0, deleted: 0, moved: 0, observedAbsent: 0, skipped: 0, omitted: 0, entries: [] };
+    }
   }
-  const plan = prepareDestruction(selected.control, key, [{ ...request, path, address: request.address ?? request.path, ...(destination === undefined ? {} : { destination, destinationAddress: request.destination }) }]);
+  const plan = prepareDestruction(control, key, [{ ...request, path, address: request.address ?? request.path, ...(destination === undefined ? {} : { destination, destinationAddress: request.destinationAddress ?? request.destination }) }], false, ledger);
   for (const member of plan.paths) plan.remove(member);
   return plan.finish();
 }
 
 /** Select the same repository/transient scope for a whole captured namespace, including standalone working-tree pruning. @internal */
 export function prepareNamespaceDestruction(anchor: string, key: string, requests: readonly DestructionRequest[], resumeCompleted = false): DestructionPlan {
-  const selected = scope(canonical(anchor));
-  return prepareDestruction(selected.control, `${key}:${canonical(anchor)}`, requests, resumeCompleted);
+  const selected = scope(resolve(anchor));
+  return inScope(selected, () => prepareDestruction(selected.control, `${key}:${canonical(anchor)}`, requests, resumeCompleted, selected.repository ? undefined : join(namespaceLedger(selected.control), "destruction")));
 }
 
 /** Agent-sized status inventory reports foreign records without decoding their contents into public output. */
@@ -372,20 +416,42 @@ export interface DestructionInventory {
   readonly receipts: readonly Omit<DestructionReceipt, "entries">[];
   readonly skipped: readonly { readonly name: string; readonly reason: string }[];
 }
+/** Observe ended member lifetimes without granting old receipts authority over replacement files. */
+function settleRetiredMembers(intent: Intent): boolean {
+  let historical = false;
+  for (const entry of intent.entries) {
+    if (entry.status !== "planned" || entry.kind === "rename") continue;
+    const current = lstatSync(resolve(intent.root, entry.path), { bigint: true, throwIfNoEntry: false });
+    if (current === undefined) { entry.status = "absent"; historical = true; }
+    else if (entry.kind === "directory" ? birth(current) !== entry.identity.split(":").slice(0, 3).join(":") : identity(current) !== entry.identity) { entry.status = "foreign"; entry.reason = "leaf_replaced"; historical = true; }
+  }
+  if (intent.entries.every(entry => entry.status !== "planned")) intent.status = "completed";
+  return historical;
+}
+
 /** Inspect durable receipts without modifying a journal, replaying a request, or following foreign record links. */
-export function inspectDestructions(control: string, limit = 20): DestructionInventory {
+function inspectLedger(control: string, limit: number, directory = join(control, "destruction")): DestructionInventory {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new DestructionRefusal("invalid_receipt_limit", "Choose a receipt limit from 1 through 20.");
-  const directory = join(control, "destruction"); const root = lstatSync(directory, { throwIfNoEntry: false });
+  const root = lstatSync(directory, { throwIfNoEntry: false });
   if (root === undefined) return { pending: 0, completed: 0, omitted: 0, skippedCount: 0, receipts: [], skipped: [] };
   if (!root.isDirectory()) return { pending: 0, completed: 0, omitted: 0, skippedCount: 1, receipts: [], skipped: [{ name: "destruction", reason: "foreign non-directory receipt store; preserved" }] };
   const found: DestructionReceipt[] = []; const skipped: { name: string; reason: string }[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isFile() || !/^[0-9a-f]{64}(?:\.[0-9a-f]{32}\.receipt|\.json)$/.test(entry.name)) { skipped.push({ name: entry.name, reason: /^[0-9a-f]{64}\.[0-9a-f]{32}\.progress$/.test(entry.name) ? "progress auxiliary; preserved for audit" : "foreign or interrupted receipt record; preserved" }); continue; }
-    try { const intent = load(join(directory, entry.name)); if (intent === undefined) continue; if (intent.root !== resolve(control)) { skipped.push({ name: entry.name, reason: "receipt belongs to another root; preserved" }); continue; } if (intent.status === "pending") { const progress = join(directory, `${entry.name.slice(0, 64)}.${intent.id}.progress`); for (let index = 0; index < intent.entries.length; index++) { const state = progressState(progress, intent, index); if (state !== undefined && intent.entries[index].status === "planned") Object.assign(intent.entries[index], state); } } found.push(receipt(intent)); }
+    try { const intent = load(join(directory, entry.name)); if (intent === undefined) continue; if (intent.root !== resolve(control)) { skipped.push({ name: entry.name, reason: "receipt belongs to another root; preserved" }); continue; } if (intent.status === "pending") { const owner = lstatSync(control, { bigint: true, throwIfNoEntry: false }); if (!owner?.isDirectory() || birth(owner) !== intent.rootIdentity) { for (const entry of intent.entries) if (entry.status === "planned") { entry.status = "cancelled"; entry.reason = "root_retired"; } intent.status = "completed"; skipped.push({ name: entry.name, reason: "root_retired; pending authority is historical" }); } } if (intent.status === "pending") { const progress = join(directory, `${entry.name.slice(0, 64)}.${intent.id}.progress`); for (let index = 0; index < intent.entries.length; index++) { const state = progressState(progress, intent, index); if (state !== undefined && intent.entries[index].status === "planned") Object.assign(intent.entries[index], state); } if (settleRetiredMembers(intent)) skipped.push({ name: entry.name, reason: "member_lifetime_ended; original authority is historical" }); } found.push(receipt(intent)); }
     catch (error) { skipped.push({ name: entry.name, reason: error instanceof DestructionRefusal ? "foreign or changing receipt record; preserved" : "unreadable receipt record; preserved" }); }
   }
   found.sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending") || a.id.localeCompare(b.id));
   return { pending: found.filter(item => item.status === "pending").length, completed: found.filter(item => item.status === "completed").length, omitted: Math.max(0, found.length - limit), skippedCount: skipped.length, receipts: found.slice(0, limit).map(({ entries: _entries, ...summary }) => summary), skipped: skipped.slice(0, 20) };
+}
+
+/** Inspect domain and namespace receipts together, preserving logical control data during observational reads. */
+export function inspectDestructions(control: string, limit = 20): DestructionInventory {
+  const absolute = resolve(control); const stat = lstatSync(absolute, { throwIfNoEntry: false }); const root = stat?.isDirectory() ? realpathSync(absolute) : absolute;
+  const domain = inspectLedger(root, limit); const namespace = inspectLedger(root, limit, join(namespaceLedger(root), "destruction"));
+  const receipts = [...domain.receipts, ...namespace.receipts].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending") || a.id.localeCompare(b.id));
+  const pending = domain.pending + namespace.pending; const completed = domain.completed + namespace.completed;
+  return { pending, completed, omitted: Math.max(0, pending + completed - limit), skippedCount: domain.skippedCount + namespace.skippedCount, receipts: receipts.slice(0, limit), skipped: [...domain.skipped, ...namespace.skipped.map(entry => ({ ...entry, name: `namespace/${entry.name}` }))].slice(0, 20) };
 }
 
 /** A read-only semantic revision supports preflight CAS before a stale writer is ever retired. @internal */

@@ -15,6 +15,7 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { openRepository } from "../vcs-commands.ts";
+import { erasureScanBoundary } from "../engine/erasure-scan.ts";
 import { eraseFile } from "../engine/erasure.ts";
 import { Repository } from "../engine/repo.ts";
 import { configureAuthority, authorize, decodeLink, encodeLink, readLayers, assertSafeFilePath, assertCompositionPath, writePrivateJson, syncDirectory, type RepositoryLink } from "../engine/composition.ts";
@@ -419,12 +420,10 @@ test("pending physical cleanup blocks writes and exports and completes under aut
   const fileId = repo.readIndex().find(entry => entry.path === "secret.bin")!.fileId as string;
   const index = repo.readIndex(); const path = objectPath(repo, index.find(entry => entry.fileId === fileId)!.id);
   const original = readFileSync(path);
-  const receipt = repo.obliterate(fileId, "erase-fixture", "incident", new Date());
-  const denial = repo.objects.denials()[0];
-  repo.objects.recordDenials([{ ...denial, pending: true }]);
-  // Recreate the interrupted cleanup's retained canonical bytes directly on
-  // disposable storage; the application denial remains durable and authoritative.
-  writeFileSync(path, original); writeFileSync(join(repo.root, "secret.bin"), "retained worktree bytes");
+  erasureScanBoundary.visit = step => { if (step === "pending") throw new Error("interrupted physical cleanup"); };
+  try { assert.throws(() => repo.obliterate(fileId, "erase-fixture", "incident", new Date()), /interrupted physical cleanup/); } finally { erasureScanBoundary.visit = () => {}; }
+  const denial = repo.objects.denials()[0]; const receipt = { tombstone: denial.id };
+  assert.deepEqual(readFileSync(path), original);
   assert.equal(repo.objects.state(index.find(entry => entry.fileId === fileId)!.id).kind, "obliterated");
   refuses(() => repo.objects.write("blob", Buffer.from("attempt"), "a".repeat(32)), "erasure_incomplete");
   refuses(() => exportBundle(repo.objects, repo.refs, []), "erasure_incomplete");

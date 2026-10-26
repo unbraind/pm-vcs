@@ -163,10 +163,10 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
       if (packed) store.unpack();
       const deletion = prepareDestruction(shared, "gc-candidates", candidates.map(candidate => ({ path: candidate.packed ? join(store.storageRoot(), candidate.id.slice(0, 2), candidate.id.slice(2)) : candidate.path })));
       for (const path of deletion.paths) {
-        const before = lstatSync(path, { throwIfNoEntry: false });
-        store.markStorageGeneration(); deletion.remove(path); if (before !== undefined && lstatSync(path, { throwIfNoEntry: false }) === undefined) removed++; syncDirectory(dirname(path)); packBoundary.visit("collected");
+        store.markStorageGeneration(); deletion.remove(path); syncDirectory(dirname(path)); packBoundary.visit("collected");
       }
       destruction = deletion.finish();
+      removed = candidates.filter(item => lstatSync(item.path, { throwIfNoEntry: false }) === undefined).length;
       if (inventory.some((item) => item.packed)) store.compact();
       store.releaseUploadRoots(visited); packBoundary.visit("released-pins");
       reclaimedBytes = Math.max(0, physicalBefore - [...store.walkInventory()].reduce((sum, item) => sum + item.bytes, 0));

@@ -248,7 +248,7 @@ export class WorktreeMutation {
     const plan = prepareNamespaceDestruction(join(this.root, ".erasure-anchor"), `obliterate-worktree:${fileId}`, requests, resume);
     return { ...plan, remove: (absolute) => {
       try { plan.remove(absolute); } catch { this.changed(); }
-    } };
+    }, finish: () => { try { return plan.finish(); } catch { this.changed(); } } };
   }
 
   /** Prune only captured empty ordinary directories with non-recursive, verified rmdir. */

@@ -940,8 +940,8 @@ export class ObjectStore {
     try {
       locked = fstatSync(fd, { bigint: true });
       writeFileSync(fd, String(process.pid));
-      durability.file(fd);
       locked = fstatSync(fd, { bigint: true });
+      durability.file(fd);
       const deadline = performance.now() + 5000;
       const sleeper = new Int32Array(new SharedArrayBuffer(4));
       for (;;) {
@@ -967,8 +967,11 @@ export class ObjectStore {
       activeLeases.delete(lease); activeRevisions.delete(lease); dirtyLeases.delete(lease);
       try {
         try {
-          const candidate = lstatSync(temporary, { bigint: true, throwIfNoEntry: false });
-          if (candidate !== undefined && locked !== undefined && candidate.dev === locked.dev && candidate.ino === locked.ino && candidate.size === locked.size && candidate.mtimeNs === locked.mtimeNs && candidate.ctimeNs === locked.ctimeNs) durability.unlink(temporary, locked);
+          if (!acquired && locked !== undefined) durability.discardUnpublished(temporary, fd, locked);
+          else {
+            const candidate = lstatSync(temporary, { bigint: true, throwIfNoEntry: false });
+            if (candidate !== undefined && locked !== undefined && candidate.dev === locked.dev && candidate.ino === locked.ino && candidate.size === locked.size && candidate.mtimeNs === locked.mtimeNs && candidate.ctimeNs === locked.ctimeNs) durability.unlink(temporary, locked);
+          }
         } finally {
           // A moved root must neither hide the mutation refusal nor unlink a foreign lock.
           if (acquired) {

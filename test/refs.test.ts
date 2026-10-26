@@ -250,7 +250,7 @@ test("ref lock descriptors close after owner inspection fails and after an earli
   let inspectFailure = true; mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => { if (inspectFailure && descriptors.includes(args[0])) { inspectFailure = false; throw Object.assign(new Error("owner inspection failed"), { code: "EIO" }); } return Reflect.apply(stat, fs, args); }); syncBuiltinESMExports();
   assert.throws(() => f.refs.transaction([{ name: "refs/heads/a", expected: null, next: id }]), { code: "EIO" }); for (const fd of descriptors.splice(0)) assert.throws(() => stat(fd), { code: "EBADF" });
   mock.method(fs, "unlinkSync", (path: fs.PathLike) => { if (String(path).endsWith("a.lock")) throw Object.assign(new Error("cleanup failed"), { code: "EACCES" }); return unlink(path); }); syncBuiltinESMExports();
-  assert.throws(() => f.refs.transaction([{ name: "refs/heads/a", expected: null, next: id }, { name: "refs/heads/b", expected: null, next: id }]), { code: "destructive_operation_pending" }); for (const fd of descriptors) assert.throws(() => stat(fd), { code: "EBADF" }); assert.equal(existsSync(join(f.root, "refs/heads/b.lock")), false);
+  assert.throws(() => f.refs.transaction([{ name: "refs/heads/a", expected: null, next: id }, { name: "refs/heads/b", expected: null, next: id }]), { code: "EACCES" }); for (const fd of descriptors) assert.throws(() => stat(fd), { code: "EBADF" }); assert.equal(existsSync(join(f.root, "refs/heads/b.lock")), false);
 });
 
 test("ref cleanup preserves a competing owner that replaced the original process lock", () => {

@@ -13,7 +13,11 @@ working-tree, layer, audit-format and flag validation. Unaccounted files are
 inventoried without deleting them. The immutable tombstone records the selected
 logical objects; separate frozen subplans record unaccounted files, working-tree
 leaves, pack retirement and the resulting loose representations. New files
-cannot join an interrupted plan. A new foreign copy makes verification refuse.
+cannot join an interrupted plan. A new foreign copy makes verification refuse. A fresh explicit
+`--purge-unaccounted` request may record another separately identified batch;
+recovery never extends a prior batch. Purge receipts include bounded batch ids,
+revision digests and pending counts, while legacy receipt entries remain audit
+facts.
 
 `--recover-lock` uses the same read-only request validator before retiring a dead
 writer. An eight-attempt CAS includes authority/reachability metadata, every
@@ -56,6 +60,10 @@ retains the complete audit record. Public success/refusal receipts expose at mos
 twenty entries, with counts for owned deletions, moves, peer-observed absences,
 skips and omissions. `DestructionRefusalCode` is an exhaustive SDK discriminator.
 
+Each live handle fingerprints the immutable revision, root lifetime and ordered
+member identities/destinations. Refresh refuses any authority change even when
+the operation id is unchanged; only progress outcomes may advance.
+
 Independent drainers serialize every journal read/modify/write under a fully
 published per-intent process lease. They reread state while holding it, preserve
 replaced sources/destinations, never extend an old set, and release ownership
@@ -67,7 +75,11 @@ authority with a typed reason; terminal entries remain historical. Skipped entri
 the peer leaves have disappeared; a clean store cannot remain stuck on an old
 skip. Observing a new leaf under an already retired name refuses without
 rewriting the original completed outcome. Foreign,
-malformed or changing journal records are preserved and reported.
+malformed or changing journal records are preserved and reported. Owned lease
+cleanup keys include the captured owner stamp, so an unlink/acknowledgment crash
+cannot transfer an old cleanup set to a new lock at the same pathname. Read-only
+inspection reports absent or replaced member lifetimes as historical and never
+uses those records to delete their successors.
 
 The namespace audit covers these paths:
 
@@ -84,7 +96,8 @@ The namespace audit covers these paths:
 `durability.ts` is the only production module allowed to call native rename,
 unlink, rmdir or fsync. Its namespace adapters always invoke the intent protocol.
 The finite bootstrap consists only of atomic journal publication, single-byte
-progress acknowledgment and descriptor-owned journal-mutex cleanup; these use
+progress acknowledgment and exclusive descriptor-owned unpublished process-owner
+or journal-mutex cleanup; these use
 that same platform-aware helper and cannot recursively create deletion intents.
 Bootstrap temporaries cannot authorize payload deletion. POSIX flushes directory
 entries; Windows flushes files and acknowledges synchronous namespace operations.
@@ -94,7 +107,11 @@ item/workspace locks, but no synchronous descriptor-bound binary-store deletion
 transaction or compressed-range pack primitive. The engine preserves its
 synchronous public storage API and native writer lease; PM lookup, history,
 settings, item transactions and rendering continue through the existing SDK.
-Private receipt/checkpoint auxiliaries are retained for audit; this command does
+Domain deletion receipts live with the store. Ordinary atomic publication and
+lease-cleanup intents use a private namespace ledger keyed by the owning root;
+they do not alter logical control snapshots or tracker metadata. Copied ledgers
+remain foreign to a different root. Private receipt/checkpoint auxiliaries are
+retained for audit; this command does
 not erase receipt history.
 
 Tests use real non-git SDK trackers, independent tree hashes and a tripwire,

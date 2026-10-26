@@ -1,5 +1,5 @@
 /** Physical erasure certificates require complete native representations and a stable namespace. */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { constants, fstatSync, lstatSync, readdirSync, readSync, type BigIntStats } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { writePrivateJson } from "./composition.ts";
@@ -206,9 +206,9 @@ export interface ErasurePurgeEntry {
   reason?: ErasurePurgeCancellation;
 }
 /** Agent-sized purge receipt preserves historical counts and explicitly reports cancelled pending authority. */
-export interface ErasurePurgeReceipt { readonly deleted: number; readonly observedAbsent: number; readonly replaced: number; readonly cancelled: number; readonly bytes: number; readonly omitted: number; readonly files: readonly ErasurePurgeEntry[] }
+export interface ErasurePurgeReceipt { readonly intents: readonly { readonly id: string; readonly revision: string; readonly planned: number; readonly pending: number }[]; readonly omittedIntents: number; readonly deleted: number; readonly observedAbsent: number; readonly replaced: number; readonly cancelled: number; readonly bytes: number; readonly omitted: number; readonly files: readonly ErasurePurgeEntry[] }
 /** Recover only package-written authorization under the caller's owning writer lease. */
-export function erasurePurge(control: string, fileId: string, roots: readonly string[], authorized: boolean, readOnly = false): { readonly canPurge: boolean; purge: NonNullable<AccountabilityOptions["purge"]>; plan(files: readonly UnaccountedFile[], resume?: boolean): void; receipt(): ErasurePurgeReceipt } {
+export function erasurePurge(control: string, fileId: string, roots: readonly string[], authorized: boolean, readOnly = false): { readonly canPurge: boolean; purge: NonNullable<AccountabilityOptions["purge"]>; begin(files: readonly UnaccountedFile[]): void; plan(files: readonly UnaccountedFile[], resume?: boolean): void; receipt(): ErasurePurgeReceipt } {
   const path = join(control, "erasure-purge.json");
   let raw: unknown;
   try { raw = readControlJson(path, "unverifiable", "purge journal", { format: "pm-vcs-erasure-purge-1", operations: {} }); }
@@ -218,8 +218,10 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
   /** Prefix membership is checked against current roots only when exercising pending deletion authority. */
   const scoped = (file: string, scope: readonly string[] = roots): string | undefined => scope.find((root) => { const name = relative(root, resolve(control, file)); return name !== "" && name !== ".." && !name.startsWith(`..${sep}`) && !isAbsolute(name); });
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
-  const journal = raw as { format: string; operations: Record<string, ErasurePurgeEntry[]> };
-  if (Object.keys(journal).sort().join(",") !== "format,operations" || journal.format !== "pm-vcs-erasure-purge-1" || journal.operations === null || typeof journal.operations !== "object" || Array.isArray(journal.operations)) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
+  const input = raw as { format: string; operations: Record<string, ErasurePurgeEntry[]>; plans?: Record<string, { id: string; revision: string }[]> };
+  const legacy = input.format === "pm-vcs-erasure-purge-1" && Object.keys(input).sort().join(",") === "format,operations";
+  if ((!legacy && (input.format !== "pm-vcs-erasure-purge-2" || Object.keys(input).sort().join(",") !== "format,operations,plans")) || input.operations === null || typeof input.operations !== "object" || Array.isArray(input.operations)) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
+  const journal: { format: string; operations: Record<string, ErasurePurgeEntry[]>; plans: Record<string, { id: string; revision: string }[]> } = { format: "pm-vcs-erasure-purge-2", operations: input.operations, plans: legacy ? {} : input.plans! };
   for (const [id, entries] of Object.entries(journal.operations)) {
     if (!/^[0-9a-f]{32}$/.test(id) || !Array.isArray(entries) || entries.some((entry) => entry === null || typeof entry !== "object"
       || !["bytes,file,fileClass,identity,sha256,status", "bytes,file,fileClass,identity,reason,sha256,status", "bytes,file,fileClass,identity,root,rootIdentity,sha256,status", "bytes,file,fileClass,identity,reason,root,rootIdentity,sha256,status"].includes(Object.keys(entry).sort().join(","))
@@ -230,6 +232,17 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
       || (entry.root !== undefined && (!canonical(entry.root) || typeof entry.rootIdentity !== "string" || !/^\d+:\d+:\d+$/.test(entry.rootIdentity) || scoped(entry.file, [resolve(control, entry.root)]) === undefined))
       || (entry.status === "cancelled" ? !["root_retired","root_missing","root_replaced","legacy_authorization"].includes(entry.reason!) : entry.reason !== undefined))) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
   }
+  if (legacy) for (const [id, entries] of Object.entries(journal.operations)) journal.plans[id] = [{ id, revision: createHash("sha256").update(JSON.stringify(entries)).digest("hex") }];
+  if (journal.plans === null || typeof journal.plans !== "object" || Array.isArray(journal.plans)) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
+  const claimed = new Set<string>();
+  for (const [file, plans] of Object.entries(journal.plans)) {
+    if (!/^[0-9a-f]{32}$/.test(file) || !Array.isArray(plans)) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
+    for (const plan of plans) {
+      if (plan === null || typeof plan !== "object" || Object.keys(plan).sort().join(",") !== "id,revision" || !/^[0-9a-f]{32}$/.test(plan.id) || !/^[0-9a-f]{64}$/.test(plan.revision) || !Object.hasOwn(journal.operations, plan.id) || claimed.has(plan.id)) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
+      claimed.add(plan.id);
+    }
+  }
+  if (claimed.size !== Object.keys(journal.operations).length) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
   /** Root birth identity is stable through ordinary file arrivals and changes when a directory is recreated. */
   const rootStamp = (root: string): string | undefined => {
     const stat = lstatSync(root, { bigint: true, throwIfNoEntry: false });
@@ -261,27 +274,34 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
     }
   };
   retire();
-  const entries = journal.operations[fileId] ?? []; journal.operations[fileId] = entries;
+  const plans = journal.plans[fileId] ?? []; journal.plans[fileId] = plans;
+  const entries = plans.flatMap(plan => journal.operations[plan.id]);
   let sealed = false;
+  /** A fresh explicit request publishes a new exact batch; previous batch membership never changes. */
+  const publish = (files: readonly UnaccountedFile[]): void => {
+    const additions: ErasurePurgeEntry[] = [];
+    for (const file of files) {
+      const name = relative(control, file.path); const root = scoped(name);
+      if (root === undefined) throw new ErasureStorageRefusal("unverifiable", file.fileClass);
+      const stamp = rootStamp(root); if (stamp === undefined) throw new Changed();
+      const rootName = relative(control, root);
+      if (![...entries, ...additions].some(entry => entry.status === "planned" && entry.file === name && entry.identity === file.identity && entry.sha256 === file.sha256 && entry.root === rootName && entry.rootIdentity === stamp)) additions.push({ file: name, fileClass: file.fileClass, sha256: file.sha256, bytes: file.bytes, identity: file.identity, root: rootName, rootIdentity: stamp, status: "planned" });
+    }
+    if (additions.length === 0 && plans.length > 0) return;
+    if (readOnly) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
+    let id = plans.length === 0 && !Object.hasOwn(journal.operations, fileId) ? fileId : randomBytes(16).toString("hex");
+    while (Object.hasOwn(journal.operations, id)) id = randomBytes(16).toString("hex");
+    const revision = createHash("sha256").update(JSON.stringify([roots.map(root => [relative(control, root), rootStamp(root)]), additions])).digest("hex");
+    journal.operations[id] = additions; plans.push({ id, revision }); entries.push(...additions); writePrivateJson(path, journal);
+    for (const entry of additions) accountabilityBoundary.visit("purge-set-persisted", resolve(control, entry.file), 0);
+  };
   return {
     /** Only current pending authority can permit automatic replay. */
     get canPurge() { return authorized || entries.some((entry) => entry.status === "planned"); },
-    /** Freeze the whole authorized purge set before removing its first member; replay never adds fresh authority. */
-    plan(files, resume = false) {
-      sealed = true;
-      if (!authorized || (resume && entries.length > 0)) return;
-      let changed = false;
-      for (const file of files) {
-        const name = relative(control, file.path); const root = scoped(name);
-        if (root === undefined) throw new ErasureStorageRefusal("unverifiable", file.fileClass);
-        const stamp = rootStamp(root); if (stamp === undefined) throw new Changed();
-        const rootName = relative(control, root);
-        if (!entries.some(entry => entry.status === "planned" && entry.file === name && entry.identity === file.identity && entry.sha256 === file.sha256 && entry.root === rootName && entry.rootIdentity === stamp)) {
-          entries.push({ file: name, fileClass: file.fileClass, sha256: file.sha256, bytes: file.bytes, identity: file.identity, root: rootName, rootIdentity: stamp, status: "planned" }); changed = true;
-        }
-      }
-      if (changed) writePrivateJson(path, journal);
-    },
+    /** Publish one separately identified fresh authorization after full caller preflight; one helper represents one request. */
+    begin(files) { if (sealed) return; sealed = true; if (authorized) publish(files); },
+    /** Recovery preserves prior batches exactly and never authorizes a newly arrived member. */
+    plan(files, resume = false) { if (sealed) return; sealed = true; if (authorized && !resume) publish(files); },
     /** Persist current root and file identity before removal; historical entries never become fresh authority. */
     purge(file, remove) {
       const name = relative(control, file.path); const root = scoped(name);
@@ -290,8 +310,8 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
       const rootName = relative(control, root);
       const existing = entries.find((entry) => entry.status === "planned" && entry.file === name && entry.identity === file.identity && entry.sha256 === file.sha256 && entry.root === rootName && entry.rootIdentity === stamp);
       if ((!authorized || sealed) && existing === undefined) return false;
-      const entry: ErasurePurgeEntry = existing ?? { file: name, fileClass: file.fileClass, sha256: file.sha256, bytes: file.bytes, identity: file.identity, root: rootName, rootIdentity: stamp, status: "planned" };
-      if (existing === undefined) { entries.push(entry); writePrivateJson(path, journal); }
+      if (existing === undefined) publish([file]);
+      const entry = existing ?? entries.find(entry => entry.status === "planned" && entry.file === name && entry.identity === file.identity && entry.sha256 === file.sha256 && entry.root === rootName && entry.rootIdentity === stamp)!;
       accountabilityBoundary.visit("purge-planned", file.path, 0);
       if (cancellation(entry) !== undefined) { retire(); throw new Changed(); }
       remove(); entry.status = "deleted"; writePrivateJson(path, journal);
@@ -307,7 +327,7 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
         else throw new ErasureStorageRefusal("unverifiable", entry.fileClass);
       }
       if (changed) writePrivateJson(path, journal);
-      return { deleted: entries.filter((entry) => entry.status === "deleted").length, observedAbsent: entries.filter((entry) => entry.status === "absent").length,
+      return { intents: plans.slice(0, 20).map(plan => ({ ...plan, planned: journal.operations[plan.id].length, pending: journal.operations[plan.id].filter(entry => entry.status === "planned").length })), omittedIntents: Math.max(0, plans.length - 20), deleted: entries.filter((entry) => entry.status === "deleted").length, observedAbsent: entries.filter((entry) => entry.status === "absent").length,
         replaced: entries.filter((entry) => entry.status === "replaced").length, cancelled: entries.filter((entry) => entry.status === "cancelled").length,
         bytes: entries.filter((entry) => entry.status === "deleted").reduce((sum, entry) => sum + entry.bytes, 0), omitted: Math.max(0, entries.length - 20), files: entries.slice(0,20) };
     },

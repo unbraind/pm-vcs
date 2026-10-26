@@ -33,7 +33,7 @@ function foreign(root: string, name = "foreign"): string { const path = join(roo
 /** Persist actual pending authority, then retire its root using the public lifecycle operations. */
 async function retiredPending() {
   const f = await fixture(); const path = join(f.dir.root, "secondary"); f.repo.linkInstance("secondary", path); foreign(join(path, ".pmvcs/objects"));
-  const cut = new ErasureStorageRefusal("unverifiable", "temporary-storage"); accountabilityBoundary.visit = step => { if (step === "purge-planned") throw cut; };
+  const cut = new ErasureStorageRefusal("unverifiable", "temporary-storage"); accountabilityBoundary.visit = step => { if (step === "purge-set-persisted") throw cut; };
   assert.throws(() => f.repo.obliterate(f.id, "erase-fixture", "incident", new Date(1), { purgeUnaccounted: true }), failure => failure === cut); accountabilityBoundary.visit = () => {};
   f.repo.unlinkInstance("secondary"); rmSync(path, { recursive: true, force: true }); f.repo.pruneRetiredInstance(relative(f.repo.root, path), "erase-fixture", "removed", new Date(1));
   return { ...f, second: f.repo.readIndex().find(entry => entry.path === "second")!.fileId! };
@@ -106,7 +106,10 @@ test("SIGKILL at every native lifecycle-journal publication step resumes after r
   const probe = await prepare(); const listed = run(probe, 0); assert.equal(listed.status, 0, listed.stderr); const steps = JSON.parse(listed.stdout) as string[]; assert.ok(steps.length >= 20);
   for (let ordinal = 1; ordinal <= steps.length; ordinal++) {
     const f = await prepare(); const child = run(f, ordinal); assert.equal(child.signal, "SIGKILL", `${ordinal}/${steps[ordinal - 1]} ${child.stderr}`);
-    f.repo.objects.recoverWriterLock(); const receipt = f.repo.obliterate(f.second, "erase-fixture", "incident", new Date(1)); assert.equal(receipt.storage.accountable, true);
+    let receipt: ReturnType<Repository["obliterate"]>;
+    try { f.repo.objects.recoverWriterLock(); receipt = f.repo.obliterate(f.second, "erase-fixture", "incident", new Date(1)); }
+    catch (error) { throw new Error(`native lifecycle cut ${ordinal}/${steps[ordinal - 1]}`, { cause: error }); }
+    assert.equal(receipt.storage.accountable, true);
     const journal = JSON.parse(readFileSync(join(f.repo.controlDirectory, "erasure-purge.json"), "utf8")) as { operations: Record<string, ErasurePurgeEntry[]> };
     assert.equal(journal.operations[f.id][0].status, "cancelled"); assert.equal(journal.operations[f.id][0].reason, "root_retired"); assert.equal(f.repo.operations.read().filter(entry => entry.command === "obliterate").length, 1);
   }
@@ -152,7 +155,7 @@ test("512 seeded lifecycle sequences always match an independent accountability 
   /** Reference verdict: complete instance scope and every unaccounted file either absent or exactly authorized. */
   const expected = (purge: boolean): boolean => !slots.some(slot => slot.state !== "absent" && !slot.present) && [...files].every(([path, file]) => !scoped(file.root) || purge || JSON.stringify(plans.get(path)) === JSON.stringify(file));
   /** Observe actual completed unlink boundaries to update the independent physical model, including interrupted writes. */
-  const observe = (step: string, path: string): void => { if (step === "purge-planned" && files.has(path)) plans.set(path, { ...files.get(path)! }); if (step === "purge-deleted") files.delete(path); };
+  const observe = (step: string, path: string): void => { if (["purge-planned", "purge-set-persisted"].includes(step) && files.has(path)) plans.set(path, { ...files.get(path)! }); if (step === "purge-deleted") files.delete(path); };
   /** Execute the real public SDK operation; a model crash reconstructs the repository before the next operation. */
   const obliterate = (purge: boolean, crash?: string): void => {
     const verdict = expected(purge); const error = new ErasureStorageRefusal("unverifiable", "temporary-storage"); let actual = true;
@@ -161,7 +164,7 @@ test("512 seeded lifecycle sequences always match an independent accountability 
     try { repo.obliterate(f.id, "erase-fixture", "model_cleanup", new Date(1), { purgeUnaccounted: purge }); }
     catch (failure) { if (failure === error) { cuts++; repo = Repository.open(repo.root); return; } assert.ok(failure instanceof Error && "code" in failure && ["unverifiable", "unbound_instance"].includes(String(failure.code)), String(failure)); actual = false; }
     finally { accountabilityBoundary.visit = () => {}; erasureScanBoundary.visit = () => {}; }
-    assert.equal(actual, verdict, `model verdict at operation ${operations}`); verdicts++;
+    assert.equal(actual, verdict, `model verdict at operation ${operations}: ${JSON.stringify({ purge, slots: slots.map(({state,present,epoch})=>({state,present,epoch})), files: [...files].map(([path,file])=>({name:relative(repo.root,path), ...file, planned:plans.get(path)})) })}`); verdicts++;
   };
   for (let seed = 1; seed <= 512; seed++) {
     if ((seed - 1) % 16 === 0) {

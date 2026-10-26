@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-26T13:04:55.065Z"
+updated_at: "2026-10-26T19:40:08.530Z"
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[59]{created_at,author,text}:
+comments[70]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -70,7 +70,18 @@ comments[59]{created_at,author,text}:
   "2026-10-26T12:50:59.094Z",codex-agent,"Final local round-6 evidence: linked pm test run passed 42/42 (no skips/cancellations); full request matrix covers 515 MUST-REFUSE requests across 16 seeded packed/loose corpora and every purge/recovery flag combination, with unchanged object-store/tripwire hashes. MUST-ALLOW coverage includes 512 valid seeded exact-set stores (1306 operations), 32 parent-erasure crash scenarios, 59 native intent/owner SIGKILL cuts, nine native recovery-preflight cuts, 16 logical intent cuts, nine synchronous recovery-error cuts and six competing drainers. Frozen purge authorization, vanished roots and pending-erasure/invalid-GC refusals pass. Targeted protocol coverage passed 41/41 at 100/100/100/100 per file for destruction and durability. Ref lifetime/ownership suite passes 14/14; ref/bisect compatibility focus passes 6/6. All new descriptors close on error and owner replacement preserves peer records. Typecheck, test build, lint, 87-source docstrings and zero duplication pass. Hermeticity passes 5/5: 98 isolated entrypoints, 155 audited child launch sites before the added FIFO probe; the three real provenance cases match contaminated sessions. Issue 151 teardown remains in its separate committed fix and the PR body retains Fixes #151. Full exact-head npm/Bun CI is the remaining verification gate."
   "2026-10-26T12:51:48.212Z",codex-agent,"Owned-cleanup revert proofs: restore only RefStore.transaction from 1d372bd, retaining the new helpers and tests: both new regressions fail 0/2 (one raw lock descriptor remains open after earlier cleanup failure; a peer replacement is deleted). Restore the fixed method: 2/2. Restore only the old ObjectStore writer-lease function behind the new scope wrapper: the in-place owner rewrite regression fails 0/1 because the foreign owner is silently retired. Restore the fixed function: 1/1 across rewritten, replaced, vanished, publication and temporary-retirement boundaries. Cleanup now holds descriptors through final namespace checks, compares original owner bytes/stamps and closes last. The added linked frozen-purge/GC/ordinary-owner focus passes 3/3. Typecheck, test build, lint and 87-source zero-duplication/docstring gates pass; exact-head full npm/Bun CI remains pending. Implementation is ready for external gate verification; item stays in_progress, never closed."
   "2026-10-26T13:04:53.504Z",codex-agent,"Final receipt-lifecycle hardening preserves completed outcomes when a retired name is reused, and treats skipped/cancelled entries as historical once peer leaves disappear. It cannot leave an accountable payload-free store permanently blocked. The end-to-end pending-erasure replacement/remove/retry case passes, as do four generic leaf/parent lifetime modes and an I/O interruption. Behavioural proof: reinstate only the unconditional terminal-skip refusal in DestructionPlan.finish; the end-to-end clean retry fails 0/1 with destructive_target_changed despite removal of the replacement. Restore the active-membership guard: 1/1. Linked lifecycle focus passes 3/3. Fresh final protocol coverage passes 48/48 at unchanged per-file 100/100/100/100 for engine/destruction.ts and engine/durability.ts, including 59 native SIGKILL cuts and six native peers. Earlier full linked request/crash run passed 42/42; added frozen-purge/GC/ordinary-owner focus passes 3/3 and ref ownership/lifetime suite 14/14. All code is ready for the self-host commit and exact-head npm/Bun CI. Item remains in_progress and unclosed; claim released for external verification."
-files[48]{path,scope}:
+  "2026-10-26T13:46:03.686Z",codex-agent,"Post-push exact-set audit found and reproduced a same-id foreign checkpoint substitution: copying another valid member set into the active header could redirect handle refresh to the tripwire. The immutable request projection is now SHA-256 fingerprinted by each live handle; refresh compares root lifetime, revision, member order, identities, digests, parent identities and destinations before adopting peer progress. Isolated behavioural revert: remove only the authority comparison, run node --test --test-name-pattern='same-id foreign checkpoint' test/destruction.test.ts: fails 0/1 with ENOENT reading the deleted tripwire. Restore comparison: passes 1/1, original members and tripwire unchanged. Legitimate peer completion and status-only progress remain supported. A follow-up self-hosted commit and new exact-head CI run will supersede 4deb40b; item stays in_progress during this validation."
+  "2026-10-26T13:50:49.055Z",codex-agent,"Immutable replay validation is complete: fresh focused gate passes 49/49 with unchanged per-file 100/100/100/100 for destruction and durability, including six native peer boundaries. Typecheck, test build, strict lint, 87-source documentation and zero duplication also pass. The added linked same-id foreign checkpoint test passes 1/1; its isolated guard revert deletes the tripwire and fails 0/1, restored guard passes 1/1. This follow-up retains historical outcomes and freezes original deletion authority through all refreshed peer checkpoints. Claim released for new exact-head CI after the required self-host commit; item remains in_progress and unclosed."
+  "2026-10-26T15:17:50.399Z",codex-agent,"The first exact-head full CI exposed compatibility regressions (Node 26: 1949/2041). Focused repairs preserve native errors and scoped descriptor fault injection, keep namespace publication receipts outside logical control snapshots, bind copied intent authority to its owning root, and partition fresh purge authorizations into immutable revision-bound batches. Fault regressions now pass 27/27; targeted erasure lifecycle recovery remains under validation. No thresholds were changed."
+  "2026-10-26T15:24:00.743Z",codex-agent,"Additional behavioral revert proof: in an isolated source copy, removed only perform() descriptor-alias validation after the exact set is recorded. The alias regression failed 0/1 because the unrelated tripwire was deleted (ENOENT); unchanged production source passes 1/1. A reused mutable request cannot redirect retirement to a foreign leaf. Purge batch schema and legacy audit migration regression also passes 1/1."
+  "2026-10-26T18:39:15.645Z",codex-agent,"Resumed after the host OOM. Remote PR head and local committed head both remain 4deb40b; no committed work was lost or discarded. Reviewed the saved compatibility and immutable-authority edits. Interrupted local runs are not passing evidence. Validation now runs serially with one test worker (never more than two including a peer), focused lifecycle cases first; full npm and Bun gates remain CI evidence."
+  "2026-10-26T18:43:57.897Z",codex-agent,"Resumed focused safety checks pass 4/4: same-id authority replacement, mutable descriptor alias, missing unplanned publication source, and unpublished bootstrap owner lifetimes. Additional isolated behavioral revert: removing only the missing-source publication guard makes its regression fail 0/1 (empty success instead of the required typed refusal); restored production source passes. Strict lint, typecheck/test build, 87-source docstrings and zero duplication pass. Lifecycle peer test passes both real-process boundaries; the 512-seed model remains running serially."
+  "2026-10-26T19:03:03.623Z",codex-agent,"Current focused validation: intent/durability per-file coverage is 100/100/100/100 after 41 core tests, additional scope/schema checks, and the eight-case PM-linked run. The 16-case destructive focus passes 515 unchanged-tree MUST-REFUSE requests and 32 valid packed/loose flag/crash cases. Pack retention additions pass 2/2. Behavioral reverts: old GC receipt counting fails 0/1 (one representation reported instead of two), restored 1/1; old compact() fails the frozen-set case 0/1 by deleting the later duplicate; removing only the captured-source identity guard fails the peer-replacement case 0/1. Both restored pack cases pass. Native lifecycle-journal crash validation is running against immutable purge batches; the 512-seed lifecycle model continues serially."
+  "2026-10-26T19:10:48.480Z",codex-agent,"The resumed round-5 lifecycle reference model now passes all 512 seeds (1..512): 6144 operations, 2048 checked accountability verdicts, 768 crashes across all eight publication boundaries, and successful clean-store convergence after every sequence. The model now observes the actual durable whole-batch publication boundary, before denial publication, rather than inferring authority only when an individual unlink begins. Both real peer retirement boundaries also pass with the same completed receipt. Native purge publication cuts are still running; no interrupted OOM run is counted as evidence."
+  "2026-10-26T19:22:05.119Z",codex-agent,"The native purge crash campaign exposed a final generic lease-lifetime gap after an unlink but before its progress acknowledgment: a new owner at the same lock name could inherit a pending cleanup set. Cleanup keys now bind the captured owner stamp; observational receipts classify ended members as historical without deleting successors. The two targeted lifecycle checks pass 2/2. Isolated behavioral revert of only the owner-stamp key fails 0/1 by blocking the new owner with destructive_target_changed; restored code passes. Re-running the complete native purge campaign and the strict focused coverage gate before committing."
+  "2026-10-26T19:31:25.940Z",codex-agent,"Fresh post-lifetime-fix targeted gate passes 59/59 with zero failures/skips/cancellations and unchanged per-file 100/100/100/100 for destruction and durability. This includes the 59 actual intent SIGKILL cuts, six real peer boundaries, invalid-request preflight, recovery CAS, owner replacement, and shipped GC. Reverting only historical member settlement makes its directory-lifetime regression fail 0/1 (pending instead of historical); restored settlement passes. Both new lease/member lifetime regressions are linked and pass through pm test --run --only-last --progress. Native purge cut campaign remains running against the fixed owner-bound cleanup keys."
+  "2026-10-26T19:40:06.520Z",codex-agent,"Final resumed local campaign is green: all 148 actual native lifecycle-journal SIGKILL cuts recover after retiring the referenced instance, including durable temporary publication, directory barriers and unlink-before-ack cleanup. The owner-bound cleanup fix removes the reproduced blockage without extending any old deletion set. Earlier current-source focused gate passes 59/59 with unchanged per-file 100/100/100/100 for destruction/durability; linked lifetime focus passes 2/2, linked safety focus 8/8, pack retention 2/2, and the lifecycle model passes 512 seeds / 6144 operations / 2048 verdicts / 768 crashes. All requested behavioral revert proofs are recorded. Typecheck, source/test builds, strict lint, zero duplication, 87-source docstrings, privacy and history-prefix checks pass. Implementation is complete; releasing the claim for self-host and exact-head npm/Bun CI verification. Item stays in_progress and must not be closed."
+files[51]{path,scope}:
   .github/workflows/ci.yml,project
   composition-commands.ts,project
   engine/bisect.ts,project
@@ -91,6 +102,7 @@ files[48]{path,scope}:
   engine/repo.ts,project
   index.ts,project
   scripts/pack-benchmark.ts,project
+  test/atomic-publication-cleanup.test.ts,project
   test/composition.test.ts,project
   test/destruction.test.ts,project
   test/destructive-plans.test.ts,project
@@ -112,32 +124,186 @@ files[48]{path,scope}:
   test/helpers/pack-worker.ts,project
   test/object-lifetime.test.ts,project
   test/object-read-protocol.test.ts,project
+  test/objects.test.ts,project
   test/packs.test.ts,project
   test/raw-coverage.test.ts,project
   test/refs.test.ts,project
   test/stream-erasure-legacy-fetch-repair.test.ts,project
   test/vcs-commands.test.ts,project
   test/worktree-races.test.ts,project
+  test/writer-lease-batch-publication.test.ts,project
   vcs-commands.ts,project
-tests[18]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
-  node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts,project,600,codex-agent,"2026-10-25T00:50:11.882Z",local_mutation,feat/indexed-pack-storage
-  node --test --test-name-pattern=agent.compaction test/packs.test.ts,project,60,codex-agent,"2026-10-25T00:53:18.003Z",local_mutation,feat/indexed-pack-storage
-  node --test --test-name-pattern=maintenance.rejects test/packs.test.ts,project,60,codex-agent,"2026-10-25T00:59:26.949Z",local_mutation,feat/indexed-pack-storage
-  node_modules/.bin/c8 --include=engine/packs.ts --include=scripts/pack-benchmark.ts --100 --per-file --reports-dir=coverage/packs-targeted node --test test/packs.test.ts,project,600,codex-agent,"2026-10-25T01:22:43.589Z",local_mutation,feat/indexed-pack-storage
-  node --test test/object-read-protocol.test.ts test/durability.test.ts,project,600,codex-agent,"2026-10-25T03:57:50.813Z",local_mutation,feat/indexed-pack-storage
-  "node --test --test-name-pattern=\"unlink refuses a concurrent leaf directory|pruning refuses content added|pruning refuses a directory recreated\" test/worktree-races.test.ts",project,120,codex-agent,"2026-10-25T04:26:21.623Z",local_mutation,feat/indexed-pack-storage
-  "node --test --test-name-pattern=\"every pack data reader\" test/packs.test.ts",project,120,codex-agent,"2026-10-25T05:31:17.136Z",local_mutation,feat/indexed-pack-storage
-  node --test test/object-lifetime.test.ts,project,300,codex-agent,"2026-10-25T09:23:52.753Z",local_mutation,feat/indexed-pack-storage
-  node --test test/erasure-storage.test.ts,project,600,codex-agent,"2026-10-25T14:46:59.037Z",local_mutation,feat/indexed-pack-storage
-  "node --expose-gc --test --test-name-pattern=\"empty file preserves|bounded 32 MiB\" test/composition.test.ts test/stream-erasure-legacy-fetch-repair.test.ts",project,120,codex-agent,"2026-10-25T16:46:49.456Z",local_mutation,feat/indexed-pack-storage
-  node --test test/erasure-accountability.test.ts,project,900,codex-agent,"2026-10-25T21:08:15.598Z",local_mutation,feat/indexed-pack-storage
-  node --test --test-name-pattern='reader surface enumeration|explicit purge for interrupted staging|complete native framing|physical inventory skips|streaming second pass' test/object-read-protocol.test.ts test/packs.test.ts test/erasure-accountability.test.ts test/stream-erasure-legacy-fetch-repair.test.ts,project,180,codex-agent,"2026-10-25T21:50:28.007Z",local_mutation,feat/indexed-pack-storage
-  node --test test/erasure-lifecycle.test.ts,project,1800,codex-agent,"2026-10-26T06:10:49.273Z",local_mutation,feat/indexed-pack-storage
-  "node --test --test-name-pattern='review: a purged dormant instance|pending authority is cancelled|a pending file cannot|root-bound journals|retirement boundaries' test/erasure-lifecycle.test.ts",project,180,codex-agent,"2026-10-26T06:10:51.475Z",local_mutation,feat/indexed-pack-storage
-  node --test test/destruction.test.ts test/destructive-plans.test.ts,project,900,codex-agent,"2026-10-26T12:33:55.139Z",local_mutation,feat/indexed-pack-storage
-  node --test test/refs.test.ts,project,120,codex-agent,"2026-10-26T12:50:56.383Z",local_mutation,feat/indexed-pack-storage
-  "node --test --test-name-pattern=\"purge drafts freeze|GC invalid apply|ordinary store lease\" test/destructive-plans.test.ts",project,180,codex-agent,"2026-10-26T12:50:56.383Z",local_mutation,feat/indexed-pack-storage
-  "node --test --test-name-pattern=\"terminal skipped|active skipped|pending erasure resumes\" test/destruction.test.ts test/destructive-plans.test.ts",project,180,codex-agent,"2026-10-26T13:03:13.062Z",local_mutation,feat/indexed-pack-storage
+tests[21]:
+  - command: node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T00:50:11.882Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test --test-name-pattern=agent.compaction test/packs.test.ts
+    scope: project
+    timeout_seconds: 60
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T00:53:18.003Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test --test-name-pattern=maintenance.rejects test/packs.test.ts
+    scope: project
+    timeout_seconds: 60
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T00:59:26.949Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node_modules/.bin/c8 --include=engine/packs.ts --include=scripts/pack-benchmark.ts --100 --per-file --reports-dir=coverage/packs-targeted node --test test/packs.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T01:22:43.589Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test test/object-read-protocol.test.ts test/durability.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T03:57:50.813Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-name-pattern=\"unlink refuses a concurrent leaf directory|pruning refuses content added|pruning refuses a directory recreated\" test/worktree-races.test.ts"
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T04:26:21.623Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-name-pattern=\"every pack data reader\" test/packs.test.ts"
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T05:31:17.136Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test test/object-lifetime.test.ts
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T09:23:52.753Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test test/erasure-storage.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T14:46:59.037Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --expose-gc --test --test-name-pattern=\"empty file preserves|bounded 32 MiB\" test/composition.test.ts test/stream-erasure-legacy-fetch-repair.test.ts"
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T16:46:49.456Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test test/erasure-accountability.test.ts
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T21:08:15.598Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test --test-name-pattern='reader surface enumeration|explicit purge for interrupted staging|complete native framing|physical inventory skips|streaming second pass' test/object-read-protocol.test.ts test/packs.test.ts test/erasure-accountability.test.ts test/stream-erasure-legacy-fetch-repair.test.ts
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-25T21:50:28.007Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test test/erasure-lifecycle.test.ts
+    scope: project
+    timeout_seconds: 1800
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-26T06:10:49.273Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-name-pattern='review: a purged dormant instance|pending authority is cancelled|a pending file cannot|root-bound journals|retirement boundaries' test/erasure-lifecycle.test.ts"
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-26T06:10:51.475Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test test/destruction.test.ts test/destructive-plans.test.ts
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-26T12:33:55.139Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test test/refs.test.ts
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-26T12:50:56.383Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-name-pattern=\"purge drafts freeze|GC invalid apply|ordinary store lease\" test/destructive-plans.test.ts"
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-26T12:50:56.383Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-name-pattern=\"terminal skipped|active skipped|pending erasure resumes\" test/destruction.test.ts test/destructive-plans.test.ts"
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-26T13:03:13.062Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-name-pattern=\"same-id foreign checkpoint\" test/destruction.test.ts"
+    scope: project
+    timeout_seconds: 60
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-26T13:50:45.495Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test --test-concurrency=1 --test-name-pattern='same-id foreign|descriptor aliases|publication source lost|unpublished owner bootstrap|verified repository aliases|whole namespace plans|receipt inspection treats|special publication destination' test/destruction.test.ts test/durability.test.ts
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-26T18:52:21.645Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+    note: "Immutable authority, exact descriptor aliases, publication validation, scoped receipts and bootstrap ownership on disposable native filesystems."
+  - command: node --test --test-concurrency=1 --test-name-pattern='unlink crash cannot transfer|observational receipts distinguish' test/destruction.test.ts
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-26T19:30:30.051Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+    note: A crashed cleanup intent cannot inherit a new lease owner or leave historical member lifetimes pending.
 docs[6]{path,scope}:
   docs/destructive-operations.md,project
   docs/indexed-pack-benchmark.json,project
