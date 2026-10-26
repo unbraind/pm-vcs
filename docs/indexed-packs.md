@@ -212,6 +212,27 @@ purge or receipt transition before completion is published. A crash can leave a
 pending denial or an incomplete purge plan; authorized rerun converges without
 repeating the completed operation receipt.
 
+Terminal purge entries (`deleted`, `absent`, `replaced`) are immutable historical
+audit facts. They never require their original instance, root or pack to remain
+in the current scope, and reading them performs no lookup of the old pathname.
+Pending entries bind both the selected file identity/hash and the exact root's
+device, inode and birth time. Removing, pruning or recreating that root cancels
+pending authority with `root_retired`, `root_missing` or `root_replaced`; receipts
+report an exact `cancelled` count and preserve the reason. A replacement root
+cannot inherit deletion authority, even through a retained hard-linked file.
+Legacy unbound pending plans become `cancelled` with `legacy_authorization`;
+remaining unaccounted files need a fresh explicit purge authorization. Completed
+legacy records remain valid history. Cancellation is durable under the owning
+lease and resumes safely after interruption.
+
+Accountability catalogues are operation-local snapshots, rebuilt on every
+verification. Erasure progress and fingerprint journals use logical object IDs
+and payload digests rather than requiring old physical locations to exist.
+Registered or retired instance cleanup scope still requires an explicit prune
+when its binding disappears; that administrative boundary is independent of
+historical purge receipts. Once the current scope is accountable and payload-free,
+a vanished historical reference cannot permanently block another obliteration.
+
 Certification opens one registered descriptor at a time, parses from that fd,
 then compares `fstat(fd)` with `lstat(path)` using device, inode, size and mtime.
 A renamed, replaced or resized file restarts inspection. A final catalogue barrier
@@ -236,6 +257,14 @@ verification boundary for loose and packed files. Native purge publication,
 directory barriers and unlinking have 96 real SIGKILL cuts. A competing process
 runs at every accountability/purge boundary on one non-git tracker. Earlier reader
 retirement and resource-lifetime regressions remain part of the release gate.
+
+Root-lifecycle regression evidence adds seeds 1..512 over 32 isolated native hub
+copies in a real non-git SDK project: 6,144 operations, 2,048 independent model
+verdicts and 768 injected crashes across eight publication boundaries. Operations
+cover add, unlink/remove, prune, same-name recreation, foreign arrivals, explicit
+purge and obliteration; every sequence ends with a successful clean-store retry.
+There are also 44 actual native lifecycle-journal SIGKILL cuts and a competing
+process at both lifecycle-publication boundaries on one non-git tracker.
 
 This certificate covers the inspected filesystem namespace under the native writer
 lease. It does not promise secure sector wiping, external backup removal, or

@@ -1028,3 +1028,7 @@ return `unverifiable`, even when no payload signature matches. Explicit
 unaccounted files with an identity-bound receipt, then re-verifies. See
 [physical erasure verification](docs/indexed-packs.md#physical-erasure-verification)
 for authorization, bounded retries and SDK examples.
+
+Completed purge receipts remain valid audit history after an instance or pack is
+removed. Pending root-bound authority is cancelled with a typed reason when its
+root disappears or is recreated; a clean current store can then be certified.

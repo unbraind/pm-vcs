@@ -184,45 +184,93 @@ export function accountErasureStorage(scope: string | readonly string[], options
   throw new ErasureStorageRefusal("unverifiable", "object-root");
 }
 
-/** Durable identity-bound purge entry; absence/replacement is distinguished from a completed deletion. */
-export interface ErasurePurgeEntry { readonly file: string; readonly fileClass: ErasureFileClass; readonly sha256: string; readonly bytes: number; readonly identity: string; status: "planned" | "deleted" | "absent" | "replaced" }
-/** Agent-sized purge receipt keeps exact totals even when its file list is bounded. */
-export interface ErasurePurgeReceipt { readonly deleted: number; readonly observedAbsent: number; readonly replaced: number; readonly bytes: number; readonly omitted: number; readonly files: readonly ErasurePurgeEntry[] }
+/** Pending authority ends with its exact storage-root lifetime, with a safe machine-readable audit reason. */
+export type ErasurePurgeCancellation = "root_retired" | "root_missing" | "root_replaced" | "legacy_authorization";
+/** Terminal entries are immutable historical facts, not membership claims about the current root set. */
+export interface ErasurePurgeEntry {
+  readonly file: string; readonly fileClass: ErasureFileClass; readonly sha256: string; readonly bytes: number; readonly identity: string;
+  readonly root?: string; readonly rootIdentity?: string;
+  status: "planned" | "deleted" | "absent" | "replaced" | "cancelled";
+  reason?: ErasurePurgeCancellation;
+}
+/** Agent-sized purge receipt preserves historical counts and explicitly reports cancelled pending authority. */
+export interface ErasurePurgeReceipt { readonly deleted: number; readonly observedAbsent: number; readonly replaced: number; readonly cancelled: number; readonly bytes: number; readonly omitted: number; readonly files: readonly ErasurePurgeEntry[] }
 /** Recover only package-written authorization under the caller's owning writer lease. */
 export function erasurePurge(control: string, fileId: string, roots: readonly string[], authorized: boolean): { readonly canPurge: boolean; purge: NonNullable<AccountabilityOptions["purge"]>; receipt(): ErasurePurgeReceipt } {
   const path = join(control, "erasure-purge.json");
   let raw: unknown;
   try { raw = readControlJson(path, "unverifiable", "purge journal", { format: "pm-vcs-erasure-purge-1", operations: {} }); }
   catch { throw new ErasureStorageRefusal("unverifiable", "verification-metadata"); }
-  /** The journal may never grant deletion outside the explicitly inventoried stores. */
-  const scoped = (file: string): boolean => roots.some((root) => { const name = relative(root, resolve(control, file)); return name !== "" && name !== ".." && !name.startsWith(`..${sep}`) && !isAbsolute(name); });
+  /** Paths remain canonical audit text even after their root ceases to exist; they never grant authority alone. */
+  const canonical = (file: unknown): file is string => typeof file === "string" && file !== "" && !file.includes("\0") && !isAbsolute(file) && relative(control, resolve(control, file)) === file;
+  /** Prefix membership is checked against current roots only when exercising pending deletion authority. */
+  const scoped = (file: string, scope: readonly string[] = roots): string | undefined => scope.find((root) => { const name = relative(root, resolve(control, file)); return name !== "" && name !== ".." && !name.startsWith(`..${sep}`) && !isAbsolute(name); });
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
   const journal = raw as { format: string; operations: Record<string, ErasurePurgeEntry[]> };
   if (Object.keys(journal).sort().join(",") !== "format,operations" || journal.format !== "pm-vcs-erasure-purge-1" || journal.operations === null || typeof journal.operations !== "object" || Array.isArray(journal.operations)) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
   for (const [id, entries] of Object.entries(journal.operations)) {
     if (!/^[0-9a-f]{32}$/.test(id) || !Array.isArray(entries) || entries.some((entry) => entry === null || typeof entry !== "object"
-      || Object.keys(entry).sort().join(",") !== "bytes,file,fileClass,identity,sha256,status"
-      || typeof entry.file !== "string" || isAbsolute(entry.file) || !scoped(entry.file) || typeof entry.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(entry.sha256)
+      || !["bytes,file,fileClass,identity,sha256,status", "bytes,file,fileClass,identity,reason,sha256,status", "bytes,file,fileClass,identity,root,rootIdentity,sha256,status", "bytes,file,fileClass,identity,reason,root,rootIdentity,sha256,status"].includes(Object.keys(entry).sort().join(","))
+      || !canonical(entry.file) || typeof entry.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(entry.sha256)
       || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || typeof entry.identity !== "string" || !/^\d+:\d+:\d+:-?\d+$/.test(entry.identity)
       || !["object-root","loose-storage","pack-storage","temporary-storage","foreign-directory"].includes(entry.fileClass)
-      || !["planned","deleted","absent","replaced"].includes(entry.status))) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
+      || !["planned","deleted","absent","replaced","cancelled"].includes(entry.status)
+      || (entry.root !== undefined && (!canonical(entry.root) || typeof entry.rootIdentity !== "string" || !/^\d+:\d+:\d+$/.test(entry.rootIdentity) || scoped(entry.file, [resolve(control, entry.root)]) === undefined))
+      || (entry.status === "cancelled" ? !["root_retired","root_missing","root_replaced","legacy_authorization"].includes(entry.reason!) : entry.reason !== undefined))) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
   }
+  /** Root birth identity is stable through ordinary file arrivals and changes when a directory is recreated. */
+  const rootStamp = (root: string): string | undefined => {
+    const stat = lstatSync(root, { bigint: true, throwIfNoEntry: false });
+    if (stat === undefined) return undefined;
+    if (!stat.isDirectory()) throw new ErasureStorageRefusal("unverifiable", "object-root");
+    return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`;
+  };
+  /** Never inspect a retired pathname or allow an old plan to follow a replacement root. */
+  const cancellation = (entry: ErasurePurgeEntry): ErasurePurgeCancellation | undefined => {
+    const root = entry.root === undefined ? scoped(entry.file) : roots.find(root => relative(control, root) === entry.root);
+    if (root === undefined) return "root_retired";
+    const stamp = rootStamp(root);
+    if (stamp === undefined) return "root_missing";
+    if (entry.root === undefined) return "legacy_authorization";
+    if (entry.rootIdentity !== stamp) return "root_replaced";
+    return undefined;
+  };
+  /** Settle obsolete pending authority across all operations, leaving terminal audit entries untouched. */
+  const retire = (): void => {
+    let changed = false;
+    for (const entries of Object.values(journal.operations)) for (const entry of entries) if (entry.status === "planned") {
+      const reason = cancellation(entry);
+      if (reason !== undefined) { entry.status = "cancelled"; entry.reason = reason; changed = true; }
+    }
+    if (changed) {
+      accountabilityBoundary.visit("purge-lifecycle-planned", path, 0);
+      writePrivateJson(path, journal);
+      accountabilityBoundary.visit("purge-lifecycle-recorded", path, 0);
+    }
+  };
+  retire();
   const entries = journal.operations[fileId] ?? []; journal.operations[fileId] = entries;
   return {
-    canPurge: authorized || entries.some((entry) => entry.status === "planned"),
-    /** Persist the precise selected identity before removal; replay recognizes only that same authorization. */
+    /** Only current pending authority can permit automatic replay. */
+    get canPurge() { return authorized || entries.some((entry) => entry.status === "planned"); },
+    /** Persist current root and file identity before removal; historical entries never become fresh authority. */
     purge(file, remove) {
-      const name = relative(control, file.path); const existing = entries.find((entry) => entry.file === name && entry.identity === file.identity && entry.sha256 === file.sha256);
-      if (!authorized && existing?.status !== "planned") return false;
-      const entry: ErasurePurgeEntry = existing ?? { file: name, fileClass: file.fileClass, sha256: file.sha256, bytes: file.bytes, identity: file.identity, status: "planned" };
+      const name = relative(control, file.path); const root = scoped(name);
+      if (root === undefined) return false;
+      const stamp = rootStamp(root); if (stamp === undefined) throw new Changed();
+      const rootName = relative(control, root);
+      const existing = entries.find((entry) => entry.status === "planned" && entry.file === name && entry.identity === file.identity && entry.sha256 === file.sha256 && entry.root === rootName && entry.rootIdentity === stamp);
+      if (!authorized && existing === undefined) return false;
+      const entry: ErasurePurgeEntry = existing ?? { file: name, fileClass: file.fileClass, sha256: file.sha256, bytes: file.bytes, identity: file.identity, root: rootName, rootIdentity: stamp, status: "planned" };
       if (existing === undefined) { entries.push(entry); writePrivateJson(path, journal); }
       accountabilityBoundary.visit("purge-planned", file.path, 0);
+      if (cancellation(entry) !== undefined) { retire(); throw new Changed(); }
       remove(); entry.status = "deleted"; writePrivateJson(path, journal);
       accountabilityBoundary.visit("purge-recorded", file.path, 0); return true;
     },
-    /** A crash after unlink is acknowledged as observed absence, never falsely attributed to this process. */
+    /** Resolve only active pending files; completed and cancelled records are historical without filesystem lookups. */
     receipt() {
-      let changed = false;
+      retire(); let changed = false;
       for (const entry of entries) if (entry.status === "planned") {
         const stat = lstatSync(resolve(control, entry.file), { bigint: true, throwIfNoEntry: false });
         if (stat === undefined) { entry.status = "absent"; changed = true; }
@@ -231,7 +279,8 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
       }
       if (changed) writePrivateJson(path, journal);
       return { deleted: entries.filter((entry) => entry.status === "deleted").length, observedAbsent: entries.filter((entry) => entry.status === "absent").length,
-        replaced: entries.filter((entry) => entry.status === "replaced").length, bytes: entries.filter((entry) => entry.status === "deleted").reduce((sum, entry) => sum + entry.bytes, 0), omitted: Math.max(0, entries.length - 20), files: entries.slice(0,20) };
+        replaced: entries.filter((entry) => entry.status === "replaced").length, cancelled: entries.filter((entry) => entry.status === "cancelled").length,
+        bytes: entries.filter((entry) => entry.status === "deleted").reduce((sum, entry) => sum + entry.bytes, 0), omitted: Math.max(0, entries.length - 20), files: entries.slice(0,20) };
     },
   };
 }

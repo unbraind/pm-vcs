@@ -1,5 +1,5 @@
 export { type ErasureOptions } from "./engine/erasure.ts";
-export { type ErasureAccountabilityReport, type ErasurePurgeEntry, type ErasurePurgeReceipt } from "./engine/erasure-accountability.ts";
+export { type ErasureAccountabilityReport, type ErasurePurgeCancellation, type ErasurePurgeEntry, type ErasurePurgeReceipt } from "./engine/erasure-accountability.ts";
 export { ErasureStorageRefusal, type ErasureFileClass, type ErasureStorageReport } from "./engine/erasure-scan.ts";
 export { PackRefusal, type PackRefusalCode, type PackReport } from "./engine/packs.ts";
 export { ObjectStore, ObjectStoreError, OBJECT_READ_RETRIES, type InventoryEntry } from "./engine/objects.ts";
