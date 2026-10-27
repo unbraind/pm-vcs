@@ -10,11 +10,10 @@ import { durability } from "./durability.ts";
 // both read the same tip, both commit on top of it, both write their own commit
 // as the new tip, and the second write silently discards the first.
 
-import type { BigIntStats, Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
-  fstatSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -233,33 +232,19 @@ export class RefStore {
         throw new ObjectStoreError("duplicate_ref_update", `Ref ${ordered[index]!.name} appears twice in one transaction.`);
       }
     }
-    const held: Array<{ descriptor: number; lockPath: string; owner?: BigIntStats }> = [];
+    const held: ReturnType<typeof durability.claim>[] = [];
     let failure: unknown;
-    try {
-      for (const update of ordered) {
-        const path = this.pathFor(update.name);
-        const lockPath = `${path}.lock`;
-        mkdirSync(dirname(path), { recursive: true });
-        let descriptor: number;
-        try {
-          descriptor = openSync(lockPath, "wx");
-        } catch {
-          throw new ObjectStoreError("ref_locked", `Ref ${update.name} is locked by another process (${lockPath}).`);
-        }
-        held.push({ descriptor, lockPath });
-        held[held.length - 1]!.owner = fstatSync(descriptor, { bigint: true });
-      }
+    /** Read every expectation under all leases, including after caller preflight callbacks. */
+    const validate = (): void => {
+      for (const lease of held) lease.verify();
       for (const update of ordered) {
         const current = readTrimmed(this.pathFor(update.name));
-        if (current !== update.expected) {
-          throw new ObjectStoreError(
-            "ref_changed",
-            `Ref ${update.name} holds ${current ?? "nothing"} but the update expected ${update.expected ?? "nothing"}. `
-            + "Re-read the ref and retry: another agent advanced it.",
-          );
-        }
+        if (current !== update.expected) throw new ObjectStoreError("ref_changed", `Ref ${update.name} changed. Re-read the ref and retry: another agent advanced it.`);
       }
-      preflight?.();
+    };
+    try {
+      for (const update of ordered) held.push(durability.claim(`${this.pathFor(update.name)}.lock`, "ref_locked"));
+      validate(); preflight?.(); validate();
       const removals = ordered.filter(update => update.next === null);
       if (removals.length > 0) {
         const plan = prepareDestruction(this.root, `ref-retirement:${JSON.stringify(ordered)}`, removals.map(update => ({ path: this.pathFor(update.name) })), false, undefined, false, "eligibility_changed");
@@ -269,7 +254,7 @@ export class RefStore {
       for (const update of ordered) if (update.next !== null) writeAtomic(this.pathFor(update.name), update.next);
     } finally {
       for (const lock of held) {
-        try { durability.release(lock.lockPath, lock.descriptor, lock.owner); } catch (error) { failure ??= error; }
+        try { lock.release(); } catch (error) { failure ??= error; }
       }
     }
     if (failure !== undefined) throw failure;

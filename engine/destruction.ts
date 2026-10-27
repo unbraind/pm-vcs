@@ -9,6 +9,7 @@ import { ObjectStoreError, VerificationRefusal, assertVerificationBound, verific
 /** Primitive implementation is supplied by the one platform-aware durability helper. @internal */
 export interface DestructionBackend {
   file(fd: number): void;
+  directory(path: string): void;
   write(path: string, bytes: Buffer): void;
   unlink(path: string): void;
   rmdir(path: string): void;
@@ -54,6 +55,8 @@ let backend: DestructionBackend;
 const scopes: Scope[] = [];
 /** Install only the durability helper's platform-aware primitives. @internal */
 export function configureDestruction(value: DestructionBackend): void { backend = value; }
+/** Validate operator paths with the same scope/alias policy used by every native retirement. @internal */
+export function resolveNamespacePath(path: string): string { return inScope(scope(resolve(path)), () => canonical(path)); }
 /** Keep synchronous namespace mutations within their store's already-owned writer lease. @internal */
 export function withDestructionScope<T>(control: string, action: () => T): T { return inScope({ control: resolve(control), repository: true }, action); }
 /** Preserve the verified repository boundary without trusting arbitrary standalone parent links. */
@@ -63,15 +66,19 @@ function birth(stat: BigIntStats): string { return `${stat.dev}:${stat.ino}:${st
 /** A mutation stamp includes ctime so an in-place rewrite cannot retain deletion authority. */
 function identity(stat: BigIntStats): string { return `${birth(stat)}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`; }
 /** Hash regular bytes or the literal link target, never following a leaf link. */
-function digest(path: string, stat: BigIntStats): string {
+function digest(path: string, stat: BigIntStats, durable = false): string {
   const hash = createHash("sha256");
   if (stat.isSymbolicLink() || stat.isDirectory()) return hash.update(stat.isSymbolicLink() ? readlinkSync(path) : "directory").digest("hex");
-  const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let file: ObjectFile;
+  try { file = objectFiles.open(path, (durable ? constants.O_RDWR : constants.O_RDONLY) | constants.O_NOFOLLOW); }
+  catch (error) { if (!durable || !["EACCES", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
   try {
+    if (durable) backend.file(file.fd);
     if (identity(fstatSync(file.fd, { bigint: true })) !== identity(stat)) throw new DestructionRefusal("destructive_target_changed", "A leaf changed before hashing.");
     const buffer = Buffer.alloc(65_536); let offset = 0;
     for (;;) { const count = readSync(file.fd, buffer, 0, buffer.length, offset); if (count === 0) break; hash.update(buffer.subarray(0, count)); offset += count; }
-    if (identity(fstatSync(file.fd, { bigint: true })) !== identity(stat)) throw new DestructionRefusal("destructive_target_changed", "A pinned leaf changed while hashing.");
+    const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    if (current === undefined || identity(current) !== identity(stat) || identity(fstatSync(file.fd, { bigint: true })) !== identity(stat)) throw new DestructionRefusal("destructive_target_changed", "A pinned leaf changed while hashing.");
     return hash.digest("hex");
   } finally { file.close(); }
 }
@@ -172,7 +179,7 @@ function snapshot(root: string, requests: readonly DestructionRequest[]): Destru
     if (request.destination !== undefined) { if (canonical(request.destination) === path) throw new DestructionRefusal("conflicting_destructive_requests", "A publication cannot retire its own destination."); const directory = lstatSync(dirname(request.destination), { bigint: true, throwIfNoEntry: false }); if (!directory?.isDirectory()) throw new DestructionRefusal("destructive_target_changed", "Publication requires an existing ordinary destination directory."); const dest = lstatSync(request.destination, { bigint: true, throwIfNoEntry: false }); if (dest !== undefined && !dest.isFile() && !dest.isSymbolicLink()) throw new DestructionRefusal(dest.isDirectory() ? "EISDIR" : "destructive_target_unsupported", "EISDIR: Publication destination is not a regular file or literal link."); target = dest === undefined ? "absent" : identity(dest); destinationParentIdentity = birth(directory); }
     const previous = result.get(path);
     if (previous !== undefined && previous.destination !== (request.destination === undefined ? undefined : coordinate(root, request.destination))) throw new DestructionRefusal("conflicting_destructive_requests", "Two requests assign incompatible actions to one leaf.");
-    result.set(path, { path: coordinate(root, path), ...(request.destination === undefined ? {} : { destination: coordinate(root, request.destination), target, destinationParentIdentity }), kind: request.destination !== undefined ? "rename" : stat.isDirectory() ? "directory" : stat.isSymbolicLink() ? "link" : "file", identity: identity(stat), digest: digest(path, stat), parent: coordinate(root, parent), parentIdentity: birth(parentStat), status: "planned" });
+    result.set(path, { path: coordinate(root, path), ...(request.destination === undefined ? {} : { destination: coordinate(root, request.destination), target, destinationParentIdentity }), kind: request.destination !== undefined ? "rename" : stat.isDirectory() ? "directory" : stat.isSymbolicLink() ? "link" : "file", identity: identity(stat), digest: digest(path, stat, true), parent: coordinate(root, parent), parentIdentity: birth(parentStat), status: "planned" });
   };
   for (const request of requests) {
     const path = canonical(request.path); const destination = request.destination === undefined ? undefined : canonical(request.destination);
@@ -241,6 +248,12 @@ function receipt(intent: Intent): DestructionReceipt { return { id: intent.id, r
 export interface DestructionPlan { readonly paths: readonly string[]; readonly resumed: boolean; remove(path: string): void; finish(): DestructionReceipt }
 /** Persist a revision-bound set after caller preflight; per-intent leases also serialize independent recovery drainers. */
 export function prepareDestruction(control: string, key: string, requests: readonly DestructionRequest[], resumeCompleted = false, journalDirectory?: string, completedIsHistorical = false, supersedeChanged?: DestructionSupersession): DestructionPlan {
+  return preparePlan([control, key, requests, resumeCompleted, journalDirectory, completedIsHistorical, supersedeChanged]);
+}
+/** Validate before recovery callbacks and snapshot again under the owning intent lease after they finish. */
+function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot?: () => void, observed?: { readonly id: string; readonly authority: string }): DestructionPlan {
+  const [control, key, suppliedRequests, resumeCompleted = false, suppliedDirectory, completedIsHistorical = false, supersedeChanged] = args;
+  let requests = suppliedRequests; let journalDirectory = suppliedDirectory;
   if (typeof key !== "string" || key === "" || key.includes("\0")) throw new DestructionRefusal("conflicting_destructive_requests", "A deletion intent requires a stable nonempty operation key.");
   if (supersedeChanged !== undefined && !["reachability_changed", "eligibility_changed"].includes(supersedeChanged)) throw new DestructionRefusal("conflicting_destructive_requests", "Supersession requires a named, freshly validated precondition change.");
   const base = process.cwd(); const supplied = requests; requests = normalizedRequests(requests, base);
@@ -248,6 +261,7 @@ export function prepareDestruction(control: string, key: string, requests: reado
   if (journalDirectory !== undefined) journalDirectory = resolve(base, journalDirectory);
   const requestedRoot = resolve(base, control); canonical(join(requestedRoot, ".intent-root")); mkdirSync(requestedRoot, { recursive: true, mode: 0o700 }); const root = realpathSync(requestedRoot); const rootStat = lstatSync(root, { bigint: true }); const rootIdentity = birth(rootStat);
   const directory = journalDirectory ?? join(root, "destruction"); const metadata = lstatSync(directory, { throwIfNoEntry: false }); if (metadata !== undefined && !metadata.isDirectory()) throw new DestructionRefusal("foreign_destructive_intent", "A foreign receipt-directory entry was preserved."); mkdirSync(directory, { recursive: true, mode: 0o700 });
+  backend.directory(root); backend.directory(directory);
   const name = intentName(root, key); const path = join(directory, `${name}.json`);
   let held = false; let captured: Intent | undefined = undefined;
   /** Publish a fully flushed owner record exclusively; no empty lock can survive a crash before publication. */
@@ -298,12 +312,20 @@ export function prepareDestruction(control: string, key: string, requests: reado
   let resumed = false;
   const intent = locked(() => {
     let current = load(path);
+    if (observed !== undefined && (current?.id !== observed.id || current.status !== "pending" || current.rootIdentity !== rootIdentity || authorityOf(current) !== observed.authority)) throw new DestructionRefusal("destructive_intent_changed", "The selected publication changed before its recovery lease; retry the current request.", current === undefined ? undefined : receipt(current));
     if (current !== undefined && current.root !== root) throw new DestructionRefusal("foreign_destructive_intent", "An intent copied from another root was preserved.");
     if (current !== undefined && current.rootIdentity !== rootIdentity) {
       if (current.status === "pending") { for (const entry of current.entries) if (entry.status === "planned") { entry.status = "cancelled"; entry.reason = "root_retired"; } current.status = "completed"; }
       backend.write(join(directory, `${name}.${current.id}.receipt`), Buffer.from(JSON.stringify(current))); current = undefined;
     }
+    if (beforeSnapshot !== undefined) {
+      if (snapshot(root, requests).length === 0 && current === undefined) throw new DestructionRefusal("destructive_target_changed", "An unplanned publication source disappeared before recovery.");
+      beforeSnapshot();
+    }
     const entries = snapshot(root, requests);
+    const absentPublication = requests.find(request => request.destination !== undefined && !hasLeaf(canonical(request.path)));
+    if (absentPublication !== undefined && (current === undefined || !current.entries.some(entry => entry.kind === "rename" && resolve(root, entry.path) === canonical(absentPublication.path) && resolve(root, entry.destination!) === canonical(absentPublication.destination!)))) throw new DestructionRefusal("destructive_target_changed", "A missing publication source has no matching current receipt; inspect its historical outcome.");
+    if (beforeSnapshot !== undefined && entries.length === 0 && current === undefined) throw new DestructionRefusal("destructive_target_changed", "An unplanned publication source disappeared during recovery.");
     if (current !== undefined && current.status !== "superseded" && (current.status === "pending" || resumeCompleted)) {
       const requested = new Set(entries.map(entry => `${entry.path}:${entry.kind}:${entry.destination ?? ""}`));
       if (supersedeChanged !== undefined && current.status === "pending") {
@@ -413,8 +435,8 @@ export function prepareDestruction(control: string, key: string, requests: reado
         refresh();
         for (let index = 0; index < intent.entries.length; index++) {
           const entry = intent.entries[index]; observe(entry, index);
-          if (entry.status === "planned" && lstatSync(resolve(root, entry.path), { throwIfNoEntry: false }) === undefined) entry.status = "absent";
         }
+        settleRetiredMembers(intent);
         intent.status = intent.entries.every(entry => entry.status !== "planned") ? "completed" : "pending";
         backend.write(path, Buffer.from(JSON.stringify(intent))); checkpoint = identity(lstatSync(path, { bigint: true })); destructionBoundary.visit("receipt-persisted", path); const result = receipt(intent);
         return result;
@@ -442,17 +464,61 @@ function retireScoped(request: DestructionRequest, selected: Scope, completedIsH
   const ledger = join(namespaceLedger(control), "destruction");
   if (ledger === path || ledger.startsWith(`${path}${sep}`)) throw new DestructionRefusal("destructive_target_unsupported", "The receipt ledger cannot be inside its own deletion set.");
   const owner = request.expected === undefined || request.expected === null ? "" : `:${identity(request.expected)}`;
-  const key = `${destination === undefined ? request.directory ? "rmdir" : "remove" : "rename"}:${path}:${destination ?? ""}${owner}`;
+  const legacyKey = `${destination === undefined ? request.directory ? "rmdir" : "remove" : "rename"}:${path}:${destination ?? ""}${owner}`;
+  const root = lstatSync(control, { throwIfNoEntry: false })?.isDirectory() ? realpathSync(control) : resolve(control); let key = destination === undefined ? legacyKey : `publication:${destination}`;
+  let current = load(join(ledger, `${intentName(root, key)}.json`));
+  if (destination !== undefined && current === undefined) {
+    for (const candidate of new Set([legacyKey, `rename:${path}:${destination}`])) {
+      const legacy = load(join(ledger, `${intentName(root, candidate)}.json`));
+      if (legacy !== undefined) { key = candidate; current = legacy; break; }
+    }
+  }
+  const fresh = [{ ...request, path, address: request.address ?? request.path, ...(destination === undefined ? {} : { destination, destinationAddress: request.destinationAddress ?? request.destination }) }];
   if (lstatSync(path, { throwIfNoEntry: false }) === undefined) {
-    const root = lstatSync(control, { throwIfNoEntry: false })?.isDirectory() ? realpathSync(control) : resolve(control);
-    if (load(join(ledger, `${intentName(root, key)}.json`)) === undefined) {
+    if (current === undefined || destination !== undefined && !current.entries.some(entry => entry.kind === "rename" && resolve(root, entry.path) === path && resolve(root, entry.destination!) === destination)) {
       if (destination !== undefined) throw new DestructionRefusal("destructive_target_changed", "An unplanned publication source disappeared; no destination was replaced.");
       return { id: intentName(root, key).slice(0, 32), revision: "absent", status: "completed", planned: 0, deleted: 0, moved: 0, observedAbsent: 0, skipped: 0, omitted: 0, entries: [] };
     }
   }
-  const plan = prepareDestruction(control, key, [{ ...request, path, address: request.address ?? request.path, ...(destination === undefined ? {} : { destination, destinationAddress: request.destinationAddress ?? request.destination }) }], false, ledger, completedIsHistorical);
+  if (destination !== undefined && current?.status === "pending" && current.entries.length === 1 && resolve(root, current.entries[0].path) !== path) recoverPublication(root, ledger, key, current, fresh);
+  const migrate = destination !== undefined && current === undefined ? () => reconcilePublications(root, ledger, path, destination, fresh) : undefined;
+  const plan = preparePlan([control, key, fresh, false, ledger, completedIsHistorical], migrate);
   for (const member of plan.paths) plan.remove(member);
   return plan.finish();
+}
+
+/** Recover only the observed immutable receipt, validating the new request inside the original receipt lease. */
+function recoverPublication(root: string, ledger: string, key: string, previous: Intent, fresh: readonly DestructionRequest[]): void {
+  if (previous.status !== "pending" || previous.root !== root || previous.rootIdentity !== birth(lstatSync(root, { bigint: true })) || previous.entries.length !== 1) return;
+  const entry = previous.entries[0]; if (entry.kind !== "rename" || entry.status !== "planned") return;
+  const recovered = preparePlan([root, key, [{ path: resolve(root, entry.path), destination: resolve(root, entry.destination!) }], false, ledger], () => { if (snapshot(root, fresh).length === 0) throw new DestructionRefusal("destructive_target_changed", "A new publication source disappeared before recovery."); }, { id: previous.id, authority: authorityOf(previous) });
+  try { for (const member of recovered.paths) recovered.remove(member); recovered.finish(); }
+  catch (error) { if (!(error instanceof DestructionRefusal) || error.code !== "destructive_target_changed" || error.receipt?.status !== "completed") throw error; }
+}
+
+/** Migrate pre-target-key receipts once, before the first new publication can replace their completion evidence. */
+function reconcilePublications(root: string, ledger: string, source: string, destination: string, fresh: readonly DestructionRequest[]): void {
+  const temporary = /^(?:ref-.*\.lock|.*\.[0-9a-f]{12}\.tmp)$/;
+  if (temporary.test(source.split(/[\\/]/).at(-1)!)) {
+    const orphan = readdirSync(dirname(source)).some(name => temporary.test(name) && resolve(dirname(source), name) !== source);
+    if (!orphan && !hasLeaf(destination)) return;
+  }
+  const started = performance.now(); let work = 0;
+  for (const file of readdirSync(ledger, { withFileTypes: true })) {
+    assertVerificationBound("receipts", "record_count", ++work, verificationLimits.receiptRecords);
+    assertVerificationBound("receipts", "time_ms", performance.now() - started, verificationLimits.receiptMs);
+    if (!file.isFile() || !/^[0-9a-f]{64}\.json$/.test(file.name)) continue;
+    let previous: Intent | undefined;
+    try { previous = load(join(ledger, file.name), true); }
+    catch (error) { if (error instanceof DestructionRefusal && ["foreign_destructive_intent", "destructive_intent_changed"].includes(error.code)) continue; throw error; }
+    if (previous === undefined || previous.status !== "pending" || previous.root !== root || previous.entries.length !== 1) continue;
+    const entry = previous.entries[0]; if (entry.kind !== "rename" || resolve(root, entry.destination!) !== destination || entry.status !== "planned") continue;
+    const original = resolve(root, entry.path);
+    const prefix = `rename:${original}:${destination}`;
+    const key = [prefix, `${prefix}:${entry.identity}`].find(candidate => `${intentName(root, candidate)}.json` === file.name);
+    if (key === undefined) continue; // A foreign record never becomes mutation authority.
+    recoverPublication(root, ledger, key, previous, fresh);
+  }
 }
 
 /** Select the same repository/transient scope for a whole captured namespace, including standalone working-tree pruning. @internal */
@@ -472,9 +538,16 @@ export interface DestructionInventory {
 function settleRetiredMembers(intent: Intent): boolean {
   let historical = false;
   for (const entry of intent.entries) {
-    if (entry.status !== "planned" || entry.kind === "rename") continue;
+    if (entry.status !== "planned") continue;
     const current = lstatSync(resolve(intent.root, entry.path), { bigint: true, throwIfNoEntry: false });
-    if (current === undefined) { entry.status = "absent"; historical = true; }
+    if (current === undefined) {
+      if (entry.kind === "rename") {
+        const target = resolve(intent.root, entry.destination!); const observed = lstatSync(target, { bigint: true, throwIfNoEntry: false });
+        if (observed?.isFile() && identity(observed).split(":").slice(0, 5).join(":") === entry.identity.split(":").slice(0, 5).join(":") && digest(target, observed) === entry.digest) entry.status = "moved";
+        else { entry.status = "cancelled"; entry.reason = "preconditions_changed"; }
+      } else entry.status = "absent";
+      historical = true;
+    }
     else if (entry.kind === "directory" ? birth(current) !== entry.identity.split(":").slice(0, 3).join(":") : identity(current) !== entry.identity) { entry.status = "foreign"; entry.reason = "leaf_replaced"; historical = true; }
   }
   if (intent.entries.every(entry => entry.status !== "planned")) intent.status = "completed";

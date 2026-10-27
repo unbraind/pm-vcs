@@ -255,6 +255,6 @@ test("ref lock descriptors close after owner inspection fails and after an earli
 
 test("ref cleanup preserves a competing owner that replaced the original process lock", () => {
   const f = freshRefs(); const lock = join(f.root, "refs/heads/a.lock");
-  f.refs.transaction([{ name: "refs/heads/a", expected: null, next: id }], () => { renameSync(lock, `${lock}.retired`); writeFileSync(lock, "peer owner"); });
-  assert.equal(readFileSync(lock, "utf8"), "peer owner"); assert.equal(f.refs.read("refs/heads/a"), id);
+  assert.throws(() => f.refs.transaction([{ name: "refs/heads/a", expected: null, next: id }], () => { renameSync(lock, `${lock}.retired`); writeFileSync(lock, "peer owner"); }), { code: "ref_locked" });
+  assert.equal(readFileSync(lock, "utf8"), "peer owner"); assert.equal(f.refs.read("refs/heads/a"), null);
 });

@@ -152,3 +152,34 @@ a FileId or reused pathname alone cannot authorize adopting it into a new set.
 Remove or resolve that foreign leaf explicitly before retrying. Validated GC
 reachability changes can supersede a plan without granting authority over a
 working-tree replacement.
+
+Recovery records are durable before the first destructive syscall. The shared
+helper flushes the file, its parent, and every ancestor on POSIX, even when an
+ancestor was created by a previously interrupted process. The source and
+replacement destination parents are flushed again after rename; unlink and
+empty-directory retirement flush their parent after removal. Windows retains
+the documented synchronous namespace acknowledgment policy.
+
+Atomic publications use the normalized destination as their stable receipt key.
+A fresh randomized source temporary therefore reconciles the original pending
+rename before publishing a replacement. Completed renames are recognized by the
+retained inode and payload digest. Previously released source-keyed receipts are
+migrated under their original lease, with bounded, fail-closed enumeration.
+Recovery never extends the old deletion set or adopts a peer replacement.
+
+Ref, operation-log, instance-registry and bisect process leases publish a flushed,
+exclusive process marker before entering protected work. Known dead markers can
+be reclaimed; unknown and live markers are preserved with a typed refusal. Owner
+descriptors close last, and protected values are rechecked after callbacks.
+Acknowledged operation-log appends and bootstrap format/index files flush their
+data and ancestry before returning.
+
+The namespace power-loss harness observes every native write, file flush,
+directory flush, link, rename, unlink and directory retirement boundary. It
+restores actual files from the durable directory-entry graph and flushed inode
+bytes, then runs native recovery twice. Identical complete crash images share a
+recovery proof. Metadata publication also replays every individual boundary.
+The matrix covers ref retirement/replacement, compaction, unpack/repack, loose
+and packed GC, lease cleanup, pruning, operation logs, deep journals, writer
+recovery and authorized obliteration. Each replay checks a retained object,
+a foreign tripwire and the absence of pending receipts.

@@ -110,7 +110,9 @@ test("reader surface enumeration classifies every exported operation and prevent
   const packReaders = packDefinition.members.filter((member) => (ts.isMethodDeclaration(member) || ts.isConstructorDeclaration(member)) && !member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword)).map((member) => ts.isConstructorDeclaration(member) ? "constructor" : member.name!.getText(packSource)).filter((name) => !packExcluded.has(name));
   assert.deepEqual(packReaders.sort(),readers.filter((reader) => reader.name.startsWith("PackStorage.")).map((reader) => reader.name.slice(12)).sort());
   const streamSource = ts.createSourceFile("object-stream.ts",readFileSync(join(packageRoot,"engine/object-stream.ts"),"utf8"),ts.ScriptTarget.Latest,true);
-  assert.deepEqual(streamSource.statements.filter(ts.isFunctionDeclaration).map((node) => node.name!.text),["objectPayloadChunks","objectPayloadLines"]); // lines is a pure decoder of caller-supplied chunks
+  assert.deepEqual(streamSource.statements.filter(ts.isFunctionDeclaration).map((node) => node.name!.text),["objectPayloadChunks","verifiedPayloadChunks","objectPayloadLines"]);
+  const exportedStreams=streamSource.statements.filter((node) => ts.isFunctionDeclaration(node) && node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)).map(node => (node as ts.FunctionDeclaration).name!.text);
+  assert.deepEqual(exportedStreams,["objectPayloadChunks","objectPayloadLines"]); // verifiedPayloadChunks is the private lifetime wrapper; lines decodes caller-supplied chunks.
   const sharedSource = ts.createSourceFile("instances.ts",readFileSync(join(packageRoot,"engine/instances.ts"),"utf8"),ts.ScriptTarget.Latest,true);
   const sharedDefinition = sharedSource.statements.find((node): node is ts.ClassDeclaration => ts.isClassDeclaration(node) && node.name?.text === "SharedObjectStore")!;
   const sharedReaders = sharedDefinition.members.filter((member) => ts.isMethodDeclaration(member) && !member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword)).map((member) => member.name!.getText(sharedSource));

@@ -213,16 +213,14 @@ export function recoverBisectWorker(repository: Repository): void {
 /** Serialize asynchronous bisect mutations; only a proven dead process permits automatic recovery. */
 export async function withBisectLease<T>(repository: Repository, action: () => Promise<T>): Promise<T> {
   const path = join(repository.controlDirectory, "BISECT_LOCK");
-  const owned = repository.objects.withWriteLock(() => {
-    recoverOwner(path);
-    writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
-    return lstatSync(path, { bigint: true });
+  const lease = repository.objects.withWriteLock(() => {
+    const current = lstatSync(path, { throwIfNoEntry: false });
+    // Released versions wrote decimal PID markers; retain their dead-owner recovery.
+    if (current?.isFile() && /^[0-9]+$/.test(readFileSync(path, "utf8"))) recoverOwner(path);
+    return durability.claim(path, "bisect_locked");
   });
-  try { return await action(); }
-  finally {
-    const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-    if (current !== undefined && current.dev === owned.dev && current.ino === owned.ino && current.size === owned.size && current.mtimeNs === owned.mtimeNs) durability.unlinkOwner(path, current);
-  }
+  try { lease.verify(); return await action(); }
+  finally { lease.release(); }
 }
 
 /** Removes the session state, concluding or abandoning the walk. */

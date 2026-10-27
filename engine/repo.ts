@@ -401,8 +401,8 @@ export class Repository {
     mkdirSync(join(repository.controlDirectory, "objects"), { recursive: true });
     mkdirSync(join(repository.controlDirectory, "refs", "heads"), { recursive: true });
     mkdirSync(join(repository.controlDirectory, "refs", "tags"), { recursive: true });
-    writeFileSync(formatPath, `${REPOSITORY_FORMAT}\n`);
-    writeFileSync(join(repository.controlDirectory, "index"), "");
+    writeFileSync(formatPath, `${REPOSITORY_FORMAT}\n`); durability.persist(formatPath);
+    writeFileSync(join(repository.controlDirectory, "index"), ""); durability.persist(join(repository.controlDirectory, "index"));
     writeConfig(join(repository.controlDirectory, "config.json"), config);
     initializeInstanceRegistry(repository.controlDirectory);
     repository.refs.setHeadToRef(`${BRANCH_PREFIX}${branch}`);
@@ -1361,8 +1361,8 @@ export class Repository {
       let registeredHere = false;
       try {
         mkdirSync(instanceControl, { recursive: true });
-        writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`);
-        writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`);
+        writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`); durability.persist(join(instanceControl, "format"));
+        writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`); durability.persist(join(instanceControl, INSTANCE_LINK_FILE));
         if (include.length > 0) writeView(instanceControl, { include });
         const instance = new Repository(instanceRoot);
         instance.refs.setHeadToRef(branchRef);

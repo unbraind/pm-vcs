@@ -284,7 +284,7 @@ test("native deletion and progress-storage faults preserve the durable plan and 
 test("schema validation rejects non-array requests and foreign receipt directories without granting authority", () => {
   const f = fixture(); assert.throws(() => prepareDestruction(f.control, "shape", null as never), { code: "conflicting_destructive_requests" });
   assert.throws(() => retireNamespace({ path: undefined as never }), { code: "destructive_target_unsupported" });
-  const directory = join(f.control, "destruction"); rmSync(directory, { recursive: true }); writeFileSync(directory, "foreign directory replacement"); assert.throws(() => prepareDestruction(f.control, "shape", []), { code: "foreign_destructive_intent" });
+  const directory = join(f.control, "destruction"); assert.equal(existsSync(directory), false, "invalid requests must not create receipt directories"); writeFileSync(directory, "foreign directory replacement"); assert.throws(() => prepareDestruction(f.control, "shape", []), { code: "foreign_destructive_intent" });
   rmSync(directory); assert.throws(() => prepareDestruction(f.control, "incompatible", [{ path: f.paths[0], destination: f.paths[1] }, { path: f.paths[0] }]), { code: "conflicting_destructive_requests" });
 });
 
