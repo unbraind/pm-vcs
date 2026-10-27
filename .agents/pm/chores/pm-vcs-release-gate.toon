@@ -6,9 +6,9 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-25T23:24:17.719Z"
-updated_at: "2026-10-27T00:21:28.085Z"
+updated_at: "2026-10-27T03:59:04.942Z"
 author: codex-agent
-comments[13]{created_at,author,text}:
+comments[15]{created_at,author,text}:
   "2026-10-25T23:24:26.154Z",codex-agent,"Normalize daily scheduling and PM_RELEASE_APPROVED job gates while preserving release decisions, generated changelogs and release notes. Verify OIDC publishing without a stored npm token, manifest metadata, packed allowlists and private-data scans. No open homepage/author PR was found during orientation. No publishing, trust setup, approval variable changes or merges are authorized."
   "2026-10-25T23:29:54.109Z",codex-agent,"Release simulation inspection found two existing blockers after a calendar version bump: changelog scripts fixed the bootstrap date, and release metadata commits omitted a refreshed self-host archive. Removed the fixed date override while preserving --date-from-version and the existing decide step. The commit step now regenerates and stages selfhost.bundle after staging release metadata. A real temporary Git repository verifies that the committed archive covers the newly staged changelog. Independently restoring either the old workflow step or manifest date makes its regression fail; restored preparation tests pass 2/2."
   "2026-10-26T01:04:02.270Z",codex-agent,"Opening the release-readiness PR after package allowlist/privacy verification and focused regression proofs so complete npm and Bun CI can run in parallel with local full-gate verification. Pending checks are explicitly not treated as passing evidence. No timeout, threshold, dependency pin or test case is being relaxed."
@@ -22,8 +22,15 @@ comments[13]{created_at,author,text}:
   "2026-10-27T00:19:11.667Z",codex-agent,"Review follow-up: preserve existing release-readiness work and merged main changes. Remove automatic release-workflow enablement; the orchestrator enables disabled schedules after merge. Require the canonical repository at job level for every write-permission or publishing job in the affected workflows, alongside the existing approval and branch conditions. Prove guard, approval, provenance and token regressions independently, then wait for complete npm and Bun CI on the pushed head."
   "2026-10-27T00:21:20.916Z",codex-agent,"Packed-artifact verification: 286 allowlisted files; dry-run and actual archive agree, and every packed member has zero private-data findings. Local project health passes with extensions disabled; globally installed extension version skew is outside this package."
   "2026-10-27T00:21:24.510Z",codex-agent,"Fork-exclusion revert proof: node --test --test-concurrency=2 test/release-approval.test.ts passes 6/6. Independently reverting each job repository guard, reverting all repository guards, allowing an OR bypass, removing approval or provenance, injecting a synthetic npm token environment, adding an unguarded CI write job, inheriting CI write permissions, adding a read-permission CI publisher, and restoring automatic setup all fail (each command exits nonzero; 10 independent mutations rejected). Restoring the workflows passes 6/6. Linked pm tests, test typecheck where present and lint pass. Canonical-repository checks include inherited permissions. Disabled release workflows remain for the orchestrator to enable after merge; no live settings or publishing were changed."
-files[9]{path,scope}:
+  "2026-10-27T03:18:23.038Z",codex-agent,"Independent re-review found the contract covered only release and CI files, missing CodeQL security-events writes, owner-only Dependabot guards and reusable workflow callers. Extend canonical-repository guards to every effectively write-enabled job in every workflow file. Replace regex workflow parsing with a pinned YAML parser, generic permission inheritance and negative fixtures for this full class. Correct local publishing documentation, preserve earlier readiness work, prove source reverts and wait for npm/Bun CI on every final head."
+  "2026-10-27T03:59:03.843Z",codex-agent,"Whole-workflow contract passes 30/30 using the pinned YAML parser. It scans every YAML workflow, resolves aliases/flow maps, applies job permission overrides or workflow inheritance, and recognizes any scope with write plus write-all, including reusable callers. Negative fixtures cover CodeQL, owner-only/wrong-repository Dependabot, inherited writes, reusable calls, write-all, future scopes, missing publication approval/provenance, provenance overrides, token environments, OR/negation bypasses and discovery of a new workflow in a non-Git directory. Behavioural revert proof: all 14 independent mutations fail with assertion failures: each write job loses only its repository guard, owner-only/OR guards return, approval/provenance disappear, a synthetic token environment is added, file discovery is narrowed back to release/CI, permission matching returns to a scope allowlist, or inheritance is removed. Restoring the implementation passes 30/30. Linked pm tests and the repository's defined typecheck, lint and duplication checks pass. Maintainer local publishing is authenticated and checked, with no approval-variable hold; the variable gates automated GitHub releases."
+files[14]{path,scope}:
   .github/workflows/ci.yml,project
+  .github/workflows/codeql.yml,project
+  .github/workflows/dependabot-auto-merge.yml,project
+  .github/workflows/dependency-refresh.yml,project
+  .github/workflows/pm-github-closeout.yml,project
+  .github/workflows/pm-github-sync.yml,project
   .github/workflows/release.yml,project
   package.json,project
   scripts/verify-pack-privacy.ts,project
