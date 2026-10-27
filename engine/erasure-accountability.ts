@@ -120,7 +120,7 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
   /** Work exhaustion refuses both certification and purge authorization. */
   const check = (): void => { assertVerificationBound("accountability", "time_ms", performance.now() - started, verificationLimits.accountabilityMs); };
   check();
-  const roots = typeof scope === "string" ? [scope] : scope;
+  const roots = [...new Set((typeof scope === "string" ? [scope] : scope).map(root => resolve(root)))];
   const packs = new Map(roots.map((root) => [root, new PackStorage(root)]));
   const root = roots[0] ?? ".";
   for (let pass = 0; pass < ACCOUNTABILITY_ATTEMPTS; pass++) {
@@ -256,6 +256,7 @@ export interface ErasurePurgeEntry {
 export interface ErasurePurgeReceipt { readonly intents: readonly { readonly id: string; readonly revision: string; readonly planned: number; readonly pending: number }[]; readonly omittedIntents: number; readonly deleted: number; readonly observedAbsent: number; readonly replaced: number; readonly cancelled: number; readonly bytes: number; readonly omitted: number; readonly files: readonly ErasurePurgeEntry[] }
 /** Recover only package-written authorization under the caller's owning writer lease. */
 export function erasurePurge(control: string, fileId: string, roots: readonly string[], authorized: boolean, readOnly = false): { readonly canPurge: boolean; purge: NonNullable<AccountabilityOptions["purge"]>; begin(files: readonly UnaccountedFile[]): void; plan(files: readonly UnaccountedFile[], resume?: boolean): void; receipt(): ErasurePurgeReceipt } {
+  control = resolve(control); roots = [...new Set(roots.map(root => resolve(root)))];
   const path = join(control, "erasure-purge.json");
   let raw: unknown;
   try { raw = readControlJson(path, "unverifiable", "purge journal", { format: "pm-vcs-erasure-purge-1", operations: {} }); }

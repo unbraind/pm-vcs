@@ -272,8 +272,8 @@ export class ObjectStore {
    * @param root - Directory that holds the object fan-out. Created on demand.
    */
   constructor(root: string) {
-    this.root = root;
-    this.packs = new PackStorage(root);
+    this.root = resolve(root);
+    this.packs = new PackStorage(this.root);
   }
 
   /**
@@ -338,6 +338,7 @@ export class ObjectStore {
    */
   resolveLocation(id: ObjectId, options: { path?: string; standalone?: boolean; physical?: boolean } = {}): ObjectLocation | undefined {
     this.assertId(id);
+    if (options.path !== undefined) options = { ...options, path: resolve(options.path) };
     const physical = options.physical === true && activeLeases.has(resolve(this.root));
     if (options.physical === true && !physical) throw new ObjectStoreError("physical_read_requires_lease", "Physical erasure inspection requires the owning writer lease.");
     for (let attempt = 0; attempt < OBJECT_READ_RETRIES; attempt++) {
@@ -814,7 +815,12 @@ export class ObjectStore {
   *walkPackedInventory(): Generator<InventoryEntry> { yield* this.walkRepresentations("pack"); }
 
   /** Inspect intentionally denied physical copies only inside authorized maintenance's writer transaction. @internal */
-  *walkErasureInventory(kind: "all" | "pack" = "all", excluded: ReadonlySet<string> = new Set()): Generator<InventoryEntry> {
+  walkErasureInventory(kind: "all" | "pack" = "all", excluded: ReadonlySet<string> = new Set()): Generator<InventoryEntry> {
+    return this.walkAuthorizedRepresentations(kind, new Set([...excluded].map(path => resolve(path))));
+  }
+
+  /** Capture path spellings at iterator creation while checking physical authority during consumption. */
+  private *walkAuthorizedRepresentations(kind: "all" | "pack", excluded: ReadonlySet<string>): Generator<InventoryEntry> {
     if (!activeLeases.has(resolve(this.root))) throw new ObjectStoreError("physical_read_requires_lease", "Physical erasure inspection requires the owning writer lease.");
     yield* this.walkRepresentations(kind, [], true, excluded);
   }
@@ -891,6 +897,7 @@ export class ObjectStore {
   /** Share path validation and pinned resolution between logical inventory reads and the explicit erasure-only scope. */
   private inventoryObject(id: ObjectId, path: string, physical: boolean): StoredObject {
     this.assertId(id);
+    path = resolve(path);
     const canonical = this.pathFor(id);
     const pack = dirname(path) === join(this.root, "packs") && /^[0-9a-f]{64}\.pack$/.test(basename(path));
     if (!pack && (dirname(path) !== dirname(canonical) || (basename(path) !== id.slice(2)

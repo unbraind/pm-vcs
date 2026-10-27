@@ -1,7 +1,7 @@
 /** Name-independent, resumable proof that owned object storage contains no selected payload representation. */
 import { createHash } from "node:crypto";
 import { constants, fstatSync, lstatSync, readdirSync, readSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ZStream, zlibInflateInit2, zlibInflate, zlibInflateEnd, Z_SYNC_FLUSH, Z_STREAM_END, Z_OK, Z_BUF_ERROR } from "pako";
 import { objectFiles } from "./object-files.ts";
 import { ObjectStoreError, VerificationRefusal } from "./object-error.ts";
@@ -328,6 +328,7 @@ export function inspectErasureFile(fd: number, size: number, patterns: readonly 
 }
 /** Independently scan all regular storage files; callers hold the package writer lease throughout deletion and this final proof. */
 export function scanErasureStorage(root: string, patterns: readonly ErasureFingerprint[], excluded: ReadonlySet<string> = new Set(), encodings = true): ErasureStorageReport {
+  root = resolve(root); excluded = new Set([...excluded].map(path => resolve(path)));
   const classes: Partial<Record<ErasureFileClass, number>> = {}; let files = 0; let foreign = 0;
   /** Descend real directories only, including arbitrary foreign and temporary subdirectories. */
   const walk = (directory: string, parts: string[]): void => {

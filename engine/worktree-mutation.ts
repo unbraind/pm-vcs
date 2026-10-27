@@ -2,7 +2,7 @@ import { prepareNamespaceDestruction, type DestructionPlan } from "./destruction
 import { durability } from "./durability.ts";
 /** Pinned or verified working-tree mutations; portable pathname checks cannot serialize a rename. */
 import fs, { type BigIntStats } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join, relative, sep, resolve } from "node:path";
 
 import { isControlPath, isPrunableDirectory } from "./ignore.ts";
 import { ObjectStoreError } from "./objects.ts";
@@ -37,11 +37,11 @@ export class WorktreeMutation {
 
   /** Snapshot ordinary directories without following links; release all descriptors on failure. */
   constructor(root: string, controlDirectory: string) {
-    this.root = root;
+    this.root = resolve(root);
     this.controlDirectory = controlDirectory;
     this.pinned = worktreeMutationCapabilities.descriptorPaths();
     try {
-      this.capture("", root);
+      this.capture("", this.root);
       const anchor = this.directories.get("")!;
       if (this.pinned) {
         let available = false;
@@ -53,7 +53,7 @@ export class WorktreeMutation {
         if (!available) {
           this.close();
           this.pinned = false;
-          this.capture("", root);
+          this.capture("", this.root);
           if (!this.same(anchor.stat, this.directories.get("")!.stat)) this.changed();
         }
       }

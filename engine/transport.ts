@@ -319,7 +319,7 @@ export class FileTransport implements Transport {
    */
   constructor(url: string, path: string) {
     this.url = redactRemoteUrl(url);
-    this.path = path;
+    this.path = resolve(path);
   }
 
   /**

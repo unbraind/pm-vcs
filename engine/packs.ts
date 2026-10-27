@@ -4,7 +4,7 @@ import { durability } from "./durability.ts";
 /** Immutable indexed packs: independently compressed frames keep their uncompressed addresses. */
 import { createHash, randomBytes } from "node:crypto";
 import { constants, existsSync, fstatSync, lstatSync, mkdirSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { deflateSync } from "node:zlib";
 import { ObjectStoreError } from "./object-error.ts";
 import { syncDirectory } from "./composition.ts";
@@ -63,7 +63,7 @@ export class PackStorage {
   private readonly directory: string;
   private readonly indexes = new Map<string, Index>();
   /** Bind a pack backend to the loose object directory. */
-  constructor(root: string) { this.directory = join(root, "packs"); }
+  constructor(root: string) { this.directory = join(resolve(root), "packs"); }
 
   /** Enumerate regular package packs, reporting every foreign entry without deleting it. */
   files(skipped: { name: string; reason: string }[] = []): string[] {
@@ -111,7 +111,7 @@ export class PackStorage {
 
   /** Open one immutable indexed range; descriptor ownership transfers to the common resolver. @internal */
   locate(id: ObjectId, exactPath?: string): ObjectHandle | undefined {
-    const paths = exactPath === undefined ? this.files() : [exactPath];
+    const paths = exactPath === undefined ? this.files() : [resolve(exactPath)];
     objectReadBoundary.visit("pack-catalog", id, 0);
     for (const path of paths) {
       let file: ObjectFile;
@@ -155,6 +155,7 @@ export class PackStorage {
 
   /** Enumerate verified pack metadata without decoding members or trusting paths after descriptor release. @internal */
   locations(excluded: ReadonlySet<string> = new Set()): { id: ObjectId; path: string }[] {
+    excluded = new Set([...excluded].map(path => resolve(path)));
     const result: { id: ObjectId; path: string }[] = [];
     for (const path of this.files()) {
       if (excluded.has(path)) continue;

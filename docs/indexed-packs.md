@@ -296,3 +296,14 @@ Pack rewrite, GC, purge and owned lease cleanup share the [three-phase destructi
 operation protocol](destructive-operations.md). Complete source validation precedes
 staging recovery or duplicate retirement. `PackReport.destruction` records the
 exact frozen source set; interrupted recovery preserves newly arrived files.
+
+Storage handles resolve relative filesystem roots when they are constructed.
+For example, `new ObjectStore(".pmvcs/objects")` keeps addressing that store after
+a later `process.chdir()`. Inventories return absolute physical locations;
+lease keys, pack caches and recorded deletion sets use the same captured
+namespace. Relative inventory hints and exclusions resolve when their API is
+called, including before a lazy iterator is consumed. Returned deletion plans
+retain their captured source, destination and descriptor aliases throughout
+recovery. Later namespace changes on a caller request refuse before deletion;
+equivalent relative spellings compare through the same captured base. Use a
+new handle to select a different storage root.

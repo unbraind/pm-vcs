@@ -6,11 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-27T07:40:05.192Z"
+updated_at: "2026-10-27T09:50:39.137Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[89]{created_at,author,text}:
+comments[93]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -100,7 +102,11 @@ comments[89]{created_at,author,text}:
   "2026-10-27T07:16:26.299Z",codex-agent,"CI run 40459502820 on 72e597b completed the Node 22 npm suite with 2150/2154 passing, four failures, and 99.99/99.89/100/99.99 source coverage. This is failed evidence, not acceptance. Main introduced a direct scratch rmSync in the pack privacy verifier; it now uses the shared durability helper. Moving the existing complete physical-inventory consistency pass before supplemental diagnostics restores all three unchanged streaming inventory regressions, including exact second-pass assertions; the four failures now pass 4/4 locally. CI uncovered negative branches now have native adversarial cases for closure payload/time/fragment errors, operational receipt-clock failure, EOF-only decoding hits, revoked purge authority, invalid supersession policy, missing members/directory birth changes, and legacy CLI unverified reports. The focused new cases pass 10/10 with no SDK mocks or threshold changes. Further targeted coverage and behavioral revert proofs are being recorded before self-host publication."
   "2026-10-27T07:25:10.513Z",codex-agent,"CI follow-up validation: targeted coverage/regressions pass 23/23; the separately linked native check passes 14/14 after restoration, with zero skips/cancellations. All six real npm-pack privacy tests pass using durable cleanup; pack:check scans 312 shipped files with zero findings. Typecheck, test typecheck, lint, zero duplication across 88 production files and all 547 declarations pass. Revert proof: restoring only verifyPack and eraseFile to their previous function behavior reproduces all four CI failures (0/4); restoration passes 4/4. Seven isolated function-level behavior reversions also fail their intended assertions: closure bound classification, receipt operational-clock propagation, final partial-quartet detection, directory-birth supersession, null-policy rejection, diagnostic failure refusal and legacy CLI negative verdicts. Each restored case passes in the targeted command. One early linked invocation overlapped the deliberately reverted cleanup function and detected it; the final serialized linked invocation passes 14/14. No regression assertion, coverage threshold or source inventory was weakened. The next pushed self-hosted head will rerun full npm/Bun CI."
   "2026-10-27T07:40:02.031Z",codex-agent,"Node 22.23.1 targeted follow-up passes 23/23 and confirms all new negative cases at the supported floor. Reading its LCOV beside the failed CI artifact identified one remaining regular-file identity comparison, distinct from directory birth. The existing supersession property now exercises unchanged and replaced regular-file and directory lifetimes, old-handle refusal, exact successor deletion and preservation of the retired originals. The Node 22 focused property passes 1/1 with nonzero hits for both directory and regular-file comparisons; the pinned-PM linked suite passes 14/14 after expansion. Revert proof: bypassing only the regular-file identity predicate makes that property fail 0/1 with resumed=true instead of false; restoration passes 1/1. Test typecheck and lint pass. This is a test-only expansion; production code, SDK contracts and thresholds are unchanged from 561ee4f. The validation head will be superseded by the committed self-host archive carrying this evidence."
-files[67]{path,scope}:
+  "2026-10-27T08:35:10.348Z",codex-agent,"Auto round 2 rule: physical namespace identity must be canonical and bound when a storage handle is constructed; inventory keys, durable intent members, leases and cache keys cannot mix cwd-relative paths with absolute authority. Reproduce the documented relative ObjectStore compaction, audit every matching namespace path across SDK/CLI and pack/loose maintenance, then test relative spellings, later cwd changes, crash recovery, packed Node/Bun consumers and renderer receipts on non-git trackers. Preserve all earlier class fixes and keep the item in_progress."
+  "2026-10-27T09:35:10.151Z",codex-agent,"Auto-round-2 audit confirms the general invariant: physical path identity is captured at handle construction or API entry, and both inventory and durable deletion-set coordinates are normalized before comparison. Eleven filesystem-owning constructors, explicit range hints, lazy iterators, scan exclusions, returned purge authority and deletion aliases/journal paths were audited. The documented relative ObjectStore compact regression failed before the fix (zero objects, no pack, pending receipt) and passes after it. The complete 25-reader surface across four root spellings and all maintenance boundaries passed 27,000 live/erased checks. Built and packed npm Node and native Bun consumers plus project-installed CLI JSON/TOON passed 6/6; all use real non-git SDK trackers. Native relative-root SIGKILL sweeps passed all 13 compaction and 32 unpack boundaries so far; GC sweep and isolated behavioral revert proofs continue. Existing full npm release gate passed on the preceding head for Node 26; new-head CI remains required. No new review-thread findings were present beyond the supplied blocking finding; the two outdated CodeQL lifetime-launcher findings were already fixed, and current CodeQL reports no open alerts."
+  "2026-10-27T09:50:35.942Z",codex-agent,"Auto-round-2 revert proof: 22 isolated behavioral reversions fail their targeted regression. These independently remove ObjectStore and PackStorage root binding; Repository, RefStore shared/private HEAD, OperationLog, RemoteStore, PublicationLeases, WorktreeMutation and FileTransport binding; lazy payload and inventory exclusion capture; explicit range/inventory hints and pack exclusions; accounting/scanner/purge root binding; deletion request aliases/journal binding; and the late caller-mutation refusal. The private ServedRepository constructor reversal separately fails the package-wide 11-owner structural invariant. Reversions execute only in isolated child module loaders, except the structural source probe which restores the exact file immediately. The initial private-HEAD fixture was strengthened to a distinct attached branch so both RefStore roots have discriminating behavioral coverage. After restoring all functions, the complete path suite passes 8/8 through pinned pm, the unchanged alias regression and compatibility set pass 8/8, and the complete relative reader matrix passes 1/1 with 27,000 checks. No existing assertion or threshold was weakened."
+  "2026-10-27T09:50:39.137Z",codex-agent,"Auto-round-2 completed local evidence: documented relative ObjectStore now publishes a pack and a completed receipt. Eight path tests cover 32 seeded non-git stores, four spellings, 96 live identities, 4,032 cwd-changing publication boundaries, 74 exact-set interruption cases, four mutated namespace fields plus equivalent spellings, and explicit range/scan/purge/lazy-iterator binding. All 90 native relative-root SIGKILL cuts pass (13 compact, 32 unpack, 45 GC), with two completed replays per cut and no foreign-tree changes, duplicate identities or lost live objects. Additional reader matrix: 25 APIs, 540 boundaries, 27,000 live/erased checks. Real built and npm-packed Node/native Bun plus project-installed CLI JSON/TOON consumers pass 6/6. Compatibility passes 8/8, including 200 descriptor-lifetime cells; environment audit covers 103 test entrypoints and 170 child-launch sites. Source/test typecheck, lint, duplication (0 percent across 88 files) and docstrings (549) pass. Current main a31158d is included. Owner issue #151 remains fixed in aee95e4; ambient-agent hermeticity remains fixed in c56d797 and 1d372bd; PR body retains Fixes #151. Full npm/Bun evidence will be the new-head CI run; previous-head Linux npm gates passed on both Node 22 and 26, Windows GC passed 1/1 per runtime, and CodeQL had no open findings. Following the updated host rule, CI observation ends after at most 30 minutes after push if still pending; pending is not reported as a pass."
+files[72]{path,scope}:
   .github/workflows/ci.yml,project
   composition-commands.ts,project
   engine/bisect.ts,project
@@ -119,9 +125,13 @@ files[67]{path,scope}:
   engine/objects.ts,project
   engine/oplog.ts,project
   engine/packs.ts,project
+  engine/publication-leases.ts,project
   engine/refs.ts,project
+  engine/remotes.ts,project
   engine/repo.ts,project
   engine/representations.ts,project
+  engine/serve.ts,project
+  engine/transport.ts,project
   engine/worktree-mutation.ts,project
   index.ts,project
   scripts/pack-benchmark.ts,project
@@ -157,6 +167,7 @@ files[67]{path,scope}:
   test/object-read-protocol.test.ts,project
   test/objects.test.ts,project
   test/packs.test.ts,project
+  test/path-identity.test.ts,project
   test/raw-coverage.test.ts,project
   test/refs.test.ts,project
   test/release-approval.test.ts,project
@@ -168,7 +179,7 @@ files[67]{path,scope}:
   test/worktree-races.test.ts,project
   test/writer-lease-batch-publication.test.ts,project
   vcs-commands.ts,project
-tests[30]:
+tests[36]:
   - command: node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts
     scope: project
     timeout_seconds: 600
@@ -405,6 +416,54 @@ tests[30]:
     provenance:
       author: codex-agent
       created_at: "2026-10-27T07:17:25.469Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test --test-concurrency=1 test/path-identity.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T09:35:28.962Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"relative-root SIGKILL\" test/packs.test.ts"
+    scope: project
+    timeout_seconds: 1800
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T09:35:34.195Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test --test-concurrency=1 test/composition-consumer.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T09:35:40.777Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"documented relative ObjectStore|captured deletion aliases|every filesystem-owning\" test/path-identity.test.ts"
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T09:42:33.457Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"EVERY reader retains relative\" test/object-read-protocol.test.ts"
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T09:50:31.179Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"every reader x four|synchronous completed|all iterator|invalid flags, paths|whole-set validation|descriptor aliases|verified repository aliases|all test entrypoints\" test/object-lifetime.test.ts test/destruction.test.ts test/test-environment.test.ts"
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T09:50:31.179Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
 docs[6]{path,scope}:

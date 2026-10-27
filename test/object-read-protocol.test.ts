@@ -340,3 +340,14 @@ test("pinned inventory rejects in-place same-size mutation and a directory subst
   objectReadBoundary.visit=(step)=>{if(step==="generation"){objectReadBoundary.visit=()=>{};fs.unlinkSync(path);mkdirSync(path);}};
   assert.throws(()=>store.readInventoryObject(f.live,path),{code:"unsupported_erasure_storage"});
 });
+
+
+test("EVERY reader retains relative-construction identity at EVERY maintenance boundary after cwd changes",async t=>{
+ const original=process.cwd();let cells=0;let boundaries=0;
+ try{for(let spelling=0;spelling<4;spelling++){
+  const f=await fixture();process.chdir(f.repo.root);const root=[".","./",".pmvcs/..",f.repo.root][spelling];const captured={...f,repo:Repository.open(root)};const shadow=join(f.repo.root,"relative-shadow");mkdirSync(shadow);writeFileSync(join(shadow,"guard"),"foreign namespace sentinel");
+  for(const kind of transitions){prepare(captured,kind);let steps=0;packBoundary.visit=()=>{process.chdir(shadow);steps++;for(const reader of readers){verify(reader,captured,f.live,false);verify(reader,captured,f.erased,true);cells+=2;}};transition(captured,kind);packBoundary.visit=()=>{};assert.ok(steps>0);boundaries+=steps;for(const reader of readers){verify(reader,captured,f.live,false);verify(reader,captured,f.erased,true);}}
+  assert.deepEqual(fs.readdirSync(shadow),["guard"]);assert.equal(readFileSync(join(shadow,"guard"),"utf8"),"foreign namespace sentinel");process.chdir(original);
+ }}finally{packBoundary.visit=()=>{};process.chdir(original);}
+ assert.equal(cells,boundaries*readers.length*2);t.diagnostic(`4 root spellings x ${readers.length} readers, ${boundaries} maintenance boundaries, ${cells} live/erased checks after cwd changes`);
+});

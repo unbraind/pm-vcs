@@ -352,6 +352,9 @@ bound remain loose. Authorized erasure first materializes verified loose copies
 and retires every pack, then applies the existing permanent denial and physical
 deletion proof. GC rewrites packed survivors when collecting packed members.
 
+Relative SDK storage roots are bound when the handle is constructed; compaction,
+reads and recovery keep using that store after a working-directory change.
+
 See the [format, recovery and SDK example](docs/indexed-packs.md).
 
 Pack and loose reads share a generation protocol with up to eight resolution attempts. Streams

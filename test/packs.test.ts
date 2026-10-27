@@ -450,3 +450,17 @@ test("compaction preserves a peer replacement of either a duplicate or newly pac
   assert.throws(()=>repo.objects.compact(),error=>error instanceof Error&&"code"in error&&error.code==="destructive_target_changed"&&"receipt"in error&&(error.receipt as {skipped:number}).skipped===1);destructionBoundary.visit=()=>{};assert.ok(changed);assert.ok(lstatSync(path).isFile());assert.deepEqual(repo.objects.readTyped(id,"blob"),bytes);
  }
 });
+
+
+for (const action of ["compact", "unpack", "gc"] as const) test(`relative-root SIGKILL at EVERY ${action} boundary preserves namespace and resumes to a completed receipt`,async t=>{
+ const baseline=await fresh();seed(baseline);if(action!=="compact")baseline.objects.compact();const steps:string[]=[];packBoundary.visit=step=>steps.push(step);
+ if(action==="compact")baseline.objects.compact();else if(action==="unpack")baseline.objects.unpack();else collectGarbage(baseline,true);packBoundary.visit=()=>{};
+ for(let boundary=1;boundary<=steps.length;boundary++){
+  const repo=await fresh();const {entries,garbage}=seed(repo);if(action!=="compact")repo.objects.compact();const shadow=join(repo.root,"cwd-shadow");mkdirSync(shadow);writeFileSync(join(shadow,"guard"),"foreign namespace sentinel");
+  const crashed=worker(`relative-${action}`,repo,boundary);assert.equal(crashed.signal,"SIGKILL",`${boundary}/${steps[boundary-1]}: ${crashed.stderr}`);repo.objects.recoverWriterLock();equalReads(repo,entries);
+  for(let retry=0;retry<2;retry++){const resumed=worker(`relative-${action}`,repo);assert.equal(resumed.status,0,resumed.stderr);assert.equal((JSON.parse(resumed.stdout) as {status:string}).status,"completed");equalReads(repo,entries);}
+  if(action==="gc")assert.equal(repo.objects.has(garbage),false);else assert.deepEqual(repo.objects.readTyped(garbage,"blob"),Buffer.from("unreachable-garbage-payload"));
+  assert.deepEqual(readdirSync(shadow),["guard"]);assert.equal(readFileSync(join(shadow,"guard"),"utf8"),"foreign namespace sentinel");const ids=[...repo.objects.walkInventory()].map(entry=>entry.id);assert.equal(new Set(ids).size,ids.length);
+ }
+ assert.ok(steps.length>0);t.diagnostic(`${steps.length} native ${action} SIGKILL cuts with relative construction and cwd changes at every publication boundary; two successful replays per cut`);
+});

@@ -2,7 +2,7 @@ import { durability } from "./durability.ts";
 /** Receiver-owned stable FileId leases, fenced generations and durable audit. */
 import { randomBytes } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { type ClosureMetadata } from "./closure.ts";
 import { syncDirectory } from "./composition.ts";
 import { readCommit, readTree, type FileId } from "./model.ts";
@@ -128,7 +128,7 @@ export class PublicationLeases {
   constructor(store: ObjectStore, controlDirectory: string, principal: ReceiverPrincipal = filesystemPrincipal()) {
     this.store = store;
     this.principal = principal;
-    this.directory = join(controlDirectory, "leases");
+    this.directory = resolve(controlDirectory, "leases");
   }
 
   /** Read the authoritative append-only audit, refusing truncation or invalid generations. */

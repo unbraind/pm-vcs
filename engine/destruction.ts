@@ -144,9 +144,17 @@ function storeRevision(root: string, fresh = false): string {
 
 /** Canonical relative audit coordinates never grant authority outside the recorded root/parent identities. */
 function coordinate(root: string, path: string): string { return relative(root, path) || "."; }
+/** Validate the complete request and bind lexical paths before any lease or publication callback. */
+function normalizedRequests(requests: readonly DestructionRequest[], base: string): readonly DestructionRequest[] {
+  if (!Array.isArray(requests) || requests.some(request => request === null || typeof request !== "object" || Object.keys(request).some(key => !["path", "recursive", "directory", "destination", "expected", "address", "destinationAddress"].includes(key)) || typeof request.path !== "string" || request.path === "" || [request.recursive, request.directory].some(value => value !== undefined && typeof value !== "boolean") || (request.destination !== undefined && (typeof request.destination !== "string" || request.destination === "" || request.recursive === true || request.directory === true)) || (request.expected !== undefined && (request.expected === null || typeof request.expected !== "object" || ["dev", "ino", "birthtimeNs", "size", "mtimeNs", "ctimeNs"].some(key => typeof Reflect.get(request.expected!, key) !== "bigint"))) || (request.address !== undefined && typeof request.address !== "string") || (request.destinationAddress !== undefined && typeof request.destinationAddress !== "string"))) throw new DestructionRefusal("conflicting_destructive_requests", "Deletion requests need ordinary paths and compatible explicit boolean flags.");
+  return requests.map(request => ({ ...request, path: resolve(base, request.path),
+    ...(request.destination === undefined ? {} : { destination: resolve(base, request.destination) }),
+    ...(request.address === undefined ? {} : { address: resolve(base, request.address) }),
+    ...(request.destinationAddress === undefined ? {} : { destinationAddress: resolve(base, request.destinationAddress) }),
+  }));
+}
 /** Capture and validate the entire exact namespace before producing any intent or removing its first member. */
 function snapshot(root: string, requests: readonly DestructionRequest[]): DestructionEntry[] {
-  if (!Array.isArray(requests) || requests.some(request => request === null || typeof request !== "object" || Object.keys(request).some(key => !["path", "recursive", "directory", "destination", "expected", "address", "destinationAddress"].includes(key)) || typeof request.path !== "string" || request.path === "" || [request.recursive, request.directory].some(value => value !== undefined && typeof value !== "boolean") || (request.destination !== undefined && (typeof request.destination !== "string" || request.destination === "" || request.recursive === true || request.directory === true)) || (request.expected !== undefined && (request.expected === null || typeof request.expected !== "object" || ["dev", "ino", "birthtimeNs", "size", "mtimeNs", "ctimeNs"].some(key => typeof Reflect.get(request.expected!, key) !== "bigint"))) || (request.address !== undefined && typeof request.address !== "string") || (request.destinationAddress !== undefined && typeof request.destinationAddress !== "string"))) throw new DestructionRefusal("conflicting_destructive_requests", "Deletion requests need ordinary paths and compatible explicit boolean flags.");
   const result = new Map<string, DestructionEntry>();
   const directorySet = new Set(requests.filter(request => request.directory).map(request => canonical(request.path)));
   const capture = (path: string, request: DestructionRequest): void => {
@@ -235,7 +243,10 @@ export interface DestructionPlan { readonly paths: readonly string[]; readonly r
 export function prepareDestruction(control: string, key: string, requests: readonly DestructionRequest[], resumeCompleted = false, journalDirectory?: string, completedIsHistorical = false, supersedeChanged?: DestructionSupersession): DestructionPlan {
   if (typeof key !== "string" || key === "" || key.includes("\0")) throw new DestructionRefusal("conflicting_destructive_requests", "A deletion intent requires a stable nonempty operation key.");
   if (supersedeChanged !== undefined && !["reachability_changed", "eligibility_changed"].includes(supersedeChanged)) throw new DestructionRefusal("conflicting_destructive_requests", "Supersession requires a named, freshly validated precondition change.");
-  const requestedRoot = resolve(control); canonical(join(requestedRoot, ".intent-root")); mkdirSync(requestedRoot, { recursive: true, mode: 0o700 }); const root = realpathSync(requestedRoot); const rootStat = lstatSync(root, { bigint: true }); const rootIdentity = birth(rootStat);
+  const base = process.cwd(); const supplied = requests; requests = normalizedRequests(requests, base);
+  const origins = new Map(requests.map((request, index) => [request, supplied[index]]));
+  if (journalDirectory !== undefined) journalDirectory = resolve(base, journalDirectory);
+  const requestedRoot = resolve(base, control); canonical(join(requestedRoot, ".intent-root")); mkdirSync(requestedRoot, { recursive: true, mode: 0o700 }); const root = realpathSync(requestedRoot); const rootStat = lstatSync(root, { bigint: true }); const rootIdentity = birth(rootStat);
   const directory = journalDirectory ?? join(root, "destruction"); const metadata = lstatSync(directory, { throwIfNoEntry: false }); if (metadata !== undefined && !metadata.isDirectory()) throw new DestructionRefusal("foreign_destructive_intent", "A foreign receipt-directory entry was preserved."); mkdirSync(directory, { recursive: true, mode: 0o700 });
   const name = intentName(root, key); const path = join(directory, `${name}.json`);
   let held = false; let captured: Intent | undefined = undefined;
@@ -364,7 +375,12 @@ export function prepareDestruction(control: string, key: string, requests: reado
     destructionBoundary.visit("before-delete", entry.path);
     const rootStat = lstatSync(root, { bigint: true, throwIfNoEntry: false }); const parent = resolve(root, entry.parent); const parentStat = lstatSync(parent, { bigint: true, throwIfNoEntry: false });
     if (!rootStat?.isDirectory() || birth(rootStat) !== intent.rootIdentity || !parentStat?.isDirectory() || birth(parentStat) !== entry.parentIdentity) { entry.status = "cancelled"; entry.reason = "root_or_parent_retired"; save(entry); return; }
-    const source = canonical(resolve(root, entry.path)); const selected = addresses.get(source); const address = addressFor(source, selected?.address);
+    const source = canonical(resolve(root, entry.path)); const selected = addresses.get(source);
+    if (selected !== undefined) {
+      const current = normalizedRequests([origins.get(selected)!], base)[0];
+      if (current.path !== selected.path || current.address !== selected.address || current.destination !== selected.destination || current.destinationAddress !== selected.destinationAddress) throw new DestructionRefusal("conflicting_destructive_requests", "A caller changed its captured namespace request; retry with a new explicit plan.");
+    }
+    const address = addressFor(source, selected?.address);
     const stat = lstatSync(source, { bigint: true, throwIfNoEntry: false });
     if (stat === undefined) {
       if (entry.destination !== undefined) { const dest = resolve(root, entry.destination); const observed = lstatSync(dest, { bigint: true, throwIfNoEntry: false }); if (observed?.isFile() && identity(observed).split(":").slice(0, 5).join(":") === entry.identity.split(":").slice(0, 5).join(":") && digest(dest, observed) === entry.digest) { entry.status = "moved"; save(entry); return; } }
@@ -413,7 +429,9 @@ function hasLeaf(path: string): boolean { try { return lstatSync(path, { throwIf
 
 /** Every namespace primitive uses the same frozen-set journal, including owned temporaries and lease cleanup. @internal */
 export function retireNamespace(request: DestructionRequest, completedIsHistorical = false): DestructionReceipt {
+  const base = process.cwd();
   if (typeof request.path !== "string" || request.path === "" || request.path.includes("\0")) canonical(request.path);
+  request = normalizedRequests([request], base)[0];
   const selected = scope(resolve(request.path));
   return inScope(selected, () => retireScoped(request, selected, completedIsHistorical));
 }

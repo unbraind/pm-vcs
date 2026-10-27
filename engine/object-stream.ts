@@ -2,11 +2,16 @@
 import { createHash } from "node:crypto";
 import { readSync } from "node:fs";
 import { Inflate } from "pako";
-import { basename, dirname } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { ObjectStore, ObjectStoreError, type ObjectLocation, type ObjectId, type ObjectType } from "./objects.ts";
 
 /** Stream verified payload chunks without materializing compressed or inflated object bytes. */
-export function* objectPayloadChunks(path: string | ObjectLocation, id: ObjectId, type: ObjectType, timeoutMs = 30_000): Generator<Buffer> {
+export function objectPayloadChunks(path: string | ObjectLocation, id: ObjectId, type: ObjectType, timeoutMs = 30_000): Generator<Buffer> {
+  return verifiedPayloadChunks(typeof path === "string" ? resolve(path) : path, id, type, timeoutMs);
+}
+
+/** Decode a captured physical path or transferred location, with deterministic ownership on every exit. */
+function* verifiedPayloadChunks(path: string | ObjectLocation, id: ObjectId, type: ObjectType, timeoutMs: number): Generator<Buffer> {
   const location = typeof path === "string" ? (() => {
     const loose = basename(dirname(path)) === id.slice(0, 2) && basename(path).slice(0, 62) === id.slice(2) && /^[0-9a-f]{62}(?:\.[0-9]+\.[0-9a-f]{12}\.tmp)?$/.test(basename(path));
     const native = loose || (basename(dirname(path)) === "packs" && /^[0-9a-f]{64}\.pack$/.test(basename(path)));

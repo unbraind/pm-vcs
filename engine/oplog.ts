@@ -11,7 +11,7 @@ import { durability } from "./durability.ts";
 // intentionally absent content.
 
 import { type BigIntStats, appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import type { ObjectId } from "./objects.ts";
 import { ObjectStoreError } from "./objects.ts";
@@ -80,7 +80,7 @@ export class OperationLog {
    * @param path - Log file path. Its directory is created on demand.
    */
   constructor(path: string) {
-    this.path = path;
+    this.path = resolve(path);
   }
 
   /**

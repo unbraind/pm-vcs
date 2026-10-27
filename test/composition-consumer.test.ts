@@ -35,7 +35,9 @@ import { buildTree, flattenTree } from "pm-vcs/dist/engine/worktree.js";
 import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom, fetchFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
-import { hashObject } from "pm-vcs/dist/engine/objects.js";
+import { ObjectStore, hashObject } from "pm-vcs/dist/engine/objects.js";
+import { PackStorage } from "pm-vcs/dist/engine/packs.js";
+import { SharedObjectStore } from "pm-vcs/dist/engine/instances.js";
 import { collectGarbage } from "pm-vcs/dist/engine/gc.js";
 import { destructionBoundary, inspectDestructions } from "pm-vcs/dist/engine/destruction.js";
 import { exportBundle, importBundleObjects, serializeBundle } from "pm-vcs/dist/engine/bundle.js";
@@ -89,6 +91,20 @@ writeFileSync(join(target.root, "asset.bin"), Buffer.from([0, 255, 128, 19, 47])
 const pin = target.commit({ message: "pin", author }, new Date());
 const link = { version: 1, repository: target.identity(), revision: pin, mappings: [{ source: "asset.bin", destination: "vendor/asset.bin" }] };
 const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+// Physical path owners bind their namespace before any later cwd change.
+const pathRoot=join(process.cwd(),process.argv[2]+"-relative");mkdirSync(pathRoot);
+await new PmClient({cwd:pathRoot,pmRoot:join(pathRoot,".agents/pm"),noExtensions:true}).init("relative",{defaults:true,author:"fixture"});
+Repository.init(pathRoot);const previousCwd=process.cwd();
+try{
+ process.chdir(pathRoot);const captured=new Repository(".");const store=new ObjectStore(".pmvcs/objects");const packs=new PackStorage("./.pmvcs/objects");const shared=new SharedObjectStore(".pmvcs/objects");const bytes=Buffer.from("packed consumer relative identity");const id=store.write("blob",bytes);captured.refs.compareAndSwap("refs/metadata/live",null,id);
+ const shadow=join(pathRoot,"shadow");mkdirSync(shadow);writeFileSync(join(shadow,"guard"),"foreign namespace sentinel");process.chdir(shadow);
+ const packed=packs.compact(store);assert.equal(packed.objects,1);assert.equal(packed.packs,1);assert.equal(packed.destruction.status,"completed");assert.deepEqual(shared.read(id).payload,bytes);packs.unpack(store);assert.equal(store.compact().destruction.status,"completed");assert.equal(collectGarbage(captured,true).destruction.status,"completed");assert.deepEqual(store.read(id).payload,bytes);assert.equal(existsSync(join(shadow,".pmvcs")),false);
+ if(process.argv[2]==="node-project-cli"){
+  const install=spawnSync(process.execPath,[cliExecutable,"package","install",process.argv[3],"--project"],{env:testEnvironment(),cwd:pathRoot,encoding:"utf8"});assert.equal(install.status,0,install.stderr);
+  for(const format of [[],["--json"]]){const next=store.write("blob",Buffer.from("relative CLI "+format.length));captured.refs.compareAndSwap("refs/metadata/cli-"+format.length,null,next);const result=spawnSync(process.execPath,[cliExecutable,...format,"vcs","compact"],{env:testEnvironment(),cwd:pathRoot,encoding:"utf8"});assert.equal(result.status,0,result.stderr);if(format.length)assert.equal(JSON.parse(result.stdout).compact.destruction.status,"completed");else assert.match(result.stdout,/completed/);assert.deepEqual(store.read(next).payload,Buffer.from("relative CLI "+format.length));}
+ }
+}finally{process.chdir(previousCwd);}
+
 // Identical built/packed Node/Bun consumers must fail closed on supported decode limits.
 const proofRoot=join(process.cwd(),process.argv[2]+"-verification");mkdirSync(proofRoot);
 await new PmClient({cwd:proofRoot,pmRoot:join(proofRoot,".agents/pm"),noExtensions:true}).init("proof",{defaults:true,author:"fixture"});

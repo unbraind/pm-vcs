@@ -21,7 +21,7 @@ import {
   readFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, join, posix, sep } from "node:path";
+import { dirname, join, posix, sep, resolve } from "node:path";
 
 import { compareByteOrder } from "./model.ts";
 import { isObjectId, type ObjectId, ObjectStoreError } from "./objects.ts";
@@ -151,8 +151,8 @@ export class RefStore {
    *   passes its own control directory so its position stays private.
    */
   constructor(root: string, headRoot: string = root) {
-    this.root = root;
-    this.headRoot = headRoot;
+    this.root = resolve(root);
+    this.headRoot = resolve(headRoot);
   }
 
   /**

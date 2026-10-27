@@ -344,9 +344,9 @@ export class Repository {
    *   is missing — an instance without its shared store cannot answer anything.
    */
   constructor(root: string, config?: RepositoryConfig, pmRoot?: string) {
-    this.root = root;
-    this.controlDirectory = join(root, CONTROL_DIRECTORY);
-    this.instanceLink = resolveInstanceLink(this.controlDirectory, root);
+    this.root = resolve(root);
+    this.controlDirectory = join(this.root, CONTROL_DIRECTORY);
+    this.instanceLink = resolveInstanceLink(this.controlDirectory, this.root);
     const shared = this.instanceLink?.controlDirectory ?? this.controlDirectory;
     this.objects = this.instanceLink === null
       ? new ObjectStore(join(shared, "objects"))
