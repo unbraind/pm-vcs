@@ -30,6 +30,15 @@ function place(root:string,name:string,bytes:Buffer):string{const path=join(root
 function replace(path:string,bytes:Buffer,scratch:string):void{const temp=join(scratch,"replacement");writeFileSync(temp,bytes);renameSync(temp,path);}
 const empty={forbiddenIds:new Set<string>(),forbiddenPayloads:new Set<string>()};
 
+test("verification bounds never certify a native object containing eight recoverable base64 layers",async()=>{
+ for(const packed of [false,true]){
+  const f=await fixture();let encoded=f.bytes;for(let layer=0;layer<8;layer++)encoded=Buffer.from(encoded.toString("base64"));
+  const copy=f.repo.objects.write("blob",encoded);if(packed)f.repo.objects.compact();
+  assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),error=>{assert.ok(error instanceof Error);assert.match(error.message,/unverified.*(?:decode_depth|decode_error|incomplete_stream)/u);return true;});
+  assert.equal(f.repo.objects.denials().length,0);assert.deepEqual(f.repo.objects.read(copy).payload,encoded);assert.deepEqual(readFileSync(join(f.repo.root,"asset")),f.bytes);
+ }
+});
+
 test("fully recoverable one-byte-truncated headerless DEFLATE is unverifiable, with an explicit receipted purge",async()=>{
  let bytes=Buffer.alloc(0);let body=Buffer.alloc(0);
  for(const size of [32,128,1024,4096,65536]){bytes=Buffer.alloc(size,97);const frame=frameObject("blob",bytes);body=deflateSync(frame,{level:9}).subarray(2,-5);if(inflateRawSync(body,{finishFlush:zlibConstants.Z_SYNC_FLUSH}).equals(frame))break;}
@@ -120,12 +129,13 @@ test("complete native framing rejects malformed, trailing, truncated and oversiz
  const path=place(root,`packs/${createHash("sha256").update(pack).digest("hex")}.pack`,pack);assert.throws(()=>accountErasureStorage(root,empty),{code:"unverifiable"});rmSync(path);
 });
 
-test("fingerprint evidence is optional diagnostics and cannot certify unknown files",async()=>{
- const f=await fixture();f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1));const journal=join(f.repo.controlDirectory,"erasure-verification.json");rmSync(journal);
- assert.equal(f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)).storage.accountable,true);
- writeFileSync(journal,"foreign diagnostic format");const receipt=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1));assert.equal(receipt.storage.accountable,true);assert.ok(receipt.storage.diagnostic);assert.equal(readFileSync(journal,"utf8"),"foreign diagnostic format");
+test("missing, corrupt or bounded fingerprint evidence never issues an erasure certificate",async()=>{
+ const f=await fixture();f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1));const journal=join(f.repo.controlDirectory,"erasure-verification.json");const original=readFileSync(journal);rmSync(journal);
+ assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),/unverified.*missing_evidence/u);
+ writeFileSync(journal,"foreign diagnostic format");assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),/unverified.*decode_error/u);assert.equal(readFileSync(journal,"utf8"),"foreign diagnostic format");
+ writeFileSync(journal,original);assert.equal(f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)).storage.accountable,true);
  const limited=await fixture();limited.repo.objects.write("blob",Buffer.alloc(100_000,122));const budget={...erasureScanLimits};
- try { erasureScanLimits.minimum=1;erasureScanLimits.ratio=0;const report=limited.repo.obliterate(limited.entry.fileId!,"erase-fixture","incident",new Date(1));assert.equal(report.storage.accountable,true);assert.match(report.storage.diagnostic!,/diagnostics incomplete/); } finally { Object.assign(erasureScanLimits,budget); }
+ try { erasureScanLimits.minimum=1;erasureScanLimits.ratio=0;assert.throws(()=>limited.repo.obliterate(limited.entry.fileId!,"erase-fixture","incident",new Date(1)),/unverified.*decoded_bytes/u);assert.equal(limited.repo.objects.denials().length,0);assert.deepEqual(readFileSync(join(limited.repo.root,"asset")),limited.bytes); } finally { Object.assign(erasureScanLimits,budget); }
  place(f.repo.objects.storageRoot(),"cache",Buffer.from("unrelated foreign bytes"));assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),{code:"unverifiable"});
 });
 

@@ -14,6 +14,7 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { collectGarbage } from "../engine/gc.ts";
+import { destructionBoundary, inspectDestructions } from "../engine/destruction.ts";
 import { Repository } from "../engine/repo.ts";
 import { PublicationLeases } from "../engine/publication-leases.ts";
 import { readFragmentRange, writeFragmented } from "../engine/fragments.ts";
@@ -23,7 +24,7 @@ import { discardChildCoverage } from "./helpers/sandbox.ts";
 
 const directories: ReturnType<typeof makeTempDir>[] = [];
 const author: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
-afterEach(() => { for (const directory of directories.splice(0)) directory.cleanup(); });
+afterEach(() => { destructionBoundary.visit=()=>{};for (const directory of directories.splice(0)) directory.cleanup(); });
 
 /** Initialize an actual PM project and VCS repository for every retention owner. */
 async function fresh() {
@@ -32,6 +33,14 @@ async function fresh() {
   await sdk.init("gc", { defaults: true, author: "fixture" });
   return Repository.init(directory.root);
 }
+
+test("interrupted GC supersedes its obsolete set when a candidate becomes reachable",async()=>{
+ const repo=await fresh();const live=repo.objects.write("blob",Buffer.from("newly referenced candidate"));const dead=repo.objects.write("blob",Buffer.from("still collectible"));let old="";
+ destructionBoundary.visit=(step,path)=>{if(step==="intent-persisted"&&path.startsWith(join(repo.controlDirectory,"destruction"))){old=(JSON.parse(readFileSync(path,"utf8")) as {id:string}).id;throw new Error("interrupt GC before deletion");}};
+ assert.throws(()=>collectGarbage(repo,true),/interrupt GC before deletion/u);destructionBoundary.visit=()=>{};assert.ok(old);
+ repo.refs.compareAndSwap("refs/metadata/retained",null,live);const result=collectGarbage(repo,true);assert.equal(repo.objects.has(live),true);assert.equal(repo.objects.has(dead),false);assert.equal(result.removed,1);assert.notEqual(result.destruction!.id,old);
+ const previous=inspectDestructions(repo.controlDirectory).receipts.find(receipt=>receipt.id===old);assert.ok(previous);assert.equal(previous.status,"superseded");assert.match(JSON.stringify(previous),/reachability_changed/u);assert.equal(collectGarbage(repo,true).removed,0);
+});
 
 /** Commit unique native file content so unrelated writes produce distinct immutable objects. */
 function commit(repo: Repository, text: string) {

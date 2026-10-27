@@ -1,4 +1,5 @@
 import { prepareDestruction, type DestructionReceipt } from "./destruction.ts";
+import { assertVerificationBound, verificationLimits } from "./object-error.ts";
 import { packBoundary } from "./packs.ts";
 import { syncDirectory } from "./composition.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
@@ -103,6 +104,10 @@ function storageInstances(repository: Repository): Repository[] {
 export function collectGarbage(repository: Repository, apply = false): GcReport {
   if (typeof apply !== "boolean") throw new ObjectStoreError("invalid_gc_options", "Collection apply must be an explicit boolean.");
   return repository.objects.withWriteLock(/** Never reuse a stale plan across a publication or a retry. */ () => {
+    const started = performance.now(); let work = 0;
+    /** Every physical and logical traversal must finish before deletion authority is published. */
+    const check = (): void => { assertVerificationBound("reachability", "object_count", ++work, verificationLimits.reachabilityObjects); assertVerificationBound("reachability", "time_ms", performance.now() - started, verificationLimits.reachabilityMs); };
+    check();
     const store = repository.objects;
     if (apply && store.denials().some(entry => entry.pending)) throw new ObjectStoreError("pack_erasure_pending", "Resume authorized erasure before applying collection; no source was retired.");
     const shared = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
@@ -133,6 +138,7 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
     const inventory: { id: ObjectId; path: string; bytes: number; packed: boolean }[] = [];
     // Complete the physical preflight before unlinking even the first candidate.
     for (const item of store.walkInventory()) {
+      check();
       inventory.push({ id: item.id, path: item.path, bytes: item.bytes, packed: item.packed !== undefined });
 
     }
@@ -142,6 +148,7 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
     const visited = new Set<ObjectId>();
     const pending = [...roots];
     while (pending.length > 0) {
+      check();
       const id = pending.pop()!;
       if (visited.has(id) || store.denial(id) !== undefined) continue;
       visited.add(id);
@@ -154,14 +161,16 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
       else if (object.type === "manifest") { const manifest = decodeManifest(object.payload); pending.push(...(manifest.pages ?? manifest.fragments).map(/** Traverse bounded manifest pages and their leaves. */ (entry) => entry.id)); }
       else if (object.type === "series") { const series = decodeSeries(object.payload); pending.push(series.base, ...series.patches.map(/** Review series keep all patch commits. */ (patch) => patch.commit)); }
     }
+    check();
     const candidates = inventory.filter(/** Physical copies of a retained address remain retained. */ (item) => !retained.has(item.id));
     const candidateBytes = candidates.reduce(/** Count physical bytes rather than logical uncompressed payloads. */ (sum, item) => sum + item.bytes, 0);
     const physicalBefore = inventory.reduce((sum, item) => sum + item.bytes, 0);
     let reclaimedBytes = 0; let removed = 0; let destruction: DestructionReceipt | undefined;
     if (apply) {
+      check();
       const packed = candidates.some((candidate) => candidate.packed);
       if (packed) store.unpack();
-      const deletion = prepareDestruction(shared, "gc-candidates", candidates.map(candidate => ({ path: candidate.packed ? join(store.storageRoot(), candidate.id.slice(0, 2), candidate.id.slice(2)) : candidate.path })));
+      const deletion = prepareDestruction(shared, "gc-candidates", candidates.map(candidate => ({ path: candidate.packed ? join(store.storageRoot(), candidate.id.slice(0, 2), candidate.id.slice(2)) : candidate.path })), false, undefined, false, "reachability_changed");
       for (const path of deletion.paths) {
         store.markStorageGeneration(); deletion.remove(path); syncDirectory(dirname(path)); packBoundary.visit("collected");
       }

@@ -86,7 +86,7 @@ test("10,000 sequential reads per representation and exit mode converge under a 
   for (const packed of [false,true]) {
     if (packed) f.store.compact();
     for (const mode of modes) {
-      const child = spawnSync("bash",["-c",'ulimit -n 128; exec "$@"',"object-soak",process.execPath,join(packageRoot,"test/helpers/object-lifetime-soak.ts"),f.store.storageRoot(),f.id,mode],{ env: testEnvironment(),encoding:"utf8",timeout:300_000});
+      const child = spawnSync("python3",["-c","import os,resource,sys; resource.setrlimit(resource.RLIMIT_NOFILE,(128,128)); os.execv(sys.argv[1],sys.argv[1:])",process.execPath,join(packageRoot,"test/helpers/object-lifetime-soak.ts"),f.store.storageRoot(),f.id,mode],{ env: testEnvironment(),encoding:"utf8",timeout:300_000});
       assert.equal(child.status,0,`${packed ? "pack" : "loose"}/${mode}: ${child.stderr}`);
       assert.equal(child.signal,null); const receipt = JSON.parse(child.stdout) as {reads:number;baseline:number;after:number;emfile:number};
       assert.equal(receipt.reads,10_000); assert.equal(receipt.baseline,receipt.after); assert.equal(receipt.emfile,0);

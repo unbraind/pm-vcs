@@ -1156,7 +1156,7 @@ export class Repository {
 
   /** Verify the entire ref closure, including fragments and intentional terminal absence. */
   verify(): ClosureReport {
-    const targets = [...this.refs.list(BRANCH_PREFIX), ...this.refs.list(TAG_PREFIX)].map(/** Branches and tags require complete typed commit structure. */ (entry) => entry.target);
+    const targets = [...this.refs.list(BRANCH_PREFIX, true), ...this.refs.list(TAG_PREFIX, true)].map(/** Branches and tags require complete typed commit structure. */ (entry) => entry.target);
     return inspectClosure(this.objects, targets, [], this.objects.denials(), true);
   }
 

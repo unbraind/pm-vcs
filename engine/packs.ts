@@ -204,7 +204,7 @@ export class PackStorage {
         else eligible.push({ id: item.id, path: item.path, cost });
       }
       // Validate all published and loose sources before even retiring a duplicate or staging job.
-      const deletion = prepareDestruction(dirname(store.storageRoot()), "compact-loose", [...new Set([...duplicates.keys(), ...eligible.map(item => item.path)])].map(path => ({ path })));
+      const deletion = prepareDestruction(dirname(store.storageRoot()), "compact-loose", [...new Set([...duplicates.keys(), ...eligible.map(item => item.path)])].map(path => ({ path })), false, undefined, false, "eligibility_changed");
       const planned = new Set(deletion.paths);
       this.recover();
       let objects = 0; let looseBytes = 0;
@@ -289,7 +289,7 @@ export class PackStorage {
       this.assertRoot(store);
       // Finish complete verification before representation changes, then retain only one leaf buffer per copy.
       for (const item of store.walkErasureInventory("pack")) void item;
-      const deletion = prepareDestruction(dirname(store.storageRoot()), "unpack-packs", this.files().map(path => ({ path })));
+      const deletion = prepareDestruction(dirname(store.storageRoot()), "unpack-packs", this.files().map(path => ({ path })), false, undefined, false, "eligibility_changed");
       this.recover();
       for (const item of store.walkErasureInventory("pack")) {
         const directory = join(store.storageRoot(), item.id.slice(0, 2)); mkdirSync(directory, { recursive: true });

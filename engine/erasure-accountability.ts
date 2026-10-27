@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { writePrivateJson } from "./composition.ts";
 import { ZStream, zlibInflateInit2, zlibInflate, zlibInflateEnd, Z_NO_FLUSH, Z_STREAM_END, Z_OK, Z_BUF_ERROR } from "pako";
 import { objectFiles } from "./object-files.ts";
+import { assertVerificationBound, verificationLimits, VerificationRefusal } from "./object-error.ts";
 import { durability } from "./durability.ts";
 import { OBJECT_TYPES, readControlJson, type ObjectType } from "./objects.ts";
 import { PackStorage, PackRefusal } from "./packs.ts";
@@ -14,7 +15,7 @@ import { classifyErasureFile, ErasureStorageRefusal, type ErasureFileClass, type
 export const accountabilityBoundary: { visit(step: string, path: string, attempt: number): void } = { visit() {} };
 /** Both per-file and whole-namespace retries are bounded. */
 export const ACCOUNTABILITY_ATTEMPTS = 8;
-/** Only this stronger report can serve as a physical-store certificate. */
+/** Complete native-format accounting; the erasure caller additionally requires complete representation inspection. */
 export interface ErasureAccountabilityReport extends ErasureStorageReport { readonly accountable: true; readonly objects: number }
 /** Exact identity selected by an explicit purge; content is never retained in its receipt. */
 export interface UnaccountedFile { readonly path: string; readonly fileClass: ErasureFileClass; readonly sha256: string; readonly bytes: number; readonly identity: string }
@@ -51,6 +52,7 @@ function nativeObject(fd: number, offset: number, length: number, id: string, hi
       do {
         stream.output = output; stream.next_out = 0; stream.avail_out = output.length;
         const status = zlibInflate(stream, Z_NO_FLUSH); let data: Buffer = Buffer.from(output.subarray(0, stream.next_out)); framedBytes += data.length;
+        assertVerificationBound("accountability", "decoded_bytes", framedBytes, verificationLimits.accountabilityDecodedBytes);
         if (maxFrameBytes !== undefined && framedBytes > maxFrameBytes) throw new InvalidRepresentation("oversized pack frame");
         hash.update(data);
         if (declared === undefined) {
@@ -80,6 +82,10 @@ function physicalDigest(fd: number, size: number): string {
 }
 /** Verify every regular file, retrying a replaced file and then the whole catalogue before certification. */
 function inspectStorage(scope: string | readonly string[], options: AccountabilityOptions, planning?: Map<string, UnaccountedFile>): ErasureAccountabilityReport {
+  const started = performance.now(); let visited = 0;
+  /** Work exhaustion refuses both certification and purge authorization. */
+  const check = (): void => { assertVerificationBound("accountability", "time_ms", performance.now() - started, verificationLimits.accountabilityMs); };
+  check();
   const roots = typeof scope === "string" ? [scope] : scope;
   const packs = new Map(roots.map((root) => [root, new PackStorage(root)]));
   const root = roots[0] ?? ".";
@@ -92,12 +98,14 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
     const catalogue = (path: string): string[] => readdirSync(path, { encoding: "utf8" });
     /** Inspect one file while retaining its descriptor until its pathname has been compared. */
     const inspect = (path: string, parts: string[], pack: PackStorage): void => {
+      assertVerificationBound("accountability", "file_count", ++visited, verificationLimits.accountabilityFiles); check();
       const kind = classifyErasureFile(parts).kind;
       for (let attempt = 0; attempt < ACCOUNTABILITY_ATTEMPTS; attempt++) {
         accountabilityBoundary.visit("file-resolve", path, attempt);
         const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
           const before = fstatSync(file.fd, { bigint: true });
+          assertVerificationBound("accountability", "file_bytes", Number(before.size), verificationLimits.accountabilityFileBytes);
           if (!before.isFile() || before.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new ErasureStorageRefusal("unverifiable", kind);
           const stamp = identity(before); let parsed = false; let forbidden = false; let count = 0;
           accountabilityBoundary.visit("file-opened", path, attempt);
@@ -139,7 +147,7 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
           accountabilityBoundary.visit("file-verified", path, attempt);
         } catch (error) {
           if (error instanceof Changed) throw error;
-          if (error instanceof ErasureStorageRefusal) throw error;
+          if (error instanceof ErasureStorageRefusal || error instanceof VerificationRefusal) throw error;
           if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Changed();
           throw new ErasureStorageRefusal("unverifiable", kind);
         } finally { file.close(); }
@@ -167,6 +175,7 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
       }
       if (purged) throw new Changed();
       accountabilityBoundary.visit("pass-check", root, pass);
+      check();
       for (const path of missing) if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) throw new Changed();
       for (const [path, expected] of directories) {
         const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
@@ -176,14 +185,15 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
         const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
         if (!stat?.isFile() || identity(stat) !== expected) throw new Changed();
       }
+      check();
       return { files, objects, foreign: 0, accountable: true, classes };
     } catch (error) {
       if (error instanceof Changed || (error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      if (error instanceof ErasureStorageRefusal) throw error;
+      if (error instanceof ErasureStorageRefusal || error instanceof VerificationRefusal) throw error;
       throw new ErasureStorageRefusal("unverifiable", "object-root");
     }
   }
-  throw new ErasureStorageRefusal("unverifiable", "object-root");
+  throw new VerificationRefusal("accountability", "storage_attempts", "The storage namespace did not stabilize.", "unverifiable");
 }
 
 /** Certify only a fully accounted, payload-free generation; planning never grants a certificate. */

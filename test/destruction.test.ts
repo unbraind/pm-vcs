@@ -428,3 +428,49 @@ test("owner completion cannot mistake a reattached original inode for a distinct
  const f=fixture();const path=join(f.control,"owner.lock");const alias=join(f.control,"retained-owner");const fd=openSync(path,"wx");writeFileSync(fd,"original owner");fs.linkSync(path,alias);const original=fstatSync(fd,{bigint:true});
  destructionBoundary.visit=step=>{if(step==="deleted")fs.linkSync(alias,path);};assert.throws(()=>durability.scoped(f.control,()=>durability.release(path,fd,original)),{code:"destructive_target_changed"});destructionBoundary.visit=()=>{};assert.equal(readFileSync(path,"utf8"),"original owner");assert.throws(()=>fstatSync(fd),{code:"EBADF"});
 });
+
+test("supersession replaces only freshly validated authority and obsolete handles cannot drain a peer plan",()=>{
+ const f=fixture();const old=prepareDestruction(f.control,"changed",f.paths.map(path=>({path})));const kept=f.paths[0];
+ const next=prepareDestruction(f.control,"changed",f.paths.slice(1).map(path=>({path})),false,undefined,false,"eligibility_changed");
+ assert.throws(()=>old.remove(kept),{code:"destructive_intent_changed"});for(const path of next.paths)next.remove(path);assert.equal(next.finish().status,"completed");assert.ok(existsSync(kept));
+ const retired=inspectDestructions(f.control).receipts.find(row=>row.status==="superseded");assert.ok(retired);assert.equal(retired.reason,"eligibility_changed");assert.equal(inspectDestructions(f.control).pending,0);
+});
+
+test("property: 128 seeded changed-eligibility recoveries match a fresh exact-set model",t=>{
+ const f=fixture();let seed=727193;const next=()=>seed=(Math.imul(seed,1664525)+1013904223)>>>0;let deletions=0;
+ for(let sequence=0;sequence<128;sequence++){
+  const base=join(f.data,`model-${sequence}`);mkdirSync(base);const paths=Array.from({length:3+next()%5},(_,i)=>join(base,`member-${i}`));for(const path of paths)writeFileSync(path,`owned-${next()}`);
+  const key=`changed-${sequence}`;const old=prepareDestruction(f.control,key,paths.map(path=>({path})));const prefix=next()%(paths.length-1);for(const path of paths.slice(0,prefix))old.remove(path);
+  const retained=paths[prefix];const expected=paths.slice(prefix+1);const extra=join(base,"newly-eligible");writeFileSync(extra,"freshly validated");expected.push(extra);
+  const plan=prepareDestruction(f.control,key,expected.map(path=>({path})),false,undefined,false,"eligibility_changed");assert.equal(plan.resumed,false);
+  for(const path of plan.paths){assert.ok(expected.includes(path));plan.remove(path);deletions++;}assert.equal(plan.finish().status,"completed");assert.ok(existsSync(retained));assert.deepEqual(readdirSync(base),[retained.split(/[\\/]/u).at(-1)]);
+ }
+ assert.equal(inspectDestructions(f.control).superseded,128);assert.equal(inspectDestructions(f.control).pending,0);assert.equal(readFileSync(join(f.tripwire,"guard"),"utf8"),"untouched sentinel");t.diagnostic(`128 seeded exact-set transitions, ${deletions} authorized successor deletions`);
+});
+
+test("native crash at EVERY supersession boundary retains protected members and converges to a terminal successor",async t=>{
+ const dir=makeTempDir();dirs.push(dir);await new PmClient({cwd:dir.root,pmRoot:join(dir.root,".agents/pm"),noExtensions:true}).init("supersession",{defaults:true,author:"fixture"});
+ /** Each cut receives its own root lifetime and pending exact-set authority. */
+ const fresh=(name:string)=>{const root=join(dir.root,name);const control=join(root,".pmvcs");const data=join(root,"data");mkdirSync(control,{recursive:true});mkdirSync(data);for(const leaf of ["a","b","c","new"])writeFileSync(join(data,leaf),`owned-${leaf}`);prepareDestruction(control,"supersede",["a","b","c"].map(leaf=>({path:join(data,leaf)})));return{root,control,data};};
+ const run=(root:string,cut:number)=>spawnSync(process.execPath,[join(packageRoot,"test/helpers/destruction-supersession-worker.ts"),root,String(cut)],{env:testEnvironment(),encoding:"utf8",timeout:30_000});
+ const probe=fresh("probe");const first=run(probe.root,0);assert.equal(first.status,0,first.stderr);const trace=(JSON.parse(first.stdout) as {trace:string[]}).trace;assert.ok(trace.includes("intent-superseded"));
+ for(let cut=1;cut<=trace.length;cut++){
+  const f=fresh(`cut-${cut}`);const crashed=run(f.root,cut);assert.equal(crashed.signal,"SIGKILL",`${cut}/${trace[cut-1]}: ${crashed.stderr}`);assert.equal(readFileSync(join(f.data,"a"),"utf8"),"owned-a");const recovered=run(f.root,0);assert.equal(recovered.status,0,`${cut}/${trace[cut-1]}: ${recovered.stderr}`);assert.deepEqual(readdirSync(f.data),["a"]);assert.equal(inspectDestructions(f.control).pending,0);assert.equal(inspectDestructions(f.control).superseded,1);
+ }
+ t.diagnostic(`${trace.length} native SIGKILL cuts cover supersession marker, archive, fresh intent, deletion and final receipt`);
+});
+
+test("unknown supersession policy refuses before any intent or source mutation",()=>{
+ const f=fixture();assert.throws(()=>prepareDestruction(f.control,"invalid-policy",f.paths.map(path=>({path})),false,undefined,false,"foreign_change" as never),{code:"conflicting_destructive_requests"});for(const path of f.paths)assert.ok(existsSync(path));assert.deepEqual(inspectDestructions(f.control).receipts,[]);
+});
+
+test("an old handle cannot reactivate a durable superseded marker before a successor is published",()=>{
+ const f=fixture();const old=prepareDestruction(f.control,"handoff",f.paths.map(path=>({path})));destructionBoundary.visit=step=>{if(step==="intent-superseded")throw new Error("handoff interrupted");};
+ assert.throws(()=>prepareDestruction(f.control,"handoff",f.paths.slice(1).map(path=>({path})),false,undefined,false,"eligibility_changed"),/handoff interrupted/u);destructionBoundary.visit=()=>{};
+ assert.throws(()=>old.remove(f.paths[0]),error=>error instanceof DestructionRefusal&&error.code==="destructive_intent_changed"&&error.receipt?.status==="superseded");assert.ok(existsSync(f.paths[0]));
+ const plan=prepareDestruction(f.control,"handoff",f.paths.slice(1).map(path=>({path})),false,undefined,false,"eligibility_changed");for(const path of plan.paths)plan.remove(path);assert.equal(plan.finish().status,"completed");assert.equal(inspectDestructions(f.control).superseded,1);
+});
+
+test("freshly validated completed recovery archives its receipt before retiring a new eligible lifetime",()=>{
+ const f=fixture();const first=drain(f.control,"completed-revalidation",f.paths);writeFileSync(f.paths[0],"new validated ownership");const plan=prepareDestruction(f.control,"completed-revalidation",[{path:f.paths[0]}],true,undefined,false,"eligibility_changed");assert.equal(plan.resumed,false);plan.remove(f.paths[0]);const final=plan.finish();assert.notEqual(final.id,first.id);assert.equal(final.planned,1);assert.equal(final.deleted,1);assert.equal(inspectDestructions(f.control).completed,2);
+});

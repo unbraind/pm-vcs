@@ -6,9 +6,14 @@ import { decodeLink } from "./composition.ts";
 import { decodeCommit, decodeManifest, decodeTree, decodeRecord } from "./model.ts";
 import { type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
+import { assertVerificationBound, VerificationRefusal, verificationLimits, type VerificationResult } from "./object-error.ts";
 
 /** Closure inspection shared by publication and verification. */
 export interface ClosureReport {
+  /** Overall certification cannot remain positive after partial, bounded or failed inspection. */
+  verification: VerificationResult;
+  /** Objects inspected before a refusal, without claiming that the whole closure verified. */
+  checked: number;
   /** Distinct successfully validated objects. */
   verified: number;
   /** Payload objects whose FileId and root match a canonical terminal denial. */
@@ -50,7 +55,8 @@ type VerifiedObject =
 
 /** Validate commit roots against held objects plus an unpublished arrival, without mutating storage. */
 export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), audits = false, trees: readonly ObjectId[] = [], metadata: ClosureMetadata = { commits: new Map(), trees: new Map() }, partial: Pick<PartialState, "shallow" | "promised"> | null = store.partialState()): ClosureReport {
-  const result: ClosureReport = { verified: 0, obliterated: [], missing: [], corrupt: [] };
+  const result: ClosureReport = { verification: { status: "verified", verifier: "integrity" }, checked: 0, verified: 0, obliterated: [], missing: [], corrupt: [] };
+  const started = performance.now(); let work = 0; let bound: string | undefined;
   const denied = new Map(denials.flatMap(/** Index addresses once while retaining each leaf's original attribution. */ (entry) => entry.tombstone.objects.map(/** Preserve the first denial when identical payloads have multiple terminal owners. */ (id) => [id, entry] as const)).reverse());
   const carried = new Map(arrivals.map(/** Resolve incoming objects before publication. */ (object) => [object.id, object]));
   const pending: Reference[] = targets.map(/** Every advertised root is a commit, independently of denial claims. */ (id) => ({ id, role: "commit" }));
@@ -59,7 +65,18 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
   const seen = new Set<string>();
   const verified = new Set<ObjectId>();
   const held = new Map<ObjectId, VerifiedObject | ObjectStoreError>();
+  /** Share the pre-read and final deadline barrier so a slow last read cannot retain a positive verdict. */
+  const budget = (reference = false): boolean => {
+    try {
+      if (reference) assertVerificationBound("integrity", "reference_count", ++work, verificationLimits.integrityObjects);
+      assertVerificationBound("integrity", "time_ms", performance.now() - started, verificationLimits.integrityMs); return true;
+    } catch (error) {
+      if (!(error instanceof VerificationRefusal)) throw error;
+      bound = error.bound; result.corrupt.push(`unverified: ${bound}`); return false;
+    }
+  };
   while (pending.length > 0) {
+    if (!budget(true)) break;
     const reference = pending.pop() as Reference;
     const { id, role, fileId, root } = reference;
     // Scalar key: the parent is content-addressed, so its id stands in for its
@@ -70,10 +87,10 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
     const denial = denied.get(id);
     if (denial !== undefined) {
       if (["payload", "conflict", "blob", "record"].includes(role) && fileId === denial.tombstone.fileId && root !== undefined && denial.tombstone.roots.includes(root)) result.obliterated.push(id);
-      else result.corrupt.push(`${id}: invalid_erasure_role`);
+      else { result.corrupt.push(`${id}: invalid_erasure_role`); bound ??= "erasure_role"; }
       continue;
     }
-    if ((role === "payload" || role === "fragment" || role === "blob") && partial?.promised.includes(id) === true && !carried.has(id) && !store.has(id)) continue;
+    if ((role === "payload" || role === "fragment" || role === "blob") && partial?.promised.includes(id) === true && !carried.has(id) && !store.has(id)) { bound ??= "partial_history"; continue; }
     try {
       let object = held.get(id);
       if (object instanceof ObjectStoreError) throw object;
@@ -102,6 +119,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
       if (reference.parent !== undefined && object.type === "manifest") assertManifestChild(reference.parent, reference.page!, object.structure);
       if (object.type === "commit") {
         const commit = object.structure;
+        if (partial?.shallow.includes(id) === true && commit.parents.length > 0) bound ??= "partial_history";
         metadata.commits.set(id, commit);
         pending.push({ id: commit.tree, role: "tree" }, ...(partial?.shallow.includes(id) === true ? [] : commit.parents).map(/** Parent references always require real commits. */ (parent) => ({ id: parent, role: "commit" as const })));
       } else if (object.type === "tree") {
@@ -124,14 +142,18 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
       verified.add(id);
     } catch (error) {
       if (!(error instanceof ObjectStoreError)) throw error;
+      bound ??= error instanceof VerificationRefusal ? error.bound : error.code === "object_payload_limit" ? "object_bytes" : error.code === "object_stream_timeout" ? "time_ms" : error.code === "object_not_found" || error.code === "missing_fragment" ? "missing_object" : "decode_error";
       // Cache only physical/structural failures. A role mismatch must leave
       // the verified kind available to other references with a valid role.
       if (!held.has(id)) held.set(id, error);
       result[error.code === "object_not_found" || error.code === "missing_fragment" ? "missing" : "corrupt"].push(`${id}: ${error.code}`);
     }
   }
-  result.verified = verified.size;
-  if (denials.some(/** Interrupted deletion cannot establish a successful verification state. */ (denial) => denial.pending)) result.corrupt.push("erasure_incomplete");
+  budget();
+  result.checked = verified.size;
+  if (denials.some(/** Interrupted deletion cannot establish a successful verification state. */ (denial) => denial.pending)) { result.corrupt.push("erasure_incomplete"); bound ??= "pending_erasure"; }
+  if (bound !== undefined) result.verification = { status: "unverified", verifier: "integrity", bound };
+  result.verified = bound === undefined ? verified.size : 0;
   return result;
 }
 
@@ -139,6 +161,6 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
 export function requireClosure(store: ObjectStore, targets: readonly ObjectId[], arrivals: readonly ObjectArrival[] = [], denials: readonly ErasureDenial[] = store.denials(), trees: readonly ObjectId[] = [], partial: Pick<PartialState, "shallow" | "promised"> | null = store.partialState()): ClosureMetadata {
   const metadata: ClosureMetadata = { commits: new Map(), trees: new Map() };
   const report = inspectClosure(store, targets, arrivals, denials, false, trees, metadata, partial);
-  if (report.missing.length + report.corrupt.length > 0) throw new ObjectStoreError("incomplete_bundle", `History closure is invalid: ${[...report.missing, ...report.corrupt].join(", ")}.`);
+  if (report.missing.length + report.corrupt.length > 0) throw new VerificationRefusal("integrity", report.verification.bound!, `History closure is invalid: ${[...report.missing, ...report.corrupt].join(", ")}.`, "incomplete_bundle");
   return metadata;
 }

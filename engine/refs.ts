@@ -1,4 +1,5 @@
 import { prepareDestruction } from "./destruction.ts";
+import { VerificationRefusal } from "./object-error.ts";
 import { durability } from "./durability.ts";
 // Ref storage: branches, tags, and HEAD.
 //
@@ -261,7 +262,7 @@ export class RefStore {
       preflight?.();
       const removals = ordered.filter(update => update.next === null);
       if (removals.length > 0) {
-        const plan = prepareDestruction(this.root, `ref-retirement:${JSON.stringify(ordered)}`, removals.map(update => ({ path: this.pathFor(update.name) })));
+        const plan = prepareDestruction(this.root, `ref-retirement:${JSON.stringify(ordered)}`, removals.map(update => ({ path: this.pathFor(update.name) })), false, undefined, false, "eligibility_changed");
         for (const path of plan.paths) plan.remove(path);
         plan.finish();
       }
@@ -280,25 +281,31 @@ export class RefStore {
    * @param prefix - Ref prefix, e.g. {@link BRANCH_PREFIX}.
    * @returns The matching refs and their targets.
    */
-  list(prefix: string): RefEntry[] {
+  list(prefix: string, strict = false): RefEntry[] {
     const base = join(this.root, ...prefix.split("/").filter(Boolean));
     const found: RefEntry[] = [];
     /** Recursively collect valid refs while ignoring the reserved lock namespace. */
-    const walk = (directory: string): void => {
+    const walk = (directory: string, observed = false): void => {
       let entries: Dirent[];
       try {
         entries = readdirSync(directory, { withFileTypes: true });
-      } catch {
+      } catch (error) {
+        if (strict && (observed || (error as NodeJS.ErrnoException).code !== "ENOENT")) throw new VerificationRefusal("integrity", "ref_io", "The reference namespace could not be completely read.");
         return;
       }
       for (const entry of entries) {
         if (entry.name.endsWith(".lock")) continue;
         const path = join(directory, entry.name);
         if (entry.isDirectory()) {
-          walk(path);
+          walk(path, true);
           continue;
         }
-        const value = readTrimmed(path);
+        let value: string | null;
+        if (strict) {
+          if (!entry.isFile()) throw new VerificationRefusal("integrity", "ref_type", "A reference is not a regular file.");
+          try { value = readFileSync(path, "utf8").trim(); } catch { throw new VerificationRefusal("integrity", "ref_io", "A reference disappeared or could not be read."); }
+          if (!isObjectId(value)) throw new VerificationRefusal("integrity", "ref_decode", "A reference does not contain a complete object identity.");
+        } else value = readTrimmed(path);
         if (value === null || !isObjectId(value)) continue;
         const relative = path.slice(base.length + 1).split(sep).join(posix.sep);
         found.push({ name: `${prefix}${relative}`, target: value });

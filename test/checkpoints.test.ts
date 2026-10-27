@@ -10,6 +10,7 @@ import { afterEach, test } from "node:test";
 import { PmClient, createAssuranceWorkspaceContext, evaluateAssuranceGate, recordAssuranceVerdict, type AssuranceDocument, type AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { attachCheckpoint, checkpointClaims, CheckpointRefusal, createSemanticCheckpoint, inspectCheckpoints, loadCheckpointReceipt, parseCheckpointPolicy, parseCheckpointRequest, parseCheckpointRequirement, updateCheckpointPolicy, CHECKPOINT_POLICY_FILE, type CheckpointRequest } from "../index.ts";
+import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
 import { assertCheckpointPublication, readCheckpointPolicy } from "../engine/checkpoints.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { decodeCommit, encodeCommit, encodeRecord, effectiveChangeId, readCommit, writeCommit, type Commit, type Signature } from "../engine/model.ts";
@@ -391,4 +392,12 @@ for (const http of [false, true]) test(`native ${http ? "HTTP" : "file"} forge s
     assert.deepEqual(receiver.refs.list("refs/forge-review/"), []);
     assert.deepEqual(receiver.operations.read(), []);
   } finally { await server?.close(); }
+});
+
+
+test("a capped assurance history refuses even when the selected receipt is present",async()=>{
+ const f=await fixture();const before=verificationLimits.checkpointRecords;
+ try {verificationLimits.checkpointRecords=1;await assert.rejects(()=>loadCheckpointReceipt(f.pmRoot,f.request),error=>error instanceof VerificationRefusal&&error.status==="unverified"&&error.bound==="receipt_count");}
+ finally {Object.assign(verificationLimits,{checkpointRecords:before});}
+ assert.deepEqual(await loadCheckpointReceipt(f.pmRoot,f.request),f.verdict);
 });

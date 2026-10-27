@@ -126,7 +126,7 @@ test("scanner covers every regular class and refuses unreadable, aliased, changi
   place(root,"other/deep/clean",Buffer.from("unrelated"));
   place(root,"root-copy",Buffer.from("unrelated"));
   const report=scanErasureStorage(root,patterns); assert.equal(report.files,5);assert.equal(Object.keys(report.classes).length,4);
-  const plain=place(root,"other/zlib",Buffer.from([0x78,0x9c]));assert.equal(scanErasureStorage(root,patterns).files,6);
+  const plain=place(root,"other/zlib",Buffer.from([0x78,0x9c]));assert.throws(()=>scanErasureStorage(root,patterns),{code:"uninspectable_payload",status:"unverified",bound:"incomplete_stream"});
   writeFileSync(plain,deflateSync(Buffer.alloc(60_000,105)));assert.equal(scanErasureStorage(root,patterns).files,6);
   erasureScanLimits.minimum=0; erasureScanLimits.ratio=0;
   assert.throws(()=>scanErasureStorage(root,patterns),{code:"unsupported_erasure_storage"});erasureScanLimits.minimum=16*1024*1024;erasureScanLimits.ratio=1032*6;
@@ -194,7 +194,7 @@ test("one non-git tracker serializes a competing erasure at EVERY proof/scan/pub
   const run=(mode:string)=>spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-peer.ts"),f.repo.root,f.fileId,mode],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
   erasureScanBoundary.visit=()=>{const peer=run("blocked");assert.equal(peer.status,0,peer.stderr);assert.equal(peer.stdout.trim(),"store_locked");attempts++;};
   const own=f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));erasureScanBoundary.visit=()=>{};
-  assert.equal(attempts,6);const peer=run("complete");assert.equal(peer.status,0,peer.stderr);const receipt=JSON.parse(peer.stdout) as {tombstone:string};assert.equal(receipt.tombstone,own.tombstone);
+  assert.equal(attempts,9);const peer=run("complete");assert.equal(peer.status,0,peer.stderr);const receipt=JSON.parse(peer.stdout) as {tombstone:string};assert.equal(receipt.tombstone,own.tombstone);
   assert.equal(f.repo.operations.read().filter((entry)=>entry.command==="obliterate").length,1);assert.equal(objectFiles.active.size,0);
   t.diagnostic(`${attempts} competing transitions on the same non-git tracker, followed by truthful idempotent peer success`);
 });

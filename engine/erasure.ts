@@ -1,8 +1,9 @@
 import { accountErasureStorage, planErasureStorage, erasurePurge, type ErasurePurgeReceipt, type ErasureAccountabilityReport } from "./erasure-accountability.ts";
 import { prepareDestruction, type DestructionReceipt } from "./destruction.ts";
 import { deflateSync } from "node:zlib";
-import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, erasureScanBoundary, ErasureStorageRefusal, type ErasureFingerprint } from "./erasure-scan.ts";
+import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, inspectErasureRepresentation, erasureScanBoundary, ErasureStorageRefusal, type ErasureFingerprint } from "./erasure-scan.ts";
 import { durability } from "./durability.ts";
+import { VerificationRefusal, assertVerificationBound, verificationLimits } from "./object-error.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Authorized FileId-scoped erasure over accountable loose and packed storage. */
 import { type BigIntStats, existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
@@ -122,6 +123,10 @@ export function eraseFile(repository: Repository, instances: readonly Repository
   const store = repository.objects;
   const control = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
   const execute = (): ErasureReceipt => {
+    const started = performance.now();
+    /** Time exhaustion is a refusal before mutation and again before final certification. */
+    const check = (): void => assertVerificationBound("erasure", "time_ms", performance.now() - started, verificationLimits.erasureMs);
+    check();
     assertErasureOptions(options);
     if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new ObjectStoreError("bad_tombstone", "Erasure requires a valid audit timestamp.");
     const principal = authorize(control, "erase", credential);
@@ -157,7 +162,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       else inventory.set(id, { type: object.type, digest });
     }
     const history = inspectClosure(store, [...inventory].filter(/** Every unreachable commit still requires a real structural closure. */ ([_id, object]) => object.type === "commit").map(/** Inspect all commit roots, not merely advertised refs. */ ([id]) => id), [], local.map(/** Pending payload absence is legitimate during an authorized cleanup retry. */ (denial) => ({ ...denial, pending: false })));
-    if (history.missing.length + history.corrupt.length > 0) throw new ObjectStoreError("incomplete_erasure_inventory", "Complete historical structure is required before erasure.");
+    if (history.verification.status === "unverified" || history.missing.length + history.corrupt.length > 0) throw new ObjectStoreError("incomplete_erasure_inventory", "Complete historical structure is required before erasure.");
     const entries: { id: string; fileId?: string; conflicts?: readonly string[] }[] = [];
     for (const object of inventory.values()) {
       if (object.type === "tree") entries.push(...object.entries.filter(/** Directory identities belong to structure, never file payload. */ (entry) => entry.mode !== "40000"));
@@ -188,10 +193,12 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         throw new ObjectStoreError("erasure_dedup_conflict", "An unrelated manifest or conflict references payloads selected for erasure.");
       }
     }
+    const authorization = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true, true);
+    if (purgeFiles.length > 0 && !authorization.canPurge) throw new ErasureStorageRefusal("unverifiable", purgeFiles[0].fileClass);
     const proofsPath = join(control, "erasure-verification.json");
-    let proofs: Record<string, ErasureFingerprint[]> = {}; let proofWritable = true; let diagnostic: string | undefined;
+    let proofs: Record<string, ErasureFingerprint[]> = {};
     try { proofs = readFingerprints(readControlJson(proofsPath, "unsupported_erasure_storage", "erasure verification", fingerprintJournal({}))); }
-    catch { proofWritable = false; diagnostic = "fingerprint metadata unavailable; native accountability remains required"; }
+    catch { throw new VerificationRefusal("erasure", "decode_error", "Restore the original valid fingerprint evidence; foreign verification metadata was preserved."); }
     const payloads: ErasureFingerprint[] = [...(existing === undefined ? [] : proofs[existing.id] ?? [])];
     const loaded = new Set<ObjectId>();
     for (const [id, path] of locations) {
@@ -209,15 +216,20 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     }
     const deleting = new Set([...locations].filter(([id]) => selected.has(id)).map(([_id, path]) => path));
     for (const file of purgeFiles) deleting.add(file.path);
-    /** Positive byte diagnostics remain conservative; a negative scan never certifies storage. */
+    /** Both native accountability and complete byte inspection are required for a certificate. */
     const diagnose = (excluded: ReadonlySet<string>): void => {
-      if (payloads.length === 0) { diagnostic = "no fingerprint diagnostics available"; return; }
-      for (const root of objectRoots.filter((path) => existsSync(path))) {
-        try { scanErasureStorage(root, payloads, excluded); }
-        catch (error) {
-          if (error instanceof ObjectStoreError && error.code === "erasure_retained_copy") throw error;
-          diagnostic = "byte diagnostics incomplete; native accountability remains required";
+      if (payloads.length === 0) throw new VerificationRefusal("erasure", "missing_evidence", "Restore the original physical inspection evidence before certification.");
+      try {
+        // Parse the known native encoding once; compressed byte noise is not a nested representation.
+        // Every surviving pack member participates, even when its pack also holds selected bytes.
+        for (const { id, object } of store.walkErasureInventory("all", new Set(purgeFiles.map(file => file.path)))) {
+          if (!selected.has(id)) inspectErasureRepresentation(frameObject(object.type, object.payload), payloads);
         }
+        for (const root of objectRoots.filter((path) => existsSync(path))) scanErasureStorage(root, payloads, excluded, false);
+      } catch (error) {
+        if (error instanceof ObjectStoreError && error.code === "erasure_retained_copy") throw error;
+        if (error instanceof VerificationRefusal) throw error;
+        throw new VerificationRefusal("erasure", "decode_error", "Byte inspection did not complete; native accountability cannot replace that proof.");
       }
     };
     diagnose(deleting);
@@ -299,13 +311,14 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       // Only this frozen set can be purged, even if a new foreign file arrives during execution.
       const signatures = [...new Map(payloads.map(item => [`${item.length}:${item.rolling}:${item.digest}`, item])).values()];
       const updatedProofs = { ...proofs, [id]: signatures };
-      if (proofWritable) assertAuditSafe([Buffer.from(JSON.stringify(fingerprintJournal(updatedProofs)))], payloads);
+      assertAuditSafe([Buffer.from(JSON.stringify(fingerprintJournal(updatedProofs)))], payloads);
       const probe = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true, true);
       if (purgeFiles.length > 0 && !probe.canPurge) throw new ErasureStorageRefusal("unverifiable", purgeFiles[0].fileClass);
       if (validateOnly) {
         if (containsPidBytes(Buffer.from(String(process.pid)), payloads)) throw new ObjectStoreError("erasure_audit_conflict", "Proposed recovery lease metadata retains selected bytes; no existing lease was retired.");
         throw new ErasureValidated();
       }
+      check();
       const purge = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true);
       if (purgeFiles.length > 0 && !purge.canPurge) throw new ErasureStorageRefusal("unverifiable", purgeFiles[0].fileClass);
       const planned = new Map(purgeFiles.map(file => [file.path, file]));
@@ -320,9 +333,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       });
       const worktreePlans = [...removals].map(([instance, paths]) => mutations.get(instance)!.planErasure(fileId, paths, existing?.pending === true));
       if (options.purgeUnaccounted === true) purge.begin(purgeFiles); else purge.plan(purgeFiles, true);
-      if (proofWritable) {
-        if (JSON.stringify(proofs) !== JSON.stringify(updatedProofs)) writePrivateJson(proofsPath, fingerprintJournal(updatedProofs));
-      }
+      if (JSON.stringify(proofs) !== JSON.stringify(updatedProofs)) writePrivateJson(proofsPath, fingerprintJournal(updatedProofs));
       erasureScanBoundary.visit("proof-persisted");
       // Preflight every proposed representation before the first audit-object or denial write.
       // recordDenials publishes verified audit objects even while another authorized cleanup is pending.
@@ -332,7 +343,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       store.unpack();
       physical.clear();
       for (const { id: objectId, path } of store.walkErasureInventory()) physical.set(path, objectId);
-      const deletion = prepareDestruction(control, `obliterate-objects:${fileId}`, [...physical].filter(([_path, objectId]) => selected.has(objectId)).map(([path]) => ({ path })), existing?.pending === true);
+      const deletion = prepareDestruction(control, `obliterate-objects:${fileId}`, [...physical].filter(([_path, objectId]) => selected.has(objectId)).map(([path]) => ({ path })), existing?.pending === true, undefined, false, "eligibility_changed");
       const directories = new Set<string>();
       const worktreeReceipts: DestructionReceipt[] = [];
       for (const plan of worktreePlans) { for (const path of plan.paths) { plan.remove(path); directories.add(dirname(path)); } worktreeReceipts.push(plan.finish()); }
@@ -347,9 +358,11 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       erasureScanBoundary.visit("receipt");
       for (const instance of instances) assertSupportedControl(instance.controlDirectory);
       assertSupportedControl(control);
+      check(); diagnose(new Set());
       const certified = { purgeReceipt: purge.receipt(), storage: accountStorage(true) };
+      check();
       const { purgeReceipt } = certified;
-      const storage = { ...certified.storage, ...(diagnostic === undefined ? {} : { diagnostic }) };
+      const storage = certified.storage;
       // No observer callback follows the final namespace barrier before completion publication.
       store.recordDenials(completed);
       if (!repository.operations.read().some((entry) => entry.command === "obliterate" && entry.summary === summary)) {

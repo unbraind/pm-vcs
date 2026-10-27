@@ -242,13 +242,29 @@ and the complete scope have eight attempts; continued mutation returns
 This pathname check belongs to certification: ordinary pinned object readers keep
 using their descriptor when compaction retires its pathname, as described above.
 
-Byte/fingerprint scans remain extra positive-copy diagnostics. Their checksummed
-private journal stores only lengths and digests, never selected bytes. A positive
-hit can refuse cleanup; a negative, unavailable or resource-limited diagnostic
-cannot certify absence. Missing or foreign diagnostic metadata is preserved and
-reported, while complete native accountability remains mandatory. Optional
-transport of these diagnostics is tracked separately; tombstone IDs and payload
-digests continue to deny reads and arrivals independently.
+Native accountability is required and byte/fingerprint inspection supplies an additional
+conservative check of supported representations. Neither check substitutes for an
+incomplete other check. The private checksummed journal stores only lengths and
+digests. A positive hit refuses cleanup. Missing or corrupt evidence, a decode
+error, or reaching a depth, stream, context, byte or time bound returns typed
+`unverified` with the exact bound; it never returns `accountable: true`.
+Every surviving native member is inspected separately, including members sharing
+a pack with the selected object. Complete canonical native framing alone cannot
+certify a blob that conceals selected bytes under additional encodings.
+Base64 quartets stream through a bounded buffer so large supported words do not
+require a buffer proportional to their length. Optional evidence transport is
+tracked separately; restore the original inspection journal before requesting a
+new physical certificate after a transfer that omitted it.
+
+Integrity reports separate `checked` objects from the overall `verification`
+result; `verified` is zero when the proof is incomplete. Reachability exhaustion
+refuses GC before a deletion plan is published. Receipt inspection reports
+`verification.status: unverified` when a work bound or recognized-record decode
+fails, even beyond the rendered page. Core assurance history that reaches the
+SDK's 1000-verdict query cap is incomplete evidence and cannot attach a checkpoint.
+JSON and TOON carry the same negative verdict and named bound. Output pagination
+never limits which records contribute to the overall verdict.
+
 
 Regression evidence includes 160 seeded store states across ten native/foreign/
 copied/renamed/truncated/overwritten forms, 190 exhaustive truncation/overwrite

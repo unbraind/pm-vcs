@@ -133,3 +133,15 @@ seeded valid/invalid request sets, actual SIGKILL at owner/intent/progress/recei
 boundaries, competing native drainers, foreign records, replaced parents and
 leaves, and injected I/O failures. A static AST audit rejects direct namespace
 or durability calls outside the one helper.
+
+A caller that has revalidated every current precondition may supersede an obsolete
+pending plan. GC uses `reachability_changed`; compaction, unpacking, erasure,
+worktree pruning, ref retirement and bisect reset use `eligibility_changed`.
+The old exact set is durably marked `superseded` and remaining authority is
+cancelled with `preconditions_changed` before its receipt is archived or a fresh
+revision-bound set is published. A crash at either publication boundary resumes
+this handoff. An obsolete handle cannot delete through the replacement plan.
+Owned lease and temporary cleanup keeps its original identity authority and
+cannot opt into this domain revalidation. Extra arrivals alone never expand a
+pending set. A new ref protecting an interrupted GC candidate therefore preserves
+that object while the freshly validated collectible set can still be retired.

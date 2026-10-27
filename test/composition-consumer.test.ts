@@ -36,6 +36,8 @@ import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom, fetchFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
 import { hashObject } from "pm-vcs/dist/engine/objects.js";
+import { collectGarbage } from "pm-vcs/dist/engine/gc.js";
+import { destructionBoundary, inspectDestructions } from "pm-vcs/dist/engine/destruction.js";
 import { exportBundle, importBundleObjects, serializeBundle } from "pm-vcs/dist/engine/bundle.js";
 const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
 assert.equal(installedSdk.version, ${JSON.stringify(pinnedSdk)});
@@ -87,6 +89,30 @@ writeFileSync(join(target.root, "asset.bin"), Buffer.from([0, 255, 128, 19, 47])
 const pin = target.commit({ message: "pin", author }, new Date());
 const link = { version: 1, repository: target.identity(), revision: pin, mappings: [{ source: "asset.bin", destination: "vendor/asset.bin" }] };
 const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+// Identical built/packed Node/Bun consumers must fail closed on supported decode limits.
+const proofRoot=join(process.cwd(),process.argv[2]+"-verification");mkdirSync(proofRoot);
+await new PmClient({cwd:proofRoot,pmRoot:join(proofRoot,".agents/pm"),noExtensions:true}).init("proof",{defaults:true,author:"fixture"});
+const proofRepo=Repository.init(proofRoot);proofRepo.setAuthority("fixture","proof-read","proof-erase");
+const selectedProof=Buffer.from("native proof selected marker 938215");writeFileSync(join(proofRoot,"asset"),selectedProof);proofRepo.stage(["asset"]);
+let nestedProof=selectedProof;for(let layer=0;layer<8;layer++)nestedProof=Buffer.from(nestedProof.toString("base64"));
+proofRepo.objects.write("blob",nestedProof);const proofToken=join(process.cwd(),process.argv[2]+".proof-token");writeFileSync(proofToken,"proof-erase");
+for(const packed of [false,true]){
+ if(packed)proofRepo.objects.compact();
+ assert.throws(()=>proofRepo.obliterate("asset","proof-erase","incident",new Date()),error=>error.status==="unverified"&&typeof error.bound==="string");
+ const refused=await harness.runCommand({command:"vcs obliterate",args:["asset"],pmRoot:proofRoot,options:{eraseTokenFile:proofToken,reason:"incident"}});assert.match(String(refused.errorMessage),/unverified/);assert.equal(refused.handled,false);assert.equal(proofRepo.objects.denials().length,0);
+}
+const liveProof=proofRepo.objects.write("blob",Buffer.from("newly protected proof object"));const deadProof=proofRepo.objects.write("blob",Buffer.from("collectible proof object"));
+let interrupted=false;destructionBoundary.visit=(step,path)=>{if(!interrupted&&step==="intent-persisted"&&path.startsWith(join(proofRepo.controlDirectory,"destruction"))&&JSON.parse(readFileSync(path,"utf8")).entries.some(entry=>entry.path.endsWith(liveProof.slice(2)))){interrupted=true;throw new Error("interrupt proof GC");}};
+assert.throws(()=>collectGarbage(proofRepo,true),/interrupt proof GC/);destructionBoundary.visit=()=>{};
+proofRepo.refs.compareAndSwap("refs/metadata/protected",null,liveProof);assert.equal(collectGarbage(proofRepo,true).applied,true);assert.equal(proofRepo.objects.has(liveProof),true);assert.equal(proofRepo.objects.has(deadProof),false);assert.ok(inspectDestructions(proofRepo.controlDirectory).superseded>0);
+if(process.argv[2]==="node-project-cli"){
+ proofRepo.objects.write("blob",nestedProof);proofRepo.objects.compact();
+ const install=spawnSync(process.execPath,[cliExecutable,"package","install",process.argv[3],"--project"],{env:testEnvironment(),cwd:proofRoot,encoding:"utf8"});assert.equal(install.status,0,install.stderr);
+ for(const format of [[],["--json"]]){
+  const refused=spawnSync(process.execPath,[cliExecutable,...format,"vcs","obliterate","asset","--erase-token-file",proofToken,"--reason","incident"],{env:testEnvironment(),cwd:proofRoot,encoding:"utf8"});assert.notEqual(refused.status,0);assert.match(refused.stdout+refused.stderr,/unverified/);assert.doesNotMatch(refused.stdout,/accountable[\\" :]+true/);assert.equal(proofRepo.objects.denials().length,0);
+ }
+}
+
 assert.equal(JSON.parse(readFileSync(join(repo.controlDirectory, "authority.json"), "utf8")).version, 2);
 const newRead = join(process.cwd(), process.argv[2] + ".new-read"); const newErase = join(process.cwd(), process.argv[2] + ".new-erase"); const currentErase = join(process.cwd(), process.argv[2] + ".current-erase");
 writeFileSync(newRead, "consumer-read-next"); writeFileSync(newErase, "consumer-erase-next"); writeFileSync(currentErase, "consumer-erase");

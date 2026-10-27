@@ -1049,3 +1049,11 @@ for authorization, bounded retries and SDK examples.
 Completed purge receipts remain valid audit history after an instance or pack is
 removed. Pending root-bound authority is cancelled with a typed reason when its
 root disappears or is recreated; a clean current store can then be certified.
+
+Verification refuses incomplete evidence. SDK errors carry `status: "unverified"`
+and a named `bound`; integrity and receipt reports carry an overall `verification`
+verdict independently of output pagination. Decode errors and exhausted work
+bounds cannot certify erasure, integrity, reachability or assurance receipts.
+An interrupted GC plan supersedes its former deletion authority when current
+reachability protects a recorded candidate, then publishes a fresh exact set.
+See the [destructive operation protocol](docs/destructive-operations.md).

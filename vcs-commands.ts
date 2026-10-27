@@ -1310,8 +1310,8 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const result = repository.verify();
       const failures = [...result.missing, ...result.corrupt];
-      if (failures.length > 0) {
-        throw new VcsError("corrupt_objects", `${failures.length} reachable objects did not verify: ${failures.join("; ")}.`,
+      if (result.verification.status === "unverified" || failures.length > 0) {
+        throw new VcsError("corrupt_objects", `unverified: integrity/${result.verification.bound ?? "decode_error"}; ${failures.length} reachable objects did not verify: ${failures.join("; ")}.`,
           "Repair missing or corrupt history from a trusted peer; incomplete erasure requires authorized cleanup.");
       }
       if (context.options?.signatures === true) {

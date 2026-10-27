@@ -228,7 +228,7 @@ export async function withBisectLease<T>(repository: Repository, action: () => P
 /** Removes the session state, concluding or abandoning the walk. */
 export function clearBisectSession(repository: Repository): void {
   recoverBisectWorker(repository);
-  const plan = prepareNamespaceDestruction(statePath(repository), "bisect-reset", [{ path: statePath(repository) }, { path: join(repository.controlDirectory, "BISECT_WORKSPACE"), recursive: true }]);
+  const plan = prepareNamespaceDestruction(statePath(repository), "bisect-reset", [{ path: statePath(repository) }, { path: join(repository.controlDirectory, "BISECT_WORKSPACE"), recursive: true }], false, "eligibility_changed");
   for (const path of plan.paths) plan.remove(path);
   plan.finish();
 }
