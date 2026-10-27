@@ -140,6 +140,13 @@ test("missing, corrupt or bounded fingerprint evidence never issues an erasure c
  place(f.repo.objects.storageRoot(),"cache",Buffer.from("unrelated foreign bytes"));assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),{code:"unverifiable"});
 });
 
+test("immutable erasure audits exist before purge intent without activating an early denial",async()=>{
+ const f=await fixture();const foreign=place(f.repo.objects.storageRoot(),"unaccounted-purge",Buffer.from("foreign bytes to purge"));const interruption=new Error("purge intent interruption");let observed=false;
+ accountabilityBoundary.visit=step=>{if(step!=="purge-set-persisted")return;observed=true;assert.equal([...f.repo.objects.walkErasureInventory("all",new Set([foreign]))].filter(entry=>entry.object.type==="tombstone").length,1);assert.deepEqual(f.repo.objects.denials(),[]);throw interruption;};
+ assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true}),error=>error===interruption);accountabilityBoundary.visit=()=>{};assert.equal(observed,true);assert.ok(existsSync(foreign));assert.deepEqual(f.repo.objects.read(f.entry.id).payload,f.bytes);
+ const result=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true});assert.equal(result.storage.accountable,true);assert.equal(result.purge.deleted,1);assert.equal(result.purge.files.length,1);
+});
+
 test("SIGKILL at EVERY purge journal and unlink boundary converges with one bounded receipt",async(t)=>{
  /** Every case uses an independently initialized SDK tracker and the actual SDK/engine command path. */
  const fresh=async()=>{const f=await fixture();place(f.repo.objects.storageRoot(),"unaccounted-purge",Buffer.from("foreign bytes to purge"));return f;};

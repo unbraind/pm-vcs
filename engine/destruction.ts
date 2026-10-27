@@ -326,7 +326,6 @@ function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot
     const entries = snapshot(root, requests);
     const absentPublication = requests.find(request => request.destination !== undefined && !hasLeaf(canonical(request.path)));
     if (absentPublication !== undefined && (current === undefined || !current.entries.some(entry => entry.kind === "rename" && resolve(root, entry.path) === canonical(absentPublication.path) && resolve(root, entry.destination!) === canonical(absentPublication.destination!)))) throw new DestructionRefusal("destructive_target_changed", "A missing publication source has no matching current receipt; inspect its historical outcome.");
-    if (beforeSnapshot !== undefined && entries.length === 0 && current === undefined) throw new DestructionRefusal("destructive_target_changed", "An unplanned publication source disappeared during recovery.");
     if (current !== undefined && current.status !== "superseded" && (current.status === "pending" || resumeCompleted)) {
       const requested = new Set(entries.map(entry => `${entry.path}:${entry.kind}:${entry.destination ?? ""}`));
       if (supersedeChanged !== undefined && current.status === "pending") {

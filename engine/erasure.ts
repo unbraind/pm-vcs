@@ -319,6 +319,9 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         throw new ErasureValidated();
       }
       check();
+      // Prepare immutable audit objects before opening the destructive purge phase.
+      // Recovery must not discover an unplanned object temporary created after its purge set was frozen.
+      store.prepareDenialObjects(next);
       const purge = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true);
       if (purgeFiles.length > 0 && !purge.canPurge) throw new ErasureStorageRefusal("unverifiable", purgeFiles[0].fileClass);
       const planned = new Map(purgeFiles.map(file => [file.path, file]));
@@ -337,8 +340,6 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       if (options.purgeUnaccounted === true) purge.begin(purgeFiles); else purge.plan(purgeFiles, true);
       if (JSON.stringify(proofs) !== JSON.stringify(updatedProofs)) writePrivateJson(proofsPath, fingerprintJournal(updatedProofs));
       erasureScanBoundary.visit("proof-persisted");
-      // Preflight every proposed representation before the first audit-object or denial write.
-      // recordDenials publishes verified audit objects even while another authorized cleanup is pending.
       store.recordDenials(next);
       erasureScanBoundary.visit("pending");
       accountStorage();

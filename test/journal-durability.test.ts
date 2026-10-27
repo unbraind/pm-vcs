@@ -11,7 +11,7 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { ObjectStore, hashObject } from "../engine/objects.ts";
 import { writePrivateJson } from "../engine/composition.ts";
-import { destructionBoundary, DestructionRefusal, inspectDestructions, prepareDestruction } from "../engine/destruction.ts";
+import { destructionBoundary, DestructionRefusal, inspectDestructions, prepareDestruction, retireNamespace } from "../engine/destruction.ts";
 import { objectFiles } from "../engine/object-files.ts";
 import { durability, durabilityCapabilities } from "../engine/durability.ts";
 import { collectGarbage } from "../engine/gc.ts";
@@ -315,4 +315,35 @@ test("directory recovery interleaves a competing drainer at every protocol bound
   assert.equal(durability.resumeDirectory(path),true);destructionBoundary.visit=()=>{};if(at!==undefined)assert.ok(injected);assert.equal(durability.resumeDirectory(path),true);assert.equal(existsSync(path),false);assert.equal((JSON.parse(readFileSync(record,"utf8")) as {status:string}).status,"completed");assert.equal(objectFiles.active.size,0);return steps;
  };
  const steps=run("probe");let count=0;for(const step of steps)run(`drainer-${count++}`,step);t.diagnostic(`${count} directory recovery peer schedules preserve original receipt completion and idempotent peer success`);
+});
+
+
+/** Leave the original publication source and durable exact-set receipt for recovery fault injection. */
+function pendingPublication(repo:Repository):{source:string;target:string;record:string}{
+ const source=join(repo.controlDirectory,"older.tmp");const target=join(repo.controlDirectory,"next.json");writeFileSync(source,"original source");writeFileSync(target,"original destination");destructionBoundary.visit=step=>{if(step==="intent-persisted")throw new Error("publication intent interruption");};try{assert.throws(()=>durability.rename(source,target));}finally{destructionBoundary.visit=()=>{};}
+ const directory=join(ledger(repo.controlDirectory),"destruction");const record=readdirSync(directory).filter(name=>name.endsWith(".json")).map(name=>join(directory,name)).find(path=>{const row=JSON.parse(readFileSync(path,"utf8")) as {entries:{destination?:string}[]};return row.entries.some(entry=>entry.destination?.endsWith("next.json"));})!;return{source,target,record};
+}
+
+test("publication recovery refuses vanished sources, missing authority and native failures before replacing data",async()=>{
+ const root=await fixture();for(const mode of ["missing-source","missing-intent","native-error","root-retired"]){const repo=Repository.init(join(root,mode));const f=pendingPublication(repo);
+  if(mode==="root-retired"){const row=JSON.parse(readFileSync(f.record,"utf8")) as {rootIdentity:string};row.rootIdentity="0:0:0";writeFileSync(f.record,JSON.stringify(row));writePrivateJson(f.target,{value:2});assert.deepEqual(JSON.parse(readFileSync(f.target,"utf8")),{value:2});assert.ok(existsSync(f.source));continue;}
+  if(mode==="native-error"){const rename=fs.renameSync;mock.method(fs,"renameSync",(...args:Parameters<typeof fs.renameSync>)=>{if(args[0]===f.source)throw Object.assign(new Error("original rename I/O failure"),{code:"EIO"});return rename(...args);});syncBuiltinESMExports();}
+  else{let injected=false;destructionBoundary.visit=step=>{if(step==="owner-opened"&&!injected){injected=true;destructionBoundary.visit=()=>{};if(mode==="missing-intent")rmSync(f.record);else{const temporary=readdirSync(repo.controlDirectory).find(name=>/^next\.json\.[0-9a-f]{12}\.tmp$/.test(name))!;rmSync(join(repo.controlDirectory,temporary));}}};}
+  assert.throws(()=>writePrivateJson(f.target,{value:2}));destructionBoundary.visit=()=>{};mock.restoreAll();syncBuiltinESMExports();assert.equal(readFileSync(f.target,"utf8"),"original destination");assert.equal(readFileSync(f.source,"utf8"),"original source");
+ }
+ for(const afterScan of [false,true]){const repo=Repository.init(join(root,String(afterScan)));const source=join(repo.controlDirectory,"incoming.tmp");const target=join(repo.controlDirectory,"target");writeFileSync(source,"incoming");writeFileSync(target,"tripwire");let injected=false;
+  if(afterScan){const scan=fs.readdirSync;mock.method(fs,"readdirSync",(...args:Parameters<typeof fs.readdirSync>)=>{const result=scan(...args);if(args[0]===join(ledger(repo.controlDirectory),"destruction")&&!injected){injected=true;rmSync(source);}return result;});syncBuiltinESMExports();}
+  else destructionBoundary.visit=step=>{if(step==="owner-opened"&&!injected){injected=true;destructionBoundary.visit=()=>{};rmSync(source);}};
+  assert.throws(()=>retireNamespace({path:source,destination:target}),{code:"destructive_target_changed"});destructionBoundary.visit=()=>{};mock.restoreAll();syncBuiltinESMExports();assert.ok(injected);assert.equal(readFileSync(target,"utf8"),"tripwire");
+ }
+});
+
+test("same-source legacy receipts and foreign names preserve compatible publication recovery",async()=>{
+ const root=await fixture();for(const mode of ["plain","stamped","foreign"]){const repo=Repository.init(join(root,mode));const f=pendingPublication(repo);const row=JSON.parse(readFileSync(f.record,"utf8")) as {root:string;entries:{identity:string}[]};const key=`rename:${f.source}:${f.target}${mode==="stamped"?":"+row.entries[0].identity:""}`;const legacy=join(ledger(repo.controlDirectory),"destruction",(mode==="foreign"?"f".repeat(64):createHash("sha256").update(`${row.root}\0${key}`).digest("hex"))+".json");fs.renameSync(f.record,legacy);
+  if(mode==="foreign"){const bytes=readFileSync(legacy,"utf8");writePrivateJson(f.target,{value:2});assert.equal(readFileSync(legacy,"utf8"),bytes);assert.equal(readFileSync(f.source,"utf8"),"original source");}
+  else{durability.rename(f.source,f.target);assert.equal((JSON.parse(readFileSync(legacy,"utf8")) as {status:string}).status,"completed");assert.equal(readFileSync(f.target,"utf8"),"original source");}
+ }
+ const repo=Repository.init(join(root,"missing"));const f=pendingPublication(repo);assert.throws(()=>retireNamespace({path:join(repo.controlDirectory,"missing-source"),destination:f.target}),{code:"destructive_target_changed"});
+ const source=join(repo.controlDirectory,"fresh-source");writeFileSync(source,"owned");const original=prepareDestruction(repo.controlDirectory,"missing-native",[{path:source,destination:f.target}]);assert.throws(()=>prepareDestruction(repo.controlDirectory,"missing-native",[{path:join(repo.controlDirectory,"absent"),destination:f.target}]),{code:"destructive_target_changed"});for(const path of original.paths)original.remove(path);original.finish();
+ const dir=join(repo.controlDirectory,"directory");pendingDirectory(repo,dir);const bound=verificationLimits.receiptBytes;verificationLimits.receiptBytes=0;try{assert.throws(()=>durability.resumeDirectory(dir),error=>error instanceof VerificationRefusal&&error.bound==="record_bytes");assert.ok(existsSync(dir));}finally{verificationLimits.receiptBytes=bound;}
 });

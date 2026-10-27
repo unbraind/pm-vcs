@@ -102,7 +102,7 @@ function claimProcessLease(address: string, code: string): ProcessLease {
   const temporary = join(dirname(path), `owner-${createHash("sha256").update(basename(path)).digest("hex").slice(0, 24)}-${process.pid}-${randomBytes(6).toString("hex")}.lock`);
   const file = objectFiles.open(temporary, "wx", 0o600); let original: fs.BigIntStats | undefined; let acquired = false; let transferred = false;
   /** Fail with a stable caller discriminator and an explicit safe recovery instruction. */
-  const refuse = (detail: string): never => { throw new ObjectStoreError(code, `${detail} Wait for live owners; known dead process markers recover on retry. Inspect foreign markers before manual removal.`); };
+  const refuse = (detail: string): never => { throw new ObjectStoreError(code, `${code === "bisect_locked" ? (detail.startsWith("Another") ? "Another bisect command or test worker owns this worktree. " : "Unknown bisect lock owner; inspect its process pid. ") : ""}${detail} Wait for live owners; known dead process markers recover on retry. Inspect foreign markers before manual removal.`); };
   /** Remove only our own marker inode; a peer's replacement is never cleanup authority. */
   const cleanup = (target: string): void => { const current = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false }); if (current !== undefined && processBirth(current) === processBirth(fs.fstatSync(file.fd, { bigint: true }))) durability.unlinkOwner(target, current); };
   try {

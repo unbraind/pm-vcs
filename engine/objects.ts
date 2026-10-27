@@ -738,13 +738,20 @@ export class ObjectStore {
     });
   }
 
+  /** Prepare validated immutable audit objects before freezing any destructive cleanup set. @internal */
+  prepareDenialObjects(denials: readonly ErasureDenial[]): void {
+    this.withWriteLock(/** Audit publication is additive and never activates a pending denial. */ () => {
+      for (const denial of denials) this.writeRaw("tombstone", encodeTombstone(denial.tombstone));
+    });
+  }
+
   /** Persist denial durably before deletion; pending cleanup closes every writer. */
   recordDenials(denials: readonly ErasureDenial[]): void {
     this.withWriteLock(/** The durable denial and canonical audit objects publish under the same store lease. */ () => {
       this.markStorageGeneration();
       writePrivateJson(join(dirname(this.root), "denials.json"), denials);
       this.denialCache = undefined;
-      for (const denial of denials) this.writeRaw("tombstone", encodeTombstone(denial.tombstone));
+      this.prepareDenialObjects(denials);
     });
   }
 

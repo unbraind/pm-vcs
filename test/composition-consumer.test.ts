@@ -40,6 +40,7 @@ import { PackStorage } from "pm-vcs/dist/engine/packs.js";
 import { SharedObjectStore } from "pm-vcs/dist/engine/instances.js";
 import { collectGarbage } from "pm-vcs/dist/engine/gc.js";
 import { destructionBoundary, inspectDestructions } from "pm-vcs/dist/engine/destruction.js";
+import { durability } from "pm-vcs/dist/engine/durability.js";
 import { writePrivateJson } from "pm-vcs/dist/engine/composition.js";
 import { exportBundle, importBundleObjects, serializeBundle } from "pm-vcs/dist/engine/bundle.js";
 const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
@@ -97,6 +98,7 @@ const retryTarget=join(repo.controlDirectory,"retry-publication.json");let retry
 destructionBoundary.visit=(step)=>{if(retryCrash&&step==="deleted"&&existsSync(retryTarget)){retryCrash=false;throw new Error("consumer publication interruption");}};
 assert.throws(()=>writePrivateJson(retryTarget,{value:1}));destructionBoundary.visit=()=>{};
 writePrivateJson(retryTarget,{value:2});assert.deepEqual(JSON.parse(readFileSync(retryTarget,"utf8")),{value:2});assert.equal(inspectDestructions(repo.controlDirectory).pending,0);
+assert.equal(durability.unlink(retryTarget).status,"completed");assert.equal(existsSync(retryTarget),false);
 
 // Physical path owners bind their namespace before any later cwd change.
 const pathRoot=join(process.cwd(),process.argv[2]+"-relative");mkdirSync(pathRoot);

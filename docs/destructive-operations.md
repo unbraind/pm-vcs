@@ -199,3 +199,8 @@ call histories or recomputing future power images. Separate directory,
 publication and legacy publication recovery matrices inject power loss during
 recovery itself. Inode keys include birth identity so native inode reuse cannot
 alias a retired model entry.
+
+Erasure prepares its validated immutable audit objects before freezing purge
+membership. It activates the pending denial only after that intent is durable.
+An interrupted purge therefore cannot introduce a new unaccounted audit-object
+temporary or use a cancelled earlier erasure as authority for another payload.

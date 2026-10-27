@@ -239,7 +239,7 @@ export class RefStore {
       for (const lease of held) lease.verify();
       for (const update of ordered) {
         const current = readTrimmed(this.pathFor(update.name));
-        if (current !== update.expected) throw new ObjectStoreError("ref_changed", `Ref ${update.name} changed. Re-read the ref and retry: another agent advanced it.`);
+        if (current !== update.expected) throw new ObjectStoreError("ref_changed", `Ref ${update.name} holds ${current ?? "nothing"}; expected ${update.expected ?? "nothing"}. Re-read the ref and retry: another agent advanced it.`);
       }
     };
     try {
