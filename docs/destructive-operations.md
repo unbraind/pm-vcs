@@ -183,3 +183,19 @@ The matrix covers ref retirement/replacement, compaction, unpack/repack, loose
 and packed GC, lease cleanup, pruning, operation logs, deep journals, writer
 recovery and authorized obliteration. Each replay checks a retained object,
 a foreign tripwire and the absence of pending receipts.
+
+A staging marker may disappear before its empty directory is retired. Recovery
+uses the existing directory receipt and its original inode lifetime to finish
+that exact deletion. It preserves missing, foreign, replaced and nonempty
+entries, and reports an already completed peer receipt truthfully. Publication
+recovery also checks the receipt's action, sole member and destination inside
+the receipt lease; copying another receipt into that slot cannot certify a write.
+
+The power model records ancestor flushes above its owned store as well as store
+mutations. Its incremental namespace is checked against a complete native scan,
+and cached durable images are checked against the uncached oracle. Crash-free
+convergence replays retain native I/O and identity checks without retaining mock
+call histories or recomputing future power images. Separate directory,
+publication and legacy publication recovery matrices inject power loss during
+recovery itself. Inode keys include birth identity so native inode reuse cannot
+alias a retired model entry.

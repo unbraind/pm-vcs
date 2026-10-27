@@ -1,4 +1,4 @@
-import { configureDestruction, retireNamespace, withDestructionScope, resolveNamespacePath, destructionBoundary, DestructionRefusal, type DestructionReceipt } from "./destruction.ts";
+import { configureDestruction, retireNamespace, withDestructionScope, resolveNamespacePath, resumeNamespaceDirectory, destructionBoundary, DestructionRefusal, type DestructionReceipt } from "./destruction.ts";
 import { ObjectStoreError } from "./object-error.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { objectFiles } from "./object-files.ts";
@@ -67,6 +67,8 @@ export const durability = {
     if (options !== undefined && (options === null || typeof options !== "object" || Array.isArray(options) || Object.keys(options).some(key => !["recursive", "force"].includes(key)) || [options.recursive, options.force].some(value => value !== undefined && typeof value !== "boolean"))) throw new DestructionRefusal("conflicting_destructive_requests", "Deletion accepts only explicit recursive and force booleans.");
     return retireNamespace({ path, recursive: options?.recursive });
   },
+  /** Recover only an existing exact directory retirement; unknown and replaced entries remain foreign. */
+  resumeDirectory: resumeNamespaceDirectory,
   /** Remove only an empty owned directory; ENOTEMPTY remains available to foreign-record preservation. */
   removeDirectory(path: string): DestructionReceipt { return retireNamespace({ path, directory: true }); },
   /** An unpublished process-owner record is bootstrap state: retire only its exclusive descriptor's original inode. */

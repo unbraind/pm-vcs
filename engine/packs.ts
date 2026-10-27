@@ -181,7 +181,7 @@ export class PackStorage {
       if (!entry.isDirectory() || !/^job-[0-9a-f]{24}$/.test(entry.name)) continue;
       const path = join(this.directory, entry.name);
       const marker = join(path, "owner");
-      if (!lstatSync(marker, { throwIfNoEntry: false })?.isFile() || readFileSync(marker, "utf8") !== `pm-vcs-pack-1 ${entry.name}\n`) continue;
+      if (!lstatSync(marker, { throwIfNoEntry: false })?.isFile() || readFileSync(marker, "utf8") !== `pm-vcs-pack-1 ${entry.name}\n`) { if (durability.resumeDirectory(path)) packBoundary.visit("recovered"); continue; }
       this.cleanupJob(path); packBoundary.visit("recovered");
     }
   }
@@ -192,7 +192,7 @@ export class PackStorage {
       this.assertRoot(store);
       if (store.denials().some((denial) => denial.pending)) throw new PackRefusal("pack_erasure_pending", "Authorized erasure is incomplete.", "Resume the authorized obliterate command before compacting.");
       const skipped: { name: string; reason: string }[] = [];
-      const before = this.files(skipped);
+      const before = this.files();
       const duplicates = new Map<string, ObjectId>();
       for (const item of store.walkErasureInventory("pack")) {
         const path = join(store.storageRoot(), item.id.slice(0, 2), item.id.slice(2));
