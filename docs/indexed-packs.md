@@ -249,7 +249,12 @@ digests. A positive hit refuses cleanup. Missing or corrupt evidence, a decode
 error, or reaching a depth, stream, context, byte or time bound returns typed
 `unverified` with the exact bound; it never returns `accountable: true`.
 Every surviving native member is inspected separately, including members sharing
-a pack with the selected object. Complete canonical native framing alone cannot
+a pack with the selected object. Final native parsing feeds the representation
+inspector from bounded slots while holding the same file descriptor used by raw
+inspection and the final pathname identity barrier. Directory catalogues are
+checked together before certification. A late copy therefore cannot fall between
+separate native and byte-proof snapshots. Preflight purge exclusions expire;
+anything recreated at a retired pathname is a current file and is inspected again. Complete canonical native framing alone cannot
 certify a blob that conceals selected bytes under additional encodings.
 Base64 quartets stream through a bounded buffer so large supported words do not
 require a buffer proportional to their length. Optional evidence transport is

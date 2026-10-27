@@ -9,7 +9,7 @@ permissions: {}
 
 jobs:
   enable-auto-merge:
-    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository_owner == 'unbraind'
+    if: github.repository == 'unbraind/pm-vcs' && github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     # `gh pr merge --auto` needs pull-requests: write to enable auto-merge
     # and contents: write for the squash merge GitHub performs once the

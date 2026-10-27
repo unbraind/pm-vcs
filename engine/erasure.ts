@@ -1,7 +1,7 @@
 import { accountErasureStorage, planErasureStorage, erasurePurge, type ErasurePurgeReceipt, type ErasureAccountabilityReport } from "./erasure-accountability.ts";
 import { prepareDestruction, type DestructionReceipt } from "./destruction.ts";
 import { deflateSync } from "node:zlib";
-import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, inspectErasureRepresentation, erasureScanBoundary, ErasureStorageRefusal, type ErasureFingerprint } from "./erasure-scan.ts";
+import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, inspectErasureRepresentation, createErasureInspection, inspectErasureFile, erasureScanBoundary, ErasureStorageRefusal, type ErasureFingerprint } from "./erasure-scan.ts";
 import { durability } from "./durability.ts";
 import { VerificationRefusal, assertVerificationBound, verificationLimits } from "./object-error.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
@@ -217,12 +217,12 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     const deleting = new Set([...locations].filter(([id]) => selected.has(id)).map(([_id, path]) => path));
     for (const file of purgeFiles) deleting.add(file.path);
     /** Both native accountability and complete byte inspection are required for a certificate. */
-    const diagnose = (excluded: ReadonlySet<string>): void => {
+    const diagnose = (excluded: ReadonlySet<string>, decoded = true): void => {
       if (payloads.length === 0) throw new VerificationRefusal("erasure", "missing_evidence", "Restore the original physical inspection evidence before certification.");
       try {
         // Parse the known native encoding once; compressed byte noise is not a nested representation.
         // Every surviving pack member participates, even when its pack also holds selected bytes.
-        for (const { id, object } of store.walkErasureInventory("all", new Set(purgeFiles.map(file => file.path)))) {
+        if (decoded) for (const { id, object } of store.walkErasureInventory("all", new Set(purgeFiles.filter(file => excluded.has(file.path)).map(file => file.path)))) {
           if (!selected.has(id)) inspectErasureRepresentation(frameObject(object.type, object.payload), payloads);
         }
         for (const root of objectRoots.filter((path) => existsSync(path))) scanErasureStorage(root, payloads, excluded, false);
@@ -322,9 +322,11 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const purge = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true);
       if (purgeFiles.length > 0 && !purge.canPurge) throw new ErasureStorageRefusal("unverifiable", purgeFiles[0].fileClass);
       const planned = new Map(purgeFiles.map(file => [file.path, file]));
-      const accountStorage = (strict = false): ErasureAccountabilityReport => accountErasureStorage(objectRoots, {
+      const accountStorage = (strict = false, representations = false): ErasureAccountabilityReport => accountErasureStorage(objectRoots, {
         forbiddenIds: strict ? new Set([...selected, ...store.denials().flatMap(entry => entry.tombstone.objects)]) : new Set(),
         forbiddenPayloads: strict ? new Set([...store.denials().flatMap(entry => entry.tombstone.payloads), ...[...selected].flatMap(id => inventory.has(id) ? [inventory.get(id)!.digest] : [])]) : new Set(),
+        inspection: representations ? (_id, frameBytes, kind) => createErasureInspection(payloads, frameBytes, kind) : undefined,
+        physical: representations ? (fd, bytes, kind, budget) => inspectErasureFile(fd, bytes, payloads, kind, budget) : undefined,
         purge: purge.canPurge ? (file, remove) => {
           const expected = planned.get(file.path);
           if (expected === undefined || expected.identity !== file.identity || expected.sha256 !== file.sha256) throw new ErasureStorageRefusal("unverifiable", file.fileClass);
@@ -358,8 +360,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       erasureScanBoundary.visit("receipt");
       for (const instance of instances) assertSupportedControl(instance.controlDirectory);
       assertSupportedControl(control);
-      check(); diagnose(new Set());
-      const certified = { purgeReceipt: purge.receipt(), storage: accountStorage(true) };
+      check(); diagnose(new Set(), false);
+      const certified = { purgeReceipt: purge.receipt(), storage: accountStorage(true, true) };
       check();
       const { purgeReceipt } = certified;
       const storage = certified.storage;

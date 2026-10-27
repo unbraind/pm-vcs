@@ -242,11 +242,11 @@ export class WorktreeMutation {
     this.unlink(parent, expected, true);
   }
 
-  /** Freeze all FileId-owned leaves under captured parents before removing the first working-tree member. */
+  /** Freeze FileId-owned leaves; retries preserve original inode authority and never adopt a replacement. */
   planErasure(fileId: string, paths: ReadonlyMap<string, BigIntStats>, resume = false): DestructionPlan {
     const requests = [...paths].map(([path, expected]) => { const parent = this.parent(path, false); if (parent === undefined) this.changed(); this.verifyLeaf(parent, expected, true); return { path: join(this.root, ...path.split("/")), address: parent.address, expected }; });
     let plan: DestructionPlan;
-    try { plan = prepareNamespaceDestruction(join(this.root, ".erasure-anchor"), `obliterate-worktree:${fileId}`, requests, resume, "eligibility_changed"); } catch { this.changed(); }
+    try { plan = prepareNamespaceDestruction(join(this.root, ".erasure-anchor"), `obliterate-worktree:${fileId}`, requests, resume); } catch { this.changed(); }
     return { ...plan, remove: (absolute) => {
       try { plan.remove(absolute); } catch { this.changed(); }
     }, finish: () => { try { return plan.finish(); } catch { this.changed(); } } };

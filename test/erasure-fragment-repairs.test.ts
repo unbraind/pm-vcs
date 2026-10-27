@@ -266,3 +266,32 @@ test("erasure refuses an actual control-root link and disappearing owned or unow
     else { assert.equal(existsSync(join(repo.root, "secret")), false); writeFileSync(join(repo.root, "secret"), selected); }
   }
 });
+
+
+test("worktree erasure recovery never adopts a foreign leaf across pending and completed receipt lifetimes", async t => {
+  let cells = 0;
+  for (const link of [false, true]) for (const checkpoint of ["pending", "completed"] as const) {
+    const { repo, scratch } = await fixture(); const leaf = join(repo.root, "owned"); const target = join(scratch, "tripwire");
+    writeFileSync(leaf, "original inode"); writeFileSync(target, "foreign sentinel");
+    const first = new WorktreeMutation(repo.root, ".pmvcs");
+    try {
+      const plan = first.planErasure("a".repeat(32), new Map([["owned", lstatSync(leaf, { bigint: true })]]));
+      renameSync(leaf, join(scratch, "retired-original"));
+      if (link) symlinkSync(target, leaf); else writeFileSync(leaf, "foreign sentinel");
+      if (checkpoint === "completed") { plan.remove(leaf); assert.throws(() => plan.finish(), { code: "worktree_path_changed" }); }
+    } finally { first.close(); }
+    for (let retry = 0; retry < 3; retry++) {
+      const next = new WorktreeMutation(repo.root, ".pmvcs");
+      try {
+        assert.throws(() => { const plan = next.planErasure("a".repeat(32), new Map([["owned", lstatSync(leaf, { bigint: true })]]), true); plan.remove(leaf); plan.finish(); }, { code: "worktree_path_changed" });
+      } finally { next.close(); }
+      assert.equal(readFileSync(leaf, "utf8"), "foreign sentinel"); assert.equal(readFileSync(target, "utf8"), "foreign sentinel");
+      if (link) assert.equal(readlinkSync(leaf), target);
+    }
+    rmSync(leaf); const final = new WorktreeMutation(repo.root, ".pmvcs");
+    try { const plan = final.planErasure("a".repeat(32), new Map(), true); for (const path of plan.paths) plan.remove(path); assert.equal(plan.finish().status, "completed"); }
+    finally { final.close(); }
+    assert.equal(readFileSync(target, "utf8"), "foreign sentinel"); cells++;
+  }
+  assert.equal(cells, 4); t.diagnostic("4 representation/receipt-lifetime cells, 12 repeated refusals, then convergence after foreign retirement");
+});

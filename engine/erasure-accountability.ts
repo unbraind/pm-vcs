@@ -5,11 +5,11 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { writePrivateJson } from "./composition.ts";
 import { ZStream, zlibInflateInit2, zlibInflate, zlibInflateEnd, Z_NO_FLUSH, Z_STREAM_END, Z_OK, Z_BUF_ERROR } from "pako";
 import { objectFiles } from "./object-files.ts";
-import { assertVerificationBound, verificationLimits, VerificationRefusal } from "./object-error.ts";
+import { ObjectStoreError, assertVerificationBound, verificationLimits, VerificationRefusal } from "./object-error.ts";
 import { durability } from "./durability.ts";
 import { OBJECT_TYPES, readControlJson, type ObjectType } from "./objects.ts";
 import { PackStorage, PackRefusal } from "./packs.ts";
-import { classifyErasureFile, ErasureStorageRefusal, type ErasureFileClass, type ErasureStorageReport } from "./erasure-scan.ts";
+import { classifyErasureFile, ErasureStorageRefusal, type ErasureFileClass, type ErasureStorageReport, type ErasureRepresentationInspection } from "./erasure-scan.ts";
 
 /** Interleavings occur before the final identity barrier, never after a successful certificate. @internal */
 export const accountabilityBoundary: { visit(step: string, path: string, attempt: number): void } = { visit() {} };
@@ -24,6 +24,10 @@ export interface AccountabilityOptions {
   readonly forbiddenIds: ReadonlySet<string>;
   readonly forbiddenPayloads: ReadonlySet<string>;
   readonly purge?: (file: UnaccountedFile, remove: () => void) => boolean;
+  /** Decode inspection shares the native parser's descriptor, byte slots and final identity barrier. @internal */
+  readonly inspection?: (id: string, frameBytes: number, kind: ErasureFileClass) => ErasureRepresentationInspection;
+  /** Raw inspection uses the same pinned file before the final pathname and catalogue checks. @internal */
+  readonly physical?: (fd: number, bytes: number, kind: ErasureFileClass, budget: () => void) => void;
 }
 /** Internal retry never escapes as a claim of stable absence. */
 class Changed extends Error {}
@@ -41,17 +45,23 @@ function slot(fd: number, start: number, length: number): Buffer {
   return bytes;
 }
 /** Verify a complete zlib stream, canonical native framing and logical identity with bounded decoded slots. */
-function nativeObject(fd: number, offset: number, length: number, id: string, hint?: ObjectType, maxFrameBytes?: number): { digest: string; length: number } {
+function nativeObject(fd: number, offset: number, length: number, id: string, budget: () => void, hint?: ObjectType, maxFrameBytes?: number, factory?: (frameBytes: number) => ErasureRepresentationInspection): { digest: string; length: number; failure?: ObjectStoreError } {
   const stream = new ZStream(); zlibInflateInit2(stream, 15);
   const output = new Uint8Array(16_384); const hash = createHash("sha256"); const payload = createHash("sha256");
   let header = Buffer.alloc(0); let declared: number | undefined; let consumed = 0; let read = 0; let ended = false; let framedBytes = 0;
+  let inspection: ErasureRepresentationInspection | undefined; let failure: ObjectStoreError | undefined;
+  let result: { digest: string; length: number } | undefined; let thrown: { error: unknown } | undefined;
+  /** Complete native-format classification even if the extra proof fails; only a valid file can be certified. */
+  const observe = (action: () => unknown): void => { if (failure !== undefined) return; try { requireSynchronousResult(action()); } catch (error) { failure = inspectionFailure(error); } };
   try {
     while (read < length && !ended) {
       const bytes = slot(fd, offset + read, Math.min(65_536, length - read)); read += bytes.length;
       stream.input = Uint8Array.from(bytes); stream.next_in = 0; stream.avail_in = bytes.length;
       do {
+        budget();
         stream.output = output; stream.next_out = 0; stream.avail_out = output.length;
         const status = zlibInflate(stream, Z_NO_FLUSH); let data: Buffer = Buffer.from(output.subarray(0, stream.next_out)); framedBytes += data.length;
+        let inspected = data;
         assertVerificationBound("accountability", "decoded_bytes", framedBytes, verificationLimits.accountabilityDecodedBytes);
         if (maxFrameBytes !== undefined && framedBytes > maxFrameBytes) throw new InvalidRepresentation("oversized pack frame");
         hash.update(data);
@@ -61,19 +71,42 @@ function nativeObject(fd: number, offset: number, length: number, id: string, hi
           else {
             const match = /^([a-z]+) (0|[1-9][0-9]*)$/.exec(header.subarray(0, nul).toString("latin1"));
             if (nul > 32 || match === null || !(OBJECT_TYPES as readonly string[]).includes(match[1]) || (hint !== undefined && hint !== match[1]) || !Number.isSafeInteger(Number(match[2]))) throw new InvalidRepresentation("invalid frame");
-            declared = Number(match[2]); data = header.subarray(nul + 1); header = Buffer.alloc(0);
+            declared = Number(match[2]); inspected = header;
+            if (factory !== undefined) observe(() => {
+              const candidate = factory(declared! + nul + 1);
+              if (candidate === null || typeof candidate !== "object" || typeof candidate.feed !== "function" || typeof candidate.finish !== "function" || typeof candidate.close !== "function") rejectInspection(candidate);
+              for (const method of [candidate.feed, candidate.finish, candidate.close]) requireSynchronousCallback(method);
+              inspection = candidate;
+            });
+            data = header.subarray(nul + 1); header = Buffer.alloc(0);
           }
         }
         payload.update(data); consumed += data.length;
         if (declared !== undefined && consumed > declared) throw new InvalidRepresentation("invalid length");
+        if (inspection !== undefined) observe(() => inspection!.feed(inspected));
         if (status === Z_STREAM_END) { ended = true; break; }
         if (status !== Z_OK && status !== Z_BUF_ERROR) throw new InvalidRepresentation("invalid zlib");
       } while (stream.avail_in > 0 || stream.avail_out === 0);
     }
     if (!ended || stream.total_in !== length || declared === undefined || consumed !== declared || hash.digest("hex") !== id) throw new InvalidRepresentation("incomplete representation");
-    return { digest: payload.digest("hex"), length: consumed };
-  } finally { zlibInflateEnd(stream); }
+    if (inspection !== undefined) observe(() => inspection!.finish());
+    result = { digest: payload.digest("hex"), length: consumed };
+  } catch (error) { thrown = { error }; }
+  finally { try { requireSynchronousResult(inspection?.close()); } catch (error) { thrown = { error: inspectionFailure(error) }; } finally { zlibInflateEnd(stream); } }
+  if (thrown !== undefined) throw thrown.error;
+  return { ...result!, ...(failure === undefined ? {} : { failure }) };
 }
+/** Unknown inspection faults are negative outcomes without disclosing inspected content. */
+function inspectionFailure(error: unknown): ObjectStoreError { return error instanceof ObjectStoreError ? error : new VerificationRefusal("erasure", "decode_error", "Pinned representation inspection did not complete."); }
+/** Unsupported asynchronous or value-returning callbacks cannot grant a synchronous certificate. */
+function rejectInspection(value: unknown): never {
+  void Promise.resolve(value).catch(() => undefined);
+  throw new VerificationRefusal("erasure", "inspection_contract", "Use synchronous native inspection callbacks that return no value.");
+}
+/** Reject declared async/generator callbacks before invoking them or opening their inspection scope. */
+function requireSynchronousCallback(callback: unknown): void { if (Object.prototype.toString.call(callback) !== "[object Function]") rejectInspection(undefined); }
+/** A rejected promise is observed but never awaited or mistaken for a completed synchronous proof. */
+function requireSynchronousResult(value: unknown): void { if (value !== undefined) rejectInspection(value); }
 /** Hash unaccounted bytes for an exact, resumable purge plan without persisting their content. */
 function physicalDigest(fd: number, size: number): string {
   const hash = createHash("sha256");
@@ -82,6 +115,7 @@ function physicalDigest(fd: number, size: number): string {
 }
 /** Verify every regular file, retrying a replaced file and then the whole catalogue before certification. */
 function inspectStorage(scope: string | readonly string[], options: AccountabilityOptions, planning?: Map<string, UnaccountedFile>): ErasureAccountabilityReport {
+  for (const callback of [options.inspection, options.physical]) if (callback !== undefined) requireSynchronousCallback(callback);
   const started = performance.now(); let visited = 0;
   /** Work exhaustion refuses both certification and purge authorization. */
   const check = (): void => { assertVerificationBound("accountability", "time_ms", performance.now() - started, verificationLimits.accountabilityMs); };
@@ -107,11 +141,12 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
           const before = fstatSync(file.fd, { bigint: true });
           assertVerificationBound("accountability", "file_bytes", Number(before.size), verificationLimits.accountabilityFileBytes);
           if (!before.isFile() || before.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new ErasureStorageRefusal("unverifiable", kind);
-          const stamp = identity(before); let parsed = false; let forbidden = false; let count = 0;
+          const stamp = identity(before); let parsed = false; let forbidden = false; let count = 0; const failures: ObjectStoreError[] = [];
           accountabilityBoundary.visit("file-opened", path, attempt);
           /** Logical denial covers both stable addresses and type-independent, nonempty payloads. */
           const object = (id: string, offset: number, length: number, type?: ObjectType, maxFrameBytes?: number): void => {
-            const value = nativeObject(file.fd, offset, length, id, type, maxFrameBytes); count++;
+            const value = nativeObject(file.fd, offset, length, id, check, type, maxFrameBytes, options.inspection === undefined ? undefined : frameBytes => options.inspection!(id, frameBytes, kind)); count++;
+            if (value.failure !== undefined) failures.push(value.failure);
             forbidden ||= options.forbiddenIds.has(id) || (value.length > 0 && options.forbiddenPayloads.has(value.digest));
             accountabilityBoundary.visit("object-verified", path, attempt);
           };
@@ -121,6 +156,7 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
             else throw new InvalidRepresentation("foreign name");
             parsed = true;
           } catch (error) { if (!(error instanceof InvalidRepresentation) && !(error instanceof PackRefusal && error.code === "corrupt_pack")) throw error; }
+          if (parsed && failures.length === 0 && options.physical !== undefined) { try { requireSynchronousResult(options.physical(file.fd, Number(before.size), kind, check)); } catch (error) { failures.push(inspectionFailure(error)); } }
           accountabilityBoundary.visit("file-parsed", path, attempt);
           /** A purge authorization write can itself race a replacement, so check again immediately before removal. */
           const same = (): boolean => {
@@ -142,6 +178,7 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
             if (removed !== true) throw new ErasureStorageRefusal("unverifiable", kind);
             purged = true; return;
           }
+          if (failures.length > 0) throw failures[0];
           if (forbidden) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
           snapshots.set(path, stamp); classes[kind] = (classes[kind] ?? 0) + 1; files++; objects += count;
           accountabilityBoundary.visit("file-verified", path, attempt);

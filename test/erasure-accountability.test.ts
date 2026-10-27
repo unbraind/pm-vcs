@@ -12,9 +12,10 @@ import { deflateSync, inflateSync, inflateRawSync, constants as zlibConstants } 
 import { afterEach, test, mock } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
-import { ObjectStore, frameObject, hashObject } from "../engine/objects.ts";
+import { ObjectStore, ObjectStoreError, frameObject, hashObject } from "../engine/objects.ts";
 import { accountErasureStorage, accountabilityBoundary, erasurePurge, planErasureStorage, ACCOUNTABILITY_ATTEMPTS } from "../engine/erasure-accountability.ts";
-import { erasureScanBoundary, erasureScanLimits } from "../engine/erasure-scan.ts";
+import { erasureScanBoundary, erasureScanLimits, createErasureInspection, inspectErasureFile, fingerprint } from "../engine/erasure-scan.ts";
+import { VerificationRefusal, verificationLimits } from "../engine/object-error.ts";
 import { objectFiles } from "../engine/object-files.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 const temps: ReturnType<typeof makeTempDir>[]=[];
@@ -224,7 +225,7 @@ test("verification faults, aliases and post-hash replacements remain unverifiabl
  const f=await fixture();const root=f.repo.objects.storageRoot();const native=f.repo.objects.inventory()[0].path;const fstat=fs.fstatSync;const read=fs.readSync;
  for(const fault of ["not-file","oversized","missing"]){
   mock.method(fs,"fstatSync",(...args:Parameters<typeof fs.fstatSync>)=>{if(fault==="missing")throw Object.assign(new Error("gone"),{code:"ENOENT"});const value=fstat(...args) as fs.BigIntStats;return fault==="not-file"?Object.assign(Object.create(value) as fs.BigIntStats,{isFile:()=>false}):Object.assign(Object.create(value) as fs.BigIntStats,{size:BigInt(Number.MAX_SAFE_INTEGER)+1n});});syncBuiltinESMExports();
-  assert.throws(()=>accountErasureStorage(root,empty),{code:"unverifiable"});mock.restoreAll();syncBuiltinESMExports();assert.equal(objectFiles.active.size,0);
+  assert.throws(()=>accountErasureStorage(root,empty),fault==="oversized"?{code:"unverified",status:"unverified",verifier:"accountability",bound:"file_bytes"}:{code:"unverifiable"});mock.restoreAll();syncBuiltinESMExports();assert.equal(objectFiles.active.size,0);
  }
  let zero=false;mock.method(fs,"readSync",(...args:Parameters<typeof fs.readSync>)=>{if(!zero){zero=true;return 0;}return read(...args);});syncBuiltinESMExports();assert.equal(accountErasureStorage(root,empty).accountable,true);mock.restoreAll();syncBuiltinESMExports();
  const foreign=place(root,"foreign-race",Buffer.from("unknown bytes"));let changed=false;
@@ -279,4 +280,92 @@ test("a fresh purge batch cannot overwrite an operation id already owned by anot
  const f=await fixture();const id=f.entry.fileId!;const other="d".repeat(32);const path=join(f.repo.controlDirectory,"erasure-purge.json");const roots=[f.repo.objects.storageRoot()];
  writeFileSync(path,JSON.stringify({format:"pm-vcs-erasure-purge-2",operations:{[id]:[]},plans:{[other]:[{id,revision:"a".repeat(64)}]}}));
  erasurePurge(f.repo.controlDirectory,id,roots,true).begin([]);const journal=JSON.parse(readFileSync(path,"utf8")) as {operations:Record<string,unknown[]>;plans:Record<string,{id:string}[]>};assert.deepEqual(journal.operations[id],[]);assert.notEqual(journal.plans[id][0].id,id);assert.equal(journal.plans[other][0].id,id);
+});
+
+test("final verification cannot exclude a native encoded copy recreated at a purged pathname",async()=>{
+ const f=await fixture();let encoded=f.bytes;for(let i=0;i<8;i++)encoded=Buffer.from(encoded.toString("base64"));const id=hashObject("blob",encoded);const path=place(f.repo.objects.storageRoot(),`${id.slice(0,2)}/${id.slice(2)}`,Buffer.alloc(0));let replaced=false;
+ erasureScanBoundary.visit=step=>{if(step==="completed"&&!replaced){replaced=true;writeFileSync(path,deflateSync(frameObject("blob",encoded)));}};
+ assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true}),/unverified/u);assert.equal(replaced,true);assert.equal(f.repo.objects.denials()[0].pending,true);assert.deepEqual(f.repo.objects.read(id).payload,encoded);
+ erasureScanBoundary.visit=()=>{};rmSync(path);const receipt=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true});assert.equal(receipt.storage.accountable,true);assert.equal(receipt.purge.deleted,1);assert.equal(f.repo.objects.denials()[0].pending,false);assert.equal(f.repo.operations.read().filter(entry=>entry.command==="obliterate").length,1);
+});
+
+
+test("a valid encoded copy introduced at EVERY erasure boundary cannot receive a completion certificate",async t=>{
+ const steps=["proof-persisted","pending","object-deleted","storage-verified","completed","receipt","file-opened","file-chunk","file-verified"];
+ for(const step of steps){
+  const f=await fixture();let encoded=f.bytes;for(let i=0;i<8;i++)encoded=Buffer.from(encoded.toString("base64"));const id=hashObject("blob",encoded);const path=place(f.repo.objects.storageRoot(),`${id.slice(0,2)}/${id.slice(2)}`,Buffer.alloc(0));let injected=false;
+  erasureScanBoundary.visit=current=>{if(current===step&&!injected){injected=true;writeFileSync(path,deflateSync(frameObject("blob",encoded)));}};
+  assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true}),error=>error instanceof ObjectStoreError&&error.status==="unverified",step);assert.equal(injected,true,step);assert.equal(f.repo.objects.denials()[0].pending,true);assert.deepEqual(f.repo.objects.read(id).payload,encoded);
+  erasureScanBoundary.visit=()=>{};rmSync(path);const receipt=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true});assert.equal(receipt.storage.accountable,true);assert.equal(f.repo.objects.denials()[0].pending,false);assert.equal(f.repo.operations.read().filter(entry=>entry.command==="obliterate").length,1);
+ }
+ t.diagnostic("9 late-copy cells cover all erasure publication and final physical-scan boundaries; every cleanup retry converges");
+});
+
+test("decoded and physical proofs share the final native descriptor and catalogue at EVERY verification boundary",async t=>{
+ const steps=["pass-start","file-resolve","file-opened","object-verified","file-parsed","file-check","file-verified","pass-check"];let cells=0;
+ for(const packed of [false,true])for(const copiedPack of [false,true])for(const step of steps){
+  const f=await fixture();if(packed)f.repo.objects.compact();const marker=Buffer.from("late independently encoded selected marker 826391");let encoded=marker;for(let i=0;i<8;i++)encoded=Buffer.from(encoded.toString("base64"));
+  let name:string;let bytes:Buffer;
+  if(copiedPack){const supplier=new ObjectStore(join(f.dir.root,"supplier"));supplier.write("blob",encoded);supplier.compact();const file=supplier.inventory()[0];name=`packs/${file.path.split(/[\\/]/u).at(-1)}`;bytes=readFileSync(file.path);}else{const id=hashObject("blob",encoded);name=`${id.slice(0,2)}/${id.slice(2)}`;bytes=deflateSync(frameObject("blob",encoded));}
+  const patterns=[fingerprint(marker)];const root=f.repo.objects.storageRoot();let injected=false;let late="";
+  accountabilityBoundary.visit=current=>{if(current===step&&!injected){injected=true;late=place(root,name,bytes);}};
+  const options={...empty,inspection:(_id:string,size:number,kind:Parameters<typeof createErasureInspection>[2])=>createErasureInspection(patterns,size,kind),physical:(fd:number,size:number,kind:Parameters<typeof inspectErasureFile>[3])=>inspectErasureFile(fd,size,patterns,kind)};
+  assert.throws(()=>accountErasureStorage(root,options),error=>error instanceof ObjectStoreError&&error.status==="unverified",`${packed}/${copiedPack}/${step}`);assert.equal(injected,true);assert.equal(objectFiles.active.size,0);
+  accountabilityBoundary.visit=()=>{};rmSync(late);assert.equal(accountErasureStorage(root,options).accountable,true);cells++;
+ }
+ assert.equal(cells,32);t.diagnostic("32 correlated-proof cells: 8 verification boundaries x loose/packed current store x loose/packed late copy");
+});
+
+
+test("pinned inspection faults and malformed inspector contracts never produce native certificates or leak handles",async()=>{
+ const f=await fixture();const root=f.repo.objects.storageRoot();const patterns=[fingerprint(Buffer.from("deliberately absent proof marker"))];
+ for(const mode of ["factory","feed","finish","close","physical","undefined","null","missing-feed","missing-finish","missing-close"]){
+  const options={...empty,inspection:(_id:string,size:number,kind:Parameters<typeof createErasureInspection>[2])=>{
+   if(mode==="factory")throw undefined;
+   if(mode==="undefined")return undefined as never;if(mode==="null")return null as never;
+   if(mode==="missing-feed")return {finish(){},close(){}} as never;if(mode==="missing-finish")return {feed(){},close(){}} as never;if(mode==="missing-close")return {feed(){},finish(){}} as never;
+   const real=createErasureInspection(patterns,size,kind);return{feed:(bytes:Uint8Array)=>{real.feed(bytes);if(mode==="feed")throw undefined;},finish:()=>{real.finish();if(mode==="finish")throw new Error("injected proof failure");},close:()=>{real.close();if(mode==="close")throw new Error("injected close failure");}};
+  },physical:(fd:number,size:number,kind:Parameters<typeof inspectErasureFile>[3])=>{inspectErasureFile(fd,size,patterns,kind);if(mode==="physical")throw new Error("injected physical failure");}};
+  assert.throws(()=>accountErasureStorage(root,options),error=>error instanceof VerificationRefusal&&error.bound===(mode.startsWith("missing-")||mode==="undefined"||mode==="null"?"inspection_contract":"decode_error"),mode);assert.equal(objectFiles.active.size,0);
+ }
+});
+
+test("pinned raw inspection keeps its borrowed descriptor and refuses missing bytes and retained copies",async()=>{
+ const f=await fixture();const path=place(f.dir.root,"raw-inspection",f.bytes);const file=objectFiles.open(path,"r");
+ try{assert.throws(()=>inspectErasureFile(file.fd,f.bytes.length,[fingerprint(f.bytes)],"object-root"),{code:"erasure_retained_copy"});inspectErasureFile(file.fd,f.bytes.length,[fingerprint(Buffer.from("absent marker"))],"object-root");assert.deepEqual(readFileSync(file.fd),f.bytes);
+ mock.method(fs,"readSync",()=>0);syncBuiltinESMExports();assert.throws(()=>inspectErasureFile(file.fd,f.bytes.length,[fingerprint(f.bytes)],"object-root"),error=>error instanceof VerificationRefusal&&error.bound==="storage_read");}
+ finally{mock.restoreAll();syncBuiltinESMExports();file.close();}
+});
+
+test("a deadline reached during a pinned native member stops decoding without certifying or authorizing purge",async()=>{
+ const f=await fixture();const large=f.repo.objects.write("blob",Buffer.alloc(1024*1024,255));const prior=verificationLimits.accountabilityMs;let chunks=0;
+ try{assert.throws(()=>accountErasureStorage(f.repo.objects.storageRoot(),{...empty,inspection:(id,size,kind)=>{const real=createErasureInspection([fingerprint(Buffer.from("absent marker"))],size,kind);return{...real,feed:(bytes:Uint8Array)=>{real.feed(bytes);if(id===large){chunks++;verificationLimits.accountabilityMs=0;}}};},purge:()=>{assert.fail("a work bound authorized purge");}}),error=>error instanceof VerificationRefusal&&error.bound==="time_ms");assert.equal(chunks,1);assert.equal(objectFiles.active.size,0);}
+ finally{verificationLimits.accountabilityMs=prior;}
+ assert.equal(f.repo.objects.has(large),true);
+});
+
+test("asynchronous and value-returning proof callbacks cannot certify or leave an unhandled rejection",async()=>{
+ const f=await fixture();const patterns=[fingerprint(Buffer.from("absent marker"))];const root=f.repo.objects.storageRoot();
+ for(const mode of ["async-factory","async-physical","async-feed","async-finish","async-close","promise-factory","promise-feed","promise-finish","promise-close","promise-physical","false-feed","false-physical"]){
+  let asyncInvoked=false;
+  const options={...empty,inspection:(_id:string,size:number,kind:Parameters<typeof createErasureInspection>[2])=>{
+   if(mode==="promise-factory")return Promise.reject(new Error("unsupported asynchronous factory")) as never;
+   const real=createErasureInspection(patterns,size,kind);return{feed:(bytes:Uint8Array)=>{real.feed(bytes);if(mode==="promise-feed")return Promise.reject(new Error("unsupported asynchronous feed"));if(mode==="false-feed")return false;},finish:()=>{real.finish();if(mode==="promise-finish")return Promise.reject(new Error("unsupported asynchronous finish"));},close:()=>{real.close();if(mode==="promise-close")return Promise.reject(new Error("unsupported asynchronous close"));},...(mode==="async-feed"?{feed:async()=>{asyncInvoked=true;}}:{}),...(mode==="async-finish"?{finish:async()=>{asyncInvoked=true;}}:{}),...(mode==="async-close"?{close:async()=>{asyncInvoked=true;}}:{})};
+  },physical:()=>{if(mode==="promise-physical")return Promise.reject(new Error("unsupported asynchronous physical proof"));if(mode==="false-physical")return false;},...(mode==="async-factory"?{inspection:async()=>{asyncInvoked=true;return undefined as never;}}:{}),...(mode==="async-physical"?{physical:async()=>{asyncInvoked=true;}}:{})};
+  assert.throws(()=>accountErasureStorage(root,options as never),error=>error instanceof VerificationRefusal&&error.bound==="inspection_contract",mode);assert.equal(asyncInvoked,false);assert.equal(objectFiles.active.size,0);await Promise.resolve();
+ }
+});
+
+test("streamed representation proofs require the whole range and cannot certify after abort or ignored errors",()=>{
+ const patterns=[fingerprint(Buffer.from("absent marker"))];const bytes=Buffer.from("ordinary byte range");
+ for(const delta of [-1,1]){const proof=createErasureInspection(patterns,bytes.length+delta);proof.feed(bytes);assert.throws(()=>proof.finish(),error=>error instanceof VerificationRefusal&&error.bound==="representation_bytes");assert.throws(()=>proof.finish(),{status:"unverified"});proof.close();}
+ const closed=createErasureInspection(patterns,bytes.length);closed.close();assert.throws(()=>closed.finish(),error=>error instanceof VerificationRefusal&&error.bound==="inspection_incomplete");assert.throws(()=>closed.feed(bytes),{status:"unverified"});
+ const complete=createErasureInspection(patterns,bytes.length);complete.feed(bytes);complete.finish();complete.finish();assert.throws(()=>complete.feed(bytes),error=>error instanceof VerificationRefusal&&error.bound==="inspection_contract");assert.throws(()=>complete.finish(),{status:"unverified"});complete.close();
+ const fault=createErasureInspection([fingerprint(bytes)],bytes.length);mock.method(crypto,"createHash",()=>{throw undefined;});syncBuiltinESMExports();try{assert.throws(()=>fault.feed(bytes),error=>error instanceof VerificationRefusal&&error.bound==="decode_error");}finally{mock.restoreAll();syncBuiltinESMExports();}assert.throws(()=>fault.finish(),error=>error instanceof VerificationRefusal&&error.bound==="decode_error");fault.close();
+ const prior={...erasureScanLimits};try{erasureScanLimits.minimum=0;erasureScanLimits.ratio=0;const bounded=createErasureInspection(patterns,bytes.length);assert.throws(()=>bounded.feed(bytes),error=>error instanceof VerificationRefusal&&error.bound==="decoded_bytes");assert.throws(()=>bounded.finish(),error=>error instanceof VerificationRefusal&&error.bound==="decoded_bytes");bounded.close();}finally{Object.assign(erasureScanLimits,prior);}
+});
+
+test("borrowed inspection slots cannot alter native payload-denial accounting",async()=>{
+ const f=await fixture();const options={forbiddenIds:new Set<string>(),forbiddenPayloads:new Set([createHash("sha256").update(f.bytes).digest("hex")]),inspection:()=>({feed:(bytes:Uint8Array)=>{bytes.fill(0);},finish(){},close(){}})};
+ assert.throws(()=>accountErasureStorage(f.repo.objects.storageRoot(),options),{code:"erasure_retained_copy"});assert.equal(objectFiles.active.size,0);assert.deepEqual(f.repo.objects.read(f.entry.id).payload,f.bytes);
 });

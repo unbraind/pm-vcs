@@ -346,6 +346,8 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     // The consumer uses the actual pinned SDK and its installed dependency graph.
     symlinkSync(join(packageRoot, "node_modules", "@unbrained"), join(project, "node_modules", "@unbrained"), "junction");
     const design = readFileSync(join(project, "node_modules", "pm-vcs", "docs", "links-layers-obliteration.md"), "utf8"); assert.match(design, /Typed obliteration/);
+    assert.match(readFileSync(join(project,"node_modules","pm-vcs","docs","indexed-packs.md"),"utf8"), /store\.compact|objects\.compact/u);
+    assert.match(readFileSync(join(project,"node_modules","pm-vcs","docs","destructive-operations.md"),"utf8"), /superseded/u);
     assert.match(design, /--current-erase-token-file/); assert.doesNotMatch(design, /PR[0-9]+|Review ID|Verified disposition|Renewed finding|source-only/);
     const built = consumer.replace('from "pm-vcs"', `from ${JSON.stringify(pathToFileURL(join(packageRoot, "dist", "index.js")).href)}`).replaceAll(/"pm-vcs\/dist\/([^" ]+)"/g, /** Bind the same consumer to built files for direct built-package acceptance. */ (_match, path: string) => JSON.stringify(pathToFileURL(join(packageRoot, "dist", path)).href));
     writeFileSync(join(project, "built.mjs"), built); writeFileSync(join(project, "packed.mjs"), consumer);

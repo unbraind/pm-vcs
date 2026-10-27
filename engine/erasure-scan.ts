@@ -225,6 +225,7 @@ class EncodedInspector {
   }
   /** Consume source or decoded slots; no namespace lookup or unbounded object materialization occurs here. */
   feed(bytes: Uint8Array): void {
+    if (this.closed) throw new VerificationRefusal("erasure", "inspection_contract", "A closed inspection cannot accept more bytes.");
     if (bytes.length === 0 || this.state.hit) return;
     const start = this.consumed; this.consumed += bytes.length;
     this.state.remaining -= bytes.length;
@@ -279,16 +280,51 @@ class EncodedInspector {
   }
 }
 
-/** Verify one canonical decoded object independently of the physical pack that also carries selected members. */
+/** Streaming proof belongs to its caller's pinned native member and closes on every exit. */
+export interface ErasureRepresentationInspection { feed(bytes: Uint8Array): void; finish(): void; close(): void }
+/** Build the same bounded proof for materialized and descriptor-streamed canonical members. @internal */
+export function createErasureInspection(patterns: readonly ErasureFingerprint[], frameBytes: number, kind: ErasureFileClass = "loose-storage"): ErasureRepresentationInspection {
+  const state: InspectionState = { remaining: Math.max(erasureScanLimits.minimum, frameBytes * erasureScanLimits.ratio), hit: false, live: 0 };
+  const inspector = new EncodedInspector(patterns, state, kind);
+  let observed = 0; let finished = false; let failure: ObjectStoreError | undefined;
+  /** Failed or aborted proof state is sticky, even if a caller ignores its first exception. */
+  const inspect = (action: () => void): void => {
+    if (failure !== undefined) throw failure;
+    try { action(); } catch (error) { failure = error instanceof ObjectStoreError ? error : new VerificationRefusal("erasure", "decode_error", "Representation inspection did not complete."); inspector.close(); throw failure; }
+  };
+  return {
+    /** Inspect borrowed slots without retaining their source buffers. */
+    feed(bytes) { inspect(() => { inspector.feed(bytes); observed += bytes.length; }); },
+    /** A hit or incomplete decode cannot become a successful native-member proof. */
+    finish() {
+      try { inspect(() => {
+        if (observed !== frameBytes) throw new VerificationRefusal("erasure", "representation_bytes", "The native member's complete byte range was not inspected.");
+        inspector.finish();
+        if (state.hit) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
+        if (state.blocked !== undefined) throw new VerificationRefusal("erasure", state.blocked, `A supported ${kind} representation remains uninspected.`, "uninspectable_payload");
+        finished = true;
+      }); } finally { inspector.close(); }
+    },
+    /** The owner releases remaining dictionaries after parse errors and early termination too. */
+    close() { if (!finished && failure === undefined) failure = new VerificationRefusal("erasure", "inspection_incomplete", "The native inspection was closed before a complete proof."); inspector.close(); },
+  };
+}
+/** Verify one decoded object independently of the physical pack that also carries selected members. */
 export function inspectErasureRepresentation(bytes: Buffer, patterns: readonly ErasureFingerprint[]): void {
-  const state: InspectionState = { remaining: Math.max(erasureScanLimits.minimum, bytes.length * erasureScanLimits.ratio), hit: false, live: 0 };
-  const inspector = new EncodedInspector(patterns, state, "loose-storage");
-  try {
-    for (let offset = 0; offset < bytes.length; offset += 65_536) inspector.feed(bytes.subarray(offset, offset + 65_536));
-    inspector.finish();
-    if (state.hit) throw new ErasureStorageRefusal("erasure_retained_copy", "loose-storage");
-    if (state.blocked !== undefined) throw new VerificationRefusal("erasure", state.blocked, "A surviving native object's representation was not fully inspected.", "uninspectable_payload");
-  } finally { inspector.close(); }
+  const inspector = createErasureInspection(patterns, bytes.length);
+  try { for (let offset = 0; offset < bytes.length; offset += 65_536) inspector.feed(bytes.subarray(offset, offset + 65_536)); inspector.finish(); }
+  finally { inspector.close(); }
+}
+/** Inspect raw bytes on the same descriptor that native accounting will identity-check before certifying. @internal */
+export function inspectErasureFile(fd: number, size: number, patterns: readonly ErasureFingerprint[], kind: ErasureFileClass, budget?: () => void): void {
+  const matcher = new Matcher(patterns); const bytes = Buffer.alloc(65_536); let offset = 0;
+  while (offset < size) {
+    budget?.();
+    const count = readSync(fd, bytes, 0, Math.min(bytes.length, size - offset), offset);
+    if (count === 0) throw new VerificationRefusal("erasure", "storage_read", "A pinned physical range became incomplete.");
+    if (matcher.feed(bytes.subarray(0, count))) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
+    offset += count;
+  }
 }
 /** Independently scan all regular storage files; callers hold the package writer lease throughout deletion and this final proof. */
 export function scanErasureStorage(root: string, patterns: readonly ErasureFingerprint[], excluded: ReadonlySet<string> = new Set(), encodings = true): ErasureStorageReport {

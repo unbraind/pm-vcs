@@ -145,3 +145,10 @@ Owned lease and temporary cleanup keeps its original identity authority and
 cannot opt into this domain revalidation. Extra arrivals alone never expand a
 pending set. A new ref protecting an interrupted GC candidate therefore preserves
 that object while the freshly validated collectible set can still be retired.
+
+Working-tree erasure keeps its original inode authority across recovery. A peer
+replacement remains foreign on every retry, including after a terminal refusal;
+a FileId or reused pathname alone cannot authorize adopting it into a new set.
+Remove or resolve that foreign leaf explicitly before retrying. Validated GC
+reachability changes can supersede a plan without granting authority over a
+working-tree replacement.
