@@ -485,6 +485,11 @@ test("supersession records missing planned members as absent and validates direc
  assert.equal(prepareDestruction(f.control,"directory-birth",[{path:directory,directory:true}],false,undefined,false,"eligibility_changed").resumed,true);
  renameSync(directory,`${directory}-original`);mkdirSync(directory);
  const plan=prepareDestruction(f.control,"directory-birth",[{path:directory,directory:true}],false,undefined,false,"eligibility_changed");assert.equal(plan.resumed,false);plan.remove(directory);plan.finish();assert.ok(existsSync(`${directory}-original`));assert.equal(inspectDestructions(f.control).superseded,2);
+ const member=f.paths[0];const old=prepareDestruction(f.control,"file-birth",[{path:member}]);
+ assert.equal(prepareDestruction(f.control,"file-birth",[{path:member}],false,undefined,false,"eligibility_changed").resumed,true);
+ renameSync(member,`${member}-original`);writeFileSync(member,"new validated file lifetime");
+ const successor=prepareDestruction(f.control,"file-birth",[{path:member}],false,undefined,false,"eligibility_changed");assert.equal(successor.resumed,false);assert.throws(()=>old.remove(member),{code:"destructive_intent_changed"});successor.remove(member);successor.finish();assert.equal(readFileSync(`${member}-original`,"utf8"),"owned-a");assert.equal(inspectDestructions(f.control).superseded,3);
+
 });
 
 test("a terminal supersession receipt with null policy is foreign evidence and cannot certify",()=>{
