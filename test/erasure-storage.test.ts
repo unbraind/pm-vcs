@@ -352,3 +352,9 @@ test("constant byte runs skip only equivalent windows and retain cross-chunk mat
     assert.throws(()=>scanErasureStorage(root,[fingerprint(pattern)]),{code:"erasure_retained_copy"});
   }
 });
+
+
+test("a selected byte decoded only by the final partial quartet cannot escape physical verification",async()=>{
+ const f=await fixture();const root=join(f.dir.root,"final-partial-quartet");place(root,"partial",Buffer.from("YQ"));
+ assert.throws(()=>scanErasureStorage(root,[fingerprint(Buffer.from("a"))]),{code:"erasure_retained_copy",status:"unverified"});assert.equal(objectFiles.active.size,0);
+});

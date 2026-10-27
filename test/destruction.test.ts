@@ -474,3 +474,22 @@ test("an old handle cannot reactivate a durable superseded marker before a succe
 test("freshly validated completed recovery archives its receipt before retiring a new eligible lifetime",()=>{
  const f=fixture();const first=drain(f.control,"completed-revalidation",f.paths);writeFileSync(f.paths[0],"new validated ownership");const plan=prepareDestruction(f.control,"completed-revalidation",[{path:f.paths[0]}],true,undefined,false,"eligibility_changed");assert.equal(plan.resumed,false);plan.remove(f.paths[0]);const final=plan.finish();assert.notEqual(final.id,first.id);assert.equal(final.planned,1);assert.equal(final.deleted,1);assert.equal(inspectDestructions(f.control).completed,2);
 });
+
+
+test("supersession records missing planned members as absent and validates directory birth identities",()=>{
+ const f=fixture();prepareDestruction(f.control,"absent-member",f.paths.map(path=>({path})));rmSync(f.paths[1]);
+ const next=prepareDestruction(f.control,"absent-member",[{path:f.paths[2]}],false,undefined,false,"eligibility_changed");next.remove(f.paths[2]);next.finish();
+ const ledger=join(f.control,"destruction");const archived=readdirSync(ledger).filter(name=>name.endsWith(".receipt")).map(name=>JSON.parse(readFileSync(join(ledger,name),"utf8")) as {status:string;entries:{path:string;status:string}[]});
+ assert.ok(archived.some(row=>row.status==="superseded"&&row.entries.some(entry=>entry.path.endsWith("/b")&&entry.status==="absent")));assert.ok(existsSync(f.paths[0]));
+ const directory=join(f.data,"directory");mkdirSync(directory);prepareDestruction(f.control,"directory-birth",[{path:directory,directory:true}]);
+ assert.equal(prepareDestruction(f.control,"directory-birth",[{path:directory,directory:true}],false,undefined,false,"eligibility_changed").resumed,true);
+ renameSync(directory,`${directory}-original`);mkdirSync(directory);
+ const plan=prepareDestruction(f.control,"directory-birth",[{path:directory,directory:true}],false,undefined,false,"eligibility_changed");assert.equal(plan.resumed,false);plan.remove(directory);plan.finish();assert.ok(existsSync(`${directory}-original`));assert.equal(inspectDestructions(f.control).superseded,2);
+});
+
+test("a terminal supersession receipt with null policy is foreign evidence and cannot certify",()=>{
+ const f=fixture();prepareDestruction(f.control,"null-policy",f.paths.map(path=>({path})));prepareDestruction(f.control,"null-policy",[{path:f.paths[1]}],false,undefined,false,"eligibility_changed");
+ const ledger=join(f.control,"destruction");const path=join(ledger,readdirSync(ledger).find(name=>name.endsWith(".receipt"))!);const bytes=readFileSync(path);const record=JSON.parse(bytes.toString()) as {reason:unknown};record.reason=null;writeFileSync(path,JSON.stringify(record));
+ const result=inspectDestructions(f.control);assert.equal(result.verification.status,"unverified");assert.equal(result.verification.bound,"decode_error");assert.ok(result.skippedCount>0);assert.equal((JSON.parse(readFileSync(path,"utf8")) as {reason:unknown}).reason,null);writeFileSync(path,bytes);
+ assert.equal(inspectDestructions(f.control).verification.status,"verified");for(const member of f.paths)assert.ok(existsSync(member));
+});

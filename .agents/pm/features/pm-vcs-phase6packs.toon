@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-27T06:05:03.571Z"
+updated_at: "2026-10-27T07:25:15.406Z"
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[86]{created_at,author,text}:
+comments[88]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -97,7 +97,9 @@ comments[86]{created_at,author,text}:
   "2026-10-27T05:51:30.302Z",codex-agent,"Merged-main validation passes 43/43 without skips or cancellations: release approval, staged release metadata, real tarball privacy and contaminated-session provenance. The source audit now covers 102 isolated entrypoints and 168 explicit allowlisted child launches across three embedded workers. Newly merged tests isolate sessions first; release fixture subprocesses use testEnvironment rather than ambient process.env. The package allowlist ships only the two required new consumer guides in addition to the existing public docs; scratch and benchmark evidence stay outside the npm tarball. Source/test typecheck, lint, zero duplication over all 88 production files, 547 documented declarations and strict emitted declaration consumption all pass. Owner issue 151 teardown and the original hermeticity fixes remain separate committed changes; the PR body retains Fixes #151."
   "2026-10-27T06:01:00.030Z",codex-agent,"Additional pre-push audit of superseded CI found two failures and neither is counted as passing evidence. The oversized-stat regression now asserts the stronger typed unverified/accountability/file_bytes result. The real authority regression was blanket worktree-erasure supersession: a retry could adopt a foreign replacement by pathname. Worktree erasure now retains its original inode authority across pending and completed receipts; generic validated object/reachability supersession remains available to GC and other owners that prove new eligibility. The original durable-denial replacement test and the new four-cell file/link x pending/completed property pass, including twelve repeated refusals and convergence after explicit foreign retirement. Revert proof: restoring only planErasure automatic eligibility supersession with a source loader makes the new property fail 0/1 (Missing expected exception); the real restored function passes within the three-test focused command. No existing regression assertions were removed or weakened."
   "2026-10-27T06:04:18.161Z",codex-agent,"Final narrow verifier campaign passes 36/36 with zero failures, skips or cancellations; focused diagnostics cover every added native-parser statement and all new helper functions. The earlier broad local campaign loaded a now-superseded test expectation and was stopped, not counted as a pass; historical full crash matrices remain covered by CI. The PM-linked ownership command passes 3/3. No full release suite was run locally. Final exact-head npm/Bun counts and CI links will be maintained in the already-linked PR 150 evidence section; dependency pins remain unchanged."
-files[66]{path,scope}:
+  "2026-10-27T07:16:26.299Z",codex-agent,"CI run 40459502820 on 72e597b completed the Node 22 npm suite with 2150/2154 passing, four failures, and 99.99/99.89/100/99.99 source coverage. This is failed evidence, not acceptance. Main introduced a direct scratch rmSync in the pack privacy verifier; it now uses the shared durability helper. Moving the existing complete physical-inventory consistency pass before supplemental diagnostics restores all three unchanged streaming inventory regressions, including exact second-pass assertions; the four failures now pass 4/4 locally. CI uncovered negative branches now have native adversarial cases for closure payload/time/fragment errors, operational receipt-clock failure, EOF-only decoding hits, revoked purge authority, invalid supersession policy, missing members/directory birth changes, and legacy CLI unverified reports. The focused new cases pass 10/10 with no SDK mocks or threshold changes. Further targeted coverage and behavioral revert proofs are being recorded before self-host publication."
+  "2026-10-27T07:25:10.513Z",codex-agent,"CI follow-up validation: targeted coverage/regressions pass 23/23; the separately linked native check passes 14/14 after restoration, with zero skips/cancellations. All six real npm-pack privacy tests pass using durable cleanup; pack:check scans 312 shipped files with zero findings. Typecheck, test typecheck, lint, zero duplication across 88 production files and all 547 declarations pass. Revert proof: restoring only verifyPack and eraseFile to their previous function behavior reproduces all four CI failures (0/4); restoration passes 4/4. Seven isolated function-level behavior reversions also fail their intended assertions: closure bound classification, receipt operational-clock propagation, final partial-quartet detection, directory-birth supersession, null-policy rejection, diagnostic failure refusal and legacy CLI negative verdicts. Each restored case passes in the targeted command. One early linked invocation overlapped the deliberately reverted cleanup function and detected it; the final serialized linked invocation passes 14/14. No regression assertion, coverage threshold or source inventory was weakened. The next pushed self-hosted head will rerun full npm/Bun CI."
+files[67]{path,scope}:
   .github/workflows/ci.yml,project
   composition-commands.ts,project
   engine/bisect.ts,project
@@ -122,6 +124,7 @@ files[66]{path,scope}:
   engine/worktree-mutation.ts,project
   index.ts,project
   scripts/pack-benchmark.ts,project
+  scripts/verify-pack-privacy.ts,project
   test/atomic-publication-cleanup.test.ts,project
   test/bisect.test.ts,project
   test/checkpoints.test.ts,project
@@ -164,7 +167,7 @@ files[66]{path,scope}:
   test/worktree-races.test.ts,project
   test/writer-lease-batch-publication.test.ts,project
   vcs-commands.ts,project
-tests[29]:
+tests[30]:
   - command: node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts
     scope: project
     timeout_seconds: 600
@@ -394,6 +397,13 @@ tests[29]:
     provenance:
       author: codex-agent
       created_at: "2026-10-27T06:00:23.530Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"integrity preserves named|receipt inspection preserves|final partial quartet|supersession records missing|terminal supersession receipt|operational diagnostic failure|purge authorization revoked|legacy unverified result|all production fsync|streaming second pass\" test/verification-bounds.test.ts test/erasure-storage.test.ts test/destruction.test.ts test/erasure-accountability.test.ts test/vcs-commands.test.ts test/durability.test.ts test/stream-erasure-legacy-fetch-repair.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T07:17:25.469Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
 docs[6]{path,scope}:

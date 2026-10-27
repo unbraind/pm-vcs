@@ -232,7 +232,6 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         throw new VerificationRefusal("erasure", "decode_error", "Byte inspection did not complete; native accountability cannot replace that proof.");
       }
     };
-    diagnose(deleting);
     // A second complete verified pass checks identity/path stability without retaining unrelated leaves.
     const inspected = new Set<string>();
     for (const { path } of store.walkErasureInventory("all", excluded)) {
@@ -243,6 +242,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       inspected.add(path);
     }
     if (inspected.size !== physical.size) throw new ObjectStoreError("incomplete_erasure_inventory", "Physical inventory lost a copy between verified passes.");
+    diagnose(deleting);
     for (const instance of instances) {
       const leaseDirectory = join(instance.controlDirectory, "leases");
       if (existsSync(leaseDirectory)) {

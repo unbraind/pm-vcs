@@ -14,7 +14,7 @@ import { prepareDestruction, inspectDestructions } from "../engine/destruction.t
 import { accountErasureStorage, accountabilityBoundary } from "../engine/erasure-accountability.ts";
 import { inspectErasureRepresentation, erasureScanLimits, fingerprint } from "../engine/erasure-scan.ts";
 import { inspectRepresentations } from "../engine/representations.ts";
-import { VerificationRefusal, verificationLimits } from "../engine/object-error.ts";
+import { ObjectStoreError, VerificationRefusal, verificationLimits } from "../engine/object-error.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const owned: ReturnType<typeof makeTempDir>[] = [];
@@ -119,4 +119,20 @@ test("receipt inspection checks its deadline after the last record before return
 
 test("native representation verification rejects a directly retained selected payload",()=>{
  const selected=Buffer.from("retained selected byte signature");assert.throws(()=>inspectErasureRepresentation(selected,[fingerprint(selected)]),{code:"erasure_retained_copy",status:"unverified"});
+});
+
+
+test("integrity preserves named payload, timeout and fragment failures without any positive certificate", async () => {
+ const {repo}=await fixture();const head=repo.refs.resolveHead()!;
+ for(const [code,bound] of [["object_payload_limit","object_bytes"],["object_stream_timeout","time_ms"],["missing_fragment","missing_object"],["explicit","custom_bound"]]){
+  mock.method(repo.objects,"read",()=>{throw code==="explicit"?new VerificationRefusal("integrity",bound,"Injected incomplete evidence"):new ObjectStoreError(code,"Injected incomplete evidence");});
+  const result=inspectClosure(repo.objects,[head]);assert.equal(result.verified,0);assert.equal(result.verification.status,"unverified");assert.equal(result.verification.bound,bound);mock.restoreAll();
+ }
+ assert.ok(repo.verify().verified>0);
+});
+
+test("receipt inspection preserves operational clock failures rather than certifying unread evidence",async()=>{
+ const {repo}=await fixture();prepareDestruction(repo.controlDirectory,"clock-fault",[]).finish();let calls=0;
+ mock.method(performance,"now",()=>{if(++calls===2)throw new Error("receipt clock unavailable");return 0;});
+ assert.throws(()=>inspectDestructions(repo.controlDirectory),/receipt clock unavailable/u);mock.restoreAll();assert.equal(inspectDestructions(repo.controlDirectory).verification.status,"verified");
 });

@@ -369,3 +369,19 @@ test("borrowed inspection slots cannot alter native payload-denial accounting",a
  const f=await fixture();const options={forbiddenIds:new Set<string>(),forbiddenPayloads:new Set([createHash("sha256").update(f.bytes).digest("hex")]),inspection:()=>({feed:(bytes:Uint8Array)=>{bytes.fill(0);},finish(){},close(){}})};
  assert.throws(()=>accountErasureStorage(f.repo.objects.storageRoot(),options),{code:"erasure_retained_copy"});assert.equal(objectFiles.active.size,0);assert.deepEqual(f.repo.objects.read(f.entry.id).payload,f.bytes);
 });
+
+
+test("an operational diagnostic failure refuses before any denial or selected-file deletion",async()=>{
+ const f=await fixture();const original=f.repo.objects.walkErasureInventory;let passes=0;
+ mock.method(f.repo.objects,"walkErasureInventory",function*(...args:Parameters<typeof original>){if(++passes===3)throw new Error("injected byte-inspection failure");yield* Reflect.apply(original,f.repo.objects,args);});
+ assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),error=>error instanceof VerificationRefusal&&error.bound==="decode_error");assert.equal(passes,3);assert.deepEqual(f.repo.objects.denials(),[]);assert.deepEqual(readFileSync(join(f.repo.root,"asset")),f.bytes);mock.restoreAll();assert.equal(f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)).storage.accountable,true);
+});
+
+test("purge authorization revoked after complete preflight refuses before deleting the recorded foreign set",async()=>{
+ const f=await fixture();const root=f.repo.objects.storageRoot();const foreign=place(root,"revoked-foreign",Buffer.from("foreign bytes retained"));const journal=join(f.repo.controlDirectory,"erasure-purge.json");
+ f.repo.objects.withWriteLock(()=>erasurePurge(f.repo.controlDirectory,f.entry.fileId!,[root],true).begin(planErasureStorage([root])));
+ const read=fs.readFileSync;const stat=fs.lstatSync;let checked=false;let reads=0;
+ mock.method(fs,"lstatSync",(...args:Parameters<typeof fs.lstatSync>)=>{if(args[0]===journal)checked=true;return Reflect.apply(stat,fs,args);});
+ mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{if(args[0]===journal&&checked){checked=false;if(++reads===3)writeFileSync(journal,JSON.stringify({format:"pm-vcs-erasure-purge-2",operations:{},plans:{}}));}return Reflect.apply(read,fs,args);});syncBuiltinESMExports();
+ assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),{code:"unverifiable"});mock.restoreAll();syncBuiltinESMExports();assert.equal(reads,3);assert.deepEqual(f.repo.objects.denials(),[]);assert.equal(readFileSync(foreign,"utf8"),"foreign bytes retained");assert.deepEqual(readFileSync(join(f.repo.root,"asset")),f.bytes);
+});
