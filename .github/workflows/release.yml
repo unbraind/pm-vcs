@@ -20,6 +20,8 @@ concurrency:
 
 jobs:
   release:
+    # New packages stay unreleased until the maintainer sets the repository variable PM_RELEASE_APPROVED=true.
+    if: github.repository == 'unbraind/pm-vcs' && vars.PM_RELEASE_APPROVED == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       RELEASE_TIMEZONE: Europe/Vienna
@@ -35,10 +37,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          registry-url: "https://registry.npmjs.org"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Use npm with trusted publishing support
+        run: npm install -g npm@11.19.0 --ignore-scripts
 
       - name: Install dependencies
         run: npm ci
@@ -141,6 +145,9 @@ jobs:
           if git diff --cached --quiet; then
             echo "Release files are already current; tagging existing commit."
           else
+            # Regenerate from staged release metadata before committing it.
+            npm run self-host:write
+            git add selfhost.bundle
             git commit -m "Release ${{ github.event.repository.name }} ${{ steps.decide.outputs.tag }}"
           fi
 
@@ -477,10 +484,14 @@ jobs:
         if: steps.decide.outputs.should_release == 'true'
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_VERSION: ${{ steps.decide.outputs.npm_version }}
         run: |
           set -euo pipefail
+          # Use npm OIDC rather than a setup-node legacy auth configuration.
+          export NPM_CONFIG_USERCONFIG=/dev/null
+          export NPM_CONFIG_GLOBALCONFIG="$RUNNER_TEMP/pm-vcs-global.npmrc"
+          : > "$NPM_CONFIG_GLOBALCONFIG"
+          unset NODE_AUTH_TOKEN NPM_TOKEN
           pkg_name="$(node -p "require('./package.json').name")"
           # Idempotence guard: if the version already resolves on the registry,
           # treat the publish as already done and exit 0. This is what lets an

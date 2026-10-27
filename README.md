@@ -28,6 +28,32 @@ pm vcs init
 
 ---
 
+## Install and release approval
+
+The first npm release is pending the maintainer's interactive bootstrap. After
+that first publish, the maintainer configures npm trusted publishing for
+`release.yml` and sets the repository variable `PM_RELEASE_APPROVED` to `true`.
+The daily workflow and manual dispatch both require this variable and `main`.
+Publishing uses OIDC with provenance; no stored npm token is needed.
+
+Once published, install the package and compatible pm host, then activate the
+extension in an initialized pm project:
+
+```sh
+npm install pm-vcs @unbrained/pm-cli
+npx --no-install pm package install ./node_modules/pm-vcs
+
+bun add pm-vcs @unbrained/pm-cli
+bunx --bun --no-install pm package install ./node_modules/pm-vcs
+
+pm package install npm:pm-vcs
+pm vcs --help
+```
+
+The package exports its SDK through `main` and `types` and registers commands
+with pm. It has no standalone `bin`: use `npx pm` or `bunx --bun pm` through
+the installed host. npm/Bun dependency installation alone does not activate it.
+
 ## Capability-limited change bundles
 
 Export selected native histories with an Ed25519-signed manifest of permitted
@@ -748,6 +774,7 @@ npm ci
 npm run check        # typecheck, strict lint, and zero-duplication gate
 npm run docstring    # every production API declaration is documented
 npm run coverage     # all production TypeScript at 100/100/100/100
+npm run pack:check   # inspect the real npm tarball for private data
 npm run release:check
 ```
 
@@ -772,6 +799,13 @@ uses built-in `node:fs` globbing and does not require the `fast-glob` peer.
 sources, untested branches, forbidden syntax, short clones and hostile configuration fail
 closed. It also invokes the operational scripts directly. `release:check` includes lint,
 duplication, docstrings and coverage; `prepublishOnly` requires that complete release gate.
+
+`pack:check` also runs in `release:check`. It packs without lifecycle scripts (the
+release gate builds first), scans every archive member's name and contents for private
+paths and credential-shaped strings, and reports categories and line numbers without
+echoing matched values. It requires npm and tar. Package documentation is allowlisted
+to README-linked guides and examples; certification, audit and receipt records stay
+in the repository.
 
 Tests run against real repositories and real filesystems. There are no mocks and no
 hand-built `api` doubles: this is filesystem and merge code, and a fake of either would only
@@ -981,3 +1015,13 @@ signature and requires explicit signing again. Wall-clock expiry, package/backen
 freshness and review approval remain separate policies. Keep receiver
 administration trusted and retain the core history alongside native bundles for
 independent receipt auditing.
+
+Every workflow job granted write permissions, including CodeQL, Dependabot and
+reusable workflow calls, requires the exact repository `unbraind/pm-vcs`.
+The approval variable controls GitHub releases; it does not impose a local npm
+publishing hold. Maintainers run the prepublish checks and authenticate with npm
+for local publication. The first local publish uses `--provenance=false`; daily
+GitHub OIDC releases keep provenance enabled.
+A maintainer enables the disabled workflow after merge with
+`gh workflow enable release.yml --repo unbraind/pm-vcs`. Workflow activation is
+manual; the package does not install an automatic setup workflow.

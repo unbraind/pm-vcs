@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   refresh:
+    if: github.repository == 'unbraind/pm-vcs'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

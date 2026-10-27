@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   codeql:
+    if: github.repository == 'unbraind/pm-vcs'
     permissions:
       security-events: write
       actions: read
