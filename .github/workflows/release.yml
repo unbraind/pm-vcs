@@ -21,7 +21,7 @@ concurrency:
 jobs:
   release:
     # New packages stay unreleased until the maintainer sets the repository variable PM_RELEASE_APPROVED=true.
-    if: vars.PM_RELEASE_APPROVED == 'true' && github.ref == 'refs/heads/main'
+    if: github.repository == 'unbraind/pm-vcs' && vars.PM_RELEASE_APPROVED == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       RELEASE_TIMEZONE: Europe/Vienna

@@ -1015,3 +1015,9 @@ signature and requires explicit signing again. Wall-clock expiry, package/backen
 freshness and review approval remain separate policies. Keep receiver
 administration trusted and retain the core history alongside native bundles for
 independent receipt auditing.
+
+Release jobs with write permissions are restricted to `unbraind/pm-vcs` at job
+level, so a fork cannot run publication with its own approval variable.
+A maintainer enables the disabled workflow after merge with
+`gh workflow enable release.yml --repo unbraind/pm-vcs`. Workflow activation is
+manual; the package does not install an automatic setup workflow.
