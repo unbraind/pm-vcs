@@ -122,6 +122,7 @@
 
 ### Other
 
+- Release readiness behind PM_RELEASE_APPROVED ([pm-vcs-release-gate](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-release-gate.toon))
 - Phase 5: the forge and the patch series ([pm-vcs-5h6j](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-5h6j.toon))
 - Phase 7: agents never stop on a conflict ([pm-vcs-phase7](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-phase7.toon))
 - Auto-merge green Dependabot updates and group the pm toolchain into one daily PR ([pm-vcs-0bur](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-0bur.toon))
