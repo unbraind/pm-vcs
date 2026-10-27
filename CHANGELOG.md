@@ -92,18 +92,13 @@
 - The release workflow falls back to an unattested npm publish and exits zero ([pm-vcs-4v28](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-4v28.toon))
 - Harden patch-series and review objects after PR 48 review ([pm-vcs-jrej](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-jrej.toon))
 - Regenerate the self-host bundle for PR 49 ([pm-vcs-m6j4](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m6j4.toon))
-- Propagate the docstring gate entry guard fix ([pm-vcs-anfk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-anfk.toon))
-- Fix release publish-before-protected-main-push ordering ([pm-vcs-m4xr](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m4xr.toon))
 - Self-host bundle gate cannot pass on dependency-manifest-only changes, so every dependabot PR is red ([pm-vcs-8y72](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8y72.toon))
 - Fix SDK GetItemProjection id drift breaking dependency-refresh release:check ([pm-vcs-1v6x](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-1v6x.toon))
 - Refresh dependencies and regenerate self-host bundle to unblock Dependabot PRs ([pm-vcs-17li](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-17li.toon))
 - Fix three PR \#27 review findings: merge --abort recovery, atomic merge-state write, hoist flattenTree, refuse --continue with --abort ([pm-vcs-8wbv](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8wbv.toon))
 - A conflicted merge must not commit and must leave durable unmerged state ([pm-vcs-ikyc](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ikyc.toon))
 - Retire the vendored docstring analyzer and converge the changelog on replace mode ([pm-vcs-8bpi](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8bpi.toon))
-- Release bot identity absent from the allowlist would break the audit on the first release ([pm-vcs-gehh](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-gehh.toon))
-- Public git history embeds a personal author email and blocks release approval ([pm-vcs-mhbz](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-mhbz.toon))
 - Fix NODE_V8_COVERAGE lcov corruption in test helpers ([pm-vcs-lapg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-lapg.toon))
-- The 100 percent branch gate rested on an incidental execution, so an unrelated change failed CI on Node 26 only ([pm-vcs-8e8k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8e8k.toon))
 - A fetched branch can be neither named nor listed, so the push refusal's own remediation cannot be followed ([pm-vcs-dh19](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-dh19.toon))
 - Make the release gate deterministic: a clock-dependent changelog date and a branch V8 reported inconsistently ([pm-vcs-ehvf](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ehvf.toon))
 - Harden the distribution surface against the review findings: one base for clone, atomic remotes, and a bounded push namespace ([pm-vcs-6220](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-6220.toon))
@@ -113,7 +108,6 @@
 - Close PR 3 transactional rewrite data-integrity findings ([pm-vcs-ntht](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-ntht.toon))
 - A mode-only change produces an empty diff, so an executable bit can move invisibly ([pm-vcs-pxgl](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-pxgl.toon))
 - Initialize pm-vcs at the source workspace outside Git ([pm-vcs-c590](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-c590.toon))
-- A VCS with no ignore mechanism can stage and then overwrite another VCS's control directory ([pm-vcs-aujy](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-aujy.toon))
 
 ### Security
 
@@ -163,3 +157,11 @@
 - pm-vcs is not git-compatible, and that is the point ([pm-vcs-ljkx](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/decisions/pm-vcs-ljkx.toon))
 - 100/100/100 coverage test suite for pm-vcs engine ([pm-vcs-m6ld](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-m6ld.toon))
 - pm-vcs: branch-aware merge safety for pm trackers ([pm-vcs-ghql](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-ghql.toon))
+
+### Closed
+
+- Closed: Propagate the docstring gate entry guard fix ([pm-vcs-anfk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-anfk.toon))
+- Closed: Fix release publish-before-protected-main-push ordering ([pm-vcs-m4xr](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m4xr.toon))
+- Closed: Release bot identity absent from the allowlist would break the audit on the first release ([pm-vcs-gehh](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-gehh.toon))
+- Closed: The 100 percent branch gate rested on an incidental execution, so an unrelated change failed CI on Node 26 only ([pm-vcs-8e8k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8e8k.toon))
+- Closed: A VCS with no ignore mechanism can stage and then overwrite another VCS's control directory ([pm-vcs-aujy](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-aujy.toon))
