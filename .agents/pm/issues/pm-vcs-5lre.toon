@@ -6,12 +6,13 @@ status: open
 priority: 2
 tags[2]: follow-up,toolchain
 created_at: "2026-10-20T08:44:51.155Z"
-updated_at: "2026-10-20T20:55:35.536Z"
+updated_at: "2026-10-27T11:05:18.358Z"
 author: codex-agent
 estimated_minutes: 30
 acceptance_criteria: Strict health no longer fails on the installed pm-github host-version skew; release gates remain green.
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-10-20T20:55:22.187Z",codex-agent,"Observed again during PR #134 closeout: node_modules/.bin/pm health --check-only --strict-exit --require-merge-drivers exits 1 with extension_host_pm_cli_version_skew:2026.10.15:2026.10.20:pm-github in the package worktree. Integrity is OK; the extension skew is the only gate-failing finding. Existing stale-item and provenance-domain findings remain advisory. In a disposable checkout, following .github/workflows/ci.yml and installing npm:pm-github@2026.10.4 through the repo-pinned host makes the same strict health command exit 0, with extension health OK and only those two existing storage advisories. The release gates for PR #134 both pass 1752/1752 at 100% in all coverage dimensions. SDK pins, telemetry settings and existing history are unchanged. This receipt enriches the existing follow-up; compatibility remediation remains out of scope for the signature review."
+  "2026-10-27T11:05:18.351Z",codex-agent,"Read-only baseline proof: extracted tracked .agents/pm from main a31158d867b02922f092b5f7062a1511806c0007 into a plain scratch tracker and ran the repository-pinned pm --no-extensions health --full --json. It reports the identical advisory provenance_value_domain_invalid:claude-code:role:single_digit:50 as this branch, with no new structural failures. This item stays open for owner review. No history-repair, normalization, dependency-floor change or historical rewrite is performed."
 files[2]{path,scope}:
   .github/workflows/ci.yml,project
   package.json,project
