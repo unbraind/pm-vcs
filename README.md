@@ -328,6 +328,13 @@ files to an old set. Inspect bounded TOON/JSON status with
 `pm vcs destructive-receipts --json`. See [destructive operation receipts](docs/destructive-operations.md)
 for recovery, typed SDK refusals and the engine path audit.
 
+Pending native ref, detached HEAD, index, merge-state, audit and upload-pin
+publications also retain their object roots during GC. Conditional updates recover
+all destinations before checking the new predicate, under the store and namespace
+leases. A recovered peer value returns `ref_changed`/`head_changed` rather than
+being silently overwritten. See [publication recovery](docs/destructive-operations.md)
+for missing-target cancellation and bounded verification.
+
 `pm vcs compact` durably replaces loose objects with bounded indexed packs.
 SHA-256 identities still name the uncompressed typed frame, so refs, bundles,
 manifest ranges and upload pins keep the same addresses. Independently compressed

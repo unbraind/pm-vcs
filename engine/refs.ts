@@ -1,6 +1,7 @@
-import { prepareDestruction } from "./destruction.ts";
+import { prepareDestruction, namespacePublicationContext } from "./destruction.ts";
 import { VerificationRefusal } from "./object-error.ts";
 import { durability } from "./durability.ts";
+import { withPublicationLock, validatePublicationIds } from "./publication.ts";
 // Ref storage: branches, tags, and HEAD.
 //
 // The important property here is not where the files live, it is that every
@@ -47,6 +48,8 @@ export interface RefUpdate {
   /** The value to store, or null to delete the ref. */
   readonly next: ObjectId | null;
 }
+/** A literal HEAD predicate can guard a ref batch, and optionally change HEAD in that same leased batch. */
+export interface HeadUpdate { readonly expected: string; readonly next?: string }
 
 /** A ref name paired with the commit it points at. */
 export interface RefEntry {
@@ -68,6 +71,7 @@ export interface RefEntry {
  *   dot-only segment, or contains whitespace or control characters.
  */
 export function assertRefName(name: string): void {
+  if (typeof name !== "string") throw new ObjectStoreError("invalid_ref_name", "Ref names must be strings.");
   const reject = (reason: string): never => {
     throw new ObjectStoreError("invalid_ref_name", `Ref name "${name}" is invalid: ${reason}`);
   };
@@ -95,10 +99,14 @@ export function assertRefName(name: string): void {
 function readTrimmed(path: string): string | null {
   try {
     return readFileSync(path, "utf8").trim();
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
+
+/** Normalize accepted symbolic HEAD spacing through the same representation the writer emits. */
+function normalizedHead(value: string | null): string | null { return value?.startsWith("ref: ") ? `ref: ${value.slice(5).trim()}` : value; }
 
 /**
  * Writes a file atomically: temp file, fsync, rename over the destination.
@@ -108,7 +116,7 @@ function readTrimmed(path: string): string | null {
  * Temporary names are randomized and end in the reserved .lock suffix so a
  * legitimate .tmp ref cannot be overwritten by an in-flight publication.
  */
-function writeAtomic(path: string, contents: string): void {
+function writeAtomic(path: string, contents: string, validate?: () => void): void {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = join(dirname(path), `ref-${process.pid}-${randomBytes(6).toString("hex")}.lock`);
   const handle = openSync(temporary, "wx");
@@ -119,7 +127,7 @@ function writeAtomic(path: string, contents: string): void {
     } finally {
       closeSync(handle);
     }
-    durability.rename(temporary, path);
+    durability.rename(temporary, path, validate);
   } catch (error) {
     durability.remove(temporary, { force: true });
     throw error;
@@ -161,6 +169,7 @@ export class RefStore {
    * @returns The path, which may or may not exist.
    */
   private pathFor(name: string): string {
+    if (name === "HEAD") return join(this.headRoot, "HEAD");
     return join(this.root, ...name.split("/"));
   }
 
@@ -218,12 +227,25 @@ export class RefStore {
    *   ref currently holds. `expected: null` requires that the ref not exist;
    *   `next: null` deletes it.
    * @param preflight - Receiver policy run after all locks and CAS checks, before any ref write.
+   * @param head - Optional literal HEAD predicate and replacement in the same batch.
    * @throws ObjectStoreError When two updates name one ref, when a ref no longer
    *   holds its expected value, or when another process holds a lock. In every
    *   case no ref has been written.
    */
-  transaction(updates: readonly RefUpdate[], preflight?: () => void): void {
-    for (const update of updates) assertRefName(update.name);
+  transaction(updates: readonly RefUpdate[], preflight?: () => void, head?: HeadUpdate): void {
+    if (!Array.isArray(updates) || updates.some(update => update === null || typeof update !== "object") || preflight !== undefined && typeof preflight !== "function" || head !== undefined && (head === null || typeof head !== "object" || typeof head.expected !== "string" || head.next !== undefined && typeof head.next !== "string")) throw new ObjectStoreError("invalid_ref_update", "Ref transactions require complete update records and compatible preflight/HEAD arguments.");
+    const supplied = updates; updates = supplied.map(update => ({ name: update.name, expected: update.expected, next: update.next }));
+    const suppliedHead = head; head = head === undefined ? undefined : { ...head };
+    /** Runtime callers cannot redirect an already leased namespace or change its CAS intent through a callback. */
+    const unchanged = (): void => { if (supplied.length !== updates.length || supplied.some((update, index) => update === null || typeof update !== "object" || update.name !== updates[index]!.name || update.expected !== updates[index]!.expected || update.next !== updates[index]!.next) || suppliedHead?.expected !== head?.expected || suppliedHead?.next !== head?.next) throw new ObjectStoreError("invalid_ref_update", "A live ref request changed; construct a new transaction before retrying."); };
+    for (const update of updates) { assertRefName(update.name); for (const id of [update.expected, update.next]) if (id !== null && !isObjectId(id)) throw new ObjectStoreError("invalid_object_id", "Ref predicates and targets need complete object identities."); }
+    if (namespacePublicationContext(join(this.root, "HEAD"))?.control === this.root && updates.some(update => update.name !== "HEAD" && !update.name.startsWith("refs/"))) throw new ObjectStoreError("invalid_ref_name", "Native refs must use HEAD or refs/<namespace>/<name>; other control files are not ref destinations.");
+    if (head !== undefined) { for (const raw of [head.expected, head.next]) if (raw !== undefined) { if (raw.startsWith("ref: ")) assertRefName(raw.slice(5).trim()); else if (!isObjectId(raw)) throw new ObjectStoreError("invalid_object_id", "HEAD needs a complete object identity or branch name."); } if (updates.some(update => update.name === "HEAD")) throw new ObjectStoreError("duplicate_ref_update", "HEAD appears twice in one transaction."); }
+    return withPublicationLock(join(this.root, "HEAD"), () => { unchanged(); for (const update of updates) if (update.next !== null) validatePublicationIds(this.pathFor(update.name), [update.next]); if (head?.next !== undefined && isObjectId(head.next)) validatePublicationIds(join(this.headRoot, "HEAD"), [head.next]); this.transactionLocked(updates, preflight, head, unchanged); });
+  }
+
+  /** Recovery of every destination precedes every fresh CAS, under the store and all ref leases. */
+  private transactionLocked(updates: readonly RefUpdate[], preflight: (() => void) | undefined, head: HeadUpdate | undefined, unchanged: () => void): void {
     const ordered = [...updates].sort((left, right) => compareByteOrder(left.name, right.name));
     for (let index = 1; index < ordered.length; index += 1) {
       // Two updates to one ref would make "the value the caller believes"
@@ -233,25 +255,38 @@ export class RefStore {
       }
     }
     const held: ReturnType<typeof durability.claim>[] = [];
+    const applied = new Set<string>();
+    let headApplied = false;
     let failure: unknown;
     /** Read every expectation under all leases, including after caller preflight callbacks. */
     const validate = (): void => {
+      unchanged();
       for (const lease of held) lease.verify();
       for (const update of ordered) {
         const current = readTrimmed(this.pathFor(update.name));
-        if (current !== update.expected) throw new ObjectStoreError("ref_changed", `Ref ${update.name} holds ${current ?? "nothing"}; expected ${update.expected ?? "nothing"}. Re-read the ref and retry: another agent advanced it.`);
+        const expected = applied.has(update.name) ? update.next : update.expected;
+        if (current !== expected) throw new ObjectStoreError("ref_changed", `Ref ${update.name} holds ${current ?? "nothing"}; expected ${expected ?? "nothing"}. Re-read the ref and retry: another agent advanced it.`);
       }
+      if (head !== undefined && normalizedHead(readTrimmed(join(this.headRoot, "HEAD"))) !== normalizedHead((headApplied ? head.next : head.expected)!)) throw new ObjectStoreError("head_changed", "HEAD changed after recovery; re-read it and retry the operation.");
     };
     try {
-      for (const update of ordered) held.push(durability.claim(`${this.pathFor(update.name)}.lock`, "ref_locked"));
+      const paths = [...ordered.map(update => this.pathFor(update.name)), ...(head === undefined ? [] : [join(this.headRoot, "HEAD")])].sort(compareByteOrder);
+      for (const path of paths) held.push(durability.claim(`${path}.lock`, "ref_locked"));
+      const beforeRecovery = new Map(paths.map(path => [path, readTrimmed(path)]));
+      for (const path of paths) durability.recoverPublication(path);
+      for (const update of ordered) { const before = beforeRecovery.get(this.pathFor(update.name)); const after = readTrimmed(this.pathFor(update.name)); if (before === update.expected && after === update.next && before !== after) applied.add(update.name); }
+      if (head?.next !== undefined) { const before = beforeRecovery.get(join(this.headRoot, "HEAD")); headApplied = normalizedHead(before ?? null) === normalizedHead(head.expected) && normalizedHead(before ?? null) !== normalizedHead(head.next) && normalizedHead(readTrimmed(join(this.headRoot, "HEAD"))) === normalizedHead(head.next); }
       validate(); preflight?.(); validate();
-      const removals = ordered.filter(update => update.next === null);
+      const removals = ordered.filter(update => update.next === null && update.expected !== null && !applied.has(update.name));
       if (removals.length > 0) {
         const plan = prepareDestruction(this.root, `ref-retirement:${JSON.stringify(ordered)}`, removals.map(update => ({ path: this.pathFor(update.name) })), false, undefined, false, "eligibility_changed");
         for (const path of plan.paths) plan.remove(path);
         plan.finish();
+        for (const update of removals) applied.add(update.name);
       }
-      for (const update of ordered) if (update.next !== null) writeAtomic(this.pathFor(update.name), update.next);
+      for (const update of ordered) if (update.next !== null && update.next !== update.expected && !applied.has(update.name)) { writeAtomic(this.pathFor(update.name), update.next, validate); applied.add(update.name); }
+      if (head?.next !== undefined && normalizedHead(head.next) !== normalizedHead(head.expected) && !headApplied) { writeAtomic(join(this.headRoot, "HEAD"), normalizedHead(head.next)!, validate); headApplied = true; }
+      validate();
     } finally {
       for (const lock of held) {
         try { lock.release(); } catch (error) { failure ??= error; }
@@ -290,7 +325,7 @@ export class RefStore {
           if (!entry.isFile()) throw new VerificationRefusal("integrity", "ref_type", "A reference is not a regular file.");
           try { value = readFileSync(path, "utf8").trim(); } catch { throw new VerificationRefusal("integrity", "ref_io", "A reference disappeared or could not be read."); }
           if (!isObjectId(value)) throw new VerificationRefusal("integrity", "ref_decode", "A reference does not contain a complete object identity.");
-        } else value = readTrimmed(path);
+        } else { try { value = readTrimmed(path); } catch { continue; } }
         if (value === null || !isObjectId(value)) continue;
         const relative = path.slice(base.length + 1).split(sep).join(posix.sep);
         found.push({ name: `${prefix}${relative}`, target: value });
@@ -347,9 +382,11 @@ export class RefStore {
    * Points HEAD at a branch, whether or not that branch exists yet.
    *
    * @param ref - Full branch ref name.
+   * @param expected - Optional literal HEAD guard, checked after prior publication recovery.
    */
-  setHeadToRef(ref: string): void {
+  setHeadToRef(ref: string, expected?: string): void {
     assertRefName(ref);
+    if (expected !== undefined) { this.transaction([], undefined, { expected, next: `ref: ${ref}` }); return; }
     writeAtomic(join(this.headRoot, "HEAD"), `ref: ${ref}`);
   }
 
@@ -357,12 +394,14 @@ export class RefStore {
    * Points HEAD directly at a commit, detaching it from any branch.
    *
    * @param target - The commit id.
+   * @param expected - Optional literal HEAD guard, checked after prior publication recovery.
    * @throws ObjectStoreError When the id is malformed.
    */
-  setHeadDetached(target: ObjectId): void {
+  setHeadDetached(target: ObjectId, expected?: string): void {
     if (!isObjectId(target)) {
       throw new ObjectStoreError("invalid_object_id", `"${target}" is not a valid object id.`);
     }
+    if (expected !== undefined) { this.transaction([], undefined, { expected, next: target }); return; }
     writeAtomic(join(this.headRoot, "HEAD"), target);
   }
 

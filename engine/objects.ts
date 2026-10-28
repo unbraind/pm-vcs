@@ -1,3 +1,4 @@
+import "./publication.ts";
 import { destructionBoundary, measureDestructionRevision } from "./destruction.ts";
 import { objectFiles, type ObjectFile } from "./object-files.ts";
 import { durability } from "./durability.ts";
@@ -29,6 +30,7 @@ import {
   mkdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   statSync,
   writeFileSync,
   writeSync,
@@ -36,7 +38,7 @@ import {
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { resolveObjectsControl } from "./instance-link.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
-import { encodeTombstone, assertArrivalsAllowed, readDenials, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
+import { encodeTombstone, assertArrivalsAllowed, readDenials, validateDenials, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { writePrivateJson } from "./composition.ts";
 import { PackStorage, PackRefusal, type PackReport, packBoundary } from "./packs.ts";
 
@@ -747,11 +749,12 @@ export class ObjectStore {
 
   /** Persist denial durably before deletion; pending cleanup closes every writer. */
   recordDenials(denials: readonly ErasureDenial[]): void {
+    validateDenials(denials);
     this.withWriteLock(/** The durable denial and canonical audit objects publish under the same store lease. */ () => {
       this.markStorageGeneration();
+      this.prepareDenialObjects(denials);
       writePrivateJson(join(dirname(this.root), "denials.json"), denials);
       this.denialCache = undefined;
-      this.prepareDenialObjects(denials);
     });
   }
 
@@ -943,6 +946,8 @@ export class ObjectStore {
       return action();
     }
     if (!existsSync(dirname(this.root))) mkdirSync(dirname(this.root), { recursive: true });
+    const control = realpathSync(dirname(this.root)); const controlOwner = lstatSync(control, { bigint: true });
+    let publicationOwner: (() => boolean) | undefined;
     const path = join(dirname(this.root), "objects.lock");
     const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
     const file = objectFiles.open(temporary, "wx", 0o600);
@@ -976,8 +981,11 @@ export class ObjectStore {
       if (published.size !== locked.size || published.mtimeNs !== locked.mtimeNs) throw new ObjectStoreError("worktree_path_changed", "Store owner bytes changed during temporary retirement.");
       locked = published;
       activeLeases.add(lease); activeRevisions.set(lease, 0);
+      publicationOwner = () => { const actual = lstatSync(path, { bigint: true, throwIfNoEntry: false }); const parent = lstatSync(control, { bigint: true, throwIfNoEntry: false }); const held = fstatSync(fd, { bigint: true }); return actual !== undefined && parent !== undefined && parent.dev === controlOwner.dev && parent.ino === controlOwner.ino && parent.birthtimeNs === controlOwner.birthtimeNs && actual.dev === published.dev && actual.ino === published.ino && actual.size === published.size && actual.mtimeNs === published.mtimeNs && actual.ctimeNs === published.ctimeNs && held.dev === published.dev && held.ino === published.ino && held.size === published.size && held.mtimeNs === published.mtimeNs && held.ctimeNs === published.ctimeNs; };
+      objectFiles.storageOwners.set(control, publicationOwner);
       result = action();
     } finally {
+      if (objectFiles.storageOwners.get(control) === publicationOwner) objectFiles.storageOwners.delete(control);
       activeLeases.delete(lease); activeRevisions.delete(lease); dirtyLeases.delete(lease);
       try {
         try {

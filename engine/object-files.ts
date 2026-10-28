@@ -11,6 +11,8 @@ export interface ObjectFile {
 /** Registered ownership and fault seam for resource-lifetime invariant tests. @internal */
 export const objectFiles = {
   active: new Set<ObjectFile>(),
+  /** Synchronous publication may reuse only a live, descriptor-verified store owner; journal scope is not ownership. */
+  storageOwners: new Map<string, () => boolean>(),
   /** Open and register before exposing the descriptor; even a failing registration observer releases it. */
   open(path: string, flags: string | number, mode?: number): ObjectFile {
     const fd = fs.openSync(path, flags, mode);

@@ -199,17 +199,11 @@ export class OperationLog {
         + "Something moved HEAD since then; re-read it and retry.",
       );
     }
-    validate?.(target);
     refs.transaction(target.refs.map((transition) => ({
       name: transition.ref,
       expected: transition.after,
       next: transition.before,
-    })));
-    if (target.head !== undefined) {
-      const restored = target.head.before;
-      if (restored.startsWith("ref: ")) refs.setHeadToRef(restored.slice(5).trim());
-      else refs.setHeadDetached(restored);
-    }
+    })), () => validate?.(target), target.head === undefined ? undefined : { expected: target.head.after, next: target.head.before });
     const reversed: RefTransition[] = target.refs.map((transition) => ({
       ref: transition.ref,
       before: transition.after,

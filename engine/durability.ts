@@ -1,4 +1,5 @@
-import { configureDestruction, retireNamespace, withDestructionScope, resolveNamespacePath, resumeNamespaceDirectory, prepareNamespaceDestruction, destructionBoundary, DestructionRefusal, type DestructionReceipt } from "./destruction.ts";
+import { configureDestruction, retireNamespace, withDestructionScope, resolveNamespacePath, resumeNamespaceDirectory, resumeNamespacePublication, prepareNamespaceDestruction, destructionBoundary, DestructionRefusal, type DestructionReceipt } from "./destruction.ts";
+import { withNativePublication, validateNativePublication } from "./publication-gate.ts";
 import { ObjectStoreError, assertVerificationBound, verificationLimits } from "./object-error.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { objectFiles } from "./object-files.ts";
@@ -45,12 +46,18 @@ export const durability = {
     durability.directory(dirname(path));
   },
   /** Flush the source file before replacing its name, then complete the platform namespace barriers. */
-  rename(source: string, destination: string): DestructionReceipt {
+  rename(source: string, destination: string, validate?: () => void): DestructionReceipt {
     source = resolve(source); destination = resolve(destination);
+    return withNativePublication(destination, () => {
+    validateNativePublication(source, destination);
+    if (validate !== undefined) { resumeNamespacePublication(destination); validate(); }
     const file = objectFiles.open(source, "r+"); let expected: fs.BigIntStats;
     try { expected = fs.fstatSync(file.fd, { bigint: true }); durability.file(file.fd); } finally { file.close(); }
-    return retireNamespace({ path: source, destination, expected });
+    return retireNamespace({ path: source, destination, expected }, false, validate);
+    });
   },
+  /** Recover durable prior publications under the store lease before a new semantic state is observed. */
+  recoverPublication(destination: string): void { withNativePublication(destination, () => resumeNamespacePublication(destination)); },
   /** Publish an already flushed immutable file exclusively, preserving EEXIST for peer-result comparison. */
   link(source: string, destination: string): void {
     source = resolve(source); destination = resolve(destination);
@@ -236,7 +243,7 @@ configureDestruction({
   link: durability.link,
   unlink(path) { durability.directory(dirname(path)); fs.unlinkSync(path); durability.directory(dirname(path)); },
   rmdir(path) { durability.directory(dirname(path)); fs.rmdirSync(path); durability.directory(dirname(path)); },
-  rename(source, destination) { durability.directory(dirname(source)); if (dirname(source) !== dirname(destination)) durability.directory(dirname(destination)); fs.renameSync(source, destination); durability.directory(dirname(source)); if (dirname(source) !== dirname(destination)) durability.directory(dirname(destination)); },
+  rename(source, destination) { withNativePublication(destination, () => { validateNativePublication(source, destination); durability.directory(dirname(source)); if (dirname(source) !== dirname(destination)) durability.directory(dirname(destination)); fs.renameSync(source, destination); durability.directory(dirname(source)); if (dirname(source) !== dirname(destination)) durability.directory(dirname(destination)); }); },
 });
 
-export { inspectDestructions, DestructionRefusal, type DestructionInventory, type DestructionRefusalCode, type DestructionReceipt, type DestructionPlan } from "./destruction.ts";
+export { inspectDestructions, DestructionRefusal, type DestructionInventory, type DestructionRefusalCode, type DestructionReceipt, type DestructionPlan, type DestructionCancellation } from "./destruction.ts";

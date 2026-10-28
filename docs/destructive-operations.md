@@ -35,7 +35,10 @@ Retry the **original operation**, with its original identity and authorization,
 to recover its immutable set. Receipt inspection is read-only and never grants
 permission to delete a path. The CLI uses the host SDK's tracker resolution and
 TOON/JSON renderers; both formats contain at most twenty receipt summaries and
-twenty skip reasons, with exact pending/completed/omitted counts.
+twenty skip reasons, with exact pending/completed/omitted counts. Pending,
+superseded and cancelled receipts take precedence over routine completions, so
+recovery evidence is not displaced by owner-cleanup history. Omission counts still
+make clear that the bounded page is not a complete historical lookup.
 
 ```ts
 import { DestructionRefusal, inspectDestructions, ObjectStore } from "pm-vcs";
@@ -228,3 +231,67 @@ foreign checkpoints remain untouched with an explicit unverified recovery
 result. Receipt work bounds refuse before candidate deletion. The power-loss
 model preserves mtime across restoration and namespace-only operations while
 continuing to observe actual content writes.
+
+
+Publication recovery is a state transition, so it precedes every fresh conditional
+observation. Ref batches acquire the store lease and every ref/HEAD lease, reconcile
+all their destinations, and only then check every expected value. They repeat the
+checks after policy callbacks and immediately before replacing a destination.
+Native ref writes accept only `HEAD` and `refs/...` destinations, so a custom
+pathname cannot bypass root retention or overwrite another control file. Existing
+legacy paths remain readable, and standalone ref stores retain their namespace API.
+Literal HEAD predicates participate in the same batch, including guarded undo and
+detached commits. Index cache updates likewise recover before checking the staged
+generation. A retry whose recorded transition itself finishes reports that success
+without publishing it twice; a different recovered peer value refuses the stale
+predicate. Invalid fresh identities or unavailable targets refuse before replay.
+Released inline checkpoints whose member is already moved are finalized before
+a fresh publication, including legacy source-key receipts. A successful retry
+therefore reports the value it actually published rather than an older replay.
+
+Every native rename and recovery drainer uses the actual shared object-store
+lease. Reentrancy requires the live owner descriptor, its matching pathname, and
+the same root lifetime; a journal scope alone grants no storage ownership.
+Publication codecs and GC share one bounded logical traversal, including tree,
+manifest, conflict and series descendants and declared shallow/promise policy.
+Ref/HEAD, merge-state and audit roots must physically exist even when a partial
+history promises an identity. Staged promised blobs and terminal denied index rows
+retain their existing metadata meaning without making missing or erased payloads
+readable.
+GC reads original pending ref, HEAD, index, merge-state and denial-audit sources
+through pinned descriptors, including private linked-instance controls. Upload
+pins may precede their arrivals and retain only existing pinned identities.
+Receipt inventory is complete independently of the twenty-entry output limit;
+foreign records are preserved with reasons, and bounds never certify verification.
+An unverifiable publication inventory conservatively retains every physical object;
+GC reports the unverified bound and deletes no candidates. Resolve the foreign
+receipt evidence or restore its verified source before expecting collection.
+GC's optional `publications` field reports pending and skipped counts in both SDK
+and CLI renderer formats, without source bytes or physical paths.
+
+An old pending publication whose target was collected or permanently denied
+cannot expose that root. Recovery durably cancels its original authority with
+`publication_target_unavailable`, then retires only its still-identical,
+recognized engine temporary under a separate exact-set receipt. A crash before
+or after that cleanup resumes the original receipts. Foreign replacement files
+remain untouched. Cancellation reasons remain visible in compact receipt summaries,
+including after detailed entries are omitted. Corruption, I/O failures and exhausted
+verification budgets refuse and preserve evidence rather than masquerading as
+absence or authorizing cancellation.
+Bounded receipt views prioritize pending authority, supersession and cancellation
+ahead of routine completed cleanup, independently of randomized receipt names.
+
+The seeded pending-root corpus covers six native formats in loose and packed
+stores. Actual child-process termination tests exercise prepared publication and
+termination during replay. Native directory-entry-loss matrices also cover
+conditional replay and cancellation, rerunning recovery twice and requiring no
+missing retained object, duplicate publication, leaked descriptor or pending
+receipt.
+
+
+The namespace helper keeps its module graph independent of the repository stack.
+The object layer installs the native publication adapter when initialized. Bare
+namespace workers can still perform standalone durability operations; attempting
+native publication without that adapter returns `publication_unverified` with
+`store_adapter`, before any namespace mutation. Public ObjectStore/Repository
+imports install the actual shared lease and verifier automatically.

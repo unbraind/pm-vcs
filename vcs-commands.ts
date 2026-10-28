@@ -1294,7 +1294,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
 
   api.registerCommand({
     name: "vcs gc",
-    description: "Report unreachable objects; --apply collects them under the shared writer lock. Refs, the entire operation log, staged sparse instances, uploads and active publication leases retain objects.",
+    description: "Report unreachable objects; --apply collects them under the shared writer lock. Refs, the entire operation log, staged sparse instances, uploads, pending native publications and active publication leases retain objects.",
     flags: [{ long: "--apply", description: "Delete the unreachable objects after a fresh locked plan", value_type: "boolean" }],
     run(context: CommandHandlerContext): VcsEnvelope & { gc: GcReport } {
       return { ok: true, gc: collectGarbage(openRepository(context), context.options?.apply === true) };

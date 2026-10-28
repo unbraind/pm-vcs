@@ -332,4 +332,4 @@ export default defineExtension({
   },
 });
 
-export { inspectDestructions, DestructionRefusal, type DestructionInventory, type DestructionRefusalCode, type DestructionReceipt, type DestructionPlan } from "./engine/durability.ts";
+export { inspectDestructions, DestructionRefusal, type DestructionInventory, type DestructionRefusalCode, type DestructionReceipt, type DestructionPlan, type DestructionCancellation } from "./engine/durability.ts";

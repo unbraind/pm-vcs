@@ -489,3 +489,10 @@ test("a peer retiring a pinned staging alias is reported as absence and never in
  const repo=await fresh();const bytes=Buffer.from("retained peer alias 893165");const id=repo.objects.write("blob",bytes);let published=false;let retired=false;packBoundary.visit=step=>{if(step==="published")published=true;};objectFiles.opened=(_file,path)=>{if(published&&!retired&&path.endsWith("/payload")){retired=true;rmSync(path);}};
  try{const result=repo.objects.compact();assert.equal(result.destruction.status,"completed");assert.equal(result.packs,1);assert.equal(retired,true);assert.deepEqual(repo.objects.readTyped(id,"blob"),bytes);}finally{objectFiles.opened=()=>{};packBoundary.visit=()=>{};}
 });
+
+
+test("pack recovery refuses a directory swapped for a foreign file after inventory validation", async () => {
+ const repo=await fresh();const directory=join(repo.objects.storageRoot(),"packs");mkdirSync(directory,{recursive:true});const backup=join(repo.root,"foreign-pack-directory");const original=ObjectStore.prototype.walkLooseInventory;let swapped=false;
+ mock.method(ObjectStore.prototype,"walkLooseInventory",function*(this:ObjectStore){yield*original.call(this);if(!swapped){swapped=true;fs.renameSync(directory,backup);writeFileSync(directory,"foreign replacement sentinel");}});
+ assert.throws(()=>new PackStorage(repo.objects.storageRoot()).recover(),{code:"corrupt_pack"});assert.ok(swapped);assert.equal(readFileSync(directory,"utf8"),"foreign replacement sentinel");assert.ok(lstatSync(backup).isDirectory());
+});

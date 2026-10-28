@@ -520,3 +520,24 @@ test("exact checkpoint lookup accounts empty, current, historical, foreign and c
  const broken=join(f.dir.root,"broken-root");mkdirSync(join(broken,"destruction"),{recursive:true});const faultPath=join(broken,"destruction",createHash("sha256").update(`${broken}\0${key}`).digest("hex")+".json");writeFileSync(faultPath,pending);const fault=new DestructionRefusal("destructive_plan_conflict","unexpected ownership failure");objectFiles.opened=(_file,path)=>{if(path===faultPath)throw fault;};try{assert.throws(()=>inspectDestructionCheckpoint(broken,key),error=>error===fault);}finally{objectFiles.opened=()=>{};}
  assert.equal(readFileSync(join(f.tripwire,"guard"),"utf8"),"untouched sentinel");
 });
+
+
+test("unnamed native open failures propagate and an absent unrelated rename source never borrows an old receipt", () => {
+ const f=fixture();const failed=new Error("unnamed native open failure");objectFiles.opened=(_file,path)=>{if(path===f.paths[0])throw failed;};assert.throws(()=>prepareDestruction(f.control,"unnamed-native-error",[{path:f.paths[0]}]),error=>error===failed);objectFiles.opened=()=>{};
+ writeFileSync(join(f.control,"format"),"pmvcs-1\n");const source=join(f.control,"state.abcdef012345.tmp");const target=join(f.control,"state");writeFileSync(source,"prepared bytes");const cut=Object.assign(new Error("prepared interruption"),{code:"EINJECTED"});destructionBoundary.visit=(step,path)=>{if(step==="before-delete"&&path.endsWith("state.abcdef012345.tmp"))throw cut;};assert.throws(()=>retireNamespace({path:source,destination:target}),error=>error===cut);destructionBoundary.visit=()=>{};
+ assert.throws(()=>retireNamespace({path:join(f.control,"absent.abcdef012345.tmp"),destination:target}),{code:"destructive_target_changed"});assert.equal(readFileSync(source,"utf8"),"prepared bytes");assert.equal(existsSync(target),false);
+});
+
+test("bounded receipt views prioritize supersession and cancellation over routine cleanup independent of nonce order",()=>{
+ const f=fixture();prepareDestruction(f.control,"ordered-audit",[{path:f.paths[0]}]);const next=prepareDestruction(f.control,"ordered-audit",[{path:f.paths[1]}],false,undefined,false,"eligibility_changed");for(const path of next.paths)next.remove(path);next.finish();const directory=join(f.control,"destruction");const main=readdirSync(directory).find(name=>/^[0-9a-f]{64}\.json$/.test(name))!;const archive=readdirSync(directory).find(name=>name.endsWith(".receipt"))!;
+ // Released terminal checkpoints need no progress bitmap. Fixed nonces make the page-order regression deterministic.
+ const ordinary=JSON.parse(readFileSync(join(directory,main),"utf8")) as {id:string};ordinary.id="0".repeat(32);writeFileSync(join(directory,main),JSON.stringify(ordinary));const historical=JSON.parse(readFileSync(join(directory,archive),"utf8")) as {id:string;status:string;reason?:string};historical.id="f".repeat(32);const path=join(directory,archive.slice(0,65)+historical.id+".receipt");renameSync(join(directory,archive),path);writeFileSync(path,JSON.stringify(historical));let report=inspectDestructions(f.control,1);assert.equal(report.receipts[0]!.status,"superseded");assert.equal(report.receipts[0]!.id,historical.id);assert.equal(report.omitted,1);
+ historical.status="completed";delete historical.reason;writeFileSync(path,JSON.stringify(historical));report=inspectDestructions(f.control,1);assert.deepEqual(report.receipts[0]!.cancellations,["preconditions_changed"]);assert.equal(report.receipts[0]!.id,historical.id);assert.equal(report.omitted,1);assert.equal(readFileSync(f.paths[0],"utf8"),"owned-a");assert.equal(readFileSync(join(f.tripwire,"guard"),"utf8"),"untouched sentinel");
+});
+
+
+test("publication cancellation refuses unrelated sets and changed targets without deleting or relabelling peer data",()=>{
+ for(const count of [1,2]){const f=fixture();const plan=prepareDestruction(f.control,"not-a-publication",f.paths.slice(0,count).map(path=>({path})));assert.throws(()=>plan.cancelPublication(),{code:"conflicting_destructive_requests"});for(const path of f.paths)assert.ok(existsSync(path));}
+ const f=fixture();const target=join(f.data,"target");const plan=prepareDestruction(f.control,"changed-publication",[{path:f.paths[0],destination:target}]);writeFileSync(target,"peer target");assert.throws(()=>plan.cancelPublication(),{code:"destructive_target_changed"});assert.equal(readFileSync(target,"utf8"),"peer target");assert.equal(readFileSync(f.paths[0],"utf8"),"owned-a");
+ const g=fixture();const moved=join(g.data,"moved");const completed=prepareDestruction(g.control,"completed-publication",[{path:g.paths[0],destination:moved}]);for(const path of completed.paths)completed.remove(path);completed.finish();assert.throws(()=>completed.cancelPublication(),{code:"destructive_target_changed"});assert.equal(readFileSync(moved,"utf8"),"owned-a");
+});

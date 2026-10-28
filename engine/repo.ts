@@ -1,5 +1,6 @@
 import type { BigIntStats } from "node:fs";
 import { durability } from "./durability.ts";
+import { withPublicationLock, publicationRootIds, validatePublicationIds } from "./publication.ts";
 import type { AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
 import { attachCheckpoint, createSemanticCheckpoint, type CheckpointRequest } from "./checkpoints.ts";
 import { signChange } from "./signatures.ts";
@@ -604,6 +605,10 @@ export class Repository {
    * @returns False only when a compare-and-swap observed a newer index.
    */
   private replaceIndex(entries: readonly IndexEntry[], expectedContents: string | null): boolean {
+    return withPublicationLock(this.indexPath, () => {
+    if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
+    const contents = encodeIndex(entries);
+    validatePublicationIds(this.indexPath, publicationRootIds(this.indexPath, contents));
     const lockPath = `${this.indexPath}.lock`;
     let descriptor: number;
     try {
@@ -618,18 +623,25 @@ export class Repository {
     }
     let temporary: string | null = null;
     let lockOwner: BigIntStats | undefined;
+    const changed = new ObjectStoreError("index_changed", "The index changed during publication recovery; re-read it and retry.");
+    /** The same predicate guards initial derivation and the final namespace mutation. */
+    const validate = (): void => { if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) throw changed; };
     try {
       lockOwner = fstatSync(descriptor, { bigint: true });
-      if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
+      durability.recoverPublication(this.indexPath); validate();
       temporary = `${this.indexPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-      writeFileSync(temporary, encodeIndex(entries), { flag: "wx" });
-      durability.rename(temporary, this.indexPath);
+      writeFileSync(temporary, contents, { flag: "wx" });
+      durability.rename(temporary, this.indexPath, validate);
       temporary = null;
       return true;
+    } catch (error) {
+      if (error === changed) return false;
+      throw error;
     } finally {
       if (temporary !== null) durability.remove(temporary, { force: true });
       durability.release(lockPath, descriptor, lockOwner);
     }
+    });
   }
 
   /**
@@ -1702,13 +1714,13 @@ export class Repository {
     now: Date,
   ): void {
     if (head.kind === "branch") {
-      this.refs.compareAndSwap(head.ref, expected, next);
+      this.refs.transaction([{ name: head.ref, expected, next }], undefined, { expected: `ref: ${head.ref}` });
       this.operations.append(command, summary, [{ ref: head.ref, before: expected, after: next }], now);
       return;
     }
     // Detached HEAD advances HEAD itself. Recorded as a transition on the literal
     // name "HEAD" so undo has something to compare and swap against.
-    this.refs.setHeadDetached(next);
+    this.refs.setHeadDetached(next, expected ?? undefined);
     this.operations.append(command, summary, [{ ref: "HEAD", before: expected, after: next }], now);
   }
 

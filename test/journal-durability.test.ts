@@ -1,3 +1,4 @@
+import { prepareControlPublication } from "./helpers/prepared-publication.ts";
 import "./helpers/isolate-session.ts";
 /** Durable publication authority and retry reconciliation on one real non-git tracker. */
 import assert from "node:assert/strict";
@@ -67,14 +68,14 @@ test("native namespace power cuts at EVERY metadata publication boundary converg
 });
 
 
-const sequences = ["ref-retirement","ref-replacement","compact","unpack","repack","gc-loose","gc-packed","lease-cleanup","prune","oplog","deep-intent","recovery","obliterate","directory-recovery","publication-recovery","legacy-publication-recovery","process-stage-recovery"] as const;
+const sequences = ["ref-retirement","ref-replacement","compact","unpack","repack","gc-loose","gc-packed","lease-cleanup","prune","oplog","deep-intent","recovery","obliterate","directory-recovery","publication-recovery","legacy-publication-recovery","process-stage-recovery","ref-cas-recovery","ref-cas-cancel"] as const;
 type Sequence = typeof sequences[number];
 /** One prepared native store below the real tracker exercises a complete engine write-then-retire path. */
 function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep?:string):{steps:string[];cuts:number[]}{
  if(template!==undefined)cpSync(template,root,{recursive:true,filter:path=>path!==join(template,".pmvcs/destruction")});
  const repo=template===undefined?Repository.init(root):Repository.open(root);const bytes=Buffer.from("retained native power object");const live=hashObject("blob",bytes);const garbage=hashObject("blob",Buffer.from("discardable native power object"));
  if(template===undefined){repo.objects.write("blob",bytes);repo.refs.compareAndSwap("refs/metadata/live",null,live);repo.objects.write("blob",Buffer.from("discardable native power object"));}const ref="refs/metadata/temporary";
- if(template===undefined&&(kind==="ref-retirement"||kind==="ref-replacement"))repo.refs.compareAndSwap(ref,null,live);
+ if(template===undefined&&(kind==="ref-retirement"||kind==="ref-replacement"||kind==="ref-cas-recovery"||kind==="ref-cas-cancel"))repo.refs.compareAndSwap(ref,null,live);
  if(template===undefined&&(kind==="unpack"||kind==="repack"||kind==="gc-packed"))repo.objects.compact();
  if(template===undefined&&kind==="repack")repo.objects.write("blob",Buffer.from("new repack member"));
  const lease=join(repo.controlDirectory,"fixture.lock");if(template===undefined&&kind==="lease-cleanup")writeFileSync(lease,"owned lease fixture");
@@ -89,11 +90,17 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
  if(kind==="publication-recovery"||kind==="legacy-publication-recovery"){let crash=true;destructionBoundary.visit=step=>{if(crash&&step==="deleted"&&existsSync(recoveringPublication)){crash=false;throw new Error("publication interruption");}};try{assert.throws(()=>writePrivateJson(recoveringPublication,{value:1}));}finally{destructionBoundary.visit=()=>{};}
   if(kind==="legacy-publication-recovery"){const directory=join(owned,"destruction");const path=readdirSync(directory).filter(name=>name.endsWith(".json")).map(name=>join(directory,name)).find(path=>{const row=JSON.parse(readFileSync(path,"utf8")) as {entries:{destination?:string}[]};return row.entries.some(entry=>entry.destination?.endsWith("recover-publication.json"));})!;const row=JSON.parse(readFileSync(path,"utf8")) as {root:string;entries:{path:string;destination:string;identity:string}[]};const entry=row.entries[0];const key=`rename:${resolve(row.root,entry.path)}:${resolve(row.root,entry.destination)}:${entry.identity}`;fs.renameSync(path,join(directory,createHash("sha256").update(`${row.root}\0${key}`).digest("hex")+".json"));}
  }
+ let preparedRef="";
+ if(kind==="ref-cas-recovery"||kind==="ref-cas-cancel"){
+  preparedRef=prepareControlPublication(repo,join(repo.controlDirectory,ref),`${garbage}\n`);
+  if(kind==="ref-cas-cancel")repo.objects.withWriteLock(()=>{repo.objects.markStorageGeneration();const plan=prepareDestruction(repo.controlDirectory,"old-collector",[{path:join(repo.objects.storageRoot(),garbage.slice(0,2),garbage.slice(2))}]);for(const path of plan.paths)plan.remove(path);plan.finish();});
+ }
  const processLock=join(repo.controlDirectory,"oplog.jsonl.lock");if(kind==="process-stage-recovery")abandonProcessStage(processLock);
  const deep=join(root,"receipts/a/b/c");const control=join(repo.controlDirectory,"fresh/a/b");
  const operation=():void=>{
   if(kind==="ref-retirement")repo.refs.compareAndSwap(ref,repo.refs.read(ref),null);
-  else if(kind==="ref-replacement")repo.refs.compareAndSwap(ref,repo.refs.read(ref),garbage);
+  else if(kind==="ref-replacement"||kind==="ref-cas-recovery")repo.refs.compareAndSwap(ref,repo.refs.read(ref),garbage);
+  else if(kind==="ref-cas-cancel")repo.refs.compareAndSwap(ref,repo.refs.read(ref),live);
   else if(kind==="compact")repo.objects.compact();
   else if(kind==="unpack")repo.objects.unpack();
   else if(kind==="repack"){repo.objects.unpack();repo.objects.compact();}
@@ -115,7 +122,7 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
   for(let attempt=0;attempt<2;attempt++)operation();
   assert.deepEqual(new ObjectStore(repo.objects.storageRoot()).readTyped(live,"blob"),bytes);assert.equal(readFileSync(join(root,"guard"),"utf8"),"foreign tripwire");const inventory=inspectDestructions(repo.controlDirectory);const pending=new Set(inventory.receipts.filter(row=>row.status==="pending").map(row=>row.id));const evidence:unknown[]=[];if(pending.size)for(const directory of [join(repo.controlDirectory,"destruction"),join(owned,"destruction")])if(existsSync(directory))for(const name of readdirSync(directory).filter(name=>name.endsWith(".json"))){const record=JSON.parse(readFileSync(join(directory,name),"utf8")) as {id:string;root:string;entries:{path:string;identity:string}[]};if(pending.has(record.id))evidence.push({name,operation:["gc-candidates","compact-loose","unpack-packs"].find(key=>createHash("sha256").update(`${record.root}\0${key}`).digest("hex")+".json"===name),entries:record.entries.map(entry=>{const stat=lstatSync(resolve(record.root,entry.path),{bigint:true,throwIfNoEntry:false});return{...entry,current:stat===undefined?null:`${stat.dev}:${stat.ino}:${stat.birthtimeNs}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`};})});}assert.equal(inventory.pending,0,JSON.stringify(evidence));
   if(kind==="gc-loose"||kind==="gc-packed"||kind==="recovery")assert.equal(repo.objects.has(garbage),false);
-  if(kind==="ref-retirement")assert.equal(repo.refs.read(ref),null);if(kind==="ref-replacement")assert.equal(repo.refs.read(ref),garbage);
+  if(kind==="ref-retirement")assert.equal(repo.refs.read(ref),null);if(kind==="ref-replacement"||kind==="ref-cas-recovery")assert.equal(repo.refs.read(ref),garbage);if(kind==="ref-cas-cancel"){assert.equal(repo.refs.read(ref),live);assert.equal(repo.objects.has(garbage),false);assert.equal(existsSync(preparedRef),false);}
   if(kind==="lease-cleanup")assert.equal(existsSync(lease),false);if(kind==="prune")assert.equal(existsSync(join(root,"empty")),false);
   if(kind==="oplog")assert.equal(repo.operations.read().filter(operation=>operation.command==="power-case").length,1);
   if(kind==="deep-intent")for(const path of paths)assert.equal(existsSync(path),false);
@@ -369,5 +376,12 @@ test("legacy scans skip a retired observation and propagate unrelated typed and 
   objectFiles.opened=(_file,path)=>{if(path!==old.record||injected)return;injected=true;if(mode==="retired")rmSync(old.record);else throw fault;};
   try{if(mode==="retired"){writePrivateJson(target,{value:2});assert.deepEqual(JSON.parse(readFileSync(target,"utf8")),{value:2});}else{assert.throws(()=>writePrivateJson(target,{value:2}),error=>error===fault);assert.equal(readFileSync(target,"utf8"),"retained destination");}}finally{objectFiles.opened=()=>{};}
   assert.ok(injected);assert.equal(readFileSync(old.source,"utf8"),"original source");assert.equal(readFileSync(old.target,"utf8"),"original destination");assert.equal(objectFiles.active.size,0);
+ }
+});
+
+
+test("released inline terminal publication checkpoints finalize before a fresh value and never report the old value as success",async()=>{
+ const root=await fixture();for(const legacy of [false,true]){const repo=Repository.init(join(root,legacy?"legacy-inline":"inline"));const target=join(repo.controlDirectory,"metadata.json");writePrivateJson(target,{value:1});let interrupted=false;const cut=Object.assign(new Error("inline acknowledgment interruption"),{code:"EINJECTED"});destructionBoundary.visit=step=>{if(!interrupted&&step==="progress-persisted"&&JSON.parse(readFileSync(target,"utf8")).value===2){interrupted=true;throw cut;}};try{assert.throws(()=>writePrivateJson(target,{value:2}));}finally{destructionBoundary.visit=()=>{};}assert.ok(interrupted);const directory=join(ledger(repo.controlDirectory),"destruction");let record=readdirSync(directory).filter(name=>name.endsWith(".json")).map(name=>join(directory,name)).find(path=>{const row=JSON.parse(readFileSync(path,"utf8"))as{status:string;entries:{destination?:string}[]};return row.status==="pending"&&row.entries.some(entry=>entry.destination==="metadata.json");})!;const row=JSON.parse(readFileSync(record,"utf8"))as{root:string;id:string;status:string;entries:{path:string;destination:string;identity:string;status:string}[]};row.entries[0]!.status="moved";writeFileSync(record,JSON.stringify(row));if(legacy){const entry=row.entries[0]!;const key=`rename:${resolve(row.root,entry.path)}:${resolve(row.root,entry.destination)}:${entry.identity}`;const old=join(directory,createHash("sha256").update(`${row.root}\0${key}`).digest("hex")+".json");fs.renameSync(record,old);record=old;}
+  writePrivateJson(target,{value:3});assert.deepEqual(JSON.parse(readFileSync(target,"utf8")),{value:3});assert.equal((JSON.parse(readFileSync(record,"utf8"))as{status:string}).status,"completed");assert.equal(inspectDestructions(repo.controlDirectory).pending,0);
  }
 });

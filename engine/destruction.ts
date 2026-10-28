@@ -1,6 +1,6 @@
 /** Immutable deletion intents separate validation from retirement and retain exact crash/recovery receipts. */
 import { createHash, randomBytes } from "node:crypto";
-import { constants, fstatSync, lstatSync, mkdirSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, writeFileSync, type BigIntStats } from "node:fs";
+import { constants, fstatSync, lstatSync, mkdirSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, writeFileSync, type BigIntStats, type Dirent } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { objectFiles, type ObjectFile } from "./object-files.ts";
@@ -29,6 +29,8 @@ export interface DestructionEntry {
 export interface DestructionReceipt {
   readonly id: string; readonly revision: string; readonly status: "pending" | "completed" | "superseded";
   readonly reason?: DestructionSupersession;
+  /** Terminal cancellation causes stay visible even when detailed entries are omitted from agent output. */
+  readonly cancellations?: readonly DestructionCancellation[];
   readonly planned: number; readonly deleted: number; readonly moved: number; readonly observedAbsent: number; readonly skipped: number;
   readonly omitted: number; readonly entries: readonly DestructionEntry[];
 }
@@ -49,6 +51,8 @@ export class DestructionRefusal extends ObjectStoreError {
 export const destructionBoundary: { visit(step: string, path: string): void } = { visit() {} };
 /** Only a caller that has revalidated its complete current request may retire obsolete authority. */
 export type DestructionSupersession = "reachability_changed" | "eligibility_changed";
+/** Named terminal causes end authority without claiming the requested mutation happened. */
+export type DestructionCancellation = "root_or_parent_retired" | "root_retired" | "preconditions_changed" | "publication_target_unavailable";
 interface Intent { format: "pm-vcs-destruction-1"; id: string; revision: string; root: string; rootIdentity: string; entries: DestructionEntry[]; status: "pending" | "completed" | "superseded"; reason?: DestructionSupersession }
 interface Scope { control: string; repository: boolean; revision?: string }
 let backend: DestructionBackend;
@@ -108,6 +112,15 @@ function packageControl(path: string): boolean {
   const directory = lstatSync(path, { throwIfNoEntry: false }); if (!directory?.isDirectory()) return false;
   const marker = join(path, "format"); const stat = lstatSync(marker, { throwIfNoEntry: false }); if (!stat?.isFile() || stat.size !== 8) return false;
   try { return readFileSync(marker, "utf8") === "pmvcs-1\n"; } catch { return false; }
+}
+/** Locate verified native control without treating an arbitrary explicit namespace scope as an object store. @internal */
+export function namespacePublicationContext(address: string): { readonly control: string } | undefined {
+  let current = dirname(resolve(address));
+  for (;;) {
+    const control = packageControl(current) ? current : packageControl(join(current, ".pmvcs")) ? join(current, ".pmvcs") : undefined;
+    if (control !== undefined) return { control };
+    const parent = dirname(current); if (parent === current) return undefined; current = parent;
+  }
 }
 /** Prefer the caller's explicit scope, then a verified repository format; standalone primitives use private intent storage. */
 function scope(path: string): Scope {
@@ -213,6 +226,7 @@ const outcomes: readonly { status: DestructionEntry["status"]; reason?: string }
   { status: "foreign", reason: "unplanned_child" }, { status: "cancelled", reason: "root_or_parent_retired" },
   { status: "cancelled", reason: "root_retired" }, { status: "foreign", reason: "retained_after_retirement" },
   { status: "cancelled", reason: "preconditions_changed" },
+  { status: "cancelled", reason: "publication_target_unavailable" },
 ];
 /** A fixed-size progress header binds every single-byte acknowledgment to one immutable intent and entry count. */
 function progressHeader(intent: Intent): Buffer {
@@ -243,9 +257,13 @@ function authorityOf(intent: Intent): string {
 }
 
 /** Keep full private plans but bound every SDK/CLI refusal and success receipt to twenty members. */
-function receipt(intent: Intent): DestructionReceipt { return { id: intent.id, revision: intent.revision, status: intent.status, ...(intent.reason === undefined ? {} : { reason: intent.reason }), planned: intent.entries.length, deleted: intent.entries.filter(entry => entry.status === "deleted").length, moved: intent.entries.filter(entry => entry.status === "moved").length, observedAbsent: intent.entries.filter(entry => entry.status === "absent").length, skipped: intent.entries.filter(entry => entry.status === "foreign" || entry.status === "cancelled").length, omitted: Math.max(0, intent.entries.length - 20), entries: intent.entries.slice(0, 20).map(entry => ({ ...entry })) }; }
+function receipt(intent: Intent): DestructionReceipt {
+  const reasons: readonly DestructionCancellation[] = ["root_or_parent_retired", "root_retired", "preconditions_changed", "publication_target_unavailable"];
+  const cancellations = reasons.filter(reason => intent.entries.some(entry => entry.status === "cancelled" && entry.reason === reason));
+  return { id: intent.id, revision: intent.revision, status: intent.status, ...(intent.reason === undefined ? {} : { reason: intent.reason }), ...(cancellations.length === 0 ? {} : { cancellations }), planned: intent.entries.length, deleted: intent.entries.filter(entry => entry.status === "deleted").length, moved: intent.entries.filter(entry => entry.status === "moved").length, observedAbsent: intent.entries.filter(entry => entry.status === "absent").length, skipped: intent.entries.filter(entry => entry.status === "foreign" || entry.status === "cancelled").length, omitted: Math.max(0, intent.entries.length - 20), entries: intent.entries.slice(0, 20).map(entry => ({ ...entry })) };
+}
 /** One exact-set handle is reusable after every deletion/progress crash without adding newly arrived files. */
-export interface DestructionPlan { readonly paths: readonly string[]; readonly resumed: boolean; remove(path: string): void; finish(): DestructionReceipt }
+export interface DestructionPlan { readonly paths: readonly string[]; readonly resumed: boolean; remove(path: string): void; cancelPublication(): void; finish(): DestructionReceipt }
 /** One exact checkpoint is advisory only; mutation still revalidates its recorded set inside the intent lease. */
 export interface DestructionCheckpoint { readonly pending: boolean; readonly verification: VerificationResult; readonly skipped?: string }
 /** Plans and read-only phase guards accept the same operation-key domain before filesystem access. */
@@ -276,7 +294,7 @@ export function prepareDestruction(control: string, key: string, requests: reado
   return preparePlan([control, key, requests, resumeCompleted, journalDirectory, completedIsHistorical, supersedeChanged]);
 }
 /** Validate before recovery callbacks and snapshot again under the owning intent lease after they finish. */
-function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot?: () => void, observed?: { readonly id: string; readonly authority: string }, publication?: string): DestructionPlan {
+function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot?: () => void, observed?: { readonly id: string; readonly authority: string }, publication?: string, validate?: () => void): DestructionPlan {
   const [control, key, suppliedRequests, resumeCompleted = false, suppliedDirectory, completedIsHistorical = false, supersedeChanged] = args;
   let requests = suppliedRequests; let journalDirectory = suppliedDirectory;
   validateOperationKey(key);
@@ -420,6 +438,7 @@ function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot
   /** Never follow an entry into a removed/recreated scope or a replaced parent. */
   const perform = (entry: DestructionEntry): void => {
     destructionBoundary.visit("before-delete", entry.path);
+    validate?.();
     const rootStat = lstatSync(root, { bigint: true, throwIfNoEntry: false }); const parent = resolve(root, entry.parent); const parentStat = lstatSync(parent, { bigint: true, throwIfNoEntry: false });
     if (!rootStat?.isDirectory() || birth(rootStat) !== intent.rootIdentity || !parentStat?.isDirectory() || birth(parentStat) !== entry.parentIdentity) { entry.status = "cancelled"; entry.reason = "root_or_parent_retired"; save(entry); return; }
     const source = canonical(resolve(root, entry.path)); const selected = addresses.get(source);
@@ -448,6 +467,16 @@ function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot
   };
   return {
     paths: intent.entries.map(entry => resolve(root, entry.path)), resumed,
+    cancelPublication() {
+      locked(() => { refresh();
+        if (intent.entries.length !== 1 || intent.entries[0].kind !== "rename") throw new DestructionRefusal("conflicting_destructive_requests", "Only an unpublished single-target publication may be cancelled.");
+        const entry = intent.entries[0]; observe(entry, 0); settleRetiredMembers(intent);
+        if (entry.status !== "planned") throw new DestructionRefusal("destructive_target_changed", "Publication already has a durable outcome; its history was preserved.", receipt(intent));
+        const destination = lstatSync(resolve(root, entry.destination!), { bigint: true, throwIfNoEntry: false });
+        if ((destination === undefined ? "absent" : identity(destination)) !== entry.target) throw new DestructionRefusal("destructive_target_changed", "A peer changed the publication target; its value was preserved.", receipt(intent));
+        entry.status = "cancelled"; entry.reason = "publication_target_unavailable"; save(entry);
+      });
+    },
     remove(target) {
       locked(() => {
         refresh(); const index = indexes.get(resolve(target)); const entry = index === undefined ? undefined : intent.entries[index];
@@ -475,12 +504,12 @@ function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot
 function hasLeaf(path: string): boolean { try { return lstatSync(path, { throwIfNoEntry: false }) !== undefined; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return false; throw error; } }
 
 /** Every namespace primitive uses the same frozen-set journal, including owned temporaries and lease cleanup. @internal */
-export function retireNamespace(request: DestructionRequest, completedIsHistorical = false): DestructionReceipt {
+export function retireNamespace(request: DestructionRequest, completedIsHistorical = false, validate?: () => void): DestructionReceipt {
   const base = process.cwd();
   if (typeof request.path !== "string" || request.path === "" || request.path.includes("\0")) canonical(request.path);
   request = normalizedRequests([request], base)[0];
   const selected = scope(resolve(request.path));
-  return inScope(selected, () => retireScoped(request, selected, completedIsHistorical));
+  return inScope(selected, () => retireScoped(request, selected, completedIsHistorical, validate));
 }
 /** Bind native retirement and marker-free recovery to the same canonical scope and receipt key. */
 function namespaceTarget(request: DestructionRequest, selected: Scope) {
@@ -494,7 +523,7 @@ function namespaceTarget(request: DestructionRequest, selected: Scope) {
   return { path, destination, control, ledger, root, legacyKey, key };
 }
 /** Preserve namespace receipts independently of the data whose root may itself be retired. */
-function retireScoped(request: DestructionRequest, selected: Scope, completedIsHistorical: boolean): DestructionReceipt {
+function retireScoped(request: DestructionRequest, selected: Scope, completedIsHistorical: boolean, validate?: () => void): DestructionReceipt {
   const { path, destination, control, ledger, root, legacyKey, key: primary } = namespaceTarget(request, selected); let key = primary;
   let current = load(join(ledger, `${intentName(root, key)}.json`));
   if (destination !== undefined && current === undefined) {
@@ -512,43 +541,140 @@ function retireScoped(request: DestructionRequest, selected: Scope, completedIsH
   }
   if (destination !== undefined && current?.status === "pending" && current.entries.length === 1 && resolve(root, current.entries[0].path) !== path) recoverPublication(root, ledger, key, current, fresh, destination);
   const migrate = destination !== undefined && current === undefined ? () => reconcilePublications(root, ledger, path, destination, fresh) : undefined;
-  const plan = preparePlan([control, key, fresh, false, ledger, completedIsHistorical], migrate, undefined, destination);
+  const beforeSnapshot = migrate === undefined && validate === undefined ? undefined : () => { migrate?.(); validate?.(); };
+  const plan = preparePlan([control, key, fresh, false, ledger, completedIsHistorical], beforeSnapshot, undefined, destination, validate);
   for (const member of plan.paths) plan.remove(member);
   return plan.finish();
 }
 
 /** Recover only the observed immutable receipt, validating the new request inside the original receipt lease. */
-function recoverPublication(root: string, ledger: string, key: string, previous: Intent, fresh: readonly DestructionRequest[], destination: string): void {
-  if (previous.status !== "pending" || previous.root !== root || previous.rootIdentity !== birth(lstatSync(root, { bigint: true })) || previous.entries.length !== 1) return;
-  const entry = previous.entries[0]; if (entry.kind !== "rename" || entry.status !== "planned") return;
-  const recovered = preparePlan([root, key, [{ path: resolve(root, entry.path), destination: resolve(root, entry.destination!) }], false, ledger], () => { if (snapshot(root, fresh).length === 0) throw new DestructionRefusal("destructive_target_changed", "A new publication source disappeared before recovery."); }, { id: previous.id, authority: authorityOf(previous) }, destination);
-  try { for (const member of recovered.paths) recovered.remove(member); recovered.finish(); }
-  catch (error) { if (!(error instanceof DestructionRefusal) || error.code !== "destructive_target_changed" || error.receipt?.status !== "completed") throw error; }
+function recoverPublication(root: string, ledger: string, key: string, previous: Intent, fresh: readonly DestructionRequest[] | undefined, destination: string): void {
+  const entry = publicationEntry(root, previous); if (entry === undefined) return;
+  if (previous.status === "completed" && entry.reason === "publication_target_unavailable") { cleanupCancelledPublication(root, entry); return; }
+  if (previous.status !== "pending") return;
+  const recovered = preparePlan([root, key, [{ path: resolve(root, entry.path), destination: resolve(root, entry.destination!) }], false, ledger], fresh === undefined ? undefined : () => { if (snapshot(root, fresh).length === 0) throw new DestructionRefusal("destructive_target_changed", "A new publication source disappeared before recovery."); }, { id: previous.id, authority: authorityOf(previous) }, destination);
+  /** Reconcile cancellation progress even when the crash preceded its completed checkpoint or temporary cleanup. */
+  const finalize = (): void => {
+    let result: DestructionReceipt;
+    try { result = recovered.finish(); }
+    catch (error) { if (!(error instanceof DestructionRefusal) || error.receipt?.status !== "completed") throw error; result = error.receipt; }
+    if (result.entries.some(member => member.reason === "publication_target_unavailable")) cleanupCancelledPublication(root, entry);
+  };
+  try { for (const member of recovered.paths) recovered.remove(member); finalize(); }
+  catch (error) {
+    if (error instanceof ObjectStoreError && (error.code === "object_obliterated" || error instanceof VerificationRefusal && error.bound === "missing_object")) {
+      recovered.cancelPublication();
+      finalize(); return;
+    }
+    if (!(error instanceof DestructionRefusal) || error.code !== "destructive_target_changed" || error.receipt?.status !== "completed") throw error;
+  }
+}
+/** Parse only one publication in its still-current root lifetime, independently of rendered receipt pages. */
+function publicationEntry(root: string, intent: Intent): DestructionEntry | undefined {
+  const owner = lstatSync(root, { bigint: true, throwIfNoEntry: false });
+  return intent.root === root && owner?.isDirectory() && intent.rootIdentity === birth(owner) && intent.entries.length === 1 && intent.entries[0].kind === "rename" ? intent.entries[0] : undefined;
+}
+
+/** An unavailable dependency ends replay authority; only the original engine temporary can be retired afterward. */
+function cleanupCancelledPublication(root: string, entry: DestructionEntry): void {
+  const source = resolve(root, entry.path); const destination = resolve(root, entry.destination!); const name = source.split(/[\\/]/).at(-1)!; const target = destination.split(/[\\/]/).at(-1)!;
+  const prefix = name.slice(0, -17); // separator + twelve hexadecimal characters + .tmp
+  const owned = /^ref-[1-9][0-9]*-[0-9a-f]{12}\.lock$/.test(name) || /\.[0-9a-f]{12}\.tmp$/.test(name) && (prefix === target || prefix.startsWith(`${target}.`) && /^[1-9][0-9]*$/.test(prefix.slice(target.length + 1)));
+  if (!owned || dirname(source) !== dirname(destination)) return;
+  const stat = lstatSync(source, { bigint: true, throwIfNoEntry: false });
+  const selected = scope(source); const namespace = namespaceTarget({ path: source }, selected); const key = `${namespace.key}:${entry.identity}`;
+  const existing = load(join(namespace.ledger, `${intentName(namespace.root, key)}.json`));
+  const original = stat !== undefined && identity(stat) === entry.identity && digest(source, stat) === entry.digest;
+  if (existing === undefined && !original) return;
+  const cleanup = inScope(selected, () => preparePlan([namespace.control, key, [{ path: source, ...(original ? { expected: stat! } : {}) }], true, namespace.ledger, true]));
+  try { for (const path of cleanup.paths) cleanup.remove(path); cleanup.finish(); }
+  catch (error) { if (!(error instanceof DestructionRefusal) || error.receipt?.status !== "completed") throw error; }
 }
 
 /** Migrate pre-target-key receipts once, before the first new publication can replace their completion evidence. */
-function reconcilePublications(root: string, ledger: string, source: string, destination: string, fresh: readonly DestructionRequest[]): void {
+function reconcilePublications(root: string, ledger: string, source: string, destination: string, fresh: readonly DestructionRequest[] | undefined): void {
   const temporary = /^(?:ref-.*\.lock|.*\.[0-9a-f]{12}\.tmp)$/;
   if (temporary.test(source.split(/[\\/]/).at(-1)!)) {
     const orphan = readdirSync(dirname(source)).some(name => temporary.test(name) && resolve(dirname(source), name) !== source);
     if (!orphan && !hasLeaf(destination)) return;
   }
-  const started = performance.now(); let work = 0;
-  for (const file of readdirSync(ledger, { withFileTypes: true })) {
-    assertVerificationBound("receipts", "record_count", ++work, verificationLimits.receiptRecords);
-    assertVerificationBound("receipts", "time_ms", performance.now() - started, verificationLimits.receiptMs);
+  for (const file of boundedNamespaceRecords(ledger)) {
     if (!file.isFile() || !/^[0-9a-f]{64}\.json$/.test(file.name)) continue;
     let previous: Intent | undefined;
     try { previous = load(join(ledger, file.name), true); }
     catch (error) { if (error instanceof DestructionRefusal && ["foreign_destructive_intent", "destructive_intent_changed"].includes(error.code)) continue; throw error; }
-    if (previous === undefined || previous.status !== "pending" || previous.root !== root || previous.entries.length !== 1) continue;
-    const entry = previous.entries[0]; if (entry.kind !== "rename" || resolve(root, entry.destination!) !== destination || entry.status !== "planned") continue;
+    if (previous === undefined || previous.status !== "pending" && previous.entries[0]?.reason !== "publication_target_unavailable") continue;
+    const entry = publicationEntry(root, previous); if (entry === undefined || resolve(root, entry.destination!) !== destination) continue;
     const original = resolve(root, entry.path);
     const prefix = `rename:${original}:${destination}`;
     const key = [prefix, `${prefix}:${entry.identity}`].find(candidate => `${intentName(root, candidate)}.json` === file.name);
     if (key === undefined) continue; // A foreign record never becomes mutation authority.
     recoverPublication(root, ledger, key, previous, fresh, destination);
   }
+}
+/** Every namespace-ledger consumer shares complete enumeration, empty-store and final-deadline bounds. */
+function* boundedNamespaceRecords(directory: string): Generator<Dirent> {
+  const started = performance.now(); let work = 0;
+  assertVerificationBound("receipts", "record_count", 0, verificationLimits.receiptRecords); assertVerificationBound("receipts", "record_bytes", 0, verificationLimits.receiptBytes); assertVerificationBound("receipts", "time_ms", 0, verificationLimits.receiptMs);
+  for (const file of readdirSync(directory, { withFileTypes: true })) {
+    assertVerificationBound("receipts", "record_count", ++work, verificationLimits.receiptRecords); assertVerificationBound("receipts", "time_ms", performance.now() - started, verificationLimits.receiptMs);
+    yield file;
+  }
+  assertVerificationBound("receipts", "time_ms", performance.now() - started, verificationLimits.receiptMs);
+}
+
+/** Explicit recovery precedes a caller's state observation and CAS; it never authorizes that caller's new write. @internal */
+export function resumeNamespacePublication(address: string): void {
+  address = resolve(address); const selected = scope(address);
+  inScope(selected, () => {
+    const { root, ledger, key, destination } = namespaceTarget({ path: address, destination: address }, selected);
+    if (!lstatSync(ledger, { throwIfNoEntry: false })?.isDirectory()) return;
+    const previous = load(join(ledger, `${intentName(root, key)}.json`));
+    if (previous !== undefined) { recoverPublication(root, ledger, key, previous, undefined, destination!); return; }
+    reconcilePublications(root, ledger, address, destination!, undefined);
+  });
+}
+
+/** Complete retention evidence is independent of the twenty-entry agent receipt page. */
+export interface PublicationInventory { readonly verification: VerificationResult; readonly pending: number; readonly skippedCount: number; readonly skipped: readonly { readonly name: string; readonly reason: string }[] }
+/** Visit only original, still-prepared package capabilities, with one pinned source and final namespace fences. @internal */
+export function inspectNamespacePublications(control: string, accepts: (destination: string) => boolean, inspect: (fd: number, destination: string) => void): PublicationInventory {
+  assertVerificationBound("receipts", "record_count", 0, verificationLimits.receiptRecords); assertVerificationBound("receipts", "record_bytes", 0, verificationLimits.receiptBytes); assertVerificationBound("receipts", "time_ms", 0, verificationLimits.receiptMs);
+  const root = realpathSync(control); const directory = join(namespaceLedger(root), "destruction");
+  const verified: VerificationResult = { status: "verified", verifier: "receipts" }; const skipped: { name: string; reason: string }[] = []; let skippedCount = 0; let pending = 0; let bound: string | undefined;
+  if (!lstatSync(directory, { throwIfNoEntry: false })?.isDirectory()) return { verification: verified, pending, skippedCount, skipped };
+  /** Every foreign entry is preserved and described without turning its bytes into authority. */
+  const skip = (name: string, reason: string): void => { skippedCount++; if (skipped.length < 20) skipped.push({ name, reason }); };
+  for (const file of boundedNamespaceRecords(directory)) {
+    if (!file.isFile() || !/^[0-9a-f]{64}\.json$/.test(file.name)) { if (!/^[0-9a-f]{64}(?:\.[0-9a-f]{32}\.(?:progress|receipt)|\.json\.(?:lock(?:\.[1-9][0-9]*)?\.)?[0-9a-f]{12}\.tmp)$/.test(file.name)) skip(file.name, "Non-authoritative foreign publication entry preserved."); continue; }
+    let intent: Intent | undefined;
+    try { intent = load(join(directory, file.name), true); }
+    catch (error) { if (!(error instanceof DestructionRefusal)) throw error; bound ??= "foreign_record"; skip(file.name, "Foreign or changing publication record preserved."); continue; }
+    if (intent === undefined || intent.status !== "pending") continue;
+    const entry = publicationEntry(root, intent); if (entry === undefined) { skip(file.name, "Foreign or historical publication scope preserved."); continue; }
+    if (entry.status !== "planned") continue;
+    const source = resolve(root, entry.path); const destination = resolve(root, entry.destination!);
+    const keys = [`publication:${destination}`, `rename:${source}:${destination}`, `rename:${source}:${destination}:${entry.identity}`];
+    if (!keys.some(key => `${intentName(root, key)}.json` === file.name)) { skip(file.name, "Foreign publication key preserved."); continue; }
+    try { const progress = progressState(join(directory, `${file.name.slice(0, -5)}.${intent.id}.progress`), intent, 0); if (progress !== undefined && progress.status !== "planned") continue; }
+    catch (error) { if (!(error instanceof DestructionRefusal)) throw error; bound ??= "foreign_record"; skip(file.name, "Foreign progress preserved; prepared roots retained conservatively."); }
+    if (!accepts(destination)) continue;
+    const stat = lstatSync(source, { bigint: true, throwIfNoEntry: false }); if (stat === undefined) continue;
+    assertVerificationBound("receipts", "record_bytes", Number(stat.size), verificationLimits.receiptBytes);
+    if (!stat.isFile() || identity(stat) !== entry.identity || digest(source, stat) !== entry.digest) { bound ??= "namespace_changed"; skip(file.name, "Prepared publication source changed; preserved without adopting replacement roots."); continue; }
+    const parent = lstatSync(dirname(source), { bigint: true }); const destinationParent = lstatSync(dirname(destination), { bigint: true });
+    if (!parent.isDirectory() || birth(parent) !== entry.parentIdentity || !destinationParent.isDirectory() || birth(destinationParent) !== entry.destinationParentIdentity) throw new VerificationRefusal("receipts", "namespace_changed", "A prepared publication parent changed before retention inspection.");
+    const held = objectFiles.open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      if (identity(fstatSync(held.fd, { bigint: true })) !== entry.identity) throw new VerificationRefusal("receipts", "namespace_changed", "A prepared root source changed before retention inspection.");
+      inspect(held.fd, destination);
+      const after = lstatSync(source, { bigint: true, throwIfNoEntry: false });
+      const rootAfter = lstatSync(root, { bigint: true, throwIfNoEntry: false }); const parentAfter = lstatSync(dirname(source), { bigint: true, throwIfNoEntry: false }); const destinationAfter = lstatSync(dirname(destination), { bigint: true, throwIfNoEntry: false });
+      if (after === undefined || identity(after) !== entry.identity || identity(fstatSync(held.fd, { bigint: true })) !== entry.identity || rootAfter === undefined || birth(rootAfter) !== intent.rootIdentity || parentAfter === undefined || birth(parentAfter) !== entry.parentIdentity || destinationAfter === undefined || birth(destinationAfter) !== entry.destinationParentIdentity) throw new VerificationRefusal("receipts", "namespace_changed", "A prepared root source or its namespace changed during retention inspection.");
+      pending++;
+    } finally { held.close(); }
+  }
+  return { verification: bound === undefined ? verified : { status: "unverified", verifier: "receipts", bound }, pending, skippedCount, skipped };
 }
 
 /** Resume an empty-directory retirement only from its original durable receipt and inode lifetime. @internal */
@@ -609,6 +735,12 @@ function settleRetiredMembers(intent: Intent): boolean {
   return historical;
 }
 
+/** Keep actionable recovery, supersession and cancellation evidence ahead of routine completed receipts in bounded agent views. */
+function compareReceipts(left: Pick<DestructionReceipt, "status" | "id" | "cancellations">, right: Pick<DestructionReceipt, "status" | "id" | "cancellations">): number {
+  const priority = (entry: typeof left): number => entry.status === "pending" ? 0 : entry.status === "superseded" ? 1 : entry.cancellations === undefined ? 3 : 2;
+  return priority(left) - priority(right) || left.id.localeCompare(right.id);
+}
+
 /** Inspect durable receipts without modifying a journal, replaying a request, or following foreign record links. */
 function inspectLedger(control: string, limit: number, directory = join(control, "destruction")): DestructionInventory {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) throw new DestructionRefusal("invalid_receipt_limit", "Choose a receipt limit from 1 through 20.");
@@ -623,7 +755,7 @@ function inspectLedger(control: string, limit: number, directory = join(control,
     try { const intent = load(join(directory, entry.name), true); if (intent === undefined) continue; if (intent.root !== resolve(control)) { skipped.push({ name: entry.name, reason: "receipt belongs to another root; preserved" }); continue; } if (intent.status === "pending") { const owner = lstatSync(control, { bigint: true, throwIfNoEntry: false }); if (!owner?.isDirectory() || birth(owner) !== intent.rootIdentity) { for (const entry of intent.entries) if (entry.status === "planned") { entry.status = "cancelled"; entry.reason = "root_retired"; } intent.status = "completed"; skipped.push({ name: entry.name, reason: "root_retired; pending authority is historical" }); } } if (intent.status === "pending") { const progress = join(directory, `${entry.name.slice(0, 64)}.${intent.id}.progress`); for (let index = 0; index < intent.entries.length; index++) { const state = progressState(progress, intent, index); if (state !== undefined && intent.entries[index].status === "planned") Object.assign(intent.entries[index], state); } if (settleRetiredMembers(intent)) skipped.push({ name: entry.name, reason: "member_lifetime_ended; original authority is historical" }); } found.push(receipt(intent)); }
     catch (error) { bound ??= error instanceof VerificationRefusal ? error.bound : "decode_error"; skipped.push({ name: entry.name, reason: error instanceof DestructionRefusal ? "foreign or changing receipt record; preserved" : "unreadable receipt record; preserved" }); }
   }
-  found.sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending") || a.id.localeCompare(b.id));
+  found.sort(compareReceipts);
   if (performance.now() - started >= verificationLimits.receiptMs) bound ??= "time_ms";
   const verification: VerificationResult = bound === undefined ? { status: "verified", verifier: "receipts" } : { status: "unverified", verifier: "receipts", bound };
   return { verification, pending: found.filter(item => item.status === "pending").length, completed: found.filter(item => item.status === "completed").length, superseded: found.filter(item => item.status === "superseded").length, omitted: Math.max(0, found.length - limit), skippedCount: skipped.length, receipts: found.slice(0, limit).map(({ entries: _entries, ...summary }) => summary), skipped: skipped.slice(0, 20) };
@@ -633,7 +765,7 @@ function inspectLedger(control: string, limit: number, directory = join(control,
 export function inspectDestructions(control: string, limit = 20): DestructionInventory {
   const absolute = resolve(control); const stat = lstatSync(absolute, { throwIfNoEntry: false }); const root = stat?.isDirectory() ? realpathSync(absolute) : absolute;
   const domain = inspectLedger(root, limit); const namespace = inspectLedger(root, limit, join(namespaceLedger(root), "destruction"));
-  const receipts = [...domain.receipts, ...namespace.receipts].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending") || a.id.localeCompare(b.id));
+  const receipts = [...domain.receipts, ...namespace.receipts].sort(compareReceipts);
   const pending = domain.pending + namespace.pending; const completed = domain.completed + namespace.completed; const superseded = domain.superseded + namespace.superseded;
   const verification = [domain.verification, namespace.verification].find(result => result.status === "unverified") ?? domain.verification;
   return { verification, pending, completed, superseded, omitted: Math.max(0, pending + completed + superseded - limit), skippedCount: domain.skippedCount + namespace.skippedCount, receipts: receipts.slice(0, limit), skipped: [...domain.skipped, ...namespace.skipped.map(entry => ({ ...entry, name: `namespace/${entry.name}` }))].slice(0, 20) };

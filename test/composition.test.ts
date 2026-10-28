@@ -488,7 +488,9 @@ test("tombstones cannot launder absent commit refs, parents, trees or unrelated 
   }
   const directory = encodeTree([{ name: "dir", mode: "40000", id: absent }]); const directoryId = hashObject("tree", directory);
   refuses(() => importBundleObjects(receiver.objects, archive({}, [], [{ id: directoryId, type: "tree", payload: directory }])), "incomplete_bundle"); assert.equal(receiver.objects.has(directoryId), false);
-  receiver.objects.recordDenials([denial]); receiver.refs.compareAndSwap("refs/heads/forged", null, absent);
+  receiver.objects.recordDenials([denial]); refuses(() => receiver.refs.compareAndSwap("refs/heads/forged", null, absent), "object_obliterated");
+  // Released stores can contain forged refs; verification must still diagnose those persisted bytes.
+  mkdirSync(join(receiver.controlDirectory, "refs/heads"), { recursive: true }); writeFileSync(join(receiver.controlDirectory, "refs/heads/forged"), `${absent}\n`);
   const verified = receiver.verify(); assert.deepEqual(verified.obliterated, []); assert.ok(verified.corrupt.some(value => value.includes("invalid_erasure_role")));
   const blob = repo.objects.write("blob", Buffer.from("wrong ref kind"));
   refuses(() => importBundle(receiver.objects, receiver.refs, archive({ "refs/heads/wrong": blob }, [], [{ id: blob, ...repo.objects.read(blob) }])), "incomplete_bundle");

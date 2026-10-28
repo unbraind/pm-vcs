@@ -120,7 +120,7 @@ export function pathsOverlap(left: string, right: string): boolean {
 }
 
 /** Shared platform-aware namespace barrier; the legacy required argument is retained for source compatibility. */
-export const syncDirectory = durability.directory;
+export function syncDirectory(...args: Parameters<typeof durability.directory>): void { durability.directory(...args); }
 
 /** Atomically replace JSON using a umask-filtered creation mode, file fsync and supported directory fsync. */
 export function writeAtomicJson(path: string, value: unknown, mode: number): void {

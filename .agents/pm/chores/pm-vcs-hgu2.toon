@@ -1,0 +1,23 @@
+id: pm-vcs-hgu2
+title: Refresh the self-host snapshot after Dependabot changelog updates
+description: "Repair PR 155 by regenerating the committed self-host snapshot after tracker and generated changelog updates, preserving direct operational audit tests and their thresholds."
+type: Chore
+status: in_progress
+priority: 2
+tags[3]: ci,dependabot,"gh:unbraind/pm-vcs#155"
+created_at: "2026-10-28T19:57:08.589Z"
+updated_at: "2026-10-28T20:46:36.981Z"
+author: codex-agent
+comments[4]{created_at,author,text}:
+  "2026-10-28T19:59:03.324Z",codex-agent,"Cause class: stale generated self-host snapshot after dependency-related changelog and tracker updates. The operational entry-point regression correctly rejects a bundle that differs from committed source. Current main merged with two parents. Keep the direct process audit and all coverage thresholds; stage only this repair, regenerate the tracked text bundle using self-host:write, then verify the committed artifact without repair."
+  "2026-10-28T20:02:28.048Z",codex-agent,"The focused operational-entry-point test fails with the expected self-host tree mismatch on the merged Dependabot head. The repository AGENTS.md requires refreshing selfhost.bundle after tracker and generated documentation changes are staged. This tracked artifact is a text bundle. Regenerate only that snapshot, retain the independent committed-source verifier, and rerun the same direct CLI-process test after committing it. No production source or threshold change is needed."
+  "2026-10-28T20:11:17.310Z",codex-agent,"Focused verification passed 1/1 through the pinned pm runner in a fresh full-history clone at commit 1f0a39c5389d482598a2135e9aa20ef3366a5406. The shared local object store contains an unrelated non-public identity and fails the all-object audit; a fresh exact-head clone passes without identity rewrites. The self-host verifier passes without regenerating its committed archive. Repair CI evidence: https://github.com/unbraind/pm-vcs/actions/runs/40760871952. Existing thresholds and direct-process audit assertions are unchanged. Generated-artifact refresh has no production-function behavioral revert; the same test failed with the previous snapshot and passes after regeneration."
+  "2026-10-28T20:46:36.979Z",codex-agent,"The 30-minute CI wait cutoff has been reached for https://github.com/unbraind/pm-vcs/actions/runs/40761207142. Both Linux test jobs remain in the full npm release gate; both Windows acceptance launchers passed. These pending checks are missing evidence, not passes. The final-head fresh full-history clone focused check passed 1/1; tracker health and changelog checks passed. Regenerate the snapshot with this handoff receipt, then leave exact-head CI to the owner pipeline without further waiting or manual merge."
+files[2]{path,scope}:
+  selfhost.bundle,project
+  test/exact-gates.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "node --test --test-concurrency=2 --test-name-pattern=\"operational entry points enforce real audits\" test/exact-gates.test.ts",project,codex-agent,"2026-10-28T19:59:28.021Z",local_mutation,dependabot/npm_and_yarn/pm-toolchain-015444b2ac
+docs[1]{path,scope}:
+  "https://github.com/unbraind/pm-vcs/actions/runs/40499569404",project
+body: ""

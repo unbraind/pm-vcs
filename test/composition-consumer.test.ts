@@ -22,7 +22,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -60,6 +60,34 @@ assert.equal(Boolean(process.versions.bun), process.argv[2].startsWith("bun-"));
 repo.stage([]); const publicationBase = repo.commit({ message: "tracker", author }, new Date());
 writeFileSync(join(root, "publication.bin"), Buffer.from([0, 255, 17])); repo.stage(["publication.bin"]);
 const publicationTip = repo.commit({ message: "publication", author }, new Date());
+// Native prepared roots survive GC in each built/npm artifact and runtime.
+const preparedName = "refs/metadata/consumer-prepared";
+const preparedA = repo.objects.write("blob", Buffer.from("consumer original root"));
+const preparedB = repo.objects.write("blob", Buffer.from("consumer recoverable root"));
+repo.refs.compareAndSwap(preparedName, null, preparedA);
+const preparedTarget = join(repo.controlDirectory, preparedName);
+const preparedSource = join(repo.controlDirectory, "refs/metadata/ref-" + process.pid + "-abcdef012345.lock");
+writeFileSync(preparedSource, preparedB + "\\n");
+const preparedCrash = Object.assign(new Error("prepared consumer interruption"), { code: "EINJECTED" });
+destructionBoundary.visit = (step,path) => { if (step === "before-delete" && resolve(repo.controlDirectory,path)===preparedSource) throw preparedCrash; };
+try { assert.throws(() => durability.rename(preparedSource, preparedTarget), error => error === preparedCrash); }
+finally { destructionBoundary.visit = () => {}; }
+assert.ok(!collectGarbage(repo).candidates.includes(preparedB));
+collectGarbage(repo, true);
+const preparedC = repo.objects.write("blob", Buffer.from("consumer replacement root"));
+assert.throws(() => repo.refs.compareAndSwap(preparedName, preparedA, preparedC), { code: "ref_changed" });
+assert.equal(repo.refs.read(preparedName), preparedB);
+assert.equal(repo.objects.readTyped(preparedB, "blob").toString(), "consumer recoverable root");
+repo.refs.compareAndSwap(preparedName, preparedB, preparedC);
+// Uncertain prepared bytes cannot become deletion authority in any artifact/runtime.
+const uncertainName="refs/metadata/consumer-uncertain";repo.refs.compareAndSwap(uncertainName,null,preparedA);
+const uncertainB=repo.objects.write("blob",Buffer.from("uncertain consumer target"));
+const uncertainTarget=join(repo.controlDirectory,uncertainName);const uncertainSource=join(repo.controlDirectory,"refs/metadata/ref-"+process.pid+"-abcdef654321.lock");writeFileSync(uncertainSource,uncertainB+"\\n");
+destructionBoundary.visit=(step,path)=>{if(step==="before-delete"&&resolve(repo.controlDirectory,path)===uncertainSource)throw preparedCrash;};try{assert.throws(()=>durability.rename(uncertainSource,uncertainTarget),error=>error===preparedCrash);}finally{destructionBoundary.visit=()=>{};}
+writeFileSync(uncertainSource,"foreign replacement");const uncertain=collectGarbage(repo,true);assert.equal(uncertain.publications.verification.status,"unverified");assert.deepEqual(uncertain.candidates,[]);assert.equal(uncertain.removed,0);assert.ok(repo.objects.has(uncertainB));
+const uncertainC=repo.objects.write("blob",Buffer.from("uncertain consumer replacement"));repo.refs.compareAndSwap(uncertainName,preparedA,uncertainC);assert.equal(repo.refs.read(uncertainName),uncertainC);assert.equal(readFileSync(uncertainSource,"utf8"),"foreign replacement");collectGarbage(repo,true);assert.equal(repo.objects.has(uncertainB),false);
+
+
 const publicationWire = new FileTransport(root, root);
 // Explicit receiver authority for ordinary packed publication consumers.
 for (const entry of repo.readIndex()) await publicationWire.lease({ action: "acquire", fileId: entry.fileId,
@@ -110,6 +138,10 @@ try{
  const packed=packs.compact(store);assert.equal(packed.objects,1);assert.equal(packed.packs,1);assert.equal(packed.destruction.status,"completed");assert.deepEqual(shared.read(id).payload,bytes);packs.unpack(store);assert.equal(store.compact().destruction.status,"completed");assert.equal(collectGarbage(captured,true).destruction.status,"completed");assert.deepEqual(store.read(id).payload,bytes);assert.equal(existsSync(join(shadow,".pmvcs")),false);
  if(process.argv[2]==="node-project-cli"){
   const install=spawnSync(process.execPath,[cliExecutable,"package","install",process.argv[3],"--project"],{env:testEnvironment(),cwd:pathRoot,encoding:"utf8"});assert.equal(install.status,0,install.stderr);
+  const recoveryName="refs/metadata/cli-recovery";const recoveryB=store.write("blob",Buffer.from("CLI retained pending root"));captured.refs.compareAndSwap(recoveryName,null,id);
+  const recoveryTarget=join(captured.controlDirectory,recoveryName);const recoverySource=join(captured.controlDirectory,"refs/metadata/ref-"+process.pid+"-654321fedcba.lock");writeFileSync(recoverySource,recoveryB+"\\n");const interruption=Object.assign(new Error("CLI prepared interruption"),{code:"EINJECTED"});destructionBoundary.visit=(step,path)=>{if(step==="before-delete"&&resolve(captured.controlDirectory,path)===recoverySource)throw interruption;};try{assert.throws(()=>durability.rename(recoverySource,recoveryTarget),error=>error===interruption);}finally{destructionBoundary.visit=()=>{};}
+  for(const format of [[],["--json"]]){const preview=spawnSync(process.execPath,[cliExecutable,...format,"vcs","gc"],{env:testEnvironment(),cwd:pathRoot,encoding:"utf8"});assert.equal(preview.status,0,preview.stderr+preview.stdout);if(format.length){assert.equal(JSON.parse(preview.stdout).gc.publications.pending,1);assert.ok(!JSON.parse(preview.stdout).gc.candidates.includes(recoveryB));}else assert.match(preview.stdout,/publications/);assert.equal(captured.refs.read(recoveryName),id);}
+  durability.recoverPublication(recoveryTarget);assert.equal(captured.refs.read(recoveryName),recoveryB);
   for(const format of [[],["--json"]]){const next=store.write("blob",Buffer.from("relative CLI "+format.length));captured.refs.compareAndSwap("refs/metadata/cli-"+format.length,null,next);const result=spawnSync(process.execPath,[cliExecutable,...format,"vcs","compact"],{env:testEnvironment(),cwd:pathRoot,encoding:"utf8"});assert.equal(result.status,0,result.stderr);if(format.length)assert.equal(JSON.parse(result.stdout).compact.destruction.status,"completed");else assert.match(result.stdout,/completed/);assert.deepEqual(store.read(next).payload,Buffer.from("relative CLI "+format.length));}
  }
 }finally{process.chdir(previousCwd);}
