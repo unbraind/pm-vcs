@@ -6,13 +6,12 @@ status: in_progress
 priority: 2
 tags[3]: ci,dependabot,"gh:unbraind/pm-vcs#155"
 created_at: "2026-10-28T19:57:08.589Z"
-updated_at: "2026-10-28T20:02:28.052Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-28T20:11:21.427Z"
 author: codex-agent
-comments[2]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-10-28T19:59:03.324Z",codex-agent,"Cause class: stale generated self-host snapshot after dependency-related changelog and tracker updates. The operational entry-point regression correctly rejects a bundle that differs from committed source. Current main merged with two parents. Keep the direct process audit and all coverage thresholds; stage only this repair, regenerate the tracked text bundle using self-host:write, then verify the committed artifact without repair."
   "2026-10-28T20:02:28.048Z",codex-agent,"The focused operational-entry-point test fails with the expected self-host tree mismatch on the merged Dependabot head. The repository AGENTS.md requires refreshing selfhost.bundle after tracker and generated documentation changes are staged. This tracked artifact is a text bundle. Regenerate only that snapshot, retain the independent committed-source verifier, and rerun the same direct CLI-process test after committing it. No production source or threshold change is needed."
+  "2026-10-28T20:11:17.310Z",codex-agent,"Focused verification passed 1/1 through the pinned pm runner in a fresh full-history clone at commit 1f0a39c5389d482598a2135e9aa20ef3366a5406. The shared local object store contains an unrelated non-public identity and fails the all-object audit; a fresh exact-head clone passes without identity rewrites. The self-host verifier passes without regenerating its committed archive. Repair CI evidence: https://github.com/unbraind/pm-vcs/actions/runs/40760871952. Existing thresholds and direct-process audit assertions are unchanged. Generated-artifact refresh has no production-function behavioral revert; the same test failed with the previous snapshot and passes after regeneration."
 files[2]{path,scope}:
   selfhost.bundle,project
   test/exact-gates.test.ts,project
