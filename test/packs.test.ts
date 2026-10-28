@@ -16,6 +16,7 @@ import extension from "../index.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { destructionBoundary } from "../engine/destruction.ts";
 import { ObjectStore, frameObject, hashObject } from "../engine/objects.ts";
+import { objectFiles } from "../engine/object-files.ts";
 import { PackStorage, PackRefusal, packBoundary } from "../engine/packs.ts";
 import { Repository } from "../engine/repo.ts";
 import { readFragmentRange, writeFragmented } from "../engine/fragments.ts";
@@ -463,4 +464,28 @@ for (const action of ["compact", "unpack", "gc"] as const) test(`relative-root S
   assert.deepEqual(readdirSync(shadow),["guard"]);assert.equal(readFileSync(join(shadow,"guard"),"utf8"),"foreign namespace sentinel");const ids=[...repo.objects.walkInventory()].map(entry=>entry.id);assert.equal(new Set(ids).size,ids.length);
  }
  assert.ok(steps.length>0);t.diagnostic(`${steps.length} native ${action} SIGKILL cuts with relative construction and cwd changes at every publication boundary; two successful replays per cut`);
+});
+
+test("owned publication aliases settle before a new compaction or unpack deletion snapshot",async()=>{
+ for(const action of ["unpack","compact","gc"] as const){const repo=await fresh();const bytes=Buffer.from("retained alias recovery 639185");const id=repo.objects.write("blob",bytes);repo.refs.compareAndSwap("refs/metadata/live",null,id);if(action==="gc")repo.objects.write("blob",Buffer.from("discardable recovery alias 718239"));if(action==="compact")repo.objects.compact();let cut=false;
+  packBoundary.visit=step=>{if(step==="published"&&!cut){cut=true;throw new Error("published alias interrupted");}};assert.throws(()=>action==="compact"?repo.objects.unpack():repo.objects.compact(),/published alias interrupted/);packBoundary.visit=()=>{};
+  if(action==="unpack")repo.objects.unpack();else if(action==="compact")repo.objects.compact();else collectGarbage(repo,true);assert.deepEqual(repo.objects.readTyped(id,"blob"),bytes);assert.equal(readdirSync(join(repo.objects.storageRoot(),"packs")).some(name=>name.startsWith("job-")),false);
+ }
+});
+
+test("public staging recovery validates its sources and holds the store lease through every cleanup boundary",async()=>{
+ const repo=await fresh();const id=repo.objects.write("blob",Buffer.from("public recovery lease data 617235"));let cut=false;packBoundary.visit=step=>{if(step==="published"&&!cut){cut=true;throw new Error("owned recovery fixture");}};assert.throws(()=>repo.objects.compact(),/owned recovery fixture/);packBoundary.visit=step=>{if(step.startsWith("staging-")||step==="recovered")assert.equal(readFileSync(join(repo.controlDirectory,"objects.lock"),"utf8"),String(process.pid));};new PackStorage(repo.objects.storageRoot()).recover();packBoundary.visit=()=>{};assert.equal(lstatSync(join(repo.controlDirectory,"objects.lock"),{throwIfNoEntry:false}),undefined);assert.deepEqual(repo.objects.readTyped(id,"blob"),Buffer.from("public recovery lease data 617235"));
+});
+
+test("staging recovery preserves every peer mutation of a previously validated canonical source",async()=>{
+ for(const mode of ["replace","missing","ctime","size","mtime"]){const repo=await fresh();const bytes=Buffer.from("peer recovery fences 916257");const id=repo.objects.write("blob",bytes);let published=false;packBoundary.visit=step=>{if(step==="published"&&!published){published=true;throw new Error("published recovery fixture");}};assert.throws(()=>repo.objects.compact(),/published recovery fixture/);packBoundary.visit=()=>{};const canonical=new PackStorage(repo.objects.storageRoot()).files()[0];const original=readFileSync(canonical);let changed=false;
+  if(mode==="size"||mode==="mtime")destructionBoundary.visit=(step,path)=>{if(step!=="deleted"||!path.endsWith("/payload")||changed)return;changed=true;if(mode==="size")fs.appendFileSync(canonical,"foreign appended data");else fs.utimesSync(canonical,new Date(5000),new Date(5000));};
+  else packBoundary.visit=step=>{if(step!=="recovered"||changed)return;changed=true;if(mode==="replace"){fs.renameSync(canonical,canonical+".retained");writeFileSync(canonical,original);}else if(mode==="missing")rmSync(canonical);else fs.chmodSync(canonical,lstatSync(canonical).mode&0o777);};
+  assert.throws(()=>repo.objects.unpack(),{code:"destructive_target_changed"});packBoundary.visit=()=>{};destructionBoundary.visit=()=>{};assert.ok(changed);if(mode!=="missing")assert.ok(lstatSync(canonical).isFile());assert.equal(lstatSync(join(repo.objects.storageRoot(),id.slice(0,2),id.slice(2))).isFile(),true);
+ }
+});
+
+test("a peer retiring a pinned staging alias is reported as absence and never invalidates the published pack",async()=>{
+ const repo=await fresh();const bytes=Buffer.from("retained peer alias 893165");const id=repo.objects.write("blob",bytes);let published=false;let retired=false;packBoundary.visit=step=>{if(step==="published")published=true;};objectFiles.opened=(_file,path)=>{if(published&&!retired&&path.endsWith("/payload")){retired=true;rmSync(path);}};
+ try{const result=repo.objects.compact();assert.equal(result.destruction.status,"completed");assert.equal(result.packs,1);assert.equal(retired,true);assert.deepEqual(repo.objects.readTyped(id,"blob"),bytes);}finally{objectFiles.opened=()=>{};packBoundary.visit=()=>{};}
 });

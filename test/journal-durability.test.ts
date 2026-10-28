@@ -20,6 +20,7 @@ import { packBoundary } from "../engine/packs.ts";
 import { WorktreeMutation } from "../engine/worktree-mutation.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 import { NamespacePowerLoss } from "./helpers/namespace-power-loss.ts";
+import { abandonProcessStage } from "./helpers/process-stage.ts";
 const temporary: ReturnType<typeof makeTempDir>[] = [];
 const capability = durabilityCapabilities.directorySync;
 afterEach(() => { mock.reset(); syncBuiltinESMExports(); destructionBoundary.visit = () => {}; packBoundary.visit = () => {}; durabilityCapabilities.directorySync = capability; assert.equal(objectFiles.active.size, 0); for (const dir of temporary.splice(0)) dir.cleanup(); });
@@ -66,7 +67,7 @@ test("native namespace power cuts at EVERY metadata publication boundary converg
 });
 
 
-const sequences = ["ref-retirement","ref-replacement","compact","unpack","repack","gc-loose","gc-packed","lease-cleanup","prune","oplog","deep-intent","recovery","obliterate","directory-recovery","publication-recovery","legacy-publication-recovery"] as const;
+const sequences = ["ref-retirement","ref-replacement","compact","unpack","repack","gc-loose","gc-packed","lease-cleanup","prune","oplog","deep-intent","recovery","obliterate","directory-recovery","publication-recovery","legacy-publication-recovery","process-stage-recovery"] as const;
 type Sequence = typeof sequences[number];
 /** One prepared native store below the real tracker exercises a complete engine write-then-retire path. */
 function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep?:string):{steps:string[];cuts:number[]}{
@@ -88,6 +89,7 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
  if(kind==="publication-recovery"||kind==="legacy-publication-recovery"){let crash=true;destructionBoundary.visit=step=>{if(crash&&step==="deleted"&&existsSync(recoveringPublication)){crash=false;throw new Error("publication interruption");}};try{assert.throws(()=>writePrivateJson(recoveringPublication,{value:1}));}finally{destructionBoundary.visit=()=>{};}
   if(kind==="legacy-publication-recovery"){const directory=join(owned,"destruction");const path=readdirSync(directory).filter(name=>name.endsWith(".json")).map(name=>join(directory,name)).find(path=>{const row=JSON.parse(readFileSync(path,"utf8")) as {entries:{destination?:string}[]};return row.entries.some(entry=>entry.destination?.endsWith("recover-publication.json"));})!;const row=JSON.parse(readFileSync(path,"utf8")) as {root:string;entries:{path:string;destination:string;identity:string}[]};const entry=row.entries[0];const key=`rename:${resolve(row.root,entry.path)}:${resolve(row.root,entry.destination)}:${entry.identity}`;fs.renameSync(path,join(directory,createHash("sha256").update(`${row.root}\0${key}`).digest("hex")+".json"));}
  }
+ const processLock=join(repo.controlDirectory,"oplog.jsonl.lock");if(kind==="process-stage-recovery")abandonProcessStage(processLock);
  const deep=join(root,"receipts/a/b/c");const control=join(repo.controlDirectory,"fresh/a/b");
  const operation=():void=>{
   if(kind==="ref-retirement")repo.refs.compareAndSwap(ref,repo.refs.read(ref),null);
@@ -101,6 +103,7 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
   else if(kind==="oplog"){const recorded=new Error("already recorded under the native lease");try{repo.operations.append("power-case","durable retention evidence",[],new Date(1),undefined,()=>{if(repo.operations.read().some(operation=>operation.command==="power-case"))throw recorded;});}catch(error){if(error!==recorded)throw error;}}
   else if(kind==="deep-intent"){const plan=prepareDestruction(control,"power-set",paths.map(path=>({path})),false,deep);for(const path of plan.paths)plan.remove(path);assert.equal(plan.finish().status,"completed");}
   else if(kind==="recovery")repo.objects.withRecoveryValidation(()=>"validated",()=>collectGarbage(repo,true));
+  else if(kind==="process-stage-recovery"){const lease=durability.claim(processLock,"fixture_locked");lease.release();}
   else if(kind==="directory-recovery"){durability.resumeDirectory(recoveringDirectory);assert.equal(existsSync(recoveringDirectory),false);}
   else if(kind==="publication-recovery"||kind==="legacy-publication-recovery")writePrivateJson(recoveringPublication,{value:2});
   else repo.obliterate(fileId,"erase-power","power-model",new Date(1),{purgeUnaccounted:true,recoverLock:existsSync(join(repo.controlDirectory,"objects.lock"))});
@@ -110,7 +113,7 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
   power.install();if(packStep!==undefined)packBoundary.visit=step=>{if(step===packStep)power.interrupt();};if(cut>0||packStep!==undefined){assert.throws(operation);power.crash();packBoundary.visit=()=>{};}else operation();trace=[...power.trace];cuts=[...power.recoveryCuts];power.replay();
   if(kind!=="recovery"&&kind!=="obliterate"&&existsSync(join(repo.controlDirectory,"objects.lock")))repo.objects.recoverWriterLock();
   for(let attempt=0;attempt<2;attempt++)operation();
-  assert.deepEqual(new ObjectStore(repo.objects.storageRoot()).readTyped(live,"blob"),bytes);assert.equal(readFileSync(join(root,"guard"),"utf8"),"foreign tripwire");const inventory=inspectDestructions(repo.controlDirectory);const pending=new Set(inventory.receipts.filter(row=>row.status==="pending").map(row=>row.id));const evidence:unknown[]=[];if(pending.size)for(const directory of [join(repo.controlDirectory,"destruction"),join(owned,"destruction")])if(existsSync(directory))for(const name of readdirSync(directory).filter(name=>name.endsWith(".json"))){const record=JSON.parse(readFileSync(join(directory,name),"utf8")) as {id:string;entries:unknown[]};if(pending.has(record.id))evidence.push(record.entries);}assert.equal(inventory.pending,0,JSON.stringify(evidence));
+  assert.deepEqual(new ObjectStore(repo.objects.storageRoot()).readTyped(live,"blob"),bytes);assert.equal(readFileSync(join(root,"guard"),"utf8"),"foreign tripwire");const inventory=inspectDestructions(repo.controlDirectory);const pending=new Set(inventory.receipts.filter(row=>row.status==="pending").map(row=>row.id));const evidence:unknown[]=[];if(pending.size)for(const directory of [join(repo.controlDirectory,"destruction"),join(owned,"destruction")])if(existsSync(directory))for(const name of readdirSync(directory).filter(name=>name.endsWith(".json"))){const record=JSON.parse(readFileSync(join(directory,name),"utf8")) as {id:string;root:string;entries:{path:string;identity:string}[]};if(pending.has(record.id))evidence.push({name,operation:["gc-candidates","compact-loose","unpack-packs"].find(key=>createHash("sha256").update(`${record.root}\0${key}`).digest("hex")+".json"===name),entries:record.entries.map(entry=>{const stat=lstatSync(resolve(record.root,entry.path),{bigint:true,throwIfNoEntry:false});return{...entry,current:stat===undefined?null:`${stat.dev}:${stat.ino}:${stat.birthtimeNs}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`};})});}assert.equal(inventory.pending,0,JSON.stringify(evidence));
   if(kind==="gc-loose"||kind==="gc-packed"||kind==="recovery")assert.equal(repo.objects.has(garbage),false);
   if(kind==="ref-retirement")assert.equal(repo.refs.read(ref),null);if(kind==="ref-replacement")assert.equal(repo.refs.read(ref),garbage);
   if(kind==="lease-cleanup")assert.equal(existsSync(lease),false);if(kind==="prune")assert.equal(existsSync(join(root,"empty")),false);
@@ -346,4 +349,25 @@ test("same-source legacy receipts and foreign names preserve compatible publicat
  const repo=Repository.init(join(root,"missing"));const f=pendingPublication(repo);assert.throws(()=>retireNamespace({path:join(repo.controlDirectory,"missing-source"),destination:f.target}),{code:"destructive_target_changed"});
  const source=join(repo.controlDirectory,"fresh-source");writeFileSync(source,"owned");const original=prepareDestruction(repo.controlDirectory,"missing-native",[{path:source,destination:f.target}]);assert.throws(()=>prepareDestruction(repo.controlDirectory,"missing-native",[{path:join(repo.controlDirectory,"absent"),destination:f.target}]),{code:"destructive_target_changed"});for(const path of original.paths)original.remove(path);original.finish();
  const dir=join(repo.controlDirectory,"directory");pendingDirectory(repo,dir);const bound=verificationLimits.receiptBytes;verificationLimits.receiptBytes=0;try{assert.throws(()=>durability.resumeDirectory(dir),error=>error instanceof VerificationRefusal&&error.bound==="record_bytes");assert.ok(existsSync(dir));}finally{verificationLimits.receiptBytes=bound;}
+});
+
+/** Namespace operations may alter ctime, but restoration must never fabricate a content-write mtime. */
+test("restored native mtime changes only after content writes, across every alias mutation",async()=>{
+ const root=await fixture();for(const cache of [true,false]){const repo=Repository.init(join(root,String(cache)));const source=join(repo.controlDirectory,"source");const alias=source+".alias";writeFileSync(source,"durable source");fs.utimesSync(source,new Date(1000),new Date(1000));fs.linkSync(source,alias);const before=lstatSync(source,{bigint:true});const power=new NamespacePowerLoss([repo.root,ledger(repo.controlDirectory)],0,[],cache,cache);
+  try{power.install();power.crashAfterReturn();power.replay();durability.link(source,source+".second");assert.equal(lstatSync(source,{bigint:true}).mtimeNs,before.mtimeNs);durability.rename(alias,alias+".moved");assert.equal(lstatSync(source,{bigint:true}).mtimeNs,before.mtimeNs);durability.unlink(alias+".moved");assert.equal(lstatSync(source,{bigint:true}).mtimeNs,before.mtimeNs);assert.equal(readFileSync(source,"utf8"),"durable source");writeFileSync(source,"new content");assert.notEqual(lstatSync(source,{bigint:true}).mtimeNs,before.mtimeNs);assert.equal(readFileSync(source,"utf8"),"new content");assert.equal(inspectDestructions(repo.controlDirectory).pending,0);}finally{power.close();}
+ }
+});
+
+/** Replay the exact acknowledged boundary cheaply in addition to each sequence's complete crash-image matrix. */
+test("acknowledged packed transactions recover twice without inheriting restoration metadata",async()=>{
+ const root=await fixture();for(const kind of ["repack","gc-packed","obliterate"] as const){const template=join(root,kind+"-seed");sequence(template,kind,-1);const probe=sequence(join(root,kind+"-probe"),kind,0,template);sequence(join(root,kind+"-terminal"),kind,probe.steps.length,template);}
+});
+
+/** Changing/foreign legacy observations cannot certify unrelated failures or adopt another receipt's authority. */
+test("legacy scans skip a retired observation and propagate unrelated typed and native failures",async()=>{
+ const root=await fixture();for(const mode of ["retired","typed","native"]){const repo=Repository.init(join(root,mode));const old=pendingPublication(repo);const target=join(repo.controlDirectory,"new-value.json");writeFileSync(target,"retained destination");let injected=false;const fault=mode==="typed"?new DestructionRefusal("destructive_plan_conflict","nested ownership refusal"):Object.assign(new Error("native read failed"),{code:"EIO"});
+  objectFiles.opened=(_file,path)=>{if(path!==old.record||injected)return;injected=true;if(mode==="retired")rmSync(old.record);else throw fault;};
+  try{if(mode==="retired"){writePrivateJson(target,{value:2});assert.deepEqual(JSON.parse(readFileSync(target,"utf8")),{value:2});}else{assert.throws(()=>writePrivateJson(target,{value:2}),error=>error===fault);assert.equal(readFileSync(target,"utf8"),"retained destination");}}finally{objectFiles.opened=()=>{};}
+  assert.ok(injected);assert.equal(readFileSync(old.source,"utf8"),"original source");assert.equal(readFileSync(old.target,"utf8"),"original destination");assert.equal(objectFiles.active.size,0);
+ }
 });

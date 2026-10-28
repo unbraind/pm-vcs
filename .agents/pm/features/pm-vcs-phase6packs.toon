@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-28T16:03:33.902Z"
+updated_at: "2026-10-28T18:17:59.041Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[106]{created_at,author,text}:
+comments[110]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -119,7 +119,11 @@ comments[106]{created_at,author,text}:
   "2026-10-27T16:24:47.492Z",codex-agent,"Durability evidence: all 178 metadata crash cuts pass; compaction restores 161 distinct durable images over 1405 native boundaries, unpack 217/1942, each with two convergent native replays. Completed local matrices also cover ref retirement/replacement, lease cleanup, pruning, operation logs, deep journals and writer recovery; directory/publication/legacy-publication recovery each passed separately. The cached image oracle matches all 338 boundaries and 46 full crash images. The remaining exhaustive local sweeps, including repack/GC/obliteration and native erasure SIGKILL loops, were intentionally stopped under the shared-host targeted-test rule and remain enabled unchanged in full npm/Bun CI. These incomplete local sweeps are not passing evidence. Both Windows GC jobs and CodeQL passed on the superseded implementation; final-head evidence must come from its fresh run. Main is merged through df3eb36. Live release-gate status: https://github.com/unbraind/pm-vcs/actions/workflows/ci.yml ; the PR records the final exact-head run URL and counts. Items remain in_progress and unclosed; release the implementation claim after recording this handoff."
   "2026-10-28T16:00:40.203Z",codex-agent,"Resume scope: merge current main through bef2611 with a two-parent merge, preserving indexed-pack storage and the released version update. Installed the pinned PM merge driver before merging; only the derived self-host archive conflicted and will be regenerated from both merged source trees. Prior exact-head CI passed both Windows GC jobs but failed Linux release jobs; inspect those failures, run focused pack tests/typecheck/lint, preserve test thresholds, then push and observe fresh npm/Bun/Windows/CodeQL gates for at most 45 minutes."
   "2026-10-28T16:03:33.902Z",codex-agent,"Merge inspection: main only advances release version metadata and generated changelog/archive; preserve version 2026.10.28 plus all indexed-pack implementation code. PM driver installed, no item/history conflicts, strict health passes, source/test typecheck and lint pass. Prior Linux CI reported six failed tests: unclassified additive audit writer, interrupted control metadata, three packed/erasure recovery matrices, plus two branch-coverage gaps. Preserve every existing assertion and close these underlying recovery classes in focused follow-up checks rather than waiting for another unchanged failing full run."
-files[75]{path,scope}:
+  "2026-10-28T17:44:50.398Z",codex-agent,"Merge fc403e4 has exactly two parents (previous indexed-pack head and main release bef2611); self-host acceptance passed and changelog check passes with released version 2026.10.28 retained. Prior run https://github.com/unbraind/pm-vcs/actions/runs/40541474002 had Node 26 npm tests 2211/2217 pass, six failures, Windows GC 2/2 pass. Focused replay exposed two further shared causes: staging alias cleanup changes canonical ctime after an old snapshot; and GC skips a pending survivor rewrite when no pack survives the crash. Added descriptor-observed alias fencing before new deletion snapshots, a store lease on public recovery, and bounded exact-checkpoint inspection shared by GC preview/apply. Foreign checkpoints report unverified with a reason instead of becoming authority; named bounds stop before deletion. Existing matrices and thresholds remain unchanged."
+  "2026-10-28T17:57:51.144Z",codex-agent,"CI failure closure after merge fc403e4: all eight behavioral revert proofs ran in a disposable source copy, restored in finally, and each produced 1 failed test with only its relevant function/condition reverted followed by 1 passing test after restoration. Commands use node --test --test-concurrency=1 --test-name-pattern=<pattern> <file>. Proofs: namespace touched() metadata preservation (test/journal-durability.test.ts, restored namespace); native-owner control accounting, orphan-stage retirement, operation-log deduplication and active in-flight staging exclusion (test/process-marker-accounting.test.ts, stage-flushed/log-flushed/lease acquisition patterns); pack alias snapshot ordering and public recover() writer-lease ownership (test/packs.test.ts, owned publication aliases/public staging recovery); GC checkpoint recovery guard (test/gc.test.ts, GC resumes its recorded). No original test, threshold or fault boundary was removed. New exact-key checkpoint observation shares parser, canonicalization and verification budgets with mutation; preview/apply use the same preflight and explicitly report foreign checkpoints as unverified."
+  "2026-10-28T18:06:47.096Z",codex-agent,"Current merge validation: pinned PM-linked corpus/stream/installed compact checks passed 5/5 and the final regression selection passed 17/17 (zero skipped), including 19 foreign marker cases, 39 exact-step competing-owner transitions, three real SIGKILL modes and descriptor closure on every observer exit. Source and test typecheck, lint, docstring (554 declarations), duplication (0%), and strict PM health passed. Existing advisory provenance evidence remains append-only; no history repair. Native process-stage power-loss recovery passed 553 boundaries / 66 full crash images with two replays each; repack passed 3430 / 383 and packed GC passed 2980 / 323. Exact mtime revert command: node --test --test-concurrency=1 --test-name-pattern=\"restored native mtime\" test/journal-durability.test.ts; it failed with touched() alone reverted and passed after restoration. Prior Node 22 and 26 gates each failed the same six tests with 2211/2217 passing; both Windows GC jobs and CodeQL passed on that prior head. Fresh exact-head CI is required after pushing these fixes."
+  "2026-10-28T18:17:59.037Z",codex-agent,"Final local CI-repair evidence: native repack, packed-GC and obliteration matrix passed 3/3 using node --expose-gc --test --test-concurrency=1 --test-name-pattern=\"EVERY native (repack|gc-packed|obliterate) boundary\" test/journal-durability.test.ts. Repack: 3430 boundaries / 383 distinct full crash images; GC: 2980 / 323; obliteration: 2304 / 272. Separate process-stage recovery passed 553 / 66. Total: 9267 boundaries, 1044 distinct images, two convergent native replays per image, no lost retained object, no changed foreign tripwire and no permanently pending receipt. Final-source PM-linked pack selection repeated and passed 5/5. Rebuilt and npm-packed Node/Bun SDK plus installed project CLI acceptance passed 6/6, zero skipped; npm run pack:check scanned 312 files with zero findings. Eight isolated behavioral revert proofs are documented above. Next: regenerate changelog and self-host archive, commit and accept the committed archive, push the merge and fixes, then observe exact-head CI within the requested 45-minute cap. Full npm/Bun release certification is not claimed locally."
+files[77]{path,scope}:
   .github/workflows/ci.yml,project
   composition-commands.ts,project
   docs/destructive-operations.md,project
@@ -178,12 +182,14 @@ files[75]{path,scope}:
   test/helpers/object-lifetime-soak.ts,project
   test/helpers/object-lifetime.ts,project
   test/helpers/pack-worker.ts,project
+  test/helpers/process-stage.ts,project
   test/journal-durability.test.ts,project
   test/object-lifetime.test.ts,project
   test/object-read-protocol.test.ts,project
   test/objects.test.ts,project
   test/packs.test.ts,project
   test/path-identity.test.ts,project
+  test/process-marker-accounting.test.ts,project
   test/raw-coverage.test.ts,project
   test/refs.test.ts,project
   test/release-approval.test.ts,project
@@ -195,7 +201,7 @@ files[75]{path,scope}:
   test/worktree-races.test.ts,project
   test/writer-lease-batch-publication.test.ts,project
   vcs-commands.ts,project
-tests[40]:
+tests[42]:
   - command: node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts
     scope: project
     timeout_seconds: 600
@@ -511,6 +517,22 @@ tests[40]:
     provenance:
       author: codex-agent
       created_at: "2026-10-27T16:23:00.135Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"random corpus reads|compaction skips zero-byte|corrupt pack fails|bounded and streamed typed|shipped compact command\" test/packs.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-28T16:33:51.105Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"native marker accounting|marker reads close|orphan process-stage|live native staging|orphan recovery fences|lease acquisition restarts|erasure reconciles a real|GC resumes its recorded|GC reports a foreign|exact checkpoint lookup|owned publication aliases|public staging recovery|staging recovery preserves|a peer retiring a pinned|reader surface enumeration\" test/process-marker-accounting.test.ts test/gc.test.ts test/destruction.test.ts test/packs.test.ts test/object-read-protocol.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-28T17:57:53.322Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
 docs[6]{path,scope}:

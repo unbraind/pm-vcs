@@ -204,3 +204,27 @@ Erasure prepares its validated immutable audit objects before freezing purge
 membership. It activates the pending denial only after that intent is durable.
 An interrupted purge therefore cannot introduce a new unaccounted audit-object
 temporary or use a cancelled earlier erasure as authority for another payload.
+
+Native process-owner temporaries are accounted only when their complete bounded
+record matches the owning inode lifetime, parent and explicit lease destination.
+Recovery keeps live, in-flight and foreign records. Under the final lease, it
+records an exact retirement set for dead or proven abandoned native markers,
+then finishes that set. Erasure always acquires the operation-log lease before
+checking whether its original operation was recorded, so an acknowledged append
+can recover its owner without appending a duplicate.
+
+A published staging payload may share an inode with a canonical pack or loose
+object. Removing that alias changes ctime. Recovery pins the alias descriptor,
+records only the effects of its own acknowledged unlink, and fences the original
+canonical source against that result before creating a deletion snapshot.
+Replacements and unrelated byte, size, mtime or ctime changes are preserved and
+refused. The public staging-recovery method also holds the store writer lease
+and validates authoritative representations first.
+
+GC previews and applies inspect the same exact survivor-compaction checkpoint.
+A pending rewrite resumes even if interruption left only loose live objects and
+no unreachable candidates. Apply reports the checkpoint observed after recovery;
+foreign checkpoints remain untouched with an explicit unverified recovery
+result. Receipt work bounds refuse before candidate deletion. The power-loss
+model preserves mtime across restoration and namespace-only operations while
+continuing to observe actual content writes.

@@ -68,7 +68,8 @@ function assertSupportedControl(control: string): void {
   const supported = new Set(["objects", "refs", "leases", "destruction", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "remotes.json",
     "partial.json", "upload-roots.json", "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "objects.recovery.lock", "objects.generation", "erasure-verification.json", "erasure-purge.json", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
   for (const entry of readdirSync(control, { withFileTypes: true })) {
-    if ((!supported.has(entry.name) && !(entry.isFile() && /^(?:objects\.(?:(?:recovery\.)?lock\.[0-9]+|generation)|(?:erasure-verification|erasure-purge|denials)\.json)\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
+    const nativeOwner = entry.isFile() && ["oplog.jsonl.lock", "instances.json.lock"].some(name => durability.processMarker(join(control, entry.name), join(control, name)));
+    if ((!supported.has(entry.name) && !nativeOwner && !(entry.isFile() && /^(?:objects\.(?:(?:recovery\.)?lock\.[0-9]+|generation)|(?:erasure-verification|erasure-purge|denials)\.json)\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Unknown control storage or symlinks prevent a complete erasure receipt.");
     }
   }
@@ -368,9 +369,13 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const storage = certified.storage;
       // No observer callback follows the final namespace barrier before completion publication.
       store.recordDenials(completed);
-      if (!repository.operations.read().some((entry) => entry.command === "obliterate" && entry.summary === summary)) {
-        repository.operations.append("obliterate", summary, [], now, undefined, /** Validate the exact assigned receipt. */ (receipt) => assertAuditSafe([Buffer.from(`${JSON.stringify(receipt)}\n`)], payloads));
-      }
+      const alreadyRecorded = new Error("The original erasure operation is already recorded.");
+      try {
+        repository.operations.append("obliterate", summary, [], now, undefined, /** Reconcile owners and deduplicate under the operation log's own lease. */ (receipt) => {
+          if (repository.operations.read().some(entry => entry.command === "obliterate" && entry.summary === summary)) throw alreadyRecorded;
+          assertAuditSafe([Buffer.from(`${JSON.stringify(receipt)}\n`)], payloads);
+        });
+      } catch (error) { if (error !== alreadyRecorded) throw error; }
       return { destruction: { objects: objectReceipt, worktrees: worktreeReceipts.slice(0, 20), omittedWorktrees: Math.max(0, worktreeReceipts.length - 20) }, fileId, tombstone: id, removed: [...selected].sort(), storage, purge: purgeReceipt };
     } finally {
       for (const mutation of mutations.values()) mutation.close();

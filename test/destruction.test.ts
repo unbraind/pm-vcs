@@ -9,9 +9,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, mock, test } from "node:test";
 import { durability } from "../engine/durability.ts";
-import { destructionBoundary, prepareDestruction, prepareNamespaceDestruction, inspectDestructions, retireNamespace, measureDestructionRevision, DestructionRefusal } from "../engine/destruction.ts";
+import { destructionBoundary, prepareDestruction, prepareNamespaceDestruction, inspectDestructions, inspectDestructionCheckpoint, retireNamespace, measureDestructionRevision, DestructionRefusal } from "../engine/destruction.ts";
 import { syncBuiltinESMExports } from "node:module";
 import { objectFiles } from "../engine/object-files.ts";
+import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
@@ -497,4 +498,25 @@ test("a terminal supersession receipt with null policy is foreign evidence and c
  const ledger=join(f.control,"destruction");const path=join(ledger,readdirSync(ledger).find(name=>name.endsWith(".receipt"))!);const bytes=readFileSync(path);const record=JSON.parse(bytes.toString()) as {reason:unknown};record.reason=null;writeFileSync(path,JSON.stringify(record));
  const result=inspectDestructions(f.control);assert.equal(result.verification.status,"unverified");assert.equal(result.verification.bound,"decode_error");assert.ok(result.skippedCount>0);assert.equal((JSON.parse(readFileSync(path,"utf8")) as {reason:unknown}).reason,null);writeFileSync(path,bytes);
  assert.equal(inspectDestructions(f.control).verification.status,"verified");for(const member of f.paths)assert.ok(existsSync(member));
+});
+
+test("native read failures retain the exact deletion set and an absent namespace retry completes its original receipt",()=>{
+ const f=fixture();const source=f.paths[0];const plan=prepareDestruction(f.control,"readonly-failure",[{path:source}]);const open=fs.openSync;
+ mock.method(fs,"openSync",(...args:Parameters<typeof fs.openSync>)=>{if(args[0]===source&&args[1]===(fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW))throw Object.assign(new Error("native read verification denied"),{code:"EIO"});return open(...args);});syncBuiltinESMExports();
+ assert.throws(()=>plan.remove(source),{code:"EIO"});assert.equal(readFileSync(source,"utf8"),"owned-a");assert.equal(readFileSync(join(f.tripwire,"guard"),"utf8"),"untouched sentinel");mock.restoreAll();syncBuiltinESMExports();plan.remove(source);assert.equal(plan.finish().status,"completed");
+ const second=f.paths[1];let interrupted=false;destructionBoundary.visit=(step,path)=>{if(step==="deleted"&&path==="b"&&!interrupted){interrupted=true;throw new Error("unlink acknowledged before progress");}};assert.throws(()=>durability.unlink(second));destructionBoundary.visit=()=>{};assert.equal(existsSync(second),false);assert.equal(durability.unlink(second).status,"completed");
+});
+
+test("exact checkpoint lookup accounts empty, current, historical, foreign and changing owners without mutation",()=>{
+ const f=fixture();const key="checkpoint-owner";assert.equal(inspectDestructionCheckpoint(join(f.dir.root,"absent"),key).pending,false);assert.equal(inspectDestructionCheckpoint(f.control,key).pending,false);assert.equal(existsSync(join(f.control,"destruction")),false);assert.equal(inspectDestructionCheckpoint(join(f.tripwire,"guard"),key).verification.status,"unverified");
+ for(const invalid of ["","bad\0key",null])assert.throws(()=>inspectDestructionCheckpoint(f.control,invalid as string),{code:"conflicting_destructive_requests"});
+ const plan=prepareDestruction(f.control,key,[{path:f.paths[0]}]);const record=join(f.control,"destruction",createHash("sha256").update(`${f.control}\0${key}`).digest("hex")+".json");const pending=readFileSync(record);assert.equal(inspectDestructionCheckpoint(f.control,key).pending,true);
+ for(const setting of ["receiptRecords","receiptBytes","receiptMs"] as const){const limit=verificationLimits[setting];verificationLimits[setting]=0;try{assert.throws(()=>inspectDestructionCheckpoint(f.control,key),error=>error instanceof VerificationRefusal&&error.verifier==="receipts");assert.equal(readFileSync(f.paths[0],"utf8"),"owned-a");}finally{verificationLimits[setting]=limit;}}
+ plan.remove(f.paths[0]);plan.finish();assert.equal(inspectDestructionCheckpoint(f.control,key).pending,false);
+ const other=join(f.dir.root,"copied-root");mkdirSync(join(other,"destruction"),{recursive:true});const copied=join(other,"destruction",createHash("sha256").update(`${other}\0${key}`).digest("hex")+".json");writeFileSync(copied,pending);assert.equal(inspectDestructionCheckpoint(other,key).verification.status,"unverified");assert.ok(inspectDestructionCheckpoint(other,key).skipped);
+ renameSync(f.control,f.control+".old");mkdirSync(join(f.control,"destruction"),{recursive:true});writeFileSync(record,pending);assert.deepEqual(inspectDestructionCheckpoint(f.control,key),{pending:false,verification:{status:"verified",verifier:"receipts"}});
+ writeFileSync(record,"foreign metadata");assert.equal(inspectDestructionCheckpoint(f.control,key).verification.status,"unverified");writeFileSync(record,pending);let retired=false;objectFiles.opened=(_file,path)=>{if(path===record&&!retired){retired=true;rmSync(record);}};try{assert.equal(inspectDestructionCheckpoint(f.control,key).verification.status,"unverified");}finally{objectFiles.opened=()=>{};}
+ const linked=join(f.dir.root,"linked-root");mkdirSync(linked);symlinkSync(join(other,"destruction"),join(linked,"destruction"),"junction");assert.equal(inspectDestructionCheckpoint(linked,key).verification.status,"unverified");
+ const broken=join(f.dir.root,"broken-root");mkdirSync(join(broken,"destruction"),{recursive:true});const faultPath=join(broken,"destruction",createHash("sha256").update(`${broken}\0${key}`).digest("hex")+".json");writeFileSync(faultPath,pending);const fault=new DestructionRefusal("destructive_plan_conflict","unexpected ownership failure");objectFiles.opened=(_file,path)=>{if(path===faultPath)throw fault;};try{assert.throws(()=>inspectDestructionCheckpoint(broken,key),error=>error===fault);}finally{objectFiles.opened=()=>{};}
+ assert.equal(readFileSync(join(f.tripwire,"guard"),"utf8"),"untouched sentinel");
 });

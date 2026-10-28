@@ -246,6 +246,31 @@ function authorityOf(intent: Intent): string {
 function receipt(intent: Intent): DestructionReceipt { return { id: intent.id, revision: intent.revision, status: intent.status, ...(intent.reason === undefined ? {} : { reason: intent.reason }), planned: intent.entries.length, deleted: intent.entries.filter(entry => entry.status === "deleted").length, moved: intent.entries.filter(entry => entry.status === "moved").length, observedAbsent: intent.entries.filter(entry => entry.status === "absent").length, skipped: intent.entries.filter(entry => entry.status === "foreign" || entry.status === "cancelled").length, omitted: Math.max(0, intent.entries.length - 20), entries: intent.entries.slice(0, 20).map(entry => ({ ...entry })) }; }
 /** One exact-set handle is reusable after every deletion/progress crash without adding newly arrived files. */
 export interface DestructionPlan { readonly paths: readonly string[]; readonly resumed: boolean; remove(path: string): void; finish(): DestructionReceipt }
+/** One exact checkpoint is advisory only; mutation still revalidates its recorded set inside the intent lease. */
+export interface DestructionCheckpoint { readonly pending: boolean; readonly verification: VerificationResult; readonly skipped?: string }
+/** Plans and read-only phase guards accept the same operation-key domain before filesystem access. */
+function validateOperationKey(key: string): void { if (typeof key !== "string" || key === "" || key.includes("\0")) throw new DestructionRefusal("conflicting_destructive_requests", "A deletion intent requires a stable nonempty operation key."); }
+/** Inspect one owned checkpoint without a truncated catalogue deciding whether recovery may run. */
+export function inspectDestructionCheckpoint(control: string, key: string): DestructionCheckpoint {
+  validateOperationKey(key); const started = performance.now(); const requested = resolve(control);
+  assertVerificationBound("receipts", "record_count", 1, verificationLimits.receiptRecords); assertVerificationBound("receipts", "time_ms", 0, verificationLimits.receiptMs);
+  /** Every returned outcome includes the complete query's elapsed work, including empty and foreign roots. */
+  const finish = (value: DestructionCheckpoint): DestructionCheckpoint => { assertVerificationBound("receipts", "time_ms", performance.now() - started, verificationLimits.receiptMs); return value; };
+  const owner = lstatSync(requested, { bigint: true, throwIfNoEntry: false }); const verified: VerificationResult = { status: "verified", verifier: "receipts" };
+  if (owner === undefined) return finish({ pending: false, verification: verified });
+  if (!owner.isDirectory()) return finish({ pending: false, verification: { status: "unverified", verifier: "receipts", bound: "foreign_record" }, skipped: "Foreign receipt root preserved; inspect its owner before recovery." });
+  const root = realpathSync(requested); const directory = join(root, "destruction");
+  try {
+    canonical(join(directory, ".intent-directory"));
+    const intent = load(join(directory, `${intentName(root, key)}.json`), true);
+    if (intent === undefined) return finish({ pending: false, verification: verified });
+    if (intent.root !== root) return finish({ pending: false, verification: { status: "unverified", verifier: "receipts", bound: "foreign_record" }, skipped: "Copied receipt belongs to another root; preserved without adopting its authority." });
+    return finish({ pending: intent.rootIdentity === birth(owner) && intent.status === "pending", verification: verified });
+  } catch (error) {
+    if (!(error instanceof DestructionRefusal) || !["foreign_destructive_intent", "destructive_intent_changed", "destructive_target_changed"].includes(error.code)) throw error;
+    return finish({ pending: false, verification: { status: "unverified", verifier: "receipts", bound: error.code === "foreign_destructive_intent" ? "decode_error" : "namespace_changed" }, skipped: "Foreign or changing checkpoint preserved; inspect its recorded owner before recovery." });
+  }
+}
 /** Persist a revision-bound set after caller preflight; per-intent leases also serialize independent recovery drainers. */
 export function prepareDestruction(control: string, key: string, requests: readonly DestructionRequest[], resumeCompleted = false, journalDirectory?: string, completedIsHistorical = false, supersedeChanged?: DestructionSupersession): DestructionPlan {
   return preparePlan([control, key, requests, resumeCompleted, journalDirectory, completedIsHistorical, supersedeChanged]);
@@ -254,7 +279,7 @@ export function prepareDestruction(control: string, key: string, requests: reado
 function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot?: () => void, observed?: { readonly id: string; readonly authority: string }, publication?: string): DestructionPlan {
   const [control, key, suppliedRequests, resumeCompleted = false, suppliedDirectory, completedIsHistorical = false, supersedeChanged] = args;
   let requests = suppliedRequests; let journalDirectory = suppliedDirectory;
-  if (typeof key !== "string" || key === "" || key.includes("\0")) throw new DestructionRefusal("conflicting_destructive_requests", "A deletion intent requires a stable nonempty operation key.");
+  validateOperationKey(key);
   if (supersedeChanged !== undefined && !["reachability_changed", "eligibility_changed"].includes(supersedeChanged)) throw new DestructionRefusal("conflicting_destructive_requests", "Supersession requires a named, freshly validated precondition change.");
   const base = process.cwd(); const supplied = requests; requests = normalizedRequests(requests, base);
   const origins = new Map(requests.map((request, index) => [request, supplied[index]]));

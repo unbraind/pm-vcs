@@ -1,4 +1,4 @@
-import { prepareDestruction, type DestructionReceipt } from "./destruction.ts";
+import { prepareDestruction, inspectDestructionCheckpoint, type DestructionCheckpoint, type DestructionReceipt } from "./destruction.ts";
 import { assertVerificationBound, verificationLimits } from "./object-error.ts";
 import { packBoundary } from "./packs.ts";
 import { syncDirectory } from "./composition.ts";
@@ -15,6 +15,8 @@ import { CONTROL_DIRECTORY, Repository } from "./repo.ts";
 /** Exact sweep receipt: candidate addresses are informational until an explicit apply. */
 export interface GcReport {
   readonly destruction?: DestructionReceipt;
+  /** Survivor rewrite state for preview or apply; foreign checkpoints remain explicitly unverified and preserved. */
+  readonly recovery?: DestructionCheckpoint;
   readonly applied: boolean;
   readonly retained: number;
   readonly candidates: readonly ObjectId[];
@@ -165,9 +167,11 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
     const candidates = inventory.filter(/** Physical copies of a retained address remain retained. */ (item) => !retained.has(item.id));
     const candidateBytes = candidates.reduce(/** Count physical bytes rather than logical uncompressed payloads. */ (sum, item) => sum + item.bytes, 0);
     const physicalBefore = inventory.reduce((sum, item) => sum + item.bytes, 0);
+    const recovery = inspectDestructionCheckpoint(shared, "compact-loose");
+    let recoveryOutcome: DestructionCheckpoint | undefined = recovery.pending || recovery.skipped !== undefined ? recovery : undefined;
     let reclaimedBytes = 0; let removed = 0; let destruction: DestructionReceipt | undefined;
+    check();
     if (apply) {
-      check();
       const packed = candidates.some((candidate) => candidate.packed);
       if (packed) store.unpack();
       const deletion = prepareDestruction(shared, "gc-candidates", candidates.map(candidate => ({ path: candidate.packed ? join(store.storageRoot(), candidate.id.slice(0, 2), candidate.id.slice(2)) : candidate.path })), false, undefined, false, "reachability_changed");
@@ -176,10 +180,10 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
       }
       destruction = deletion.finish();
       removed = candidates.filter(item => lstatSync(item.path, { throwIfNoEntry: false }) === undefined).length;
-      if (inventory.some((item) => item.packed)) store.compact();
+      if (recovery.skipped === undefined && (inventory.some((item) => item.packed) || recovery.pending)) { store.compact(); if (recovery.pending) recoveryOutcome = inspectDestructionCheckpoint(shared, "compact-loose"); }
       store.releaseUploadRoots(visited); packBoundary.visit("released-pins");
       reclaimedBytes = Math.max(0, physicalBefore - [...store.walkInventory()].reduce((sum, item) => sum + item.bytes, 0));
     }
-    return { ...(destruction === undefined ? {} : { destruction }), applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed, candidateBytes, reclaimedBytes, activeLeases };
+    return { ...(destruction === undefined ? {} : { destruction }), ...(recoveryOutcome === undefined ? {} : { recovery: recoveryOutcome }), applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed, candidateBytes, reclaimedBytes, activeLeases };
   });
 }

@@ -1,9 +1,9 @@
 import { objectFiles, type ObjectFile } from "./object-files.ts";
-import { prepareDestruction, type DestructionReceipt } from "./destruction.ts";
+import { prepareDestruction, DestructionRefusal, type DestructionReceipt, type DestructionRequest } from "./destruction.ts";
 import { durability } from "./durability.ts";
 /** Immutable indexed packs: independently compressed frames keep their uncompressed addresses. */
 import { createHash, randomBytes } from "node:crypto";
-import { constants, existsSync, fstatSync, lstatSync, mkdirSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { constants, existsSync, fstatSync, lstatSync, mkdirSync, readdirSync, readFileSync, readSync, writeFileSync, type BigIntStats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { deflateSync } from "node:zlib";
 import { ObjectStoreError } from "./object-error.ts";
@@ -45,6 +45,10 @@ export const packBoundary: { visit(step: string): void } = { visit() {} };
 
 /** Hash physical pack bytes independently of logical object identities. */
 function digest(bytes: Buffer): string { return createHash("sha256").update(bytes).digest("hex"); }
+/** Bind legitimate alias retirement to one inode lifetime, never another file at the same address. */
+function inode(stat: BigIntStats): string { return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`; }
+/** Full immutable-source fences include content metadata and ctime after each acknowledged alias mutation. */
+function sameStamp(left: BigIntStats, right: BigIntStats): boolean { return (["dev", "ino", "birthtimeNs", "size", "mtimeNs", "ctimeNs"] as const).every(key => left[key] === right[key]); }
 /** Refuse suspect bytes before any source copy can be retired. */
 function corrupt(): never { throw new PackRefusal("corrupt_pack", "Pack index or content failed verification.", "Restore a verified copy of the pack before retrying; loose sources have not been retired by this attempt."); }
 /** Read an exact bounded range from a pinned descriptor, never neighboring members. */
@@ -175,6 +179,12 @@ export class PackStorage {
 
   /** Remove only recognized owned staging jobs; authoritative source representations always precede staging. */
   recover(): void {
+    const store = new ObjectStore(dirname(this.directory));
+    store.withWriteLock(() => { this.assertRoot(store); for (const item of store.walkPackedInventory()) void item; for (const item of store.walkLooseInventory()) void item; this.recoverTracked(new Map()); });
+  }
+
+  /** Record only our acknowledged hardlink side effects before exposing the next interleaving boundary. */
+  private recoverTracked(aliases: Map<string, BigIntStats>): void {
     if (!existsSync(this.directory)) return;
     if (!lstatSync(this.directory).isDirectory()) corrupt();
     for (const entry of readdirSync(this.directory, { withFileTypes: true })) {
@@ -182,8 +192,19 @@ export class PackStorage {
       const path = join(this.directory, entry.name);
       const marker = join(path, "owner");
       if (!lstatSync(marker, { throwIfNoEntry: false })?.isFile() || readFileSync(marker, "utf8") !== `pm-vcs-pack-1 ${entry.name}\n`) { if (durability.resumeDirectory(path)) packBoundary.visit("recovered"); continue; }
-      this.cleanupJob(path); packBoundary.visit("recovered");
+      this.cleanupJob(path, aliases); packBoundary.visit("recovered");
     }
+  }
+
+  /** Recovery settles aliases before snapshotting the exact set, while replacements and data changes retain their old fences. */
+  private recoveryRequests(paths: readonly string[]): DestructionRequest[] {
+    const before = new Map(paths.map(path => [path, lstatSync(path, { bigint: true })])); const aliases = new Map<string, BigIntStats>();
+    this.recoverTracked(aliases);
+    return paths.map(path => {
+      const original = before.get(path)!; const expected = aliases.get(inode(original)) ?? original; const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+      if (original.size !== expected.size || original.mtimeNs !== expected.mtimeNs || current === undefined || !sameStamp(current, expected)) throw new DestructionRefusal("destructive_target_changed", "A source changed during staging recovery; its replacement was preserved.");
+      return { path, expected };
+    });
   }
 
   /** Publish one complete pack durably before deleting any loose source, in bounded deterministic batches. */
@@ -205,9 +226,11 @@ export class PackStorage {
         else eligible.push({ id: item.id, path: item.path, cost });
       }
       // Validate all published and loose sources before even retiring a duplicate or staging job.
-      const deletion = prepareDestruction(dirname(store.storageRoot()), "compact-loose", [...new Set([...duplicates.keys(), ...eligible.map(item => item.path)])].map(path => ({ path })), false, undefined, false, "eligibility_changed");
+      const sources = new Map([...duplicates, ...eligible.map(item => [item.path, item.id] as const)]);
+      const requests = this.recoveryRequests([...sources.keys()]);
+      for (const [path, id] of sources) store.readInventoryObject(id, path);
+      const deletion = prepareDestruction(dirname(store.storageRoot()), "compact-loose", requests, false, undefined, false, "eligibility_changed");
       const planned = new Set(deletion.paths);
-      this.recover();
       let objects = 0; let looseBytes = 0;
       for (const [path] of duplicates) {
         if (!planned.has(path)) continue;
@@ -259,11 +282,16 @@ export class PackStorage {
   }
 
   /** Retire only package-owned regular staging leaves; foreign children keep their directory and are reported by files(). */
-  private cleanupJob(job: string): void {
+  private cleanupJob(job: string, aliases?: Map<string, BigIntStats>): void {
     // Payload goes first: a crash after marker retirement must never leave unmarked owned bytes.
     for (const name of ["payload", "owner"]) {
       const path = join(job, name);
-      if (lstatSync(path, { throwIfNoEntry: false })?.isFile() === true) { durability.unlink(path); syncDirectory(job); packBoundary.visit(`staging-${name}-retired`); }
+      if (lstatSync(path, { throwIfNoEntry: false })?.isFile() === true) {
+        const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try { const before = fstatSync(file.fd, { bigint: true }); const result = durability.unlink(path, before); if (name === "payload" && result.deleted > 0) aliases?.set(inode(before), fstatSync(file.fd, { bigint: true })); }
+        finally { file.close(); }
+        syncDirectory(job); packBoundary.visit(`staging-${name}-retired`);
+      }
     }
     try { durability.removeDirectory(job); packBoundary.visit("staging-job-retired"); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error;
@@ -290,8 +318,9 @@ export class PackStorage {
       this.assertRoot(store);
       // Finish complete verification before representation changes, then retain only one leaf buffer per copy.
       for (const item of store.walkErasureInventory("pack")) void item;
-      const deletion = prepareDestruction(dirname(store.storageRoot()), "unpack-packs", this.files().map(path => ({ path })), false, undefined, false, "eligibility_changed");
-      this.recover();
+      const requests = this.recoveryRequests(this.files());
+      for (const item of store.walkErasureInventory("pack")) void item;
+      const deletion = prepareDestruction(dirname(store.storageRoot()), "unpack-packs", requests, false, undefined, false, "eligibility_changed");
       for (const item of store.walkErasureInventory("pack")) {
         const directory = join(store.storageRoot(), item.id.slice(0, 2)); mkdirSync(directory, { recursive: true });
         const destination = join(directory, item.id.slice(2));

@@ -145,8 +145,14 @@ export class NamespacePowerLoss {
       return Reflect.get(target, key, receiver);
     } });
   }
-  /** Record actual writes while preserving the independent durable copy until fsync. */
-  private touched(path: string): void { const stat = native.stat(path, { bigint: true, throwIfNoEntry: false }); if (stat !== undefined) { const node = this.nodes.get(identity(stat)); if (node !== undefined) { node.stamp = stat; if (node.flushed === undefined) this.durableRevision++; } } }
+  /** Content writes advance mtime; namespace-only changes preserve logical mtime across restoration's private byte copy. */
+  private touched(path: string, content = true): void {
+    const stat = native.stat(path, { bigint: true, throwIfNoEntry: false }); if (stat === undefined) return;
+    const node = this.nodes.get(identity(stat)); if (node === undefined) return;
+    const previous = { mtime: node.stamp.mtime, mtimeMs: node.stamp.mtimeMs, mtimeNs: node.stamp.mtimeNs };
+    node.stamp = content ? stat : new Proxy(stat, { get(target, key, receiver) { return key === "mtime" || key === "mtimeMs" || key === "mtimeNs" ? previous[key] : Reflect.get(target, key, receiver); } });
+    if (node.flushed === undefined) this.durableRevision++;
+  }
 
   /** Install native fault seams after creating one real SDK tracker; no SDK method is mocked. */
   install(): void {
@@ -170,9 +176,9 @@ export class NamespacePowerLoss {
       else { const node = this.nodes.get(id); if (node !== undefined) { const bytes=native.read(node.backup);if(node.bytes===undefined||!node.bytes.equals(bytes)||node.flushed===undefined||node.flushed.mtimeNs!==node.stamp.mtimeNs||node.flushed.ctimeNs!==node.stamp.ctimeNs||node.flushed.mode!==node.stamp.mode)this.durableRevision++;node.bytes=bytes;node.flushed=node.stamp; } }
       const path = this.descriptors.get(fd); if (path !== undefined) this.step(stat.isDirectory() ? "directory-flushed" : "file-flushed");
     });
-    mock.method(fs, "linkSync", (...args: Parameters<typeof fs.linkSync>) => { this.writable(); const result = native.link(...args); const source = this.physical(String(args[0])); const target = this.physical(String(args[1])); if (this.owned(target)) { if(this.phase === "record")this.namespace(target); this.touched(source); this.step("file-linked"); } return result; });
-    mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => { this.writable(); const source = this.physical(String(args[0])); const target = this.physical(String(args[1])); this.authority(source, target); const result = native.rename(...args); if (this.owned(source) || this.owned(target)) { if(this.phase === "record"){this.namespace(source,false,false);this.namespace(target);} this.touched(target); this.step("file-renamed"); } return result; });
-    mock.method(fs, "unlinkSync", (...args: Parameters<typeof fs.unlinkSync>) => { this.writable(); const path = this.physical(String(args[0])); this.authority(path); const before = native.stat(path, { bigint: true }); const result = native.unlink(...args); const retained = this.nodes.get(identity(before)); if (retained !== undefined) {retained.stamp = native.stat(retained.backup, { bigint: true });if(retained.flushed===undefined)this.durableRevision++;} if (this.owned(path)) { if(this.phase === "record")this.namespace(path,false); this.step("file-unlinked"); } return result; });
+    mock.method(fs, "linkSync", (...args: Parameters<typeof fs.linkSync>) => { this.writable(); const result = native.link(...args); const source = this.physical(String(args[0])); const target = this.physical(String(args[1])); if (this.owned(target)) { if(this.phase === "record")this.namespace(target); this.touched(source, false); this.step("file-linked"); } return result; });
+    mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => { this.writable(); const source = this.physical(String(args[0])); const target = this.physical(String(args[1])); this.authority(source, target); const result = native.rename(...args); if (this.owned(source) || this.owned(target)) { if(this.phase === "record"){this.namespace(source,false,false);this.namespace(target);} this.touched(target, false); this.step("file-renamed"); } return result; });
+    mock.method(fs, "unlinkSync", (...args: Parameters<typeof fs.unlinkSync>) => { this.writable(); const path = this.physical(String(args[0])); this.authority(path); const before = native.stat(path, { bigint: true }); const result = native.unlink(...args); const retained = this.nodes.get(identity(before)); if (retained !== undefined) this.touched(retained.backup, false); if (this.owned(path)) { if(this.phase === "record")this.namespace(path,false); this.step("file-unlinked"); } return result; });
     mock.method(fs, "rmdirSync", (...args: Parameters<typeof fs.rmdirSync>) => { this.writable(); const path = this.physical(String(args[0])); if (this.phase !== "record" || !this.owned(path)) return native.rmdir(...args); this.authority(path); assert.equal(native.names(path).length, 0); const id = this.capture(path); const backup = join(this.archive.root, `directory-${++this.serial}`); native.rename(path, backup); this.nodes.get(id)!.backup = backup; this.namespace(path,false); this.step("directory-unlinked"); });
     const kill = process.kill;
     mock.method(process, "kill", (...args: Parameters<typeof process.kill>) => { if (this.phase === "recover" && args[0] === process.pid && args[1] === 0) throw Object.assign(new Error("modeled pre-crash process ended"), { code: "ESRCH" }); return kill(...args); });
