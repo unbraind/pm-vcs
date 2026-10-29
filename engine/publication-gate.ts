@@ -1,14 +1,18 @@
 /** Keep namespace durability independent of the repository stack while native publications require its real store protocol. */
 import { namespacePublicationContext } from "./destruction.ts";
 import { VerificationRefusal } from "./object-error.ts";
-import { relative, resolve, sep } from "node:path";
+import { relative, sep } from "node:path";
+
+/** Match Windows single-code-unit case aliases without inventing multi-character filesystem equivalences. */
+function windowsCase(name: string): string { return name.replace(/[\s\S]/g, character => { const upper = character.toUpperCase(); return upper.length === 1 ? upper : character; }); }
 
 /** Recognize only native root-bearing control destinations, never ordinary files or recovery journals. @internal */
-export function nativePublicationKind(destination: string): string | undefined {
- const context = namespacePublicationContext(destination); if (context === undefined) return undefined;
- const name = relative(context.control, resolve(destination)).split(sep).join("/");
- if (name.startsWith("refs/")) return "ref";
- return !name.includes("/") && ["HEAD", "index", "MERGE_STATE", "upload-roots.json", "denials.json"].includes(name) ? name : undefined;
+export function nativePublicationKind(destination: string, platform: NodeJS.Platform = process.platform): string | undefined {
+ const context = namespacePublicationContext(destination, platform); if (context === undefined) return undefined;
+ const name = relative(context.control, context.destination).split(sep).join("/");
+ const windows = platform === "win32"; const normalized = windows ? windowsCase(name) : name;
+ if (normalized.startsWith(windows ? "REFS/" : "refs/")) return "ref";
+ return !normalized.includes("/") ? ["HEAD", "index", "MERGE_STATE", "upload-roots.json", "denials.json"].find(key => (windows ? windowsCase(key) : key) === normalized) : undefined;
 }
 
 /** The native object layer installs its shared lease and dependency verifier once its module graph is initialized. @internal */

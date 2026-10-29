@@ -114,11 +114,17 @@ function packageControl(path: string): boolean {
   try { return readFileSync(marker, "utf8") === "pmvcs-1\n"; } catch { return false; }
 }
 /** Locate verified native control without treating an arbitrary explicit namespace scope as an object store. @internal */
-export function namespacePublicationContext(address: string): { readonly control: string } | undefined {
-  let current = dirname(resolve(address));
+export function namespacePublicationContext(address: string, platform: NodeJS.Platform = process.platform): { readonly control: string; readonly destination: string } | undefined {
+  const absolute = resolve(address);
+  let destination = /^\/proc\/self\/fd\/[0-9]+$/.test(dirname(absolute)) ? resolveNamespacePath(absolute) : absolute;
+  if (platform === "win32" && process.platform === "win32") {
+    const entry = lstatSync(destination, { throwIfNoEntry: false });
+    if (entry?.isFile()) destination = realpathSync(destination);
+  }
+  let current = dirname(destination);
   for (;;) {
     const control = packageControl(current) ? current : packageControl(join(current, ".pmvcs")) ? join(current, ".pmvcs") : undefined;
-    if (control !== undefined) return { control };
+    if (control !== undefined) return { control, destination };
     const parent = dirname(current); if (parent === current) return undefined; current = parent;
   }
 }

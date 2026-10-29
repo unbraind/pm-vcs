@@ -328,3 +328,5 @@ intentionally omitted parents through the same native shallow policy as fetch.
 Read-only status reports preserve older index state when an optional stat-hint
 refresh cannot meet the current publication rule. Explicit index writes still
 validate their new roots, and native I/O failures remain errors.
+
+Native publication classification uses the same descriptor-address resolver as namespace mutation. Windows case aliases remain root-bearing, while distinct POSIX metadata and symlink leaves retain their ordinary namespace meaning. A cold durability worker must initialize the real object adapter before publishing through either spelling.

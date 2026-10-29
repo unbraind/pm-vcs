@@ -14,6 +14,7 @@ import { parseBundle, serializeBundle } from "../engine/bundle.ts";
 import { canonicalRecordValue, encodeCommit, encodeManifest, encodeTree, readCommit, type RecordValue, type Signature, type TreeEntry } from "../engine/model.ts";
 import { encodeConflict } from "../engine/conflicts.ts";
 import { Repository } from "../engine/repo.ts";
+import { reachableObjects } from "../engine/reachability.ts";
 import { keyFingerprint, publicKeyText } from "../engine/signatures.ts";
 import { configureAuthority, writePrivateJson } from "../engine/composition.ts";
 import { updateTrustedKeys } from "../engine/signature-policy.ts";
@@ -200,12 +201,16 @@ test("destination ref namespace collisions refuse the whole import before storin
   ];
   for (const { incoming, existing } of cases) {
     const receiver = Repository.init(temp());
-    for (const entry of f.repo.objects.inventory()) receiver.objects.write(entry.object.type, entry.object.payload);
+    if (existing.length > 0) for (const id of reachableObjects(f.repo.objects, [f.first])) {
+      const object = f.repo.objects.read(id); receiver.objects.write(object.type, object.payload);
+    }
     for (const name of existing) receiver.refs.compareAndSwap(name, null, f.first);
+    assert.equal(receiver.objects.has(f.last), false, "the incoming tip must remain absent before collision preflight");
     const scope = { ...f.scope, refs: incoming }; const policy = { ...f.policy, scope };
     const bytes = exportChangeBundle(f.repo.objects, Object.fromEntries(incoming.map(name => [name, f.last])), scope, author.email, keys.privateKey);
     const before = snapshot(receiver);
     refused(() => importChangeBundle(receiver, bytes, policy, Object.fromEntries(incoming.map(name => [name, null]))), "bundle_ref_conflict");
+    assert.equal(receiver.objects.has(f.last), false, "a rejected namespace must not admit incoming history");
     assert.deepEqual(snapshot(receiver), before);
     assert.equal(receiver.refs.read("refs/heads/0"), null);
     assert.equal(existsSync(join(receiver.controlDirectory, "refs/heads/0.lock")), false);

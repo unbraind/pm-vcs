@@ -4,12 +4,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import fs, { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { afterEach, mock, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
+import { RefStore } from "../engine/refs.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { objectFiles } from "../engine/object-files.ts";
 import { durability } from "../engine/durability.ts";
@@ -20,6 +21,7 @@ import { encodeIndex, readWorkingFile } from "../engine/worktree.ts";
 import { encodeTombstone } from "../engine/lifecycle.ts";
 import { encodeConflict } from "../engine/conflicts.ts";
 import { requireClosure, retainPublicationClosure } from "../engine/closure.ts";
+import { nativePublicationKind } from "../engine/publication-gate.ts";
 import { hashObject, ObjectStore } from "../engine/objects.ts";
 import { withPublicationLock, validatePublication, publicationRootIds, publicationRootsFromFd, validatePublicationIds } from "../engine/publication.ts";
 import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
@@ -332,4 +334,70 @@ test("read-only status preserves released index state when new publication valid
  assert.deepEqual(repo.status(read), expected); assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), before);
  assert.throws(() => repo.writeIndex([{ ...entry, id: "e".repeat(64) }]), { code: "publication_unverified" });
  assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), before); assert.equal(repo.readIndex()[0]!.id, entry.id);
+});
+
+
+test("native root case policy preserves Windows aliases and distinct POSIX metadata", async () => {
+ const repo = await fixture();
+ const corpus: readonly (readonly [string, string | undefined, string | undefined])[] = [
+  ["HEAD", "HEAD", "HEAD"], ["head", undefined, "HEAD"], ["HeAd", undefined, "HEAD"],
+  ["index", "index", "index"], ["INDEX", undefined, "index"], ["MERGE_STATE", "MERGE_STATE", "MERGE_STATE"], ["merge_state", undefined, "MERGE_STATE"],
+  ["upload-roots.json", "upload-roots.json", "upload-roots.json"], ["Upload-Roots.Json", undefined, "upload-roots.json"], ["denials.json", "denials.json", "denials.json"], ["DENIALS.JSON", undefined, "denials.json"],
+  ["refs/heads/main", "ref", "ref"], ["Refs/HEADS/main", undefined, "ref"], ["refſ/heads/main", undefined, "ref"], ["ındex", undefined, "index"], ["MERGE_ﬆATE", undefined, undefined], ["nested/HEAD", undefined, undefined], ["constructor", undefined, undefined], ["__proto__", undefined, undefined],
+ ];
+ for (const [name, posix, windows] of corpus) {
+  assert.equal(nativePublicationKind(join(repo.controlDirectory, name), "linux"), posix, name);
+  assert.equal(nativePublicationKind(join(repo.controlDirectory, name), "win32"), windows, name);
+ }
+ assert.equal(nativePublicationKind(join(repo.root, "HEAD"), "win32"), undefined);
+});
+
+test("native root case aliases cannot bypass a bare worker's adapter requirement on Windows", async () => {
+ const repo = await fixture(); const target = join(repo.controlDirectory, "head"); const head = join(repo.controlDirectory, "HEAD"); const before = readFileSync(head);
+ const source = join(repo.controlDirectory, "case-input.tmp"); writeFileSync(source, "ordinary POSIX metadata or a Windows root alias");
+ const result = spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/publication-gate-worker.ts"), source, target], { env: testEnvironment(), encoding: "utf8", timeout: 60000 });
+ assert.equal(result.status, 0, result.stderr);
+ if (process.platform === "win32") { assert.deepEqual(JSON.parse(result.stdout), { code: "publication_unverified", bound: "store_adapter" }); assert.ok(existsSync(source)); }
+ else { assert.deepEqual(JSON.parse(result.stdout), { published: true }); assert.equal(existsSync(source), false); assert.equal(readFileSync(target, "utf8"), "ordinary POSIX metadata or a Windows root alias"); }
+ assert.deepEqual(readFileSync(head), before);
+});
+
+
+test("native root case observation preserves ordinary directories and symlink leaves", async () => {
+ const repo = await fixture(); const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+ const ordinary = join(repo.controlDirectory, "ordinary.json"); writeFileSync(ordinary, "ordinary metadata");
+ try {
+  Object.defineProperty(process, "platform", { ...original, value: "win32" });
+  assert.equal(nativePublicationKind(join(repo.controlDirectory, "HEAD"), "win32"), "HEAD");
+  assert.equal(nativePublicationKind(join(repo.controlDirectory, "missing.json"), "win32"), undefined);
+  assert.equal(nativePublicationKind(ordinary, "win32"), undefined); assert.equal(nativePublicationKind(repo.controlDirectory, "win32"), undefined);
+ } finally { Object.defineProperty(process, "platform", original); }
+ if (process.platform !== "win32") {
+  const link = join(repo.controlDirectory, "ordinary-link"); symlinkSync(join(repo.controlDirectory, "HEAD"), link);
+  try { Object.defineProperty(process, "platform", { ...original, value: "win32" }); assert.equal(nativePublicationKind(link, "win32"), undefined); }
+  finally { Object.defineProperty(process, "platform", original); }
+ }
+});
+
+test("native root descriptor aliases cannot bypass a bare worker's adapter requirement", { skip: process.platform !== "linux" }, async () => {
+ const repo = await fixture(); const target = join(repo.controlDirectory, "HEAD"); const before = readFileSync(target); const source = join(repo.controlDirectory, "descriptor-input.tmp"); writeFileSync(source, "unverified descriptor publication");
+ const result = spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/publication-gate-worker.ts"), source, target, "descriptor"], { env: testEnvironment(), encoding: "utf8", timeout: 60000 });
+ assert.equal(result.status, 0, result.stderr); assert.deepEqual(JSON.parse(result.stdout), { code: "publication_unverified", bound: "store_adapter" }); assert.deepEqual(readFileSync(target), before); assert.ok(existsSync(source));
+});
+
+
+test("native root descriptor ref namespaces retain the native destination policy", { skip: process.platform !== "linux" }, async () => {
+ const repo = await fixture(); const id = repo.objects.write("blob", Buffer.from("descriptor namespace root")); const descriptor = fs.openSync(repo.controlDirectory, "r");
+ try {
+  const refs = new RefStore(`/proc/self/fd/${descriptor}`);
+  for (const name of ["bookmark", "index", "denials.json", "MERGE_STATE", "upload-roots.json", "objects.generation", "constructor", "__proto__"]) assert.throws(() => refs.compareAndSwap(name, null, id), { code: "invalid_ref_name" }, name);
+ } finally { fs.closeSync(descriptor); }
+ repo.refs.compareAndSwap("refs/metadata/allowed", null, id); assert.equal(repo.refs.read("refs/metadata/allowed"), id);
+});
+
+test("native root case ref namespaces retain the native destination policy", async () => {
+ const repo = await fixture(); const id = repo.objects.write("blob", Buffer.from("case namespace root")); const refs = new RefStore(process.platform === "win32" ? repo.controlDirectory.toUpperCase() : repo.controlDirectory);
+ for (const name of ["bookmark", "index", "denials.json", "MERGE_STATE", "objects.generation"]) assert.throws(() => refs.compareAndSwap(name, null, id), { code: "invalid_ref_name" }, name);
+ repo.refs.compareAndSwap("refs/metadata/allowed", null, id); assert.equal(repo.refs.read("refs/metadata/allowed"), id);
+ const ordinary = new RefStore(join(repo.root, "standalone-ref-store")); ordinary.compareAndSwap("bookmark", null, id); assert.equal(ordinary.read("bookmark"), id);
 });

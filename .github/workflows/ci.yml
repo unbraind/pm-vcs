@@ -151,4 +151,4 @@ jobs:
         run: npm run build
 
       - name: Verify Windows GC apply on a non-git tracker
-        run: node --test --test-name-pattern="Windows GC" test/durability.test.ts
+        run: node --test --test-concurrency=1 --test-name-pattern="Windows GC|native root case" test/durability.test.ts test/ref-publication-recovery.test.ts
