@@ -510,7 +510,10 @@ export async function runBisect(
             scratch.switchTo(selected.commit, options.now());
           } catch (error) {
             if (!(error instanceof ObjectStoreError)) throw error;
-            materializationError = `candidate could not be materialized: ${error.code}`;
+            // Publication now detects missing dependencies before checkout. Keep
+            // the persisted bisect outcome compatible with the same older miss.
+            const code = error.code === "publication_unverified" && error.bound === "missing_object" ? "object_not_found" : error.code;
+            materializationError = `candidate could not be materialized: ${code}`;
           }
           outcome = materializationError === undefined ? await runner(selected, workspace) : { outcome: "untestable", detail: materializationError };
         }

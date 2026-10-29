@@ -22,7 +22,7 @@ import { encodeConflict } from "../engine/conflicts.ts";
 import { requireClosure, retainPublicationClosure } from "../engine/closure.ts";
 import { hashObject, ObjectStore } from "../engine/objects.ts";
 import { withPublicationLock, validatePublication, publicationRootIds, publicationRootsFromFd, validatePublicationIds } from "../engine/publication.ts";
-import { verificationLimits } from "../engine/object-error.ts";
+import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -323,8 +323,10 @@ test("read-only status preserves released index state when new publication valid
  const expected = repo.status(read, false);
  const io = Object.assign(new Error("cache validation I/O failure"), { code: "EIO" });
  const original = ObjectStore.prototype.read;
- mock.method(ObjectStore.prototype, "read", function(this: ObjectStore, id: string) { if (id === entry.id) throw io; return original.call(this, id); });
- try { assert.throws(() => repo.status(read), error => error === io); } finally { mock.restoreAll(); }
+ for (const fault of [io, new VerificationRefusal("reachability", "object_count", "cache verification budget")]) {
+  mock.method(ObjectStore.prototype, "read", function(this: ObjectStore, id: string) { if (id === entry.id) throw fault; return original.call(this, id); });
+  try { assert.throws(() => repo.status(read), error => error === fault); } finally { mock.restoreAll(); }
+ }
  rmSync(join(repo.objects.storageRoot(), entry.id.slice(0, 2), entry.id.slice(2)));
  const before = readFileSync(join(repo.controlDirectory, "index"));
  assert.deepEqual(repo.status(read), expected); assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), before);

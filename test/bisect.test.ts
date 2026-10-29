@@ -17,6 +17,7 @@ import { bisectCandidates, bisectRemaining, bisectStepLimit, decodeBisectSession
 import { effectiveChangeId, readCommit, writeCommit, type Signature } from "../engine/model.ts";
 import { Repository } from "../engine/repo.ts";
 import { ObjectStoreError } from "../engine/objects.ts";
+import { VerificationRefusal } from "../engine/object-error.ts";
 import { cloneFrom } from "../engine/sync.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
@@ -1807,4 +1808,20 @@ test("bisect SDK linked commands share one PM sandbox per candidate without a fa
   assert.equal(result.bisect.verdict?.commit, culprit);
   assert.ok(result.bisect.steps.some((step) => step.commit === passing && step.outcome === "good"));
   assert.equal(headCommit(fixture), bad);
+});
+
+
+test("bisect preserves missing-object compatibility without flattening other publication refusals", async context => {
+ const fixture = await setup(); const item = await linkedTestItem(fixture, "Typed candidate refusal", join(fixture.root, "typed-count"));
+ const good = edit(fixture, "state.txt", "good", "good"); const middle = edit(fixture, "state.txt", "middle", "middle"); const bad = edit(fixture, "state.txt", "bad", "bad");
+ await fixture.bisect(["start", good, bad], { item }); const session = storedSession(fixture)!;
+ for (const [code, bound, expected] of [["publication_unverified", "missing_object", "object_not_found"], ["publication_unverified", "decode_error", "publication_unverified"], ["unverified", "missing_object", "unverified"]]) {
+  const fault = new VerificationRefusal("reachability", bound!, "candidate verification refused", code);
+  const init = context.mock.method(Repository, "init", () => { throw fault; }); let runs = 0;
+  try {
+   const result = await runBisect(fixture.repository, session, async () => { runs++; return { outcome: "good" }; }, { author: "fixture", now: () => new Date() });
+   assert.equal(runs, 0); assert.equal(result.session.steps.find(step => step.commit === middle)!.detail, `candidate could not be materialized: ${expected}`);
+   assert.equal(result.session.verdict?.kind, "ambiguous"); assert.equal(headCommit(fixture), bad);
+  } finally { init.mock.restore(); }
+ }
 });
