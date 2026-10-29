@@ -161,3 +161,16 @@ test("publication fresh binary staging after unrelated erasure retains malformed
   }
   assert.deepEqual(readFileSync(join(repo.controlDirectory, "denials.json")), denied);
 });
+
+
+test("native ref batches share one closure across every namespace and their final rename validation", async () => {
+ const { repo, ids, left, right } = await fixture(); const original = ObjectStore.prototype.read;
+ for (let seed = 1; seed <= 8; seed++) {
+  const reads = new Map<string, number>();
+  ObjectStore.prototype.read = function(id) { const object = original.call(this, id); if (ids.includes(id)) reads.set(id, (reads.get(id) ?? 0) + 1); return object; };
+  try {
+   repo.refs.transaction(Array.from({ length: seed + 1 }, (_, index) => ({ name: `refs/${["heads", "tags", "metadata"][index % 3]}/case-${seed}-${index}`, expected: null, next: index % 2 ? right : left })), undefined, { expected: repo.refs.rawHead(), next: seed % 2 ? left : right });
+  } finally { Object.defineProperty(ObjectStore.prototype, "read", { value: original }); }
+  assert.deepEqual([...reads.keys()].sort(), [...ids].sort()); assert.deepEqual([...reads.values()], Array(ids.length).fill(1));
+ }
+});

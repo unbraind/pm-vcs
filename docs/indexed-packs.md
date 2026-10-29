@@ -310,3 +310,21 @@ retain their captured source, destination and descriptor aliases throughout
 recovery. Later namespace changes on a caller request refuse before deletion;
 equivalent relative spellings compare through the same captured base. Use a
 new handle to select a different storage root.
+
+
+Native publication uses one destination classifier for validation and recovery.
+Refs, detached HEAD, the index, merge state, upload pins and denial registries
+participate in object publication; ordinary working files and recovery journals
+retain their namespace leases without recursively acquiring the object writer.
+Each ref batch validates all targets in one closure walk, including shared history
+and detached HEAD. A verified closure can be reused only by the same live
+descriptor owner.
+Storage mutations, owner release and changes to omission or denial policy end
+that evidence. A repaired denial registry verifies its canonical audit objects
+physically under the writer lease, so corrupt prior registry bytes do not prevent
+repair or authorize payload revival. Disposable bisect candidates declare their
+intentionally omitted parents through the same native shallow policy as fetch.
+
+Read-only status reports preserve older index state when an optional stat-hint
+refresh cannot meet the current publication rule. Explicit index writes still
+validate their new roots, and native I/O failures remain errors.

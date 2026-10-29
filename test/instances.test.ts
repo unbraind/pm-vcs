@@ -235,9 +235,10 @@ test("committing a staged change outside the view is refused, never silently rec
   // exactly what a stale or foreign index would leave behind. Committing it
   // would attribute a change no working tree ever saw, so it must be refused.
   const alice = Repository.open(aliceRoot);
+  const stale = hub.objects.write("blob", Buffer.from("stale out-of-view payload"));
   writeFileSync(join(aliceRoot, CONTROL_DIRECTORY, "index"), `${[
     "pm-vcs-index 4",
-    JSON.stringify(["100644", "d".repeat(64), "sub/deep.txt", null, null, null, true]),
+    JSON.stringify(["100644", stale, "sub/deep.txt", null, null, null, true]),
     JSON.stringify(["100644", readmeId, "readme.txt", "f".repeat(32), null, null, false]),
   ].join("\n")}\n`);
   writeFileSync(join(aliceRoot, "readme.txt"), "edited\n");
@@ -1184,7 +1185,13 @@ test("a failed instance creation leaves neither a branch nor a directory behind"
   // the branch has already been installed.
   const deepId = hub.readIndex().find((entry) => entry.path === "sub/deep.txt")?.id;
   assert.ok(deepId !== undefined);
-  rmSync(objectFile(join(root, CONTROL_DIRECTORY, "objects"), deepId));
+  // Fail after this call installs its new branch, exercising the rollback
+  // rather than the earlier publication preflight on an already corrupt store.
+  const compareAndSwap = hub.refs.compareAndSwap.bind(hub.refs);
+  hub.refs.compareAndSwap = (name, expected, next) => {
+    compareAndSwap(name, expected, next);
+    if (name === "refs/heads/carol" && next !== null) rmSync(objectFile(join(root, CONTROL_DIRECTORY, "objects"), deepId));
+  };
 
   const branchesBefore = hub.refs.list("refs/heads").map((ref) => ref.name).sort();
   const carolRoot = join(parent, "carol-tree");
@@ -1281,7 +1288,13 @@ test("a failed creation into a pre-existing empty directory removes only what it
 
   const deepId = hub.readIndex().find((entry) => entry.path === "sub/deep.txt")?.id;
   assert.ok(deepId !== undefined);
-  rmSync(objectFile(join(root, CONTROL_DIRECTORY, "objects"), deepId));
+  // Fail after this call installs its new branch, exercising the rollback
+  // rather than the earlier publication preflight on an already corrupt store.
+  const compareAndSwap = hub.refs.compareAndSwap.bind(hub.refs);
+  hub.refs.compareAndSwap = (name, expected, next) => {
+    compareAndSwap(name, expected, next);
+    if (name === "refs/heads/frank" && next !== null) rmSync(objectFile(join(root, CONTROL_DIRECTORY, "objects"), deepId));
+  };
 
   // The caller's own empty directory, made before linking.
   const frankRoot = join(parent, "frank-tree");

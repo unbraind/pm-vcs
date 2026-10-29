@@ -11,9 +11,9 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, test } from "node:test";
 
@@ -1290,4 +1290,16 @@ test("action revision exceptions never cover shell scalars, inputs or malformed 
   assert.equal(sameWorkflowExceptActionRevisions(path, Buffer.from(job), Buffer.from(job.replace("a".repeat(40), "b".repeat(40)))), true);
   const caller = job.replace("actions/setup-node", "unbraind/pm-github/.github/workflows/pm-github-sync.yml").replace("v7.0.0", "pm-github 2026.10.16");
   assert.equal(sameWorkflowExceptActionRevisions(path, Buffer.from(caller), Buffer.from(caller.replace("a".repeat(40), "b".repeat(40)).replace("2026.10.16", "2026.10.17"))), true);
+});
+
+
+test("source snapshots publish every blob and tree under one uninterrupted native writer", () => {
+ const f = freshStore(); const leases = new Set<bigint>(); const original = f.store.write.bind(f.store);
+ f.store.write = (type, payload, fileId) => { leases.add(statSync(join(dirname(f.store.storageRoot()), "objects.lock"), { bigint: true }).ino); return original(type, payload, fileId); };
+ try {
+  const files = new Map<string, SourceFile>(["first", "second", "nested/third"].map(path => [path, { content: Buffer.from(path), mode: "100644" }]));
+  const tree = buildSourceTree(f.store, files); assert.equal(leases.size, 1);
+  assert.equal(f.store.read(tree).type, "tree");
+  for (const file of files.values()) assert.ok(f.store.inventory().some(entry => entry.object.payload.equals(file.content)));
+ } finally { f.cleanup(); }
 });

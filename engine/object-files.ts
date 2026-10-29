@@ -13,6 +13,8 @@ export const objectFiles = {
   active: new Set<ObjectFile>(),
   /** Synchronous publication may reuse only a live, descriptor-verified store owner; journal scope is not ownership. */
   storageOwners: new Map<string, () => boolean>(),
+  /** Verified closures belong to one live writer, never another acquisition of the same path. */
+  publicationClosures: new Map<string, { owner: () => boolean; roots: ReadonlySet<string>; policy: string }>(),
   /** Open and register before exposing the descriptor; even a failing registration observer releases it. */
   open(path: string, flags: string | number, mode?: number): ObjectFile {
     const fd = fs.openSync(path, flags, mode);

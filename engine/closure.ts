@@ -1,4 +1,7 @@
 import { type PartialState } from "./partial.ts";
+import { realpathSync } from "node:fs";
+import { dirname } from "node:path";
+import { objectFiles } from "./object-files.ts";
 import { assertManifestChild, assertManifestRoot } from "./manifest-pages.ts";
 /** Role-aware history validation: only attributed payload leaves can be intentionally absent. */
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
@@ -30,6 +33,16 @@ export interface ClosureMetadata {
   readonly commits: Map<ObjectId, ReturnType<typeof decodeCommit>>;
   /** Decoded directory entries, excluding payload bytes. */
   readonly trees: Map<ObjectId, ReturnType<typeof decodeTree>>;
+}
+
+/** Only this verifier can mint evidence, bound to the descriptor owner present during inspection. */
+const certified = new WeakMap<ClosureMetadata, { control: string; owner: () => boolean; roots: ReadonlySet<string> }>();
+/** Activate verified arrival closure after its immutable objects have been stored under the same uninterrupted lease. @internal */
+export function retainPublicationClosure(store: ObjectStore, metadata: ClosureMetadata): void {
+  const proof = certified.get(metadata);
+  if (proof === undefined || proof.control !== realpathSync(dirname(store.storageRoot())) || objectFiles.storageOwners.get(proof.control) !== proof.owner || !proof.owner()) return;
+  certified.delete(metadata);
+  objectFiles.publicationClosures.set(proof.control, { owner: proof.owner, roots: proof.roots, policy: JSON.stringify([store.partialState(), store.denials()]) });
 }
 
 /** Context follows tree ownership through a payload manifest to its physical fragments. */
@@ -162,5 +175,10 @@ export function requireClosure(store: ObjectStore, targets: readonly ObjectId[],
   const metadata: ClosureMetadata = { commits: new Map(), trees: new Map() };
   const report = inspectClosure(store, targets, arrivals, denials, false, trees, metadata, partial);
   if (report.missing.length + report.corrupt.length > 0) throw new VerificationRefusal("integrity", report.verification.bound!, `History closure is invalid: ${[...report.missing, ...report.corrupt].join(", ")}.`, "incomplete_bundle");
+  const control = realpathSync(dirname(store.storageRoot())); const owner = objectFiles.storageOwners.get(control);
+  if (owner !== undefined && owner()) {
+    certified.set(metadata, { control, owner, roots: new Set([...targets, ...trees]) });
+    if (arrivals.length === 0) retainPublicationClosure(store, metadata);
+  }
   return metadata;
 }

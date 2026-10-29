@@ -322,11 +322,13 @@ export function buildSourceTree(
   store: ObjectStore,
   files: ReadonlyMap<string, SourceFile>,
 ): ObjectId {
-  const map = new Map<string, { id: ObjectId; mode: FileMode }>();
-  for (const [path, file] of files) {
-    map.set(path, { id: store.write("blob", file.content), mode: file.mode });
-  }
-  return buildTree(store, map);
+  return store.withWriteLock(() => {
+    const map = new Map<string, { id: ObjectId; mode: FileMode }>();
+    for (const [path, file] of files) {
+      map.set(path, { id: store.write("blob", file.content), mode: file.mode });
+    }
+    return buildTree(store, map);
+  });
 }
 
 /**

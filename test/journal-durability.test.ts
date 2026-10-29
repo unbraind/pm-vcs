@@ -1,5 +1,5 @@
-import { prepareControlPublication } from "./helpers/prepared-publication.ts";
 import "./helpers/isolate-session.ts";
+import { prepareControlPublication } from "./helpers/prepared-publication.ts";
 /** Durable publication authority and retry reconciliation on one real non-git tracker. */
 import assert from "node:assert/strict";
 import fs, { cpSync, existsSync, fstatSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";

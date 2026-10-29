@@ -156,7 +156,9 @@ test("supported metadata-only fetch reports a new denial then a real no-op witho
   const denial = peer.objects.denials()[0]!;
   // Importing structure without its denied leaf is correctly impossible; copy the real held structural objects directly instead.
   for (const entry of peer.objects.inventory()) if (entry.id !== denial.id) local.objects.write(entry.object.type, entry.object.payload);
-  local.refs.transaction([{ name: "refs/remotes/peer/main", expected: null, next: tip }]);
+  // Reproduce the previously persisted state; a new publication correctly refuses this incomplete closure.
+  mkdirSync(join(local.controlDirectory, "refs/remotes/peer"), { recursive: true });
+  writeFileSync(join(local.controlDirectory, "refs/remotes/peer/main"), `${tip}\n`);
   const refs = local.refs.list("refs/"); const log = local.operations.read(); const index = local.readIndex();
   const report = await fetchFrom(local, "peer", new Date(3000));
   assert.equal(report.upToDate, false, "new security metadata means the receiver was not up to date");

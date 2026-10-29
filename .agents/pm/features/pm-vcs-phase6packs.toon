@@ -4,13 +4,15 @@ description: "The measured slice uses existing compressed loose objects. Design 
 type: Feature
 status: in_progress
 priority: 2
-tags: []
+tags[3]: "gh:unbraind/pm-vcs#150","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#158"
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-28T23:15:24.366Z"
+updated_at: "2026-10-29T18:41:56.900Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[122]{created_at,author,text}:
+comments[126]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -133,6 +135,10 @@ comments[122]{created_at,author,text}:
   "2026-10-28T23:14:34.211Z",codex-agent,"Behavioral revert proofs in disposable source copies: 13 isolated function reverts each produced an AssertionError and exit 1, then restoration passed exit 0. Cases: transactionLocked CAS ordering; collectGarbage pending roots; replaceIndex recovery ordering; validatePublicationIds target validation; collectGarbage conservative unverified retention; nativeGate adapter requirement; transaction native namespace restriction; replaceIndex fresh preflight; compareReceipts actionable ordering; cleanupCancelledPublication source ownership; readPublicationRoots final descriptor fence; reachableObjects conflict alternatives; recoverPublication released inline terminal checkpoint. Exact regression invocations use node --test --test-concurrency=1 with the matching named cases in test/ref-publication-recovery.test.ts, test/destruction.test.ts and test/journal-durability.test.ts. The terminal-checkpoint proof reinstated only the early return for a non-planned member; the old value then remained after a reported successful fresh write."
   "2026-10-28T23:14:42.941Z",codex-agent,"Main toolchain update 1671ccb is merged without rebasing or dropping branch commits; selfhost.bundle is regenerated rather than hand-merged. Existing thresholds and tests remain intact. Owner issue #151 deterministic teardown and ambient-agent environment isolation remain landed in the prior commits; PR body retains Fixes #151. Full npm/Bun release gates, Windows GC apply and CodeQL require fresh exact-head CI after push; current checks will be observed for at most 30 minutes at https://github.com/unbraind/pm-vcs/pull/150/checks. Any pending gate is missing certification, not a pass."
   "2026-10-28T23:15:17.931Z",codex-agent,"Final local checks passed: focused pack selection 5/5 (random differential corpus, interrupted loose temporaries, typed streams and non-git CLI, mixed GC, foreign-directory recovery); source and test typechecks; lint; duplication 0% across 29337 lines and 91 sources; all 567 declarations documented; npm package privacy scanned 324 files with zero findings. Coverage for the three new publication-gate/publication/reachability modules has no missed branches in the targeted instrumented runs. Final source validation is followed by changelog regeneration, the mandatory self-host write/commit/accept cycle and a normal push. The feature remains in_progress and unclosed; this run releases only its own claim."
+  "2026-10-29T18:07:32.064Z",codex-agent,"Review round: refreshed remote head d125343 and fetched every review thread with comments (two total, zero unresolved). Read issues 154 and 158 in full; collecting current Linux job logs and all CodeRabbit review bodies. Merging the current main release first; only generated self-host archive conflicts. Will diagnose recovery failures without relaxing foreign-entry guards, audit equivalent paths, record behavioral revert proofs, and run unchanged npm/Bun release gates."
+  "2026-10-29T18:18:56.342Z",codex-agent,"Verified current failure classes: low-level namespace metadata recursively acquired the object writer during journal creation/retirement; disposable bisect trees lacked an explicit shallow boundary; primitive publication repeated a closure already verified under the same live receiver lease; denial-registry repair incorrectly read the corrupt registry it was replacing. Focused native journal recovery: 6/6 pass, including 178 power cuts, eight legacy-key cases and 17 competing publication schedules. Focused publication: 7/7 pass, five original object reads per push/publish under one lease. Merged current main release. No unresolved threads exist; CodeRabbit has no review body and its discussion says review was skipped. Added per-gate byte/inode/owned-scratch diagnostics while retaining exact owned-root cleanup and unchanged thresholds."
+  "2026-10-29T18:33:39.925Z",codex-agent,"Behavioral revert proofs in a disposable copy: namespace destination guard fixed 2/2, reverted 0/2, restored 2/2; receiver closure reuse fixed 2/2, reverted 0/2, restored 2/2; denial-registry repair fixed 1/1, reverted 0/1, restored 1/1; snapshot batching fixed 1/1, reverted 0/1, restored 1/1; gate-owned scratch fixed 1/1, reverted 0/1, restored 1/1. Reverts affected only the changed behavior, and fixed bytes were restored in finally before rerunning. The first bisect-copy control lacked built dist; rebuilding its disposable artifact before a separate proof. PM-linked adversarial test passed 4/4 with zero skips. Source/test builds, lint, zero duplication across 91 measured sources, and 568 documented declarations pass. The original workflow timeout passed unchanged on retry; no threshold was altered."
+  "2026-10-29T18:41:50.627Z",codex-agent,"Supplemental behavioral reverts are complete: rebuilt bisect shallow-boundary case fixed 1/1, reverted 0/1, restored 1/1; certificate invalidation on storage mutation, owner release, and single-use proof consumption each fixed 1/1, reverted 0/1, restored 1/1; native ref batch shared-closure case fixed 1/1, reverted 0/1, restored 1/1; optional status-cache refusal case fixed 1/1, reverted 0/1, restored 1/1. The cache regression now forces a cacheable observation independently of clock timing and also requires native EIO to propagate. Combined with the preceding five groups this is 13 failing behavioral-revert cases and 13 restored passes across 11 groups. Whole-package searches covered every native rename/recovery caller, ref transaction, requireClosure caller, and disposable Repository initializer. Root-bearing publication and generic namespace recovery now share one classifier; direct ref batches as well as import/push/publish reuse verified closure under the actual live writer. Preparing the committed self-host snapshot and sequential unchanged npm/Bun release gates with fresh HOME and isolated Git configuration."
 files[88]:
   - path: .github/workflows/ci.yml
     scope: project
@@ -334,7 +340,7 @@ files[88]:
   - path: vcs-commands.ts
     scope: project
     note: GC help describes pending native publication retention
-tests[48]:
+tests[50]:
   - command: node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts
     scope: project
     timeout_seconds: 600
@@ -714,6 +720,22 @@ tests[48]:
     provenance:
       author: codex-agent
       created_at: "2026-10-28T23:15:05.129Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"namespace metadata never|closure certificates|bare namespace workers|read-only status preserves\" test/ref-publication-recovery.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-29T18:29:11.586Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"native ref batches\" test/publication-validation.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-29T18:41:56.139Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
 docs[6]{path,scope}:

@@ -200,6 +200,7 @@ test("destination ref namespace collisions refuse the whole import before storin
   ];
   for (const { incoming, existing } of cases) {
     const receiver = Repository.init(temp());
+    for (const entry of f.repo.objects.inventory()) receiver.objects.write(entry.object.type, entry.object.payload);
     for (const name of existing) receiver.refs.compareAndSwap(name, null, f.first);
     const scope = { ...f.scope, refs: incoming }; const policy = { ...f.policy, scope };
     const bytes = exportChangeBundle(f.repo.objects, Object.fromEntries(incoming.map(name => [name, f.last])), scope, author.email, keys.privateKey);

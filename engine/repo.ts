@@ -608,7 +608,13 @@ export class Repository {
     return withPublicationLock(this.indexPath, () => {
     if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
     const contents = encodeIndex(entries);
-    validatePublicationIds(this.indexPath, publicationRootIds(this.indexPath, contents));
+    try { validatePublicationIds(this.indexPath, publicationRootIds(this.indexPath, contents)); }
+    catch (error) {
+      // Status may refresh stat hints on an older index with unavailable payloads.
+      // Preserve that readable state; an explicit staging write still validates.
+      if (expectedContents !== null && error instanceof ObjectStoreError && error.code === "publication_unverified") return false;
+      throw error;
+    }
     const lockPath = `${this.indexPath}.lock`;
     let descriptor: number;
     try {

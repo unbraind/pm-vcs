@@ -1,5 +1,6 @@
 import { prepareNamespaceDestruction } from "./destruction.ts";
 import { durability } from "./durability.ts";
+import { writePrivateJson } from "./composition.ts";
 /** Durable bisect sessions over stable change identities, driven by a recorded PM test. */
 
 import { randomBytes } from "node:crypto";
@@ -503,6 +504,9 @@ export async function runBisect(
             const scratch = Repository.init(workspace);
             const closure = collectCommitObjects(repository.objects, [selected.commit]);
             scratch.objects.accept([...closure].map((id) => ({ id, ...repository.objects.read(id) })), false);
+            // Only this candidate tree is copied; its deliberately absent parents
+            // form a native shallow boundary, shared with publication validation.
+            writePrivateJson(join(scratch.controlDirectory, "partial.json"), { remote: "bisect-source", shallow: [selected.commit], promised: [] });
             scratch.switchTo(selected.commit, options.now());
           } catch (error) {
             if (!(error instanceof ObjectStoreError)) throw error;

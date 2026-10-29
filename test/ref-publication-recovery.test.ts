@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import fs, { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { afterEach, mock, test } from "node:test";
@@ -19,7 +19,8 @@ import { writeCommit, writeTree, encodeRecord, type Signature } from "../engine/
 import { encodeIndex, readWorkingFile } from "../engine/worktree.ts";
 import { encodeTombstone } from "../engine/lifecycle.ts";
 import { encodeConflict } from "../engine/conflicts.ts";
-import { hashObject } from "../engine/objects.ts";
+import { requireClosure, retainPublicationClosure } from "../engine/closure.ts";
+import { hashObject, ObjectStore } from "../engine/objects.ts";
 import { withPublicationLock, validatePublication, publicationRootIds, publicationRootsFromFd, validatePublicationIds } from "../engine/publication.ts";
 import { verificationLimits } from "../engine/object-error.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
@@ -240,4 +241,93 @@ test("publication source verification rechecks its descriptor after the final pa
 
 test("publication and GC share complete conflict-alternative reachability across packed survivors",async()=>{
  const repo=await fixture();const sides=["base","ours","theirs"].map(value=>repo.objects.write("record",encodeRecord({value})));const conflict=repo.objects.write("conflict",encodeConflict({kind:"field",field:"title",base:sides[0]!,ours:sides[1]!,theirs:sides[2]!}));repo.refs.compareAndSwap("refs/metadata/conflict",null,conflict);const garbage=repo.objects.write("blob",Buffer.from("unrelated conflict garbage"));repo.objects.compact();collectGarbage(repo,true);validatePublicationIds(join(repo.controlDirectory,"refs/metadata/conflict"),[conflict]);for(const id of [conflict,...sides])assert.ok(repo.objects.has(id));assert.equal(repo.objects.has(garbage),false);
+});
+
+
+test("namespace metadata never recursively owns an object writer and root publications still require it", async () => {
+ const repo = await fixture(); const lock = join(repo.controlDirectory, "objects.lock"); const owner = "2147483647";
+ writeFileSync(lock, owner);
+ for (const name of ["metadata.json", "nested/private.json", "destruction/fixture.json", "objects.generation", "working/HEAD", "working/index", "working/refs/heads/main"]) {
+  const path = name.startsWith("working/") ? join(repo.root, name.slice(8)) : join(repo.controlDirectory, name);
+  writePrivateJson(path, { generation: 1 }); writePrivateJson(path, { generation: 2 });
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { generation: 2 }); assert.equal(readFileSync(lock, "utf8"), owner);
+ }
+ const id = hashObject("blob", Buffer.from("unpublished root")); const before = repo.refs.rawHead();
+ assert.throws(() => repo.refs.setHeadDetached(id), { code: "store_locked" }); assert.equal(repo.refs.rawHead(), before); assert.equal(readFileSync(lock, "utf8"), owner);
+});
+
+test("closure certificates cannot outlive their native owner or any storage and omission policy change", async () => {
+ const repo = await fixture(); const other = Repository.init(join(repo.root, "other"));
+ const leaf = repo.objects.write("blob", Buffer.from("certified leaf"));
+ const tree = writeTree(repo.objects, [{ name: "leaf", mode: "100644", id: leaf }]);
+ const signature: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
+ const commit = writeCommit(repo.objects, { tree, parents: [], author: signature, committer: signature, message: "certified root" });
+ const control = fs.realpathSync(repo.controlDirectory); const destination = join(control, "refs/metadata/certified");
+ const outside = requireClosure(repo.objects, [commit]); retainPublicationClosure(repo.objects, outside); assert.equal(objectFiles.publicationClosures.size, 0);
+ repo.objects.withWriteLock(() => {
+  retainPublicationClosure(repo.objects, { commits: new Map(), trees: new Map() }); assert.equal(objectFiles.publicationClosures.size, 0);
+  const arrival = { id: commit, ...repo.objects.read(commit) };
+  const pending = requireClosure(repo.objects, [commit], [arrival]); retainPublicationClosure(other.objects, pending); assert.equal(objectFiles.publicationClosures.size, 0);
+  const nativeOwner = objectFiles.storageOwners.get(control)!; let healthy = true; const transientOwner = () => healthy;
+  objectFiles.storageOwners.set(control, transientOwner);
+  const rejected = requireClosure(repo.objects, [commit], [arrival]); healthy = false;
+  retainPublicationClosure(repo.objects, rejected); assert.equal(objectFiles.publicationClosures.size, 0);
+  retainPublicationClosure(repo.objects, requireClosure(repo.objects, [commit], [arrival])); assert.equal(objectFiles.publicationClosures.size, 0);
+  objectFiles.storageOwners.set(control, nativeOwner);
+  retainPublicationClosure(repo.objects, rejected); assert.equal(objectFiles.publicationClosures.size, 0);
+  const metadata = requireClosure(repo.objects, [commit]); assert.ok(objectFiles.publicationClosures.has(control));
+  assert.throws(() => validatePublicationIds(join(control, "denials.json"), [leaf]), { code: "bad_tombstone" });
+  let reads = 0; const read = ObjectStore.prototype.read;
+  mock.method(ObjectStore.prototype, "read", function(this: ObjectStore, id: string) { reads++; return read.call(this, id); });
+  try {
+   for (let retry = 0; retry < 4; retry++) validatePublicationIds(destination, [commit]); assert.equal(reads, 0);
+   validatePublicationIds(destination, [leaf]); assert.ok(reads > 0); reads = 0;
+   const proof = objectFiles.publicationClosures.get(control)!; const owner = objectFiles.storageOwners.get(control)!;
+   for (const available of [true, false]) {
+    const check = () => false; objectFiles.publicationClosures.set(control, { ...proof, owner: check });
+    if (available) objectFiles.storageOwners.set(control, check);
+    try { validatePublicationIds(destination, [commit]); assert.ok(reads >= 3); reads = 0; } finally { objectFiles.storageOwners.set(control, owner); objectFiles.publicationClosures.set(control, proof); }
+   }
+   writePrivateJson(join(control, "partial.json"), { remote: "fixture", shallow: [], promised: [] });
+   validatePublicationIds(destination, [commit]); assert.ok(reads >= 3); reads = 0;
+   requireClosure(repo.objects, [commit]); reads = 0; validatePublicationIds(destination, [commit]); assert.equal(reads, 0);
+   repo.objects.markStorageGeneration(); assert.equal(objectFiles.publicationClosures.size, 0);
+   rmSync(join(repo.objects.storageRoot(), leaf.slice(0, 2), leaf.slice(2)));
+   assert.throws(() => validatePublicationIds(destination, [commit]), { code: "publication_unverified" });
+   retainPublicationClosure(repo.objects, metadata); assert.equal(objectFiles.publicationClosures.size, 0);
+   objectFiles.storageOwners.set(control, () => false);
+   try { retainPublicationClosure(repo.objects, metadata); assert.equal(objectFiles.publicationClosures.size, 0); } finally { objectFiles.storageOwners.set(control, owner); }
+  } finally { mock.restoreAll(); }
+ });
+ assert.equal(objectFiles.publicationClosures.size, 0); retainPublicationClosure(repo.objects, outside); assert.equal(objectFiles.publicationClosures.size, 0);
+ repo.objects.write("blob", Buffer.from("certified leaf"));
+ repo.objects.withWriteLock(() => { requireClosure(repo.objects, [commit]); assert.equal(objectFiles.publicationClosures.size, 1); });
+ assert.equal(objectFiles.publicationClosures.size, 0);
+});
+
+
+test("bare namespace workers can publish ordinary metadata beneath a native repository without object authority", async () => {
+ const repo = await fixture(); const source = join(repo.controlDirectory, "ordinary.tmp"); const destination = join(repo.root, "HEAD");
+ writeFileSync(source, "ordinary worktree payload");
+ const result = spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/publication-gate-worker.ts"), source, destination], { env: testEnvironment(), encoding: "utf8", timeout: 60000 });
+ assert.equal(result.status, 0, result.stderr); assert.deepEqual(JSON.parse(result.stdout), { published: true }); assert.equal(readFileSync(destination, "utf8"), "ordinary worktree payload");
+});
+
+
+test("read-only status preserves released index state when new publication validation cannot refresh its cache", async () => {
+ const repo = await fixture(); writeFileSync(join(repo.root, "retained"), "retained working bytes"); repo.stage(["retained"]);
+ const signature: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
+ repo.commit({ message: "released state", author: signature }, new Date(1));
+ const entry = repo.readIndex()[0]!; repo.writeIndex([{ ...entry, stat: undefined }]);
+ const read: typeof readWorkingFile = (root, path) => readWorkingFile(root, path, () => BigInt(Date.now()) * 1_000_000n + 3_000_000_000n);
+ const expected = repo.status(read, false);
+ const io = Object.assign(new Error("cache validation I/O failure"), { code: "EIO" });
+ const original = ObjectStore.prototype.read;
+ mock.method(ObjectStore.prototype, "read", function(this: ObjectStore, id: string) { if (id === entry.id) throw io; return original.call(this, id); });
+ try { assert.throws(() => repo.status(read), error => error === io); } finally { mock.restoreAll(); }
+ rmSync(join(repo.objects.storageRoot(), entry.id.slice(0, 2), entry.id.slice(2)));
+ const before = readFileSync(join(repo.controlDirectory, "index"));
+ assert.deepEqual(repo.status(read), expected); assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), before);
+ assert.throws(() => repo.writeIndex([{ ...entry, id: "e".repeat(64) }]), { code: "publication_unverified" });
+ assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), before); assert.equal(repo.readIndex()[0]!.id, entry.id);
 });

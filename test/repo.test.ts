@@ -664,7 +664,7 @@ test("merge refuses unrelated histories and an unborn or dirty tree", () => {
   const aCommit = commitFile(a, "a.txt", "a", "a", now);
   const bCommit = commitFile(b, "b.txt", "b", "b", now);
   // Bring b's commit into a's store by writing it directly, then point a branch at it.
-  a.objects.write("commit", b.objects.readTyped(bCommit, "commit"));
+  for (const entry of b.objects.inventory()) a.objects.write(entry.object.type, entry.object.payload);
   a.refs.compareAndSwap("refs/heads/foreign", null, bCommit);
 
   assert.throws(

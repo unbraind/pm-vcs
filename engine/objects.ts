@@ -300,6 +300,7 @@ export class ObjectStore {
     if (validationLeases.has(lease)) throw new ObjectStoreError("destructive_preflight_write", "A recovery preflight cannot publish or delete storage.");
     if (!activeLeases.has(lease)) throw new ObjectStoreError("store_locked", "A storage generation can change only inside its owning writer lease.");
     activeRevisions.set(lease, activeRevisions.get(lease)! + 1);
+    objectFiles.publicationClosures.delete(realpathSync(dirname(this.root)));
     if (dirtyLeases.has(lease)) return;
     writePrivateJson(join(dirname(this.root), "objects.generation"), randomBytes(16).toString("hex"));
     dirtyLeases.add(lease);
@@ -986,6 +987,7 @@ export class ObjectStore {
       result = action();
     } finally {
       if (objectFiles.storageOwners.get(control) === publicationOwner) objectFiles.storageOwners.delete(control);
+      objectFiles.publicationClosures.delete(control);
       activeLeases.delete(lease); activeRevisions.delete(lease); dirtyLeases.delete(lease);
       try {
         try {
