@@ -641,12 +641,12 @@ export class Repository {
       temporary = null;
       return true;
     } catch (error) {
-      if (error === changed) return false;
-      throw error;
+      if (error !== changed) throw error;
     } finally {
       if (temporary !== null) durability.remove(temporary, { force: true });
       durability.release(lockPath, descriptor, lockOwner);
     }
+    return false;
     });
   }
 
@@ -1726,7 +1726,8 @@ export class Repository {
     }
     // Detached HEAD advances HEAD itself. Recorded as a transition on the literal
     // name "HEAD" so undo has something to compare and swap against.
-    this.refs.setHeadDetached(next, expected ?? undefined);
+    // Every caller derives expected from an existing target in the detached case.
+    this.refs.setHeadDetached(next, expected!);
     this.operations.append(command, summary, [{ ref: "HEAD", before: expected, after: next }], now);
   }
 

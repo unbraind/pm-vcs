@@ -276,7 +276,10 @@ export class RefStore {
       const beforeRecovery = new Map(paths.map(path => [path, readTrimmed(path)]));
       for (const path of paths) durability.recoverPublication(path);
       for (const update of ordered) { const before = beforeRecovery.get(this.pathFor(update.name)); const after = readTrimmed(this.pathFor(update.name)); if (before === update.expected && after === update.next && before !== after) applied.add(update.name); }
-      if (head?.next !== undefined) { const before = beforeRecovery.get(join(this.headRoot, "HEAD")); headApplied = normalizedHead(before ?? null) === normalizedHead(head.expected) && normalizedHead(before ?? null) !== normalizedHead(head.next) && normalizedHead(readTrimmed(join(this.headRoot, "HEAD"))) === normalizedHead(head.next); }
+      if (head?.next !== undefined) {
+        const before = normalizedHead(beforeRecovery.get(join(this.headRoot, "HEAD")) ?? null);
+        headApplied = before === normalizedHead(head.expected) && before !== normalizedHead(head.next) && normalizedHead(readTrimmed(join(this.headRoot, "HEAD"))) === normalizedHead(head.next);
+      }
       validate(); preflight?.(); validate();
       const removals = ordered.filter(update => update.next === null && update.expected !== null && !applied.has(update.name));
       if (removals.length > 0) {
