@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, mock, test } from "node:test";
 import { Repository } from "../engine/repo.ts";
+import { writeCommit, writeTree, type Signature } from "../engine/model.ts";
 import { RefStore } from "../engine/refs.ts";
 import { DestructionRefusal, destructionBoundary, inspectNamespacePublications, prepareDestruction, retireNamespace } from "../engine/destruction.ts";
 import { durability } from "../engine/durability.ts";
@@ -164,4 +165,17 @@ test("status cache recovery loses its CAS to a newer index and releases its owne
   mock.method(durability, "recoverPublication", (path: string) => { recover(path); if (path === index) { changed = true; writeFileSync(index, next); } });
   const read: typeof readWorkingFile = (root, path) => readWorkingFile(root, path, () => BigInt(Date.now()) * 1_000_000n + 3_000_000_000n);
   repo.status(read); assert.ok(changed); assert.equal(readFileSync(index, "utf8"), next); assert.equal(existsSync(index + ".lock"), false);
+});
+
+
+test("malformed persisted merge parents preserve detached publication refusal and its original HEAD", () => {
+  const repo = fixture();
+  const signature: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
+  const tree = writeTree(repo.objects, []);
+  const original = writeCommit(repo.objects, { tree, parents: [], author: signature, committer: signature, message: "detached original" });
+  repo.refs.setHeadDetached(original); const head = repo.refs.rawHead();
+  const state = { ours: null, theirs: original, revision: "fixture", bases: [], merged: [], conflicts: [], message: "malformed persisted parent", author: signature, committer: signature };
+  const path = join(repo.controlDirectory, "MERGE_STATE"); const bytes = JSON.stringify(state); writeFileSync(path, bytes);
+  assert.throws(() => repo.mergeContinue(new Date(1)), error => error instanceof Error && "code" in error && error.code === "publication_unverified" && "bound" in error && error.bound === "decode_error");
+  assert.equal(repo.refs.rawHead(), head); assert.equal(readFileSync(path, "utf8"), bytes); assert.deepEqual(repo.readIndex(), []);
 });

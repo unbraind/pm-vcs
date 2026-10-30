@@ -19,20 +19,21 @@ are restricted to an explicitly owned source, destination, descriptor or receipt
 | `engine/refs.ts:244` (two records) | Malformed HEAD predicates and duplicate literal HEAD destinations refuse before recovery or mutation. |
 | `engine/refs.ts:279` | An absent predecessor or a recovered peer value cannot satisfy a fresh HEAD CAS. |
 | `engine/refs.ts:329` | Permissive enumeration skips an unreadable leaf and retains readable peers; strict enumeration refuses the incomplete read. |
+| `engine/repo.ts:1729` | Malformed persisted merge state with a null first parent exercises the retained nullable fallback and preserves the original detached HEAD, index and state after the existing decode refusal. |
 | `engine/repo.ts:646` | Index-owner inspection errors propagate and release the original lock; a status-cache recovery that observes a newer index returns without overwriting it. |
 
-Two nullable fallbacks have no reachable behavior:
+HEAD recovery normalizes the predecessor once and reuses it for both comparisons.
+This is the same normalizer on the same immutable string-or-null input, so it
+preserves both outcomes while avoiding a duplicated nullish alternative. For a
+validated string expectation, a null predecessor cannot satisfy the first
+comparison; even runtime edge inputs retain the same comparison behavior.
 
-- In HEAD recovery, reaching the second comparison means the first normalized
-  predecessor equals `head.expected`, which is always a string. A nullish
-  predecessor cannot satisfy that comparison. Normalize the predecessor once
-  and reuse it, removing the second, unreachable nullish alternative.
-- A detached `HeadState` always has a complete target. Every `advanceHead` caller
-  derives its expected value from an existing target: commit's parent, merge's
-  current tip, resolve's current target, replay's checked target, or reset's
-  current target. The null case belongs to an unborn symbolic branch, which
-  returns through the branch arm. Remove only the detached null-to-undefined
-  fallback.
+The detached-HEAD nullable fallback remains intact. A deeper audit found that
+`readMergeState` parses persisted JSON without a structural schema check. A
+malformed null `ours` reaches `advanceHead` before publication rejects the new
+commit's invalid parent. The added behavioral test requires that existing decode
+refusal and unchanged HEAD/index/state. Treating this path as unreachable from
+only the TypeScript types was incorrect; the pm item retains the correction.
 
 V8 also reported the closing whitespace of the index catch as an uncovered
 branch: that catch either returned false or threw, so it could never fall
@@ -73,8 +74,8 @@ npm and Bun, using isolated Git identity and separate scratch roots.
 
 ## Isolated revert results
 
-All twenty mutations fail with exit 1; each restored regression passes with
-exit 0 and exactly one executed test. The first fifteen cover the fault/edge
+All twenty-one mutations fail with exit 1; each restored regression passes with
+exit 0 and exactly one executed test. The first sixteen cover the fault/edge
 cases above (HEAD validation has independent malformed and duplicate reverts).
 The remaining five recheck native erasure ownership, restored logical mtime,
 transient ENOTEMPTY handling, resource settlement and gate scratch ownership.

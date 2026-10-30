@@ -1726,8 +1726,7 @@ export class Repository {
     }
     // Detached HEAD advances HEAD itself. Recorded as a transition on the literal
     // name "HEAD" so undo has something to compare and swap against.
-    // Every caller derives expected from an existing target in the detached case.
-    this.refs.setHeadDetached(next, expected!);
+    this.refs.setHeadDetached(next, expected ?? undefined);
     this.operations.append(command, summary, [{ ref: "HEAD", before: expected, after: next }], now);
   }
 
