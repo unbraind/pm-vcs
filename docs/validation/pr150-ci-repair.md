@@ -82,3 +82,21 @@ transient ENOTEMPTY handling, resource settlement and gate scratch ownership.
 Failures include the expected native/typed exception as well as assertion
 failures; no syntax/build failure is counted as a revert proof. Exact commands
 and per-mutation outcomes are recorded on `pm-vcs-phase6packs`.
+
+## Buffer-memory measurement calibration
+
+Synchronous major GC alone does not synchronously retire unreachable array-buffer
+backing stores on either tested Node version. A 30-sample probe left stale storage
+above the existing 128-KiB bound in 5 Node 22 samples and 11 Node 26 samples, up to
+16 MiB. With concurrent backing-store sweeping disabled, neither version reported
+any such sample. Normal and coverage test commands therefore disable that sweep;
+streaming memory bounds and coverage thresholds are unchanged.
+
+The real-store calibration in `test/fragments.test.ts` requires unreachable backing
+stores to disappear and a retained whole-file payload to remain visible. Both Node
+22 and Node 26 pass all 56 fragment tests. Removing the sweep flag fails the new
+calibration on each runtime; restoring it passes. Independently replacing the
+streaming output buffer with a whole-file allocation fails the existing read test
+at 524,292 bytes against the unchanged 131,072-byte bound; restoring the allocation
+passes. These three failing controls and restored passes are additional to the
+twenty-one mutation groups above.

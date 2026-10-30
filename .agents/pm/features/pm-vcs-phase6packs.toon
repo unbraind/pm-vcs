@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags[3]: "gh:unbraind/pm-vcs#150","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#158"
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-30T19:06:58.853Z"
+updated_at: "2026-10-30T19:22:59.129Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[145]{created_at,author,text}:
+comments[148]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -158,7 +158,10 @@ comments[145]{created_at,author,text}:
   "2026-10-30T14:42:35.326Z",codex-agent,"Corrected-source behavioral proof: all 21 isolated mutations fail (exit 1), then all 21 restored regressions pass (exit 0), one executed test each. This reruns the preceding 20 cases and adds detached-null: removing only expected??undefined causes the malformed persisted merge parent regression to fail with a changed refusal; restoration passes. Exact command: node --test --test-concurrency=1 --test-name-pattern=\"malformed persisted merge parents\" test/publication-faults.test.ts. Node 22 c8 fault selection and PM-linked fault command both pass 15/15, no skips/cancellations. Source/test typechecks and lint pass. The earlier npm gate stopped at 73 passes / 0 failures / 103 cancellations for this correction; it is incomplete and is not counted as a gate pass. Scope follow-up: pm-vcs-merge-state-schema."
   "2026-10-30T18:28:24.061Z",codex-agent,"Full npm run on corrected code head 1c36eaf remains active and cannot pass yet: one fragment-memory test reported a failure. It is not an installer timeout and is not waived. The complete fragment file independently passes 55/55 under c8, and three disposable diagnostic copies also pass, each measuring a 32772-byte read delta against the unchanged 131072-byte bound. Waiting for the full reporter error while investigating; no threshold, ignore or assertion retry was introduced. Completed recovery evidence on this run: 704 native purge/unlink SIGKILL cuts; 722 lifecycle-journal SIGKILL cuts; 512 lifecycle seeds with 6144 operations, 2048 verdicts and 768 crashes; compact 1851 raw boundaries/161 distinct images; unpack 2564/217. Repack is still running. Local full-gate certification remains incomplete."
   "2026-10-30T19:06:58.853Z",codex-agent,Remote main advanced to 0f97868 during the diagnostic npm gate with the 2026.10.30 release metadata. Merge it without rebasing and preserve the indexed-pack implementation; regenerate the self-host archive from staged source if the generated archive conflicts. The current npm attempt has one fragmented-read memory-test failure; focused runs are diagnostic only and do not replace a full passing gate.
-files[89]:
+  "2026-10-30T19:15:31.331Z",codex-agent,"Investigated the fragmented-file memory failure without relaxing its bound. A 30-sample runtime probe leaves 32 unreachable 512-KiB buffers before each synchronous GC: default backing-store sweeping reports stale garbage above the existing 128-KiB bound in 5/30 Node 22 samples and 11/30 Node 26 samples (up to 16 MiB); disabling concurrent array-buffer sweeping reports 0/30 on both. Add a real-store calibration corpus that excludes unreachable buffers and must still count a retained whole-file payload. Both normal and coverage test commands will select synchronous backing-store sweeping; unchanged streaming bounds and coverage thresholds remain required. The full diagnostic run is still running, so its actual failure details and authoritative totals remain pending."
+  "2026-10-30T19:18:40.709Z",codex-agent,"Memory calibration and revert evidence, all in disposable copies with cleanup in finally: Node 22.23.1 and Node 26.13.0 each pass node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-reporter=tap --test-concurrency=1 test/fragments.test.ts (56 tests, 56 pass, 0 fail). Removing only --no-concurrent-array-buffer-sweeping fails the selected in-flight buffer calibration on each runtime with AssertionError: unreachable backing stores must not count as live buffers (1 test, 0 pass, 1 fail); restored flag passes each (1/1). Independently changing only readFragmentedToFile output allocation from 32768 bytes to manifest.totalLength fails its original read-memory test at 524292 bytes against the unchanged 131072-byte bound; finally-restored streaming allocation passes 1/1. pm test --run --match in-flight-buffer-calibration selection also passed 1/1 through the linked command. These three failing controls and restored passes supplement the 21 earlier mutation groups; no syntax failure or assertion retry is used."
+  "2026-10-30T19:22:59.128Z",codex-agent,"The corrected coverage-instrumented fragment selection passes all 56 tests on Node 26.13.0 with synchronous backing-store sweeping. npm run check passes typecheck/lint and duplication 0%; npm run build:test passes; npm run docstring passes 91 files and 568 declarations. The linked pm calibration used the exact selector --match \"in-flight buffer samples exclude\" and passed 1/1 (ambient Node 24); the independent explicit-runtime checks above covered Node 22 and Node 26. Prepare and push the candidate for hosted coverage feedback while the original diagnostic npm attempt finishes; neither that pending attempt nor focused passes certify a full release gate. Full npm then Bun 1.3.14 gates remain required on the corrected committed candidate."
+files[90]:
   - path: .github/workflows/ci.yml
     scope: project
   - path: composition-commands.ts
@@ -236,6 +239,8 @@ files[89]:
   - path: index.ts
     scope: project
     note: "Publication recovery ordering, retention authority, native power loss and runtime consumers"
+  - path: package.json
+    scope: project
   - path: scripts/pack-benchmark.ts
     scope: project
   - path: scripts/verify-pack-privacy.ts
@@ -361,7 +366,7 @@ files[89]:
   - path: vcs-commands.ts
     scope: project
     note: GC help describes pending native publication retention
-tests[53]:
+tests[54]:
   - command: node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts
     scope: project
     timeout_seconds: 600
@@ -780,6 +785,13 @@ tests[53]:
     provenance:
       author: codex-agent
       created_at: "2026-10-30T13:56:52.799Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"in-flight buffer samples exclude\" test/fragments.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-30T19:17:32.369Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
 docs[7]{path,scope}:
