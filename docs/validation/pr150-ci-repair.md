@@ -17,7 +17,7 @@ are restricted to an explicitly owned source, destination, descriptor or receipt
 | `engine/destruction.ts:668` | An absent prepared source contributes no pending root and leaves the current ref unchanged. |
 | `engine/publication.ts:47` | Ordinary destinations do not open a missing source as native root metadata. |
 | `engine/refs.ts:244` (two records) | Malformed HEAD predicates and duplicate literal HEAD destinations refuse before recovery or mutation. |
-| `engine/refs.ts:279` | An absent predecessor or a recovered peer value cannot satisfy a fresh HEAD CAS. |
+| `engine/refs.ts:279` (two records) | An absent predecessor or a recovered peer value cannot satisfy a fresh HEAD CAS. |
 | `engine/refs.ts:329` | Permissive enumeration skips an unreadable leaf and retains readable peers; strict enumeration refuses the incomplete read. |
 | `engine/repo.ts:1729` | Malformed persisted merge state with a null first parent exercises the retained nullable fallback and preserves the original detached HEAD, index and state after the existing decode refusal. |
 | `engine/repo.ts:646` | Index-owner inspection errors propagate and release the original lock; a status-cache recovery that observes a newer index returns without overwriting it. |
