@@ -1,7 +1,8 @@
 # PR 150 erasure review repair
 
 The latest repair closes the escaped-JSON retention finding from the re-review
-of `6dfc776`. Its representation-class audit and final validation are below; the
+of `6dfc776` and percent-escaped retention found in the native-URL audit. Its
+representation-class audit and validation are below; the
 earlier ownership and physical-copy repairs remain documented as baseline evidence.
 
 The independent Codex review of `f4d4cf6` blocked on two reproducible erasure
@@ -173,6 +174,7 @@ retain their existing refusals. Decode-budget exhaustion always refuses. Existin
 | Purge receipts and fingerprint journal | Existing schema/checksum parsers retain authority. Shared JSON/hex/base64 inspection now covers decoded file/root fields, keys, digests and proposed audit bytes before mutation. |
 | Operation log and lease audits | JSONL records participate in the same semantic string scan. Sequence/command/summary/ref fields and audit keys cannot hide selected bytes behind JSON escapes. |
 | Index, config, HEAD, identity, authority, remotes, instance/link/view/dirty metadata and native control stages | Index JSON tuples, ordinary JSON records and native text retain their existing readers. All regular control bytes participate in materialized semantic inspection; verified PIDs retain their literal policy. Control-first inspection preserves the existing typed ref refusal. |
+| Native remote URL fields and URL-bearing retained payloads | `transport.ts` and `objects.ts` use `fileURLToPath`; `http-transport.ts` uses native URL parsing; `credentials.ts` decodes URL userinfo. Both scanners inspect percent bytes, canonical addresses and native filesystem paths. The same native parser handles slash/dot normalization. Complete locators at native payload and decoded-string boundaries receive the same projection in streaming inspection; a locator exceeding the 64 KiB normalization window refuses before deletion. Raw inspection remains mandatory. |
 | Private layers | Content was already base64-decoded and inspected. The audit found path/name/key metadata omitted with the `layers.json` exception; the full layer document now participates after existing content/ownership checks, preserving `erasure_layer_conflict`. |
 | Refs and native ref temporaries | Existing names, ObjectId values, pinned descriptors and namespace fences remain. Raw and canonical base64 bytes are checked; binary identity bytes decoded from canonical hex are now checked too. |
 | Loose and packed object identities | Every retained inventory ID is checked as literal and decoded hexadecimal bytes before deletion, and again in final descriptor-scoped accountability. A selected payload equal to a peer's binary identity refuses. |
@@ -190,6 +192,51 @@ the selected asset and leaving denial unpublished. Must-allow cases retain nativ
 ref literals, progress checksums, ordinary decoded values and every existing
 classification guard. Incremental cases exercise every input split and bounded
 4096-byte output slots against native JSON parsing.
+
+The final native-decoder search also found percent-escaped URLs. A disposable
+public-erasure probe against `5019dad` completed with selected bytes retained in
+the decoded path of a file remote. `UrlBytes` now shares bounded output slots with
+the JSON decoder. Supported schemes and percent
+triplets survive arbitrary input splits. Literal ASCII tab/newline characters
+removed by native URL parsing are removed in this interpretation; encoded control
+bytes remain present. Literal controls are removed before triplet recognition,
+including controls inside a triplet. Native `URL` and `fileURLToPath` projections
+also cover address/path normalization, using the same parser as transport.
+Streaming projection captures at most 64 KiB for a complete locator beginning
+at a native member or decoded-string boundary. Larger locators give the typed
+`uninspectable_payload` refusal before deletion; truncated projection cannot
+certify erasure. An unrelated 32 KiB locator and a 70 KiB JSON document with a
+short URL remain accepted. Ordinary binary slots retain only the bounded scheme
+suffix. Malformed and interrupted escapes retain their literal
+bytes while every complete percent byte is inspected. The unchanged raw scan
+still covers literal percent text. URL-derived inspection does not recursively
+reinterpret its unchanged scheme; actual JSON/base64/hex/compression transforms
+continue to compose under the original bounds. Native remote-writer regressions
+cover quotes, controls and non-ASCII text, with loose/packed and composite copies
+and an ordinary-URL must-allow case. No new native codec family was found beyond
+JSON, canonical base64, hexadecimal identities, native framing, zlib and URLs.
+
+All ten earlier decoded-state reversion groups were repeated after adding URL
+inspection. Eight URL groups were then repeated on the final implementation.
+Each mutation runs in a disposable copy, restores the original in `finally`,
+reruns the selection and removes the copy.
+
+| Final URL behavioral mutation | Mutant result | Restored selection |
+| --- | --- | --- |
+| Remove materialized URL inspection | 8/18 fail: native remote fields and a metadata key escape the pre-deletion guard. | 18/18 |
+| Remove streamed URL inspection | 11/18 fail: retained loose, packed and composite URL bodies escape the guard. | 18/18 |
+| Stop percent-byte decoding | 4/18 fail: encoded HTTP paths and embedded retained data escape inspection. | 18/18 |
+| Drop the carried scheme suffix on non-URL slots | The real streaming split-input regression fails at a scheme crossing the input boundary. | 1/1 |
+| Remove control filtering before triplet recognition | 2/18 fail: an embedded URI with a control inside a triplet receives untruthful completion. | 18/18 |
+| Remove materialized native URL projection | 3/18 fail: normalized file/HTTP addresses retain selected bytes. | 18/18 |
+| Remove streamed native URL projection | 4/18 fail: normalized loose/packed/HTTP bodies retain selected bytes. | 18/18 |
+| Remove the normalization-window refusal | The oversized-locator public-erasure regression unexpectedly completes using a truncated projection. | 1/1 |
+
+Together with the ten semantic-repair groups, these are eighteen behavioral
+mutation groups. The binary-slot optimization skips byte-by-byte scheme probing
+when a slot contains no colon and retains only the six-byte recognition suffix.
+The every-split corpus exercises both sides of that path. It adds no ownership,
+classification or refusal exception.
 
 The decoded-state round has nine additional isolated behavioral reversion groups:
 
@@ -229,7 +276,7 @@ protected tool boundary, ref literals/refusals, ID checks and journal races.
 The 142/144 diagnostic before these corrections is not a passing gate. One
 pre-correction power rerun was cancelled; its partial progress is not certification.
 
-## Decoded-state final validation
+## Decoded-state validation at `5019dad`
 
 | Gate on the corrected implementation | Result |
 | --- | --- |
@@ -250,3 +297,35 @@ local selection does not certify the complete lifecycle domain. Full npm/Bun rel
 acceptance and fresh independent Codex review remain pending on the pushed head.
 No installer was retried. Tracker writes finish before changelog/archive generation;
 committed self-host verification and pushed-head CI receipts are reported on the PR.
+
+## Final URL-class validation
+
+All counts below use the final production implementation. No installer was retried.
+
+| Gate | Result |
+| --- | --- |
+| Erasure/accountability/fragment-repair cohort | 166/166, zero failures, skips or cancellations |
+| Decoder/composition c8 cohort | 77/77; `json-strings.ts`, `url-bytes.ts` and `representations.ts` each 100% statements, branches, functions and lines |
+| Node 22 decoder and bounded streaming cohort | 66/66; 32 MiB corpus retains 1,075,345 bytes and makes two observed reads under unchanged bounds |
+| Complete packed power-loss matrix | 1/1; 5,546 native boundaries, 474 distinct complete crash images, two convergent replays each |
+| Lifecycle focus | 42/42; 17/722 retired-instance and 18/934 interrupted-unpack native cuts |
+| Complete pack suite | 38/38; 13 compact, 32 unpack and 45 GC native SIGKILL cuts, two successful replays each |
+| Complete fragment suite | 56/56 |
+| Behavioral reversion groups | All eighteen mutants fail behaviorally; all restored selections pass |
+| Static, production/test compilation and docstrings | Passed; 93 production files, 582 documented declarations and zero duplicated lines |
+| Actual package privacy inspection | 332 files, zero findings |
+
+The combined pack/fragment attempt expired at its mistaken 900-second harness
+budget without an assertion failure. The final standalone pack run uses the
+pre-existing 3,600-second linked-command budget, and fragments run separately.
+The redundant combined link is removed through the CLI; diagnostic history is
+retained. Earlier deliberately stopped implementation runs and the initial
+120-second broad runner timeout do not count as passing gates. None of these
+changes modifies a production, memory, coverage or CI threshold.
+
+The exact commands and results are linked on `pm-vcs-phase6packs`. At most two
+workers run concurrently, with one test worker per command. Full npm/Bun release
+acceptance and fresh independent review remain CI/orchestrator work on the pushed
+head. Every default lifecycle cut and the 512-seed model remain enabled there.
+All tracker writes finish before changelog/archive generation; the committed
+archive is then verified at HEAD without regeneration during that verification.

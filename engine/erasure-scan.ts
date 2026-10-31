@@ -4,6 +4,7 @@ import { constants, fstatSync, lstatSync, readdirSync, readSync } from "node:fs"
 import { join, resolve } from "node:path";
 import { ZStream, zlibInflateInit2, zlibInflate, zlibInflateEnd, Z_SYNC_FLUSH, Z_STREAM_END, Z_OK, Z_BUF_ERROR } from "pako";
 import { JsonStrings } from "./json-strings.ts";
+import { UrlBytes, nativeUrlRepresentations } from "./url-bytes.ts";
 import { objectFiles } from "./object-files.ts";
 import { ObjectStoreError, VerificationRefusal } from "./object-error.ts";
 
@@ -160,26 +161,34 @@ class EncodedInspector {
   private readonly speculative: boolean;
   private jsonPhase: Base64Phase | undefined;
   private readonly json: JsonStrings;
+  private urlPhase: Base64Phase | undefined;
+  private readonly url: UrlBytes | undefined;
   private hex: Base64Phase[] | undefined;
   /** Reuse immutable matcher tables; lazy windows grow only with actually observed bytes. */
-  constructor(patterns: readonly ErasureFingerprint[], state: InspectionState, kind: ErasureFileClass, depth = 0, template?: Matcher, speculative = false) {
+  constructor(patterns: readonly ErasureFingerprint[], state: InspectionState, kind: ErasureFileClass, depth = 0, template?: Matcher, speculative = false, urls = true) {
     this.speculative = speculative;
     this.patterns = patterns; this.state = state; this.kind = kind; this.depth = depth;
     this.matcher = new Matcher(patterns, template); this.template = template ?? this.matcher; state.live++;
     this.json = new JsonStrings(bytes => { this.jsonPhase ??= { skip: 0, pending: "", prefix: Buffer.alloc(0) }; this.decoded(this.jsonPhase, bytes, true); }, () => { this.jsonPhase?.child?.finish(); this.jsonPhase?.child?.close(); this.jsonPhase = undefined; });
+    if (urls) this.url = new UrlBytes(bytes => { this.urlPhase ??= { skip: 0, pending: "", prefix: Buffer.alloc(0) }; this.decoded(this.urlPhase, bytes, true, false); }, bytes => {
+      for (const candidate of nativeUrlRepresentations(bytes)) {
+        const child = this.child(true, false);
+        if (child !== undefined) { try { child.feed(candidate); child.finish(); } finally { child.close(); } }
+      }
+    });
   }
   /** Reject excessive supported encodings rather than certifying their uninspected remainder. */
-  private child(speculative = this.speculative): EncodedInspector | undefined {
+  private child(speculative = this.speculative, urls = true): EncodedInspector | undefined {
     if (this.depth >= erasureScanLimits.depth) { this.state.blocked ??= "decode_depth"; return undefined; }
     if (this.state.live >= erasureScanLimits.contexts) { this.state.blocked ??= "decode_contexts"; return undefined; }
-    return new EncodedInspector(this.patterns, this.state, this.kind, this.depth + 1, this.template, speculative);
+    return new EncodedInspector(this.patterns, this.state, this.kind, this.depth + 1, this.template, speculative, urls);
   }
   /** Delay tiny decoded prefixes only until they can contain a supported stream or selected signature. */
-  private decoded(phase: Base64Phase, bytes: Buffer, speculative = this.speculative): void {
+  private decoded(phase: Base64Phase, bytes: Buffer, speculative = this.speculative, urls = true): void {
     if (phase.child === undefined) {
       const prefix = Buffer.concat([phase.prefix, bytes]);
       if (prefix.length < 4 && !this.patterns.some(pattern => pattern.length <= prefix.length)) { phase.prefix = prefix; return; }
-      phase.child = this.child(speculative); phase.prefix = Buffer.alloc(0); if (phase.child === undefined) return;
+      phase.child = this.child(speculative, urls); phase.prefix = Buffer.alloc(0); if (phase.child === undefined) return;
       phase.child.feed(prefix);
     } else phase.child.feed(bytes);
   }
@@ -256,7 +265,7 @@ class EncodedInspector {
       }
       this.previous = byte; if (this.state.hit) return;
     }
-    this.json.feed(bytes);
+    this.json.feed(bytes); this.url?.feed(bytes);
     const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("latin1");
     let hexEnd = 0;
     for (const match of text.matchAll(/[0-9a-fA-F]+/g)) {
@@ -285,7 +294,7 @@ class EncodedInspector {
   /** Flush final partial words and recoverable streams, then close dictionaries before returning or throwing. */
   finish(): void {
     try {
-      this.json.finish(); this.endHex();
+      this.json.finish(); this.url?.finish(); this.urlPhase?.child?.finish(); this.endHex();
       this.endWord();
       while (this.codecs.length > 0) {
         const codec = this.codecs.shift()!;
@@ -301,6 +310,8 @@ class EncodedInspector {
     for (const codec of this.codecs) this.closeCodec(codec);
     for (const phase of [...(this.word ?? []), ...(this.hex ?? [])]) phase.child?.close();
     this.jsonPhase?.child?.close(); this.jsonPhase = undefined; this.hex = undefined;
+    this.urlPhase?.child?.close(); this.urlPhase = undefined;
+    this.url?.close();
     this.word = undefined; this.codecs.length = 0; this.state.live--;
   }
 }

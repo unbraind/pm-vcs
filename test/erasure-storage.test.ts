@@ -17,6 +17,8 @@ import { writePrivateJson } from "../engine/composition.ts";
 import { serializeBundle, parseBundle } from "../engine/bundle.ts";
 import { JsonStrings } from "../engine/json-strings.ts";
 import { inspectRepresentations } from "../engine/representations.ts";
+import { UrlBytes } from "../engine/url-bytes.ts";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { objectFiles } from "../engine/object-files.ts";
 import { verificationLimits } from "../engine/object-error.ts";
 import { assertDestructionStorage, destructionBoundary, prepareDestruction } from "../engine/destruction.ts";
@@ -40,6 +42,57 @@ async function fixture(chosen?: Buffer) {
 }
 /** Place arbitrary storage without changing generation markers or acquiring an engine lease. */
 function place(root: string, path: string, bytes: Buffer): string { const file=join(root,path); mkdirSync(dirname(file),{recursive:true}); writeFileSync(file,bytes); return file; }
+
+test("native percent-escaped remote URLs and loose or packed URL copies cannot retain selected bytes", async t => {
+  for (const where of ["remote", "remote-controls", "remote-unicode", "remote-newline", "remote-path", "remote-http-path", "metadata-key", "loose", "loose-newline", "loose-path", "packed", "packed-path", "http-body", "embedded-newline", "json", "base64", "compressed"] as const) await t.test(where, async () => {
+    const nativePath = ["remote-path", "loose-path", "packed-path"].includes(where); const httpPath = ["remote-http-path", "http-body"].includes(where); const interruptedEscape = ["remote-newline", "loose-newline", "embedded-newline"].includes(where);
+    const payload = where === "remote-controls" ? "selected secret \u0001\u0007 controls 937184" : where === "remote-unicode" ? "selected café 雪 😀 937184" : nativePath ? join("selected", "secret", "quoted 937184") : httpPath ? "selected/secret/quoted 937184" : 'selected secret "quoted bytes" 937184';
+    const f = await fixture(Buffer.from(payload)); const encoded = pathToFileURL(join(f.repo.root, payload)).href; const url = interruptedEscape ? encoded.replace("secret", "sec\nret").replace("%20", "%\n20").replace("%22", "%2\t2") : nativePath ? encoded.replace("/selected/", "/selected\\foreign\\..\\") : httpPath ? "HTTPS://EXAMPLE.INVALID/selected\\foreign\\..\\secret/quoted%20937184" : encoded;
+    assert.equal((httpPath ? decodeURIComponent(new URL(url).pathname) : fileURLToPath(url)).endsWith(payload), true);
+    if (where.startsWith("remote")) f.repo.remotes.add("backup", url);
+    else if (where === "metadata-key") writePrivateJson(join(f.repo.controlDirectory, "remotes.json"), { [url]: "unrelated metadata" });
+    else {
+      const bytes = where === "json" ? Buffer.from(JSON.stringify({ url })) : where === "base64" ? Buffer.from(Buffer.from(url).toString("base64")) : where === "compressed" ? deflateSync(Buffer.from(url)) : Buffer.from(where === "embedded-newline" ? `backup-prefix:${url}:backup-suffix` : url);
+      f.repo.objects.write("blob", bytes); if (where === "packed" || where === "packed-path") f.repo.objects.compact();
+    }
+    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "percent-retention", new Date(1)), { code: where.startsWith("remote") || where === "metadata-key" ? "unsupported_erasure_storage" : "erasure_retained_copy" });
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+  });
+});
+
+test("percent URL bytes normalization stays bounded and refuses before deletion when a locator exceeds the window", async () => {
+  for (const [size, json] of [[32_768, false], [70_000, true], [70_000, false]] as const) {
+    const f = await fixture(Buffer.from("unrelated selected asset 193847")); f.repo.objects.write("blob", Buffer.from(json ? JSON.stringify({ url: "https://example.invalid/unrelated", padding: "z".repeat(size) }) : "https://example.invalid/" + "z".repeat(size)));
+    if (size < 65_536 || json) assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "url-window", new Date(1)).storage.accountable, true);
+    else { assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "url-window", new Date(1)), { code: "uninspectable_payload" }); assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0); }
+  }
+});
+
+test("percent URL bytes preserve every input split, literal controls, malformed escapes and bounded slots", async () => {
+  const payload = 'selected secret "quoted bytes" café 雪 😀 937184';
+  const url = Buffer.from("file:///synthetic/" + encodeURIComponent(payload));
+  for (let split = 0; split <= url.length; split++) {
+    const inspection = createErasureInspection([fingerprint(Buffer.from(payload))], url.length);
+    try { inspection.feed(url.subarray(0, split)); inspection.feed(url.subarray(split)); assert.throws(() => inspection.finish(), { code: "erasure_retained_copy" }); } finally { inspection.close(); }
+  }
+  for (const [input, expected] of [["unrelated metadata", ""], ["FiLe:/a%2fb%20c%00%09%0a%0D%FF", "FiLe:/a/b c\0\t\n\r\xff"], ["http:\t\n\ra%xx%%41%2!%A%", "http:a%xx%A%2!%A%"], ["file:/a%\n20b%2\t2q%\r3Ac", 'file:/a b"q:c'], ["https:/" + "z".repeat(9000), "https:/" + "z".repeat(9000)]] as const) {
+    const pieces: Buffer[] = []; let maximum = 0; const decoder = new UrlBytes(bytes => { maximum = Math.max(maximum, bytes.length); pieces.push(Buffer.from(bytes)); });
+    for (const byte of Buffer.from(input)) decoder.feed(Buffer.from([byte])); decoder.finish();
+    assert.deepEqual(Buffer.concat(pieces), Buffer.from(expected, "latin1")); assert.ok(maximum <= 4096);
+    const together: Buffer[] = []; const whole = new UrlBytes(bytes => { assert.ok(bytes.length <= 4096); together.push(Buffer.from(bytes)); }); whole.feed(Buffer.from(input)); whole.finish(); assert.deepEqual(Buffer.concat(together), Buffer.from(expected, "latin1"));
+  }
+  assert.equal(inspectRepresentations(Buffer.from(JSON.stringify({ url: url.toString() })), candidate => candidate.includes(Buffer.from(payload))), true);
+  const crossing = Buffer.from("file:///" + "z".repeat(4080) + encodeURIComponent(payload));
+  assert.throws(() => inspectErasureRepresentation(crossing, [fingerprint(Buffer.from(payload))]), { code: "erasure_retained_copy" });
+  assert.throws(() => inspectErasureRepresentation(Buffer.from("x".repeat(100) + url.toString()), [fingerprint(Buffer.from(payload))]), { code: "erasure_retained_copy" });
+  assert.throws(() => inspectRepresentations(url, () => false, 0), { code: "uninspectable_payload" });
+  const depth = erasureScanLimits.depth;
+  try { erasureScanLimits.depth = 0; assert.throws(() => inspectErasureRepresentation(url, [fingerprint(Buffer.from("unrelated fingerprint"))]), { code: "uninspectable_payload" }); } finally { erasureScanLimits.depth = depth; }
+  for (const text of ["file://[", "file:///bad%xx", "HTTPS://EXAMPLE.INVALID/a/../unrelated%20bytes"]) assert.equal(inspectRepresentations(Buffer.from(text), () => false), false);
+  const f = await fixture(Buffer.from("unrelated selected asset 193847")); f.repo.remotes.add("backup", pathToFileURL(join(f.repo.root, "unrelated remote")).href.replace("/unrelated%20remote", "/foreign/../unrelated%20remote"));
+  f.repo.objects.write("blob", Buffer.from("https://example.invalid/unrelated%20bytes"));
+  assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "percent-must-allow", new Date(1)).storage.accountable, true);
+});
 
 test("decoded persisted metadata, logs, layer paths and keys cannot retain selected bytes", async t => {
   for (const where of ["metadata-value", "metadata-key", "metadata-hex-zlib", "metadata-hex-truncated", "operation-log", "lease-audit", "layer-path", "layer-value", "worktree-path", "worktree-json"] as const) await t.test(where, async () => {

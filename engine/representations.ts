@@ -1,5 +1,6 @@
-/** Bounded inspection of supported raw, loose-framed, zlib and canonical base64 representations. */
+/** Bounded inspection of raw, framed, JSON, hex, base64, URL and zlib representations. */
 import { JsonStrings } from "./json-strings.ts";
+import { UrlBytes, nativeUrlRepresentations } from "./url-bytes.ts";
 import { ZStream, zlibInflateInit2, zlibInflate, zlibInflateEnd, Z_SYNC_FLUSH, Z_STREAM_END, Z_OK } from "pako";
 import { inflateSync } from "node:zlib";
 import { parseFramedObject } from "./objects.ts";
@@ -24,16 +25,16 @@ function inflateGuess(bytes: Buffer, limit: number): Buffer {
 export function inspectRepresentations(input: Buffer, matches: (bytes: Buffer) => boolean, maxDepth = 6, maxBytes = 16 * 1024 * 1024): boolean {
   let remaining = Math.max(maxBytes, input.length * maxDepth);
   /** Visit one decode at a time so long documents cannot exhaust a queue of base64-shaped words. */
-  function visit(bytes: Buffer, depth: number, speculative = false): boolean {
+  function visit(bytes: Buffer, depth: number, speculative = false, urls = true): boolean {
     if (matches(bytes)) return true;
     if (depth > 0) {
       remaining -= bytes.length;
       if (remaining <= 0) throw new VerificationRefusal("representations", "decoded_bytes", "Supported representation exceeds the decode budget.", "uninspectable_payload");
     }
     /** Inspect a recognized decode without silently certifying bytes beyond the nesting bound. */
-    const decoded = (candidate: Buffer, guess = speculative): boolean => {
+    const decoded = (candidate: Buffer, guess = speculative, childUrls = true): boolean => {
       if (depth >= maxDepth) throw new VerificationRefusal("representations", "decode_depth", "Supported encoding exceeds the nesting bound.", "uninspectable_payload");
-      return visit(candidate, depth + 1, guess);
+      return visit(candidate, depth + 1, guess, childUrls);
     };
     if (/^[a-z]+ [0-9]+\0/.test(bytes.subarray(0, 80).toString("latin1"))) {
       let payload: Buffer;
@@ -53,6 +54,11 @@ export function inspectRepresentations(input: Buffer, matches: (bytes: Buffer) =
         try { payload = inflateSync(bytes, { maxOutputLength: Math.max(1, remaining) }); } catch (error) { throw new VerificationRefusal("representations", (error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE" ? "decoded_bytes" : "decode_error", "Recognizable zlib data cannot be completely inspected.", "uninspectable_payload"); }
         if (decoded(payload)) return true;
       }
+    }
+    if (urls) {
+      for (const candidate of nativeUrlRepresentations(bytes)) if (decoded(candidate, true, false)) return true;
+      const pieces: Buffer[] = []; const url = new UrlBytes(chunk => pieces.push(Buffer.from(chunk)));
+      url.feed(bytes); url.finish(); if (pieces.length > 0 && decoded(Buffer.concat(pieces), true, false)) return true;
     }
     let hit = false; let pieces: Buffer[] = [];
     const json = new JsonStrings(chunk => { pieces.push(Buffer.from(chunk)); }, () => { if (pieces.length > 0) hit ||= decoded(Buffer.concat(pieces), true); pieces = []; });
