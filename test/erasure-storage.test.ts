@@ -2,6 +2,7 @@ import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Byte-authoritative erasure proof over arbitrary object-store names, representations and interruptions. */
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs, { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -10,13 +11,16 @@ import { afterEach, mock, test } from "node:test";
 import { deflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
-import { frameObject, OBJECT_TYPES } from "../engine/objects.ts";
+import { frameObject, hashObject, OBJECT_TYPES } from "../engine/objects.ts";
 import { ErasureStorageRefusal, erasureScanLimits, erasureScanBoundary, fingerprint, fingerprintJournal, matchesFingerprints, type ErasureFingerprint, readFingerprints, scanErasureStorage } from "../engine/erasure-scan.ts";
+import { inspectRepresentations } from "../engine/representations.ts";
 import { objectFiles } from "../engine/object-files.ts";
+import { verificationLimits } from "../engine/object-error.ts";
+import { assertDestructionStorage, destructionBoundary, prepareDestruction } from "../engine/destruction.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 const temporary: ReturnType<typeof makeTempDir>[] = [];
-afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); erasureScanBoundary.visit = () => {}; erasureScanLimits.minimum=16*1024*1024; erasureScanLimits.ratio=1032*6; erasureScanLimits.depth=6; erasureScanLimits.streams=32; erasureScanLimits.contexts=512; erasureScanLimits.wordBytes=16*1024*1024; objectFiles.opened=()=>{}; for (const dir of temporary.splice(0)) dir.cleanup(); });
+afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); destructionBoundary.visit = () => {}; erasureScanBoundary.visit = () => {}; erasureScanLimits.minimum=16*1024*1024; erasureScanLimits.ratio=1032*6; erasureScanLimits.depth=6; erasureScanLimits.streams=32; erasureScanLimits.contexts=512; erasureScanLimits.wordBytes=16*1024*1024; objectFiles.opened=()=>{}; for (const dir of temporary.splice(0)) dir.cleanup(); });
 let random = 314159;
 /** Deterministic randomized corpus is reproducible in Node and Bun release gates. */
 function number(): number { random = (Math.imul(random,1664525)+1013904223) >>> 0; return random; }
@@ -33,6 +37,211 @@ async function fixture(chosen?: Buffer) {
 }
 /** Place arbitrary storage without changing generation markers or acquiring an engine lease. */
 function place(root: string, path: string, bytes: Buffer): string { const file=join(root,path); mkdirSync(dirname(file),{recursive:true}); writeFileSync(file,bytes); return file; }
+
+test("erasure refuses unknown control-directory bytes and kinds before deleting anything", async () => {
+  for (const mode of ["destruction-backup", "destruction-directory", "destruction-link", "destruction-json", "destruction-progress", "destruction-owner", "destruction-empty-canonical", "destruction-foreign-empty-stage", "destruction-bad-stage", "destruction-bad-pid", "refs-backup", "refs-link", "refs-lock", "refs-native-directory", "file-directory", "directory-file"] as const) {
+    const f = await fixture(Buffer.from("selected control guard payload 836429"));
+    const control = f.repo.controlDirectory; const ledger = join(control, "destruction"); mkdirSync(ledger, { recursive: true });
+    let foreign: string;
+    if (mode === "destruction-backup") foreign = place(ledger, "foreign-backup", f.bytes);
+    else if (mode === "destruction-directory") foreign = place(ledger, "nested/foreign-backup", f.bytes);
+    else if (mode === "destruction-link") { foreign = join(ledger, "linked"); fs.symlinkSync(join(f.repo.root, "asset"), foreign); }
+    else if (mode === "destruction-json") foreign = place(ledger, `${"a".repeat(64)}.json`, Buffer.from(JSON.stringify({ format: "pm-vcs-destruction-1", backup: f.bytes.toString("base64") })));
+    else if (mode === "destruction-progress") foreign = place(ledger, `${"a".repeat(64)}.${"b".repeat(32)}.progress`, f.bytes);
+    else if (mode === "destruction-owner") foreign = place(ledger, `${"a".repeat(64)}.json.lock`, Buffer.from("{}"));
+    else if (mode === "destruction-empty-canonical") foreign = place(ledger, `${"a".repeat(64)}.json`, Buffer.alloc(0));
+    else if (mode === "destruction-foreign-empty-stage") foreign = place(ledger, "foreign.tmp", Buffer.alloc(0));
+    else if (mode === "destruction-bad-stage") foreign = place(ledger, `${"a".repeat(64)}.json.${"b".repeat(12)}.tmp`, f.bytes);
+    else if (mode === "destruction-bad-pid") foreign = place(ledger, `${"a".repeat(64)}.json.lock.2147483648.${"b".repeat(12)}.tmp`, Buffer.alloc(0));
+    else if (mode === "refs-backup") foreign = place(control, "refs/metadata/foreign-backup", f.bytes);
+    else if (mode === "refs-link") { foreign = join(control, "refs/linked"); fs.symlinkSync(join(f.repo.root, "asset"), foreign); }
+    else if (mode === "refs-lock") foreign = place(control, "refs/foreign.lock", f.bytes);
+    else if (mode === "refs-native-directory") foreign = place(control, `refs/ref-${process.pid}-${"a".repeat(12)}.lock/foreign`, f.bytes);
+    else if (mode === "file-directory") { fs.rmSync(join(control, "remotes.json"), { force: true }); foreign = place(control, "remotes.json/foreign-backup", f.bytes); }
+    else { rmSync(ledger, { recursive: true }); foreign = place(control, "destruction", f.bytes); }
+    if (mode === "directory-file") assert.throws(() => assertDestructionStorage(control), { code: "unsupported_erasure_storage" });
+    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "control-guard", new Date(1), { purgeUnaccounted: true }), { code: "unsupported_erasure_storage" }, mode);
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes, mode);
+    assert.deepEqual(f.repo.objects.readTyped(f.id, "blob"), f.bytes, mode);
+    assert.equal(f.repo.objects.denials().length, 0, mode);
+    assert.ok(fs.lstatSync(foreign), mode);
+    assert.equal(f.repo.operations.read().filter(entry => entry.command === "obliterate").length, 0, mode);
+  }
+});
+
+test("erasure accepts sparse native control and regular native reference temporaries", async () => {
+  for (const nativeTemporary of [false, true]) {
+    const f = await fixture(Buffer.from("sparse native control payload 918236"));
+    assert.equal(existsSync(join(f.repo.controlDirectory, "destruction")), false);
+    rmSync(join(f.repo.controlDirectory, "refs"), { recursive: true });
+    if (nativeTemporary) place(f.repo.controlDirectory, `refs/metadata/ref-${process.pid}-${"a".repeat(12)}.lock`, Buffer.from(`${f.id}\n`));
+    assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "sparse-native", new Date(1)).storage.accountable, true);
+    assert.equal(existsSync(join(f.repo.root, "asset")), false);
+    assert.throws(() => f.repo.objects.read(f.id), { code: "object_obliterated" });
+  }
+});
+
+test("native literal reference identities do not become compressed payload candidates", async () => {
+  const f = await fixture(Buffer.from("selected literal ref payload 918263")); const peer = Buffer.from("native ref literal 38");
+  const id = f.repo.objects.write("blob", peer); assert.match(id, /^80/);
+  f.repo.refs.compareAndSwap("refs/metadata/literal", null, id);
+  assert.equal(f.repo.refs.read("refs/metadata/literal"), id);
+  assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "literal-native-ref", new Date(1)).storage.accountable, true);
+  assert.equal(f.repo.refs.read("refs/metadata/literal"), id); assert.deepEqual(f.repo.objects.readTyped(id, "blob"), peer);
+});
+
+test("native reference metadata retaining selected bytes still refuses before deletion", async () => {
+  const peer = Buffer.from("native ref literal 38"); const id = hashObject("blob", peer); const f = await fixture(Buffer.from(id));
+  f.repo.objects.write("blob", peer); f.repo.refs.compareAndSwap("refs/metadata/literal", null, id);
+  assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "retained-native-ref", new Date(1)), { code: "unsupported_erasure_storage" });
+  assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0); assert.deepEqual(f.repo.objects.readTyped(id, "blob"), peer);
+});
+
+test("native reference inspection pins its bytes and namespace until classification completes", async () => {
+  for (const mode of ["change", "vanish", "held", "directory", "kind", "link-before", "link-after", "root-missing", "replace-root", "arrive", "oversize"] as const) {
+    const f = await fixture(Buffer.from("selected pinned ref payload 182736")); const peer = f.repo.objects.write("blob", Buffer.from("unrelated pinned ref peer")); f.repo.refs.compareAndSwap("refs/metadata/pinned", null, peer);
+    const directory = join(f.repo.controlDirectory, "refs/metadata"); const path = join(directory, "pinned"); const original = readFileSync(path); let descriptor = -1; let injected = false;
+    const read = fs.readFileSync; const open = fs.openSync; const list = fs.readdirSync; const stat = fs.lstatSync;
+    mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => { if (String(args[0]) === path && mode === "kind" && !injected) { injected = true; fs.unlinkSync(path); mkdirSync(path); } return open(...args); });
+    mock.method(fs, "readdirSync", (...args: Parameters<typeof fs.readdirSync>) => { const result = list(...args); if (String(args[0]) === join(f.repo.controlDirectory, "refs") && mode === "link-before" && !injected) { injected = true; fs.renameSync(directory, `${directory}.original`); fs.symlinkSync(`${directory}.original`, directory); } return result; });
+    mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => { const result = stat(...args); if (String(args[0]) === path && !injected && ["held", "root-missing"].includes(mode)) { injected = true; if (mode === "held") writeFileSync(path, Buffer.concat([original, Buffer.from("\n")])); else fs.renameSync(directory, `${directory}.original`); } return result; });
+    objectFiles.opened = (file, opened) => { if (opened === path) { descriptor = file.fd; if (mode === "directory" && !injected) { injected = true; fs.unlinkSync(path); mkdirSync(path); } } };
+    mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+      const result = read(...args);
+      if (args[0] === descriptor && !injected && !["held", "root-missing"].includes(mode)) {
+        injected = true;
+        if (mode === "change") writeFileSync(path, Buffer.concat([original, Buffer.from("\n")]));
+        if (mode === "vanish") fs.unlinkSync(path);
+        if (mode === "arrive") writeFileSync(join(directory, "foreign-backup"), f.bytes);
+        if (["replace-root", "link-after"].includes(mode)) { fs.renameSync(directory, `${directory}.original`); if (mode === "link-after") fs.symlinkSync(`${directory}.original`, directory); else { mkdirSync(directory); fs.linkSync(join(`${directory}.original`, "pinned"), path); } }
+      }
+      return result;
+    });
+    const limit = verificationLimits.receiptBytes;
+    if (mode === "oversize") { verificationLimits.receiptBytes = 64; objectFiles.opened = (_file, opened) => { if (opened === path) injected = true; }; }
+    syncBuiltinESMExports();
+    try { assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "pinned-native-ref", new Date(1)), { code: "unsupported_erasure_storage" }, mode); assert.equal(injected, true, mode); }
+    finally { verificationLimits.receiptBytes = limit; mock.restoreAll(); syncBuiltinESMExports(); objectFiles.opened = () => {}; if (["replace-root", "link-before", "link-after", "root-missing"].includes(mode) && injected) { rmSync(directory, { recursive: true, force: true }); fs.renameSync(`${directory}.original`, directory); } else if (["directory", "kind"].includes(mode) && injected) rmSync(path, { recursive: true }); writeFileSync(path, original); }
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+  }
+});
+
+test("native destruction creation-stage SIGKILL artifacts remain retryable without accepting backup bytes", async () => {
+  for (const boundary of ["destruction-owner-opened", "destruction-intent-opened", "destruction-progress-opened"]) {
+    const f = await fixture(Buffer.from("native creation crash payload 817263"));
+    const child = spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-purge-worker.ts"), f.repo.root, f.fileId, boundary], { env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8", timeout: 120_000 });
+    assert.equal(child.signal, "SIGKILL", child.stderr);
+    f.repo.objects.recoverWriterLock();
+    assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "incident", new Date(1)).storage.accountable, true, boundary);
+    assert.equal(existsSync(join(f.repo.root, "asset")), false);
+  }
+});
+
+/** Produce current, archived, progress and owner fixtures through native writers. */
+async function nativeControlFixture() {
+  const f = await fixture(Buffer.from("selected native compatibility payload 182746")); const control = f.repo.controlDirectory;
+  const directory = join(control, "destruction"); let stagedOwner = "";
+  destructionBoundary.visit = (step, path) => {
+    if (step === "owner-written" && dirname(path) === directory && stagedOwner === "") { stagedOwner = path.replace(/\.[0-9a-f]{12}\.tmp$/, `.${"e".repeat(12)}.tmp`); fs.linkSync(path, stagedOwner); }
+  };
+  try {
+    f.repo.objects.withWriteLock(() => {
+      for (let generation = 0; generation < 2; generation++) {
+        const path = join(f.repo.root, "native-candidate"); writeFileSync(path, `unrelated generation ${generation}`);
+        const plan = prepareDestruction(control, "control-compatibility", [{ path }]); for (const target of plan.paths) plan.remove(target); plan.finish();
+      }
+    });
+  } finally { destructionBoundary.visit = () => {}; }
+  const names = readdirSync(directory); assert.ok(names.some(name => name.endsWith(".receipt"))); assert.ok(names.some(name => name.endsWith(".progress")));
+  for (const name of names.filter(name => /\.(?:json|receipt|progress)$/.test(name))) copyFileSync(join(directory, name), join(directory, `${name}.${"d".repeat(12)}.tmp`));
+  fs.linkSync(stagedOwner, stagedOwner.replace(/\.lock\..*$/, ".lock"));
+  return { ...f, directory, names, stagedOwner };
+}
+
+test("erasure retains native destruction checkpoints, archives, progress and staged artifacts", async () => {
+  const { directory, names, ...f } = await nativeControlFixture();
+  // A native checksum can coincidentally contain a canonical base64 token
+  // whose decoded prefix resembles zlib. Its fixed binary frame is still valid.
+  const retained = await fixture(Buffer.from("972cad1e5f86dbbdd24f4b796e5d9621f53f637a3c63252a6f952be7fad1c47b", "hex"));
+  for (const current of [f, retained]) {
+    const randomBytes = crypto.randomBytes;
+    mock.method(crypto, "randomBytes", ((size: number) => size === 16 ? Buffer.from("00000000000000000000000000000c54", "hex") : randomBytes(size)) as typeof crypto.randomBytes);
+    syncBuiltinESMExports();
+    try {
+      current.repo.objects.withWriteLock(() => {
+        const path = join(current.repo.root, "native-bitmap-candidate"); writeFileSync(path, "unrelated binary checksum");
+        const plan = prepareDestruction(current.repo.controlDirectory, "binary-progress-compatibility", [{ path }]); for (const target of plan.paths) plan.remove(target); plan.finish();
+      });
+    } finally { mock.restoreAll(); syncBuiltinESMExports(); }
+    const ledger = join(current.repo.controlDirectory, "destruction");
+    const bitmap = readdirSync(ledger).find(name => name.endsWith(".00000000000000000000000000000c54.progress"))!;
+    assert.throws(() => inspectRepresentations(readFileSync(join(ledger, bitmap)), () => false), { code: "uninspectable_payload" });
+  }
+  assert.throws(() => retained.repo.obliterate(retained.fileId, "erase-fixture", "retained-bitmap", new Date(1)), { code: "unsupported_erasure_storage" });
+  assert.deepEqual(readFileSync(join(retained.repo.root, "asset")), retained.bytes); assert.equal(retained.repo.objects.denials().length, 0);
+  assertDestructionStorage(f.repo.controlDirectory);
+  const receipt = f.repo.obliterate(f.fileId, "erase-fixture", "native-compatibility", new Date(1));
+  assert.equal(receipt.storage.accountable, true); assert.equal(existsSync(join(f.repo.root, "asset")), false);
+  for (const name of names) assert.ok(existsSync(join(directory, name)), "native audit artifacts remain historical evidence");
+});
+
+test("erasure rejects malformed native journal shapes without trusting their supported names", async () => {
+  const f = await nativeControlFixture(); const owner = f.stagedOwner;
+  const original = readFileSync(owner); const value = JSON.parse(original.toString()) as Record<string, unknown>;
+  const patches = [{ extra: "backup" }, { format: "foreign" }, { cleanup: "foreign" }, { key: "f".repeat(64) }, { identity: "1:2:3" }, { root: 7 }, { root: "relative" }, { rootIdentity: 7 }, { rootIdentity: "bad" }, { pid: "1" }, { pid: 0 }, { pid: 2_147_483_648 }, { pid: process.pid === 1 ? 2 : 1 }];
+  /** Every refused fixture leaves payloads, public reads and denial state unchanged. */
+  const refused = (): void => {
+    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "journal-shape", new Date(1)), { code: "unsupported_erasure_storage" });
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.deepEqual(f.repo.objects.readTyped(f.id, "blob"), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+  };
+  try { for (const patch of patches) { writeFileSync(owner, JSON.stringify({ ...value, ...patch })); refused(); } for (const text of ["null", "[]", "7", "invalid"]) { writeFileSync(owner, text); refused(); } }
+  finally { writeFileSync(owner, original); }
+  const current = f.names.find(name => name.endsWith(".json"))!; const record = JSON.parse(readFileSync(join(f.directory, current), "utf8")) as { id: string; entries: { path: string }[] };
+  const wrong = record.id === "0".repeat(32) ? "1".repeat(32) : "0".repeat(32);
+  const foreign = join(f.directory, `${current.slice(0, 64)}.${wrong}.receipt`);
+  try { writeFileSync(foreign, JSON.stringify(record)); refused(); } finally { rmSync(foreign); }
+  const progress = f.names.find(name => name.endsWith(".progress") && f.names.includes(`${name.slice(0, 97)}.receipt`))!; const path = join(f.directory, progress); const bitmap = readFileSync(path);
+  for (const mode of ["header", "length", "state", "archive-id"] as const) {
+    const archive = join(f.directory, `${progress.slice(0, 97)}.receipt`); const archived = readFileSync(archive);
+    try {
+      if (mode === "archive-id") { const row = JSON.parse(archived.toString()) as { id: string }; row.id = wrong; writeFileSync(archive, JSON.stringify(row)); }
+      else { const bytes = Buffer.from(bitmap); if (mode === "header") bytes[0] ^= 1; if (mode === "state") bytes[76] = 255; writeFileSync(path, mode === "length" ? Buffer.concat([bytes, Buffer.from([0])]) : bytes); }
+      refused();
+    } finally { writeFileSync(path, bitmap); writeFileSync(archive, archived); }
+  }
+  const journal = join(f.directory, current); const previous = readFileSync(journal);
+  try { record.entries[0].path = f.bytes.toString(); writeFileSync(journal, JSON.stringify(record)); refused(); }
+  finally { writeFileSync(journal, previous); }
+});
+
+test("erasure refuses pinned journal and directory races before deleting payloads", async () => {
+  for (const mode of ["open", "read", "vanish", "held", "new-name", "directory", "root-missing", "root-link", "root-replaced"] as const) {
+    const f = await nativeControlFixture(); const path = join(f.directory, mode.startsWith("root-") ? readdirSync(f.directory).sort().at(-1)! : readdirSync(f.directory).find(name => /\.json\.[0-9a-f]{12}\.tmp$/.test(name))!); const original = readFileSync(path); let descriptor = -1; let injected = false; let observations = 0;
+    const read = fs.readFileSync; const stat = fs.lstatSync;
+    objectFiles.opened = (file, opened) => { if (opened === path) { descriptor = file.fd; if (mode === "open" && !injected) { injected = true; writeFileSync(path, Buffer.concat([original, Buffer.from("\n")])); } } };
+    mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+      const result = read(...args);
+      if (args[0] === descriptor && !injected && ["root-link", "root-replaced"].includes(mode)) {
+        injected = true; fs.renameSync(f.directory, `${f.directory}.original`);
+        if (mode === "root-link") fs.symlinkSync(`${f.directory}.original`, f.directory);
+        else { mkdirSync(f.directory); for (const name of readdirSync(`${f.directory}.original`)) fs.linkSync(join(`${f.directory}.original`, name), join(f.directory, name)); }
+      }
+      if (args[0] === descriptor && !injected && ["read", "vanish", "new-name"].includes(mode)) {
+        injected = true; if (mode === "vanish") fs.unlinkSync(path); else if (mode === "new-name") writeFileSync(join(f.directory, "foreign-backup"), "foreign bytes"); else writeFileSync(path, Buffer.concat([original, Buffer.from("\n")]));
+      }
+      return result;
+    });
+    mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => { const result = stat(...args); if (String(args[0]) === path && ++observations === 2 && ["held", "root-missing"].includes(mode) && !injected) { injected = true; if (mode === "root-missing") fs.renameSync(f.directory, `${f.directory}.original`); else writeFileSync(path, Buffer.concat([original, Buffer.from("\n")])); } return result; });
+    if (mode === "directory") {
+      f.repo.objects.write("blob", Buffer.from("unrelated scanner tripwire"));
+      erasureScanBoundary.visit = step => { if (step === "file-verified" && !injected) { injected = true; fs.renameSync(f.directory, `${f.directory}.original`); writeFileSync(f.directory, "foreign directory replacement"); } };
+    }
+    syncBuiltinESMExports();
+    try { assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "journal-race", new Date(1)), { code: "unsupported_erasure_storage" }, mode); assert.equal(injected, true, mode); }
+    finally { mock.restoreAll(); syncBuiltinESMExports(); objectFiles.opened = () => {}; erasureScanBoundary.visit = () => {}; if ((mode === "directory" || mode.startsWith("root-")) && injected) { rmSync(f.directory, { recursive: true, force: true }); fs.renameSync(`${f.directory}.original`, f.directory); } else writeFileSync(path, original); }
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.deepEqual(f.repo.objects.readTyped(f.id, "blob"), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+  }
+});
 
 test("copied foreign backup.pack blocks erasure without deleting the foreign copy or publishing success", async () => {
   const f=await fixture(); f.repo.objects.compact(); const pack=f.repo.objects.inventory().find((entry)=>entry.id===f.id)!;

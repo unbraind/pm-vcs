@@ -6,13 +6,11 @@ status: in_progress
 priority: 2
 tags[3]: "gh:unbraind/pm-vcs#150","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#158"
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-30T19:22:59.129Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-31T18:50:56.184Z"
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[148]{created_at,author,text}:
+comments[158]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -161,6 +159,16 @@ comments[148]{created_at,author,text}:
   "2026-10-30T19:15:31.331Z",codex-agent,"Investigated the fragmented-file memory failure without relaxing its bound. A 30-sample runtime probe leaves 32 unreachable 512-KiB buffers before each synchronous GC: default backing-store sweeping reports stale garbage above the existing 128-KiB bound in 5/30 Node 22 samples and 11/30 Node 26 samples (up to 16 MiB); disabling concurrent array-buffer sweeping reports 0/30 on both. Add a real-store calibration corpus that excludes unreachable buffers and must still count a retained whole-file payload. Both normal and coverage test commands will select synchronous backing-store sweeping; unchanged streaming bounds and coverage thresholds remain required. The full diagnostic run is still running, so its actual failure details and authoritative totals remain pending."
   "2026-10-30T19:18:40.709Z",codex-agent,"Memory calibration and revert evidence, all in disposable copies with cleanup in finally: Node 22.23.1 and Node 26.13.0 each pass node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-reporter=tap --test-concurrency=1 test/fragments.test.ts (56 tests, 56 pass, 0 fail). Removing only --no-concurrent-array-buffer-sweeping fails the selected in-flight buffer calibration on each runtime with AssertionError: unreachable backing stores must not count as live buffers (1 test, 0 pass, 1 fail); restored flag passes each (1/1). Independently changing only readFragmentedToFile output allocation from 32768 bytes to manifest.totalLength fails its original read-memory test at 524292 bytes against the unchanged 131072-byte bound; finally-restored streaming allocation passes 1/1. pm test --run --match in-flight-buffer-calibration selection also passed 1/1 through the linked command. These three failing controls and restored passes supplement the 21 earlier mutation groups; no syntax failure or assertion retry is used."
   "2026-10-30T19:22:59.128Z",codex-agent,"The corrected coverage-instrumented fragment selection passes all 56 tests on Node 26.13.0 with synchronous backing-store sweeping. npm run check passes typecheck/lint and duplication 0%; npm run build:test passes; npm run docstring passes 91 files and 568 declarations. The linked pm calibration used the exact selector --match \"in-flight buffer samples exclude\" and passed 1/1 (ambient Node 24); the independent explicit-runtime checks above covered Node 22 and Node 26. Prepare and push the candidate for hosted coverage feedback while the original diagnostic npm attempt finishes; neither that pending attempt nor focused passes certify a full release gate. Full npm then Bun 1.3.14 gates remain required on the corrected committed candidate."
+  "2026-10-31T15:48:07.584Z",codex-agent,"Resumed after independent Codex BLOCK review of f4d4cf6; pulled the remote head and retained the orchestrator main merge d2c4768 plus archive regeneration f4d4cf6. Address two erasure invariants: recognize control artifacts by exact kind/schema rather than directory name, and retain every owned physical representation in deletion plans. Audit engine peers for both classes. Add must-refuse and must-allow control corpora, and extend existing lifecycle/power-loss matrices with the interrupted-unpack duplicate state. Prove each fix by behavioral reversion in disposable copies. Updated instructions prioritize focused erasure/lifecycle/durability/pack gates and CI for the full matrix; do not wait for the complete CI run."
+  "2026-10-31T16:06:08.338Z",codex-agent,"Implemented the control-directory audit and physical-copy preflight repair. The audit also found opaque refs and metadata directories under native file names; these now refuse or validate their exact native kinds/refs. Objects already use complete native accountability, leases already enumerate regular audit entries and scan their bytes. GC retains physical inventory arrays and pack compaction keys candidates by path; other ObjectId maps cache logical graph metadata, not deletion authority. The new interrupted-unpack matrix exposed a second recovery blocker in PackStorage.unpack: duplicate loose verification used the ordinary denial-enforcing reader. Use the existing writer-lease-scoped readErasureObject for this intentionally denied physical copy, preserving public denial. Control refusal/compatibility selection passed 2/2; packed recovery matrix extensions are running."
+  "2026-10-31T17:10:13.653Z",codex-agent,"Isolated behavioral reverts in disposable copies: disabling destruction classification makes the public foreign-backup case fail with Missing expected exception; restore passes 1/1. Collapsing physical locations to the last path per ObjectId makes the acknowledged packed-transaction matrix fail with erasure_retained_copy; restore passes 1/1. Restoring the ordinary unpack reader makes that matrix fail with object_obliterated; restore passes 1/1. Each mutant exits 1 and each restored case exits 0; no syntax/build failures count. The complete new packed power matrix passes: 5546 native boundaries, all 474 distinct crash images, two convergent replays each, retained peer and tripwire preserved. Earlier diagnostic npm on 1c36eaf finished 2304/2305, no skips/cancellations: all original four coverage files are 100% in all dimensions; sole failure was the old memory counter at 164327 versus 131072 bytes. That gate remains failed, not certification."
+  "2026-10-31T17:10:16.060Z",codex-agent,"Native creation-stage SIGKILL additionally reproduced zero-length unpublished destruction stages. Recognize only exact native regular zero-byte .tmp creation states, without granting checkpoint/deletion authority; unknown names, empty canonical records, out-of-range owner PIDs, symlinks and malformed nonempty stages still refuse. Three real SIGKILL creation cases plus the expanded foreign-storage refusal corpus pass. A larger interrupted-unpack fixture hit its original 30-second setup deadline (SIGTERM, before the intended SIGKILL); the new scenario now has a bounded 120-second setup/worker deadline. Assertions and production refusals remain intact; this is not an assertion retry or installer retry. Final named-cut validation remains pending."
+  "2026-10-31T17:52:47.631Z",codex-agent,"Final literal-ref audit: the generic encoded scanner treated a valid writer-produced 80-prefixed ObjectId as a partial zlib stream. Ref names/values now validate and inspect on one pinned descriptor, with file and directory namespace barriers. Schema-known IDs share the existing raw/canonical-base64 literal PID inspection policy; arbitrary compressed interpretation is not a native ref format. The native ref literal 38 regression passes; reverting only its format-aware inspection fails with unsupported_erasure_storage, then restoration passes 1/1. A separate native-ref selected-byte fixture still refuses before deletion. Node 22 coverage selection passes 10/10; all branches in assertDestructionStorage, inspectRefs, controlStamp and containsLiteralBytes are exercised. The creation-stage compatibility revert also fails as expected, then all three real creation cuts pass after restoration. Native cut 550 originally failed during its 30-second setup, then exposed the literal-ref decoder issue on the next bounded run; both causes are recorded rather than retried away."
+  "2026-10-31T18:08:19.600Z",codex-agent,"The completed broad erasure/accountability rerun was 62/63, not a passing gate. Its clean randomized-store retry refused native destruction metadata. A deterministic native-writer progress bitmap reproduces a checksum whose incidental canonical-base64 token decodes to a malformed zlib header. Classification now treats the fully verified binary bitmap as its fixed native frame, while still checking raw selected-byte fingerprints; textual journal metadata retains representation inspection. The compatibility corpus includes both this must-allow bitmap and selected checksum bytes that must refuse before deletion. The final passing rerun and a format-policy revert will supersede the failed diagnostic count. Packed power-loss recovery has passed all 5546 native boundaries represented by 474 distinct complete crash images, each replayed twice."
+  "2026-10-31T18:11:16.314Z",codex-agent,"Sixth isolated behavioral revert: replacing fixed-frame progress inspection with arbitrary representation decoding fails the native checkpoint compatibility test with unsupported_erasure_storage. Restoring the format-aware check passes 1/1 and still refuses raw selected checksum bytes before deletion. The final linked c8 review selection passes 9/9 on Node 26; assertDestructionStorage, inspectRefs, controlStamp and containsLiteralBytes have no uncovered branch records in that focused report. This is helper coverage evidence, not whole-repository release certification. A diagnostic-only randomized retry probe was cancelled after the deterministic checksum fixture isolated the failure; it is not counted as a passing test. The broad three-file focused rerun is now registered and running through pm with an 1800-second bound."
+  "2026-10-31T18:28:53.336Z",codex-agent,"The final broad PM-linked focused command passes 103/103, zero failures/skips/cancellations: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern=SIGKILL test/erasure-accountability.test.ts test/erasure-fragment-repairs.test.ts test/erasure-storage.test.ts. It includes all 168 randomized foreign-store cases; the earlier 62/63 failed diagnostic is superseded, not counted as a pass. Node 22 final controls plus acknowledged packed recovery pass 10/10 after the bitmap fix. The registered selected lifecycle command is now running on this final source; the complete pack rerun remains active. Strict PM health exits 0 with the existing advisory provenance follow-up pm-vcs-5lre enriched and left open/unclaimed. Fresh fetch confirms main is fully included; every changed history already on main remains a byte-identical prefix extension."
+  "2026-10-31T18:44:25.388Z",codex-agent,"Final-source complete pack suite passes 38/38, zero failures/skips/cancellations, including all 90 relative-root native SIGKILL cuts with two convergent replays each. Original branch-coverage fault file passes 15/15 again on this source. The expanded lifecycle command reached its 900-second orchestration timeout after 17/722 and 18/934 selected native cuts passed; it reported no assertion failure and is not counted as a passing gate. That command unintentionally included the separate 512-seed case, which took 1499756 ms in the earlier full diagnostic run. The intended focused command now explicitly excludes that long model case locally and reruns the same 35 native cuts plus ordinary cases. No test implementation, assertion, threshold or CI selection is changed; the complete 512-seed model and every native cut remain enabled by default in CI."
+  "2026-10-31T18:50:54.241Z",codex-agent,"Final local results on the repair source: intended PM-linked lifecycle focus passes 42/42 (17/722 retired-instance and 18/934 interrupted-unpack actual native cuts); complete packs passes 38/38 including all 90 relative-root cuts with two replays each; broad erasure/accountability/fragment selection passes 103/103; publication-faults passes 15/15; Node 22 controls and acknowledged packed recovery pass 10/10; Node 22 annotation/fixture/scratch regressions pass 5/5; linked c8 control corpus passes 9/9 with every branch of the new destruction/ref helpers covered. Packed power-loss passes 1/1 across 5546 boundaries and 474 distinct crash images, two replays each; later binary-format-only refinement is protected by the deterministic native bitmap regression and acknowledged recovery. All six new isolated behavioral reversions fail as expected and restored tests pass, in addition to the original 21 mutation groups and three memory controls. Full npm diagnostic on 1c36eaf remains 2304/2305 with its memory-counter failure, not release certification; the four original coverage files measured 100 in all four dimensions. Final full npm/Bun acceptance and fresh independent Codex review remain pending CI under the updated scope. No installer retries. The expanded lifecycle orchestration timeout remains recorded as failed. Typecheck/build/test compilation/lint/docstrings/zero duplication/package privacy pass. All pm writes finish now; claims are released without closure, then changelog, archive regeneration, committed self-host verification, push and external exact-head receipts follow. No later tracker write will invalidate the final archive."
 files[90]:
   - path: .github/workflows/ci.yml
     scope: project
@@ -366,7 +374,7 @@ files[90]:
   - path: vcs-commands.ts
     scope: project
     note: GC help describes pending native publication retention
-tests[54]:
+tests[62]:
   - command: node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts
     scope: project
     timeout_seconds: 600
@@ -794,12 +802,76 @@ tests[54]:
       created_at: "2026-10-30T19:17:32.369Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
-docs[7]{path,scope}:
+  - command: "node_modules/.bin/c8 --include=engine/destruction.ts --include=engine/erasure.ts --include=engine/packs.ts --reporter=json --reporter=lcov --reporter=text --temp-directory=coverage/pr150-erasure-review-tmp --report-dir=coverage/pr150-erasure-review node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"erasure refuses unknown control|native destruction creation-stage|erasure accepts sparse|erasure retains native destruction|erasure rejects malformed native journal|erasure refuses pinned journal\" test/erasure-storage.test.ts"
+    scope: project
+    timeout_seconds: 240
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T17:10:11.243Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node_modules/.bin/c8 --include=engine/destruction.ts --include=engine/erasure.ts --include=engine/packs.ts --reporter=json --reporter=lcov --reporter=text --temp-directory=coverage/pr150-erasure-review-final-tmp --report-dir=coverage/pr150-erasure-review-final node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"erasure refuses unknown control|native destruction creation-stage|erasure accepts sparse|erasure retains native destruction|erasure rejects malformed native journal|erasure refuses pinned journal|native literal reference|native reference metadata|native reference inspection\" test/erasure-storage.test.ts"
+    scope: project
+    timeout_seconds: 240
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T17:55:08.942Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern=SIGKILL test/erasure-accountability.test.ts test/erasure-fragment-repairs.test.ts test/erasure-storage.test.ts
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T18:11:03.758Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern=\"cut (?!(?:1|2|25|50|100|150|200|250|300|350|400|450|500|550|600|650|700|750):)\" test/erasure-lifecycle.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T18:16:08.871Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern=\"512 seeded|cut (?!(?:1|2|25|50|100|150|200|250|300|350|400|450|500|550|600|650|700|750):)\" test/erasure-lifecycle.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T18:44:00.916Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/packs.test.ts
+    scope: project
+    timeout_seconds: 3600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T18:50:51.881Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"EVERY native obliterate-packed boundary\" test/journal-durability.test.ts"
+    scope: project
+    timeout_seconds: 3600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T18:50:51.881Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/publication-faults.test.ts
+    scope: project
+    timeout_seconds: 240
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T18:50:51.881Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+docs[8]{path,scope}:
   docs/destructive-operations.md,project
   docs/indexed-pack-benchmark.json,project
   docs/indexed-packs.md,project
   docs/links-layers-obliteration.md,project
   docs/scale-history-and-gc.md,project
   docs/validation/pr150-ci-repair.md,project
+  docs/validation/pr150-erasure-review-repair.md,project
   README.md,project
 body: ""

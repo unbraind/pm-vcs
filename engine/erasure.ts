@@ -1,17 +1,19 @@
 import { accountErasureStorage, planErasureStorage, erasurePurge, type ErasurePurgeReceipt, type ErasureAccountabilityReport } from "./erasure-accountability.ts";
-import { prepareDestruction, type DestructionReceipt } from "./destruction.ts";
+import { assertDestructionStorage, prepareDestruction, type DestructionReceipt } from "./destruction.ts";
+import { assertRefName } from "./refs.ts";
 import { deflateSync } from "node:zlib";
 import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, inspectErasureRepresentation, createErasureInspection, inspectErasureFile, erasureScanBoundary, ErasureStorageRefusal, type ErasureFingerprint } from "./erasure-scan.ts";
 import { durability } from "./durability.ts";
 import { VerificationRefusal, assertVerificationBound, verificationLimits } from "./object-error.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Authorized FileId-scoped erasure over accountable loose and packed storage. */
-import { type BigIntStats, existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { constants, type BigIntStats, existsSync, fstatSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { objectFiles, type ObjectFile } from "./object-files.ts";
 import { dirname, join } from "node:path";
 import { authorize, readLayers, assertCompositionPath, syncDirectory, writePrivateJson } from "./composition.ts";
 import { payloadDigest, encodeTombstone, type ErasureDenial } from "./lifecycle.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
-import { frameObject, hashObject, OBJECT_TYPES, readControlJson, ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
+import { frameObject, hashObject, isObjectId, OBJECT_TYPES, readControlJson, ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
 import { inspectClosure } from "./closure.ts";
 import { inspectRepresentations } from "./representations.ts";
 import { ALWAYS_IGNORED } from "./ignore.ts";
@@ -64,15 +66,52 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, Inventory
 }
 
 /** Refuse unsupported control storage and temporary metadata copies before reporting physical erasure. */
-function assertSupportedControl(control: string): void {
+function assertSupportedControl(control: string, payloads: readonly ErasureFingerprint[] = []): void {
   const supported = new Set(["objects", "refs", "leases", "destruction", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "remotes.json",
     "partial.json", "upload-roots.json", "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "objects.recovery.lock", "objects.generation", "erasure-verification.json", "erasure-purge.json", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
   for (const entry of readdirSync(control, { withFileTypes: true })) {
+    if (supported.has(entry.name) && (["objects", "refs", "leases", "destruction"].includes(entry.name) ? !entry.isDirectory() : !entry.isFile())) {
+      throw new ObjectStoreError("unsupported_erasure_storage", "Control storage must retain its supported native kind.");
+    }
     const nativeOwner = entry.isFile() && ["oplog.jsonl.lock", "instances.json.lock"].some(name => durability.processMarker(join(control, entry.name), join(control, name)));
     if ((!supported.has(entry.name) && !nativeOwner && !(entry.isFile() && /^(?:objects\.(?:(?:recovery\.)?lock\.[0-9]+|generation)|(?:erasure-verification|erasure-purge|denials)\.json)\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Unknown control storage or symlinks prevent a complete erasure receipt.");
     }
   }
+  assertDestructionStorage(control, (bytes, binaryProgress) => {
+    // The verified bitmap is a fixed binary frame, not an encoded document.
+    if (payloads.length > 0 && (binaryProgress ? matchesFingerprints(bytes, payloads) : containsSelectedBytes(bytes, payloads))) throw new ObjectStoreError("unsupported_erasure_storage", "Destruction metadata retains selected payload bytes.");
+  });
+  /** Every reference leaf is native metadata, never an opaque backup namespace. */
+  const inspectRefs = (directory: string, prefix: string): void => {
+    const original = lstatSync(directory, { bigint: true });
+    if (!original.isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Reference directories cannot follow links.");
+    const entries = readdirSync(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const path = join(directory, entry.name); const name = `${prefix}/${entry.name}`;
+      let file: ObjectFile | undefined;
+      try {
+        if (!entry.isDirectory() && !entry.isFile()) throw new Error("nonregular reference");
+        if (!/^ref-[1-9][0-9]*-[0-9a-f]{12}\.lock$/.test(entry.name) || entry.isDirectory()) assertRefName(name);
+        if (entry.isDirectory()) inspectRefs(path, name);
+        else {
+          file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+          const before = fstatSync(file.fd, { bigint: true });
+          if (!before.isFile() || before.size > BigInt(verificationLimits.receiptBytes)) throw new Error("unsupported reference size or kind");
+          const bytes = readFileSync(file.fd);
+          if (!isObjectId(bytes.toString("utf8").trim())) throw new Error("invalid reference bytes");
+          // A verified ObjectId is literal metadata, not a compressed stream.
+          if (payloads.length > 0 && containsLiteralBytes(bytes, payloads)) throw new Error("retained reference payload");
+          const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+          if (current === undefined || controlStamp(current) !== controlStamp(before) || controlStamp(fstatSync(file.fd, { bigint: true })) !== controlStamp(before)) throw new Error("changed reference");
+        }
+      } catch { throw new ObjectStoreError("unsupported_erasure_storage", "Unknown reference storage prevents a complete erasure receipt."); }
+      finally { file?.close(); }
+    }
+    const after = lstatSync(directory, { bigint: true, throwIfNoEntry: false });
+    if (after === undefined || !after.isDirectory() || JSON.stringify(entries.map(entry => entry.name).sort()) !== JSON.stringify(readdirSync(directory).sort()) || controlStamp(after) !== controlStamp(original)) throw new ObjectStoreError("unsupported_erasure_storage", "The reference namespace changed during inspection.");
+  };
+  if (existsSync(join(control, "refs"))) inspectRefs(join(control, "refs"), "refs");
   const leases = join(control, "leases");
   if (existsSync(leases)) {
     if (!lstatSync(leases).isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Lease audits must occupy a real directory.");
@@ -87,15 +126,18 @@ function assertSupportedControl(control: string): void {
   }
 }
 
+/** Fence content and namespace replacement across one pinned native control read. */
+function controlStamp(stat: BigIntStats): string { return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`; }
+
 /** Detect recoverable selected bytes in raw, compressed and base64 worktree representations. */
 function containsSelectedBytes(bytes: Buffer, payloads: readonly ErasureFingerprint[]): boolean {
   return inspectRepresentations(bytes, /** A retained full payload or fragment prevents a false physical-erasure receipt. */ (candidate) => matchesFingerprints(candidate, payloads));
 }
 
-/** Inspect a schema-validated live writer PID as raw and canonical base64 bytes, without mistaking decimal 80-prefixed PIDs for zlib streams. */
-function containsPidBytes(bytes: Buffer, payloads: readonly ErasureFingerprint[]): boolean {
+/** Inspect a schema-validated PID or ObjectId literally, including canonical base64, without treating an 80 prefix as zlib. */
+function containsLiteralBytes(bytes: Buffer, payloads: readonly ErasureFingerprint[]): boolean {
   if (matchesFingerprints(bytes, payloads)) return true;
-  const text = bytes.toString("utf8");
+  const text = bytes.toString("utf8").trim();
   const decoded = Buffer.from(text, "base64");
   return decoded.toString("base64") === text && containsSelectedBytes(decoded, payloads);
 }
@@ -148,9 +190,9 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     const excluded = new Set(purgeFiles.map(file => file.path));
     const physical = new Map<string, ObjectId>();
     const inventory = new Map<ObjectId, InventoryObject>();
-    const locations = new Map<ObjectId, string>();
+    const locations: { id: ObjectId; path: string }[] = [];
     for (const { id, path, object } of store.walkErasureInventory("all", excluded)) {
-      locations.set(id, path);
+      locations.push({ id, path });
       const digest = payloadDigest(object.payload);
       physical.set(path, id);
       if (object.type === "manifest") {
@@ -202,7 +244,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     catch { throw new VerificationRefusal("erasure", "decode_error", "Restore the original valid fingerprint evidence; foreign verification metadata was preserved."); }
     const payloads: ErasureFingerprint[] = [...(existing === undefined ? [] : proofs[existing.id] ?? [])];
     const loaded = new Set<ObjectId>();
-    for (const [id, path] of locations) {
+    for (const { id, path } of locations) {
       if (!selected.has(id) || loaded.has(id)) continue;
       const object = store.readErasureObject(id, path);
       loaded.add(id);
@@ -215,7 +257,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       }
       if (object.type !== "manifest" && object.payload.length > 0) payloads.push(fingerprint(object.payload), fingerprint(Buffer.from(object.payload.toString("base64"))));
     }
-    const deleting = new Set([...locations].filter(([id]) => selected.has(id)).map(([_id, path]) => path));
+    const deleting = new Set(locations.filter(({ id }) => selected.has(id)).map(({ path }) => path));
     for (const file of purgeFiles) deleting.add(file.path);
     /** Both native accountability and complete byte inspection are required for a certificate. */
     const diagnose = (excluded: ReadonlySet<string>, decoded = true): void => {
@@ -244,6 +286,13 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     }
     if (inspected.size !== physical.size) throw new ObjectStoreError("incomplete_erasure_inventory", "Physical inventory lost a copy between verified passes.");
     diagnose(deleting);
+    /** Native control records must not become a hidden selected-byte copy during cleanup either. */
+    const diagnoseControl = (): void => {
+      for (const instanceControl of new Set([control, ...instances.map(instance => instance.controlDirectory)])) {
+        assertSupportedControl(instanceControl, payloads);
+      }
+    };
+    diagnoseControl();
     for (const instance of instances) {
       const leaseDirectory = join(instance.controlDirectory, "leases");
       if (existsSync(leaseDirectory)) {
@@ -259,7 +308,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
           // A verified live writer's decimal PID is typed control metadata, not an encoded payload.
           // Other lock contents retain full representation inspection; raw selected bytes remain forbidden.
           const ownedPid = (entry.name === "objects.lock" || entry.name === "objects.recovery.lock" || /^objects\.(?:recovery\.)?lock\.[0-9]+\.[0-9a-f]{12}\.tmp$/.test(entry.name)) && /^[1-9][0-9]*$/.test(bytes.toString("utf8"));
-          const retained = ownedPid ? containsPidBytes(bytes, payloads) : containsSelectedBytes(bytes, payloads);
+          const retained = ownedPid ? containsLiteralBytes(bytes, payloads) : containsSelectedBytes(bytes, payloads);
           if (retained) throw new ObjectStoreError("unsupported_erasure_storage", "Control metadata retains selected payload bytes; clean the ambiguous copy before retrying.");
         }
       }
@@ -316,7 +365,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const probe = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true, true);
       if (purgeFiles.length > 0 && !probe.canPurge) throw new ErasureStorageRefusal("unverifiable", purgeFiles[0].fileClass);
       if (validateOnly) {
-        if (containsPidBytes(Buffer.from(String(process.pid)), payloads)) throw new ObjectStoreError("erasure_audit_conflict", "Proposed recovery lease metadata retains selected bytes; no existing lease was retired.");
+        if (containsLiteralBytes(Buffer.from(String(process.pid)), payloads)) throw new ObjectStoreError("erasure_audit_conflict", "Proposed recovery lease metadata retains selected bytes; no existing lease was retired.");
         throw new ErasureValidated();
       }
       check();
@@ -362,6 +411,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       erasureScanBoundary.visit("receipt");
       for (const instance of instances) assertSupportedControl(instance.controlDirectory);
       assertSupportedControl(control);
+      diagnoseControl();
       check(); diagnose(new Set(), false);
       const certified = { purgeReceipt: purge.receipt(), storage: accountStorage(true, true) };
       check();

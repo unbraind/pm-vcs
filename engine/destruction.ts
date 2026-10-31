@@ -219,6 +219,10 @@ function load(path: string, observation = false): Intent | undefined {
     try { const before = fstatSync(file.fd, { bigint: true }); bytes = readFileSync(file.fd, "utf8"); const current = lstatSync(path, { bigint: true, throwIfNoEntry: false }); if (identity(before) !== identity(observed) || current === undefined || identity(current) !== identity(before) || identity(fstatSync(file.fd, { bigint: true })) !== identity(before)) throw new DestructionRefusal("destructive_intent_changed", "An intent record changed during its pinned read."); }
     finally { file.close(); }
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new DestructionRefusal("destructive_intent_changed", "An observed intent disappeared during its pinned read."); throw error; }
+  return decodeIntent(bytes);
+}
+/** Share the complete persisted intent schema between recovery and erasure classification. */
+function decodeIntent(bytes: string): Intent {
   let value: Intent; try { value = JSON.parse(bytes) as Intent; } catch { throw new DestructionRefusal("foreign_destructive_intent", "Unparseable intent metadata was preserved."); }
   const canonicalName = (name: unknown): name is string => typeof name === "string" && name !== "" && !name.includes("\0") && !isAbsolute(name) && relative(value.root, resolve(value.root, name)) === (name === "." ? "" : name);
   if (value?.format !== "pm-vcs-destruction-1" || Object.keys(value).sort().join(",") !== (value.status === "superseded" ? "entries,format,id,reason,revision,root,rootIdentity,status" : "entries,format,id,revision,root,rootIdentity,status") || !/^[0-9a-f]{32}$/.test(value.id) || typeof value.root !== "string" || !isAbsolute(value.root) || (typeof value.revision !== "string" || !/^[0-9a-f]{64}$/.test(value.revision)) || !/^\d+:\d+:\d+$/.test(value.rootIdentity) || !["pending", "completed", "superseded"].includes(value.status) || (value.status === "superseded" && !["reachability_changed", "eligibility_changed"].includes(value.reason ?? "")) || !Array.isArray(value.entries) || value.entries.some(entry => entry === null || typeof entry !== "object" || Object.keys(entry).some(key => !["path", "destination", "kind", "identity", "digest", "parent", "parentIdentity", "target", "destinationParentIdentity", "status", "reason"].includes(key)) || !canonicalName(entry.path) || !canonicalName(entry.parent) || (entry.destination !== undefined && !canonicalName(entry.destination)) || !["file", "link", "directory", "rename"].includes(entry.kind) || !/^\d+:\d+:\d+:\d+:-?\d+:-?\d+$/.test(entry.identity) || !/^[0-9a-f]{64}$/.test(entry.digest) || !/^\d+:\d+:\d+$/.test(entry.parentIdentity) || !["planned", "deleted", "moved", "absent", "foreign", "cancelled"].includes(entry.status) || (entry.kind === "rename" ? entry.destination === undefined || typeof entry.target !== "string" || (entry.target !== "absent" && !/^\d+:\d+:\d+:\d+:-?\d+:-?\d+$/.test(entry.target)) || !/^\d+:\d+:\d+$/.test(entry.destinationParentIdentity ?? "") : entry.destination !== undefined || entry.target !== undefined || entry.destinationParentIdentity !== undefined) || !outcomes.some(outcome => outcome.status === entry.status && outcome.reason === entry.reason) || (value.status !== "pending" && entry.status === "planned"))) throw new DestructionRefusal("foreign_destructive_intent", "Foreign or invalid intent metadata was preserved.");
@@ -245,6 +249,60 @@ function verifyProgress(fd: number, intent: Intent): void {
   if (!stat.isFile() || stat.size !== BigInt(PROGRESS_HEADER + intent.entries.length)) throw new DestructionRefusal("foreign_destructive_intent", "A nonregular or incomplete progress bitmap was preserved.");
   const header = Buffer.alloc(PROGRESS_HEADER); const count = readSync(fd, header, 0, header.length, 0);
   if (count !== header.length || !header.equals(progressHeader(intent))) throw new DestructionRefusal("foreign_destructive_intent", "A foreign or incomplete progress bitmap was preserved.");
+}
+
+/** Recognize every native journal artifact without granting deletion authority or following links. @internal */
+export function assertDestructionStorage(control: string, inspect: (bytes: Buffer, binaryProgress: boolean) => void = () => {}): void {
+  const directory = join(control, "destruction"); const root = lstatSync(directory, { bigint: true, throwIfNoEntry: false });
+  if (root === undefined) return;
+  /** Unknown bytes remain untouched and prevent a physical-erasure certificate. */
+  const refuse = (): never => { throw new ObjectStoreError("unsupported_erasure_storage", "Unknown or changing destruction storage prevents a complete erasure receipt."); };
+  if (!root.isDirectory()) refuse();
+  const names = readdirSync(directory).sort(); const started = performance.now(); let work = 0;
+  for (const name of names) {
+    let file: ObjectFile | undefined;
+    try {
+      assertVerificationBound("receipts", "record_count", ++work, verificationLimits.receiptRecords);
+      assertVerificationBound("receipts", "time_ms", performance.now() - started, verificationLimits.receiptMs);
+      const path = join(directory, name); const before = lstatSync(path, { bigint: true });
+      if (!before.isFile()) refuse();
+      assertVerificationBound("receipts", "record_bytes", Number(before.size), verificationLimits.receiptBytes);
+      file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      if (identity(fstatSync(file.fd, { bigint: true })) !== identity(before)) refuse();
+      const bytes = readFileSync(file.fd);
+      const record = /^([0-9a-f]{64})(?:\.json|\.([0-9a-f]{32})\.receipt)(?:\.[0-9a-f]{12}\.tmp)?$/.exec(name);
+      const progress = /^([0-9a-f]{64})\.([0-9a-f]{32})\.progress(?:\.[0-9a-f]{12}\.tmp)?$/.exec(name);
+      const owner = /^([0-9a-f]{64})\.json\.lock(?:\.([1-9][0-9]*)\.[0-9a-f]{12}\.tmp)?$/.exec(name);
+      // Exclusive creation precedes the first write. A killed native publisher
+      // can leave this exact empty stage; it contains no bytes or authority.
+      const emptyStage = bytes.length === 0 && name.endsWith(".tmp") && (record !== null || progress !== null || owner !== null && Number(owner[2]) >= 1 && Number(owner[2]) <= 2_147_483_647);
+      if (emptyStage) { /* Preserve the native zero-byte creation state without treating it as a checkpoint. */ }
+      else if (record !== null) {
+        const intent = decodeIntent(bytes.toString("utf8"));
+        if (record[2] !== undefined && intent.id !== record[2]) refuse();
+      } else if (progress !== null) {
+        const current = load(join(directory, `${progress[1]}.json`), true);
+        const intent = (current?.id === progress[2] ? current : load(join(directory, `${progress[1]}.${progress[2]}.receipt`), true)) ?? refuse();
+        if (intent.id !== progress[2]) refuse();
+        verifyProgress(file.fd, intent);
+        for (const state of bytes.subarray(PROGRESS_HEADER)) if (outcomes[state] === undefined) refuse();
+      } else if (owner !== null) {
+        const value = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+        if (value === null || Object.keys(value).sort().join(",") !== "cleanup,format,identity,key,pid,root,rootIdentity"
+          || value.format !== "pm-vcs-destruction-lock-1" || value.cleanup !== "unlink-only-this-inode" || value.key !== owner[1]
+          || value.identity !== birth(before) || typeof value.root !== "string" || !isAbsolute(value.root)
+          || typeof value.rootIdentity !== "string" || !/^\d+:\d+:\d+$/.test(value.rootIdentity)
+          || !Number.isSafeInteger(value.pid) || Number(value.pid) < 1 || Number(value.pid) > 2_147_483_647
+          || owner[2] !== undefined && String(value.pid) !== owner[2]) refuse();
+      } else refuse();
+      inspect(bytes, progress !== null);
+      const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+      if (current === undefined || identity(current) !== identity(before) || identity(fstatSync(file.fd, { bigint: true })) !== identity(before)) refuse();
+    } catch { refuse(); }
+    finally { file?.close(); }
+  }
+  const after = lstatSync(directory, { bigint: true, throwIfNoEntry: false });
+  if (after === undefined || !after.isDirectory() || birth(after) !== birth(root) || JSON.stringify(names) !== JSON.stringify(readdirSync(directory).sort())) refuse();
 }
 /** Read only a fixed header and one state byte; completed intents keep their immutable checkpoint and need no bitmap. */
 function progressState(path: string, intent: Intent, index: number): { status: DestructionEntry["status"]; reason?: string } | undefined {

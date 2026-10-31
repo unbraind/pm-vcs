@@ -1,13 +1,23 @@
 /** SIGKILL real purge publication and retirement native steps; no JavaScript cleanup runs. */
 import fs from "node:fs";
 import { createHash } from "node:crypto";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { Repository } from "../../engine/repo.ts";
 import { destructionBoundary } from "../../engine/destruction.ts";
+import { packBoundary } from "../../engine/packs.ts";
 const [root,id,ordinal]=process.argv.slice(2);const repo=Repository.open(root);const steps:string[]=[];const opened=new Map<number,string>();let active=false;let finishing=false;
 const processPrefix=`owner-${createHash("sha256").update("oplog.jsonl.lock").digest("hex").slice(0,24)}-`;
+if(ordinal==="unpacked"){
+ const selected=repo.readIndex().find(entry=>entry.fileId===id)!.id;
+ const members=repo.objects.withWriteLock(()=>[...repo.objects.walkErasureInventory("pack")].length);let unpacked=0;
+ packBoundary.visit=step=>{if(step==="unpacked"&&++unpacked===members&&fs.existsSync(join(repo.objects.storageRoot(),selected.slice(0,2),selected.slice(2))))process.kill(process.pid,"SIGKILL");};
+}
 if(ordinal==="owner-published")destructionBoundary.visit=(step,path)=>{if(step==="process-owner-published"&&path===join(repo.controlDirectory,"oplog.jsonl.lock"))process.kill(process.pid,"SIGKILL");};
+if(ordinal.startsWith("destruction-"))destructionBoundary.visit=(step,path)=>{
+ const expected=ordinal==="destruction-owner-opened"?"owner-opened":"intent-temp-opened";
+ if(dirname(path)===join(repo.controlDirectory,"destruction")&&step===expected&&(ordinal!=="destruction-progress-opened"||/\.progress\.[0-9a-f]{12}\.tmp$/.test(path)))process.kill(process.pid,"SIGKILL");
+};
 /** Classify only the current purge journal, its barriers and this worker's selected foreign leaf. */
 function kind(value:unknown):string|undefined{
  const path=typeof value==="number"?opened.get(value):typeof value==="string"?value:undefined;if(path===undefined)return undefined;

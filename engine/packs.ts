@@ -327,7 +327,7 @@ export class PackStorage {
         if (!existsSync(destination)) {
           const job = this.publish(deflateSync(frameObject(item.object.type, item.object.payload)), destination, store);
           this.cleanupJob(job); packBoundary.visit("cleaned");
-        } else store.readInventoryObject(item.id, destination);
+        } else store.readErasureObject(item.id, destination);
         syncDirectory(directory); packBoundary.visit("unpacked");
       }
       for (const path of deletion.paths) { store.markStorageGeneration(); deletion.remove(path); this.indexes.delete(path); syncDirectory(this.directory); packBoundary.visit("pack-retired"); }

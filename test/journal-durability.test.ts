@@ -68,7 +68,7 @@ test("native namespace power cuts at EVERY metadata publication boundary converg
 });
 
 
-const sequences = ["ref-retirement","ref-replacement","compact","unpack","repack","gc-loose","gc-packed","lease-cleanup","prune","oplog","deep-intent","recovery","obliterate","directory-recovery","publication-recovery","legacy-publication-recovery","process-stage-recovery","ref-cas-recovery","ref-cas-cancel"] as const;
+const sequences = ["ref-retirement","ref-replacement","compact","unpack","repack","gc-loose","gc-packed","lease-cleanup","prune","oplog","deep-intent","recovery","obliterate","obliterate-packed","directory-recovery","publication-recovery","legacy-publication-recovery","process-stage-recovery","ref-cas-recovery","ref-cas-cancel"] as const;
 type Sequence = typeof sequences[number];
 /** One prepared native store below the real tracker exercises a complete engine write-then-retire path. */
 function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep?:string):{steps:string[];cuts:number[]}{
@@ -82,8 +82,10 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
  if(template===undefined&&kind==="prune")mkdirSync(join(root,"empty/a/b"),{recursive:true});if(template===undefined)writeFileSync(join(root,"guard"),"foreign tripwire");
  const paths=[join(root,"candidate-a"),join(root,"candidate-b")];if(template===undefined&&kind==="deep-intent")for(const path of paths)writeFileSync(path,"owned candidate");
  if(template===undefined&&kind==="recovery")writeFileSync(join(repo.controlDirectory,"objects.lock"),"2147483647");
- let fileId="";if(template===undefined&&kind==="obliterate"){writeFileSync(join(root,"asset"),"selected power payload 917364852");repo.stage(["asset"]);fileId=repo.readIndex()[0].fileId!;repo.setAuthority("fixture","read-power","erase-power");}
- if(template!==undefined&&kind==="obliterate")fileId=repo.readIndex()[0].fileId!;
+ const erasing=kind==="obliterate"||kind==="obliterate-packed";
+ let fileId="";if(template===undefined&&erasing){writeFileSync(join(root,"asset"),"selected power payload 917364852");repo.stage(["asset"]);fileId=repo.readIndex()[0].fileId!;repo.setAuthority("fixture","read-power","erase-power");if(kind==="obliterate-packed")repo.objects.compact();}
+ if(template!==undefined&&erasing)fileId=repo.readIndex()[0].fileId!;
+ const selected=erasing?repo.readIndex()[0].id:undefined;
  const owned=ledger(repo.controlDirectory);rmSync(owned,{recursive:true,force:true});if(cut<0)return{steps:[],cuts:[]};
  const recoveringDirectory=join(repo.objects.storageRoot(),"packs",`job-${"d".repeat(24)}`);const recoveringPublication=join(repo.controlDirectory,"recover-publication.json");
  if(kind==="directory-recovery"){mkdirSync(recoveringDirectory,{recursive:true});destructionBoundary.visit=step=>{if(step==="intent-persisted")throw new Error("directory intent interruption");};try{assert.throws(()=>durability.removeDirectory(recoveringDirectory));}finally{destructionBoundary.visit=()=>{};}}
@@ -113,12 +115,12 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
   else if(kind==="process-stage-recovery"){const lease=durability.claim(processLock,"fixture_locked");lease.release();}
   else if(kind==="directory-recovery"){durability.resumeDirectory(recoveringDirectory);assert.equal(existsSync(recoveringDirectory),false);}
   else if(kind==="publication-recovery"||kind==="legacy-publication-recovery")writePrivateJson(recoveringPublication,{value:2});
-  else repo.obliterate(fileId,"erase-power","power-model",new Date(1),{purgeUnaccounted:true,recoverLock:existsSync(join(repo.controlDirectory,"objects.lock"))});
+  else assert.equal(repo.obliterate(fileId,"erase-power","power-model",new Date(1),{purgeUnaccounted:true,recoverLock:existsSync(join(repo.controlDirectory,"objects.lock"))}).storage.accountable,true);
  };
  const power=new NamespacePowerLoss([root,owned],cut,[deep]);let trace:string[]=[];let cuts:number[]=[];
  try{
-  power.install();if(packStep!==undefined)packBoundary.visit=step=>{if(step===packStep)power.interrupt();};if(cut>0||packStep!==undefined){assert.throws(operation);power.crash();packBoundary.visit=()=>{};}else operation();trace=[...power.trace];cuts=[...power.recoveryCuts];power.replay();
-  if(kind!=="recovery"&&kind!=="obliterate"&&existsSync(join(repo.controlDirectory,"objects.lock")))repo.objects.recoverWriterLock();
+  power.install();if(packStep!==undefined)packBoundary.visit=step=>{if(step===packStep&&(!erasing||existsSync(join(repo.objects.storageRoot(),selected!.slice(0,2),selected!.slice(2)))))power.interrupt();};if(cut>0||packStep!==undefined){assert.throws(operation);power.crash();packBoundary.visit=()=>{};}else operation();trace=[...power.trace];cuts=[...power.recoveryCuts];power.replay();
+  if(kind!=="recovery"&&!erasing&&existsSync(join(repo.controlDirectory,"objects.lock")))repo.objects.recoverWriterLock();
   for(let attempt=0;attempt<2;attempt++)operation();
   assert.deepEqual(new ObjectStore(repo.objects.storageRoot()).readTyped(live,"blob"),bytes);assert.equal(readFileSync(join(root,"guard"),"utf8"),"foreign tripwire");const inventory=inspectDestructions(repo.controlDirectory);const pending=new Set(inventory.receipts.filter(row=>row.status==="pending").map(row=>row.id));const evidence:unknown[]=[];if(pending.size)for(const directory of [join(repo.controlDirectory,"destruction"),join(owned,"destruction")])if(existsSync(directory))for(const name of readdirSync(directory).filter(name=>name.endsWith(".json"))){const record=JSON.parse(readFileSync(join(directory,name),"utf8")) as {id:string;root:string;entries:{path:string;identity:string}[]};if(pending.has(record.id))evidence.push({name,operation:["gc-candidates","compact-loose","unpack-packs"].find(key=>createHash("sha256").update(`${record.root}\0${key}`).digest("hex")+".json"===name),entries:record.entries.map(entry=>{const stat=lstatSync(resolve(record.root,entry.path),{bigint:true,throwIfNoEntry:false});return{...entry,current:stat===undefined?null:`${stat.dev}:${stat.ino}:${stat.birthtimeNs}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`};})});}assert.equal(inventory.pending,0,JSON.stringify(evidence));
   if(kind==="gc-loose"||kind==="gc-packed"||kind==="recovery")assert.equal(repo.objects.has(garbage),false);
@@ -126,7 +128,7 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
   if(kind==="lease-cleanup")assert.equal(existsSync(lease),false);if(kind==="prune")assert.equal(existsSync(join(root,"empty")),false);
   if(kind==="oplog")assert.equal(repo.operations.read().filter(operation=>operation.command==="power-case").length,1);
   if(kind==="deep-intent")for(const path of paths)assert.equal(existsSync(path),false);
-  if(kind==="obliterate")assert.equal(existsSync(join(root,"asset")),false);
+  if(erasing){assert.equal(existsSync(join(root,"asset")),false);repo.objects.withWriteLock(()=>assert.equal([...repo.objects.walkErasureInventory()].some(entry=>entry.id===selected),false));assert.equal(repo.objects.denials().find(entry=>entry.tombstone.fileId===fileId)!.pending,false);}
   if(kind==="publication-recovery"||kind==="legacy-publication-recovery")assert.deepEqual(JSON.parse(readFileSync(recoveringPublication,"utf8")),{value:2});
  }catch(error){throw new Error(`${kind} power boundary ${cut}/${trace.length||power.trace.length} (${power.trace[cut-1]??"probe"}) failed`,{cause:error});}
  finally{packBoundary.visit=()=>{};power.close();rmSync(owned,{recursive:true,force:true});}
@@ -367,7 +369,7 @@ test("restored native mtime changes only after content writes, across every alia
 
 /** Replay the exact acknowledged boundary cheaply in addition to each sequence's complete crash-image matrix. */
 test("acknowledged packed transactions recover twice without inheriting restoration metadata",async()=>{
- const root=await fixture();for(const kind of ["repack","gc-packed","obliterate"] as const){const template=join(root,kind+"-seed");sequence(template,kind,-1);const probe=sequence(join(root,kind+"-probe"),kind,0,template);sequence(join(root,kind+"-terminal"),kind,probe.steps.length,template);}
+ const root=await fixture();for(const kind of ["repack","gc-packed","obliterate","obliterate-packed"] as const){const template=join(root,kind+"-seed");sequence(template,kind,-1);const probe=sequence(join(root,kind+"-probe"),kind,0,template);sequence(join(root,kind+"-terminal"),kind,probe.steps.length,template);if(kind==="obliterate-packed")sequence(join(root,kind+"-unpacked"),kind,0,template,"unpacked");}
 });
 
 /** Changing/foreign legacy observations cannot certify unrelated failures or adopt another receipt's authority. */
