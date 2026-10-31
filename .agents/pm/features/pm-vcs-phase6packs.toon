@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags[3]: "gh:unbraind/pm-vcs#150","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#158"
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-31T18:50:56.184Z"
+updated_at: "2026-10-31T20:25:46.331Z"
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[158]{created_at,author,text}:
+comments[166]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -169,7 +169,15 @@ comments[158]{created_at,author,text}:
   "2026-10-31T18:28:53.336Z",codex-agent,"The final broad PM-linked focused command passes 103/103, zero failures/skips/cancellations: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern=SIGKILL test/erasure-accountability.test.ts test/erasure-fragment-repairs.test.ts test/erasure-storage.test.ts. It includes all 168 randomized foreign-store cases; the earlier 62/63 failed diagnostic is superseded, not counted as a pass. Node 22 final controls plus acknowledged packed recovery pass 10/10 after the bitmap fix. The registered selected lifecycle command is now running on this final source; the complete pack rerun remains active. Strict PM health exits 0 with the existing advisory provenance follow-up pm-vcs-5lre enriched and left open/unclaimed. Fresh fetch confirms main is fully included; every changed history already on main remains a byte-identical prefix extension."
   "2026-10-31T18:44:25.388Z",codex-agent,"Final-source complete pack suite passes 38/38, zero failures/skips/cancellations, including all 90 relative-root native SIGKILL cuts with two convergent replays each. Original branch-coverage fault file passes 15/15 again on this source. The expanded lifecycle command reached its 900-second orchestration timeout after 17/722 and 18/934 selected native cuts passed; it reported no assertion failure and is not counted as a passing gate. That command unintentionally included the separate 512-seed case, which took 1499756 ms in the earlier full diagnostic run. The intended focused command now explicitly excludes that long model case locally and reruns the same 35 native cuts plus ordinary cases. No test implementation, assertion, threshold or CI selection is changed; the complete 512-seed model and every native cut remain enabled by default in CI."
   "2026-10-31T18:50:54.241Z",codex-agent,"Final local results on the repair source: intended PM-linked lifecycle focus passes 42/42 (17/722 retired-instance and 18/934 interrupted-unpack actual native cuts); complete packs passes 38/38 including all 90 relative-root cuts with two replays each; broad erasure/accountability/fragment selection passes 103/103; publication-faults passes 15/15; Node 22 controls and acknowledged packed recovery pass 10/10; Node 22 annotation/fixture/scratch regressions pass 5/5; linked c8 control corpus passes 9/9 with every branch of the new destruction/ref helpers covered. Packed power-loss passes 1/1 across 5546 boundaries and 474 distinct crash images, two replays each; later binary-format-only refinement is protected by the deterministic native bitmap regression and acknowledged recovery. All six new isolated behavioral reversions fail as expected and restored tests pass, in addition to the original 21 mutation groups and three memory controls. Full npm diagnostic on 1c36eaf remains 2304/2305 with its memory-counter failure, not release certification; the four original coverage files measured 100 in all four dimensions. Final full npm/Bun acceptance and fresh independent Codex review remain pending CI under the updated scope. No installer retries. The expanded lifecycle orchestration timeout remains recorded as failed. Typecheck/build/test compilation/lint/docstrings/zero duplication/package privacy pass. All pm writes finish now; claims are released without closure, then changelog, archive regeneration, committed self-host verification, push and external exact-head receipts follow. No later tracker write will invalidate the final archive."
-files[90]:
+  "2026-10-31T19:21:57.547Z",codex-agent,"The independent re-review of 6dfc776 blocks on escaped JSON path retention. Rule: compare selected bytes with decoded persisted representations, including JSON string values, rather than raw serialization alone. Reuse this item and keep the prior ownership, physical-copy and compatibility fixes intact. Plan: reproduce quotes/backslashes/control/Unicode/path containment, introduce shared semantic JSON inspection, audit every persisted-state scan and its native decoders, run isolated behavioral reverts and focused gates, then finish tracker writes before changelog/archive/commit/head verification and push. Full CI will not be awaited."
+  "2026-10-31T19:37:13.041Z",codex-agent,"Class audit found the same raw-serialization gap in shared JSON metadata/native payload inspection, layer path metadata, unowned filenames and hex-encoded identity bytes. Added one incremental JSON string decoder for materialized and streaming scanners, both hex alignments under existing bounds, layer/path refusal checks, and decoded native/ref/inventory IDs. Strict destruction parsing, classifications, fixed binary progress handling, raw/base64 refusals and physical-copy recovery remain. Initial cohorts pass exact quotes, backslashes, escaped controls, Unicode, containing paths, JSON keys/values, operation/lease logs, layer metadata, loose/packed composite copies and all input splits. The broad diagnostic caught a changed ref error priority; control inspection now precedes the new inventory guard so the established unsupported_erasure_storage refusal stays intact. Full location-by-location verdicts are in docs/validation/pr150-erasure-review-repair.md. Remaining work: final focused coverage/gates and disposable behavioral reverts."
+  "2026-10-31T19:54:15.575Z",codex-agent,"Nine isolated behavioral reversion groups now fail on real retained-copy paths and pass after restoration: materialized JSON (reviewer case), streaming JSON (13-case cohort), streaming hex (13), full layer metadata (11), retained filenames (11), decoded literal identities (4), preflight identity check (4), final descriptor identity check (1), and recoverable truncated hex/zlib prefixes (11). The preflight mutation is caught by unexpected asset deletion despite a later refusal; final-ID mutation permits an untruthful success. Every disposable copy restores originals in finally. Targeted current-source power replay around the earlier guard refusal passes 25 images; the earlier full diagnostic is failed, not certified. Running the full final-source packed matrix next. No source threshold, ownership refusal or classification was relaxed."
+  "2026-10-31T20:07:25.287Z",codex-agent,"Corrected-source reverts repeated: all nine erasure-retention groups fail behaviorally and their restored selections pass. A tenth native compatibility proof forces writer nonce 654a7a2f000000000000000000000000: restoring new-guess descendants to declared-stream mode fails with unsupported_erasure_storage; restoring origin propagation passes 1/1. This fixes the nested JSON/hex/base64 codec-guess cause found by the broader must-allow corpus while retaining every original raw/base64 refusal and inspecting all recoverable output. The post-scan control guard is back in its original position; the new ID check follows it, preserving the directory-race and native ref refusal codes. Corrected compatibility passes 14/14. The preceding broad diagnostic was 142/144 and is failed; a pre-correction power process was cancelled. Complete corrected broad and power gates are now running; neither earlier run is claimed as passing."
+  "2026-10-31T20:17:56.067Z",codex-agent,"Corrected full packed power-loss gate passes 1/1: 5546 native boundaries and 474 distinct complete crash images, each restored and replayed twice, preserving the retained object and foreign tripwire with completed truthful receipts. This is the passing final-source matrix; the previous failed/cancelled/targeted diagnostics remain separate. The corrected broad gate is still active. Static/type/test-compilation/docstrings and real package privacy inspection pass; no thresholds, default CI matrix or ownership checks changed."
+  "2026-10-31T20:21:56.857Z",codex-agent,"Corrected final-source broad gate passes 146/146 with zero failures/skips/cancellations, including the exact reviewer reproduction and all original accountability/fragment/storage cases. Final c8+composition compatibility cohort passes 57/57; engine/json-strings.ts and engine/representations.ts each measure 100 percent statements/branches/functions/lines. The complete corrected packed matrix passed all 5546 boundaries/474 distinct images with two convergent replays each. The selected lifecycle and Node 22 encoded-state/32-MiB streaming checks are running next. Ten current-source behavioral revert groups are verified; no diagnostic failures, partial runs or cancellations are claimed as passing gates."
+  "2026-10-31T20:24:06.683Z",codex-agent,"Node 22.23.1 corrected-source decoding plus bounded-streaming selection passes 46/46, zero failures/skips/cancellations. The real 32 MiB unrelated corpus retains 1075345 bytes (under the unchanged 8 MiB bound) and observes two reads; no deadline or memory bound is increased. Final lifecycle focus remains active; the complete fragment file is now running as an additional check of the retained memory calibration. Decoder, compatibility, power and revert evidence remain as recorded above."
+  "2026-10-31T20:25:44.946Z",codex-agent,"All corrected final-source focused gates pass: broad erasure/accountability/fragment-repair 146/146; c8 plus native composition compatibility 57/57, with json-strings.ts and representations.ts each 100 statements/branches/functions/lines; complete packed power loss 1/1 over 5546 boundaries/474 distinct full crash images replayed twice; selected lifecycle 42/42 over 35 native cuts (17/722 and 18/934); Node 22 decoding and bounded 32 MiB streaming 46/46 with 1075345 retained bytes and two observed reads; complete fragments 56/56. All ten current-source behavioral mutants fail and restored selections pass. Type/build/test compilation/lint/docstrings/zero duplication/package privacy pass: 92 production files, 574 documented declarations, 328 package files and zero privacy findings. Earlier 135/136 and 142/144 diagnostics, one failed power diagnostic and one cancelled pre-correction matrix are not passing evidence. Native forced-nonce and original directory-race regressions protect the compatibility corrections. All default lifecycle cuts and the 512-seed model remain for CI; final full npm/Bun acceptance and independent review are pending. No installer retries. Finish this final tracker write and release the claim without closure, then changelog, archive, commit, self-host verification at HEAD and push. Subsequent exact-head CI/issue receipts will be external so the archive stays valid."
+files[91]:
   - path: .github/workflows/ci.yml
     scope: project
   - path: composition-commands.ts
@@ -201,6 +209,8 @@ files[90]:
     scope: project
     note: "Publication recovery ordering, retention authority, native power loss and runtime consumers"
   - path: engine/instances.ts
+    scope: project
+  - path: engine/json-strings.ts
     scope: project
   - path: engine/object-error.ts
     scope: project
@@ -374,7 +384,7 @@ files[90]:
   - path: vcs-commands.ts
     scope: project
     note: GC help describes pending native publication retention
-tests[62]:
+tests[66]:
   - command: node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts
     scope: project
     timeout_seconds: 600
@@ -863,6 +873,39 @@ tests[62]:
     provenance:
       author: codex-agent
       created_at: "2026-10-31T18:50:51.881Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node_modules/.bin/c8 --include=engine/json-strings.ts --include=engine/representations.ts --include=engine/erasure-scan.ts --reporter=json --reporter=text --temp-directory=coverage/pr150-json-final-tmp --report-dir=coverage/pr150-json-final node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"decoded persisted|native loose and packed JSON|incremental JSON|streamed decoded|decoded journal|reviewer quoted|hex-encoded native|final descriptor accounting|native bundle bodies|recursive scanner|streaming scanner|native literal reference|erasure retains native destruction|scanner covers every|streamed representation proofs\" test/erasure-storage.test.ts test/erasure-accountability.test.ts"
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T19:38:58.811Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node_modules/.bin/c8 --include=engine/json-strings.ts --include=engine/representations.ts --include=engine/erasure-scan.ts --reporter=json --reporter=text --temp-directory=coverage/pr150-json-end-tmp --report-dir=coverage/pr150-json-end node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"decoded persisted|native loose and packed JSON|incremental JSON|streamed decoded|decoded journal|reviewer quoted|hex-encoded native|final descriptor accounting|native bundle bodies|native journal identities do not|recursive scanner|streaming scanner|native literal reference|erasure retains native destruction|scanner covers every|streamed representation proofs|supported representation inspection|review decoded expansion|review ordinary large|erasing an empty file|proposed audit metadata|affected layers and untracked|recoverable loose-frame wrappers|denial refuses stale fetch\" test/erasure-storage.test.ts test/erasure-accountability.test.ts test/composition.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T20:17:54.499Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"decoded persisted|native loose and packed JSON|incremental JSON|streamed decoded|decoded journal|reviewer quoted|hex-encoded native|final descriptor accounting|native bundle bodies|native journal identities do not|native literal reference|erasure retains native destruction|bounded 32 MiB\" test/erasure-storage.test.ts test/stream-erasure-legacy-fetch-repair.test.ts"
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T20:24:05.522Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+    note: "Executed with Node 22.23.1: 46/46; 32 MiB streaming corpus retained 1075345 bytes and made two observed reads under unchanged bounds."
+  - command: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/fragments.test.ts
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T20:24:05.522Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
 docs[8]{path,scope}:

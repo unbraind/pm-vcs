@@ -138,6 +138,7 @@ function containsSelectedBytes(bytes: Buffer, payloads: readonly ErasureFingerpr
 function containsLiteralBytes(bytes: Buffer, payloads: readonly ErasureFingerprint[]): boolean {
   if (matchesFingerprints(bytes, payloads)) return true;
   const text = bytes.toString("utf8").trim();
+  if (/^(?:[0-9a-f]{2})+$/.test(text) && matchesFingerprints(Buffer.from(text, "hex"), payloads)) return true;
   const decoded = Buffer.from(text, "base64");
   return decoded.toString("base64") === text && containsSelectedBytes(decoded, payloads);
 }
@@ -293,6 +294,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       }
     };
     diagnoseControl();
+    for (const id of inventory.keys()) if (!selected.has(id) && containsLiteralBytes(Buffer.from(id), payloads)) throw new ErasureStorageRefusal("erasure_retained_copy", "verification-metadata");
     for (const instance of instances) {
       const leaseDirectory = join(instance.controlDirectory, "leases");
       if (existsSync(leaseDirectory)) {
@@ -331,6 +333,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
             }
           }
         }
+        const layerPath = join(instance.controlDirectory, "layers.json");
+        if (existsSync(layerPath) && containsSelectedBytes(readFileSync(layerPath), payloads)) throw new ObjectStoreError("erasure_layer_conflict", "Private layer metadata retains selected bytes; remove the copy before retrying.");
         // Inspect observed leaves first, then any absent or excluded owned paths.
         const observed = new Set(listWorkingTree(instance.root, ".pmvcs", { patterns: [], negations: [], runtime: rules.runtime }, true));
         for (const path of new Set([...observed, ...owned])) {
@@ -343,7 +347,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
             throw new ObjectStoreError("worktree_path_changed", "An inspected working-tree leaf disappeared during erasure.");
           }
           if (owned.has(path)) paths.set(path, leaf.stat);
-          else if (containsSelectedBytes(leaf.content, payloads)) {
+          else if (containsSelectedBytes(Buffer.from(JSON.stringify(path)), payloads) || containsSelectedBytes(leaf.content, payloads)) {
             throw new ObjectStoreError("erasure_worktree_conflict", "An unrelated or untracked file retains selected bytes; remove the copy before retrying.");
           }
         }
@@ -378,7 +382,10 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const accountStorage = (strict = false, representations = false): ErasureAccountabilityReport => accountErasureStorage(objectRoots, {
         forbiddenIds: strict ? new Set([...selected, ...store.denials().flatMap(entry => entry.tombstone.objects)]) : new Set(),
         forbiddenPayloads: strict ? new Set([...store.denials().flatMap(entry => entry.tombstone.payloads), ...[...selected].flatMap(id => inventory.has(id) ? [inventory.get(id)!.digest] : [])]) : new Set(),
-        inspection: representations ? (_id, frameBytes, kind) => createErasureInspection(payloads, frameBytes, kind) : undefined,
+        inspection: representations ? (id, frameBytes, kind) => {
+          if (containsLiteralBytes(Buffer.from(id), payloads)) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
+          return createErasureInspection(payloads, frameBytes, kind);
+        } : undefined,
         physical: representations ? (fd, bytes, kind, budget) => inspectErasureFile(fd, bytes, payloads, kind, budget) : undefined,
         purge: purge.canPurge ? (file, remove) => {
           const expected = planned.get(file.path);

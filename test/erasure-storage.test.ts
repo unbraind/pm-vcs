@@ -12,7 +12,10 @@ import { deflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { frameObject, hashObject, OBJECT_TYPES } from "../engine/objects.ts";
-import { ErasureStorageRefusal, erasureScanLimits, erasureScanBoundary, fingerprint, fingerprintJournal, matchesFingerprints, type ErasureFingerprint, readFingerprints, scanErasureStorage } from "../engine/erasure-scan.ts";
+import { ErasureStorageRefusal, erasureScanLimits, erasureScanBoundary, fingerprint, fingerprintJournal, matchesFingerprints, type ErasureFingerprint, readFingerprints, scanErasureStorage, createErasureInspection, inspectErasureRepresentation } from "../engine/erasure-scan.ts";
+import { writePrivateJson } from "../engine/composition.ts";
+import { serializeBundle, parseBundle } from "../engine/bundle.ts";
+import { JsonStrings } from "../engine/json-strings.ts";
 import { inspectRepresentations } from "../engine/representations.ts";
 import { objectFiles } from "../engine/object-files.ts";
 import { verificationLimits } from "../engine/object-error.ts";
@@ -37,6 +40,133 @@ async function fixture(chosen?: Buffer) {
 }
 /** Place arbitrary storage without changing generation markers or acquiring an engine lease. */
 function place(root: string, path: string, bytes: Buffer): string { const file=join(root,path); mkdirSync(dirname(file),{recursive:true}); writeFileSync(file,bytes); return file; }
+
+test("decoded persisted metadata, logs, layer paths and keys cannot retain selected bytes", async t => {
+  for (const where of ["metadata-value", "metadata-key", "metadata-hex-zlib", "metadata-hex-truncated", "operation-log", "lease-audit", "layer-path", "layer-value", "worktree-path", "worktree-json"] as const) await t.test(where, async () => {
+    const payload = 'selected secret "quoted bytes" 937184'; const f = await fixture(Buffer.from(payload));
+    let code = "unsupported_erasure_storage";
+    if (where === "metadata-value") writePrivateJson(join(f.repo.controlDirectory, "remotes.json"), { backup: payload });
+    if (where === "metadata-hex-zlib") writePrivateJson(join(f.repo.controlDirectory, "remotes.json"), { backup: deflateSync(f.bytes).toString("hex") });
+    if (where === "metadata-hex-truncated") writePrivateJson(join(f.repo.controlDirectory, "remotes.json"), { backup: deflateSync(f.bytes).subarray(0, -2).toString("hex") });
+    if (where === "metadata-key") writePrivateJson(join(f.repo.controlDirectory, "remotes.json"), { [payload]: "unrelated metadata" });
+    if (where === "operation-log") f.repo.operations.append("fixture", payload, [], new Date(1));
+    if (where === "lease-audit") place(f.repo.controlDirectory, `leases/${"a".repeat(32)}.jsonl`, Buffer.from(`${JSON.stringify({ note: payload })}\n`));
+    if (where === "layer-path") { writePrivateJson(join(f.repo.controlDirectory, "layers.json"), [{ name: "retained-layer", files: [{ path: payload, content: Buffer.from("unrelated layer bytes").toString("base64"), executable: false }] }]); code = "erasure_layer_conflict"; }
+    if (where === "layer-value") { writePrivateJson(join(f.repo.controlDirectory, "layers.json"), [{ name: "retained-layer", files: [{ path: "unrelated-layer-path", content: Buffer.from(JSON.stringify({ value: payload })).toString("base64"), executable: false }] }]); code = "erasure_layer_conflict"; }
+    if (where === "worktree-json") { writeFileSync(join(f.repo.root, "unrelated.json"), JSON.stringify({ value: payload })); code = "erasure_worktree_conflict"; }
+    if (where === "worktree-path") { writeFileSync(join(f.repo.root, `prefix-${payload}-suffix`), "unrelated worktree bytes"); code = "erasure_worktree_conflict"; }
+    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "decoded-metadata", new Date(1)), { code });
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+  });
+});
+
+test("native bundle bodies and headers do not hide decoded retained bytes", async t => {
+  for (const where of ["body", "header"] as const) await t.test(where, async () => {
+    const payload = 'selected secret "quoted bytes" 937184'; const f = await fixture(Buffer.from(payload));
+    const id = f.repo.objects.write("blob", Buffer.from(JSON.stringify({ value: payload })));
+    const bytes = serializeBundle(f.repo.objects, { refs: where === "header" ? { [payload]: id } : {}, prerequisites: [], objects: where === "body" ? [id] : [] }, false);
+    parseBundle(bytes); // Native framing, object hashes and base64 payloads remain independently valid.
+    const native = [...f.repo.objects.inventory()].find(entry => entry.id === id)!; rmSync(native.path);
+    writeFileSync(join(f.repo.root, "retained.bundle"), bytes);
+    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "decoded-bundle", new Date(1)), { code: "erasure_worktree_conflict" });
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+  });
+});
+
+test("final descriptor accounting rejects a late native identity that decodes to selected bytes", async () => {
+  const peer = Buffer.from("late native retained identity peer 193847"); const id = hashObject("blob", peer);
+  const f = await fixture(Buffer.from(id, "hex")); const path = join(f.repo.objects.storageRoot(), id.slice(0, 2), id.slice(2)); let injected = false;
+  erasureScanBoundary.visit = step => { if (step === "completed" && !injected) { injected = true; place(f.repo.objects.storageRoot(), `${id.slice(0, 2)}/${id.slice(2)}`, deflateSync(frameObject("blob", peer))); } };
+  assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "late-hex-identity", new Date(1)), { code: "erasure_retained_copy" });
+  assert.equal(injected, true); assert.equal(f.repo.objects.denials()[0].pending, true);
+  erasureScanBoundary.visit = () => {}; rmSync(path);
+  assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "late-hex-identity", new Date(1)).storage.accountable, true);
+});
+
+test("hex-encoded native identities in refs and loose or pack inventories cannot retain selected bytes", async t => {
+  const peer = Buffer.from("native retained identity peer 193847"); const id = hashObject("blob", peer);
+  for (const where of ["loose", "pack", "ref"] as const) await t.test(where, async () => {
+    const f = await fixture(Buffer.from(id, "hex")); assert.equal(f.repo.objects.write("blob", peer), id);
+    if (where === "pack") f.repo.objects.compact();
+    if (where === "ref") f.repo.refs.compareAndSwap("refs/metadata/hexidentity", null, id);
+    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "hex-identity", new Date(1)), { code: where === "ref" ? "unsupported_erasure_storage" : "erasure_retained_copy" });
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+  });
+});
+
+test("native loose and packed JSON, hex and composite payload copies refuse after decoding", async t => {
+  const payload = Buffer.from('selected secret "quoted bytes" 937184');
+  for (const encoding of ["json-value", "json-key", "hex", "hex-zlib", "base64-json", "json-base64"] as const) for (const packed of [false, true]) await t.test(`${encoding}/${packed}`, async () => {
+    const f = await fixture(payload);
+    const json = Buffer.from(JSON.stringify({ value: payload.toString() }));
+    const bytes = encoding === "json-value" ? json : encoding === "json-key" ? Buffer.from(JSON.stringify({ [payload.toString()]: 1 })) : encoding === "hex" ? Buffer.from(payload.toString("hex")) : encoding === "hex-zlib" ? Buffer.from(deflateSync(payload).toString("hex")) : encoding === "base64-json" ? Buffer.from(json.toString("base64")) : Buffer.from(JSON.stringify({ encoded: payload.toString("base64") }));
+    f.repo.objects.write("blob", bytes); if (packed) f.repo.objects.compact();
+    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "decoded-object", new Date(1)), { code: "erasure_retained_copy" });
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), payload); assert.equal(f.repo.objects.denials().length, 0);
+  });
+});
+
+test("incremental JSON strings agree with native parsing for every escape and UTF-16 edge", () => {
+  const tokens = ['""', JSON.stringify("\b\f\n\r\t/\\\""), String.raw`"\/"`, String.raw`"\ud83d\ude00"`, String.raw`"\ud83d\u0041"`, String.raw`"\ud83dx"`, String.raw`"\ud83d\n"`, String.raw`"\ud83d"`, String.raw`"\udc00"`, JSON.stringify("a".repeat(9000))];
+  for (const token of tokens) {
+    const pieces: Buffer[] = []; let ended = 0; const decoder = new JsonStrings(bytes => pieces.push(Buffer.from(bytes)), () => { ended++; });
+    for (const byte of Buffer.from(token)) decoder.feed(Buffer.from([byte])); decoder.finish();
+    assert.deepEqual(Buffer.concat(pieces), Buffer.from(JSON.parse(token) as string), token.slice(0, 50)); assert.equal(ended, 1);
+    const whole: Buffer[] = []; let largest = 0; const together = new JsonStrings(bytes => { largest = Math.max(largest, bytes.length); whole.push(Buffer.from(bytes)); }, () => {});
+    together.feed(Buffer.from(token)); together.finish(); assert.deepEqual(Buffer.concat(whole), Buffer.from(JSON.parse(token) as string)); assert.ok(largest <= 4096);
+  }
+  for (const token of ['"\\q"', '"\\u0x"', '"incomplete\\u0', '"interrupted', '"raw\ncontrol']) {
+    let ended = 0; const decoder = new JsonStrings(() => {}, () => { ended++; }); decoder.feed(Buffer.from(token)); decoder.finish(); assert.ok(ended >= 1);
+  }
+  const selected = Buffer.from("bounded selected decoder payload 193847");
+  inspectErasureRepresentation(Buffer.from(JSON.stringify({ unrelated: "native must-allow metadata 80" })), [fingerprint(selected)]);
+  for (const bytes of [Buffer.from(JSON.stringify({ value: selected.toString() })), Buffer.from(deflateSync(selected).toString("hex")), Buffer.from(deflateSync(selected).subarray(0, -2).toString("hex"))]) assert.equal(inspectRepresentations(bytes, candidate => candidate.includes(selected)), true);
+  assert.throws(() => inspectRepresentations(Buffer.from(JSON.stringify({ value: deflateSync(Buffer.alloc(4096)).toString("hex") })), () => false, 6, 64), { code: "uninspectable_payload" });
+  const large = Buffer.from(`${"z".repeat(65_536)}${selected.toString()}`);
+  assert.equal(inspectRepresentations(Buffer.from(deflateSync(large).toString("hex")), candidate => candidate.includes(selected)), true);
+  const escaped = Buffer.from(JSON.stringify({ value: `${"x".repeat(4090)}selected "quoted" payload` }));
+  assert.throws(() => inspectErasureRepresentation(escaped, [fingerprint(Buffer.from('selected "quoted" payload'))]), { code: "erasure_retained_copy" });
+});
+
+test("streamed decoded strings preserve escapes, Unicode and encoding state across every split", () => {
+  for (const payload of ['selected "quoted" payload', "selected \\backslash\\ payload", "selected \u0001\u0007 controls", "selected café 雪 😀 payload"]) {
+    const bytes = Buffer.from(JSON.stringify({ [payload]: { value: payload } }).replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`));
+    for (let split = 0; split <= bytes.length; split++) {
+      const inspection = createErasureInspection([fingerprint(Buffer.from(payload))], bytes.length);
+      try { inspection.feed(bytes.subarray(0, split)); inspection.feed(bytes.subarray(split)); assert.throws(() => inspection.finish(), { code: "erasure_retained_copy" }); } finally { inspection.close(); }
+    }
+    const hex = Buffer.from(deflateSync(Buffer.from(payload)).toString("hex"));
+    for (let split = 0; split <= hex.length; split++) { const inspection = createErasureInspection([fingerprint(Buffer.from(payload))], hex.length); try { inspection.feed(hex.subarray(0, split)); inspection.feed(hex.subarray(split)); assert.throws(() => inspection.finish(), { code: "erasure_retained_copy" }); } finally { inspection.close(); } }
+  }
+});
+
+test("decoded journal strings refuse every escaped retained payload before erasure", async t => {
+  for (const [kind, payload, contained] of [
+    ["quotes", 'selected secret "quoted bytes" 937184', false],
+    ["backslashes", "selected secret \\backslash\\ bytes 937184", false],
+    ["controls", "selected secret \u0001\u0007 bytes 937184", false],
+    ["unicode", "selected secret café 雪 😀 937184", false],
+    ["unicode-literal", "selected secret café 雪 😀 937184", false],
+    ["containing-path", 'selected secret "quoted bytes" 937184', true],
+  ] as const) await t.test(kind, async () => {
+    const f = await fixture(Buffer.from(payload));
+    const path = join(f.repo.root, contained ? `prefix-${payload}-suffix` : payload); writeFileSync(path, "unrelated native journal candidate");
+    f.repo.objects.withWriteLock(() => { const plan = prepareDestruction(f.repo.controlDirectory, "escaped-retention", [{ path }]); for (const target of plan.paths) plan.remove(target); plan.finish(); });
+    const ledger = join(f.repo.controlDirectory, "destruction"); const journal = readdirSync(ledger).find(name => name.endsWith(".json"))!; const record = readFileSync(join(ledger, journal), "utf8");
+    if (kind === "unicode") writeFileSync(join(ledger, journal), record.replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`));
+    const bytes = readFileSync(join(ledger, journal)); assert.equal(bytes.includes(f.bytes), kind === "unicode-literal");
+    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "escaped-retention", new Date(1)), { code: "unsupported_erasure_storage" });
+    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+  });
+});
+
+test("reviewer quoted filename and contents never leave a successful physical receipt", async () => {
+  const payload = 'selected secret "quoted bytes" 937184'; const f = await fixture(Buffer.from(payload));
+  fs.renameSync(join(f.repo.root, "asset"), join(f.repo.root, payload)); f.repo.stage([payload]);
+  const fileId = f.repo.readIndex().find(entry => entry.path === payload)!.fileId!;
+  assert.throws(() => f.repo.obliterate(fileId, "erase-fixture", "reviewer-quoted", new Date(1)), { code: "unsupported_erasure_storage" });
+  assert.deepEqual(readFileSync(join(f.repo.root, payload)), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+});
 
 test("erasure refuses unknown control-directory bytes and kinds before deleting anything", async () => {
   for (const mode of ["destruction-backup", "destruction-directory", "destruction-link", "destruction-json", "destruction-progress", "destruction-owner", "destruction-empty-canonical", "destruction-foreign-empty-stage", "destruction-bad-stage", "destruction-bad-pid", "refs-backup", "refs-link", "refs-lock", "refs-native-directory", "file-directory", "directory-file"] as const) {
@@ -81,9 +211,18 @@ test("erasure accepts sparse native control and regular native reference tempora
   }
 });
 
+test("native journal identities do not promote new codec guesses into declared streams", async () => {
+  const f = await fixture(Buffer.from("selected native codec ancestry payload 193847")); const randomBytes = crypto.randomBytes;
+  mock.method(crypto, "randomBytes", ((size: number) => size === 16 ? Buffer.from("654a7a2f000000000000000000000000", "hex") : randomBytes(size)) as typeof crypto.randomBytes); syncBuiltinESMExports();
+  try { f.repo.objects.withWriteLock(() => { const path = join(f.repo.root, "ordinary-journal-candidate"); writeFileSync(path, "unrelated native candidate"); const plan = prepareDestruction(f.repo.controlDirectory, "codec-ancestry-compatibility", [{ path }]); for (const target of plan.paths) plan.remove(target); plan.finish(); }); }
+  finally { mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "native-codec-ancestry", new Date(1)).storage.accountable, true);
+});
+
 test("native literal reference identities do not become compressed payload candidates", async () => {
   const f = await fixture(Buffer.from("selected literal ref payload 918263")); const peer = Buffer.from("native ref literal 38");
   const id = f.repo.objects.write("blob", peer); assert.match(id, /^80/);
+  writeFileSync(join(f.repo.root, "peer"), peer); f.repo.stage(["peer"]);
   f.repo.refs.compareAndSwap("refs/metadata/literal", null, id);
   assert.equal(f.repo.refs.read("refs/metadata/literal"), id);
   assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "literal-native-ref", new Date(1)).storage.accountable, true);

@@ -1,5 +1,9 @@
 # PR 150 erasure review repair
 
+The latest repair closes the escaped-JSON retention finding from the re-review
+of `6dfc776`. Its representation-class audit and final validation are below; the
+earlier ownership and physical-copy repairs remain documented as baseline evidence.
+
 The independent Codex review of `f4d4cf6` blocked on two reproducible erasure
 defects. The main merge `d2c4768` and archive regeneration `f4d4cf6` are retained.
 
@@ -92,7 +96,7 @@ backing-store-sweep calibration passed on Node 22 and Node 26, including its
 whole-file-allocation negative control. That diagnostic run is not a passing
 release gate.
 
-## Focused validation
+## Focused validation for 6dfc776
 
 All focused commands use an isolated child environment and owned scratch, with
 one test worker per command and at most two active test workers.
@@ -143,3 +147,106 @@ native cuts passed, with no assertion failure reported; it is not a passing gate
 That model took 1,499,756 ms in the earlier full diagnostic run. The intended
 focused command above excludes it locally, while CI retains it unchanged.
 The original branch-coverage fault file also passes 15/15 on the final source.
+
+## Decoded-state re-review of 6dfc776
+
+The reviewer reproduced a completed receipt while the escaped destruction path
+retained `selected secret "quoted bytes" 937184`. Raw JSON text is not its string
+value. Every declared encoding must be decoded before comparing selected bytes.
+
+`JsonStrings` now shares one bounded UTF-8/UTF-16 JSON string decoder between
+materialized and streaming inspection. It visits keys as well as values, handles
+all JSON escapes and surrogate pairs across input slots, and never joins adjacent
+strings. Existing strict destruction-record parsing and classification still run
+before semantic inspection. Hex words receive both byte alignments; decoded JSON,
+hex, base64, loose frames and zlib compose under the existing depth, work, context
+and time bounds. Raw inspection remains mandatory. New speculative codec guesses
+inside literal strings or decoded hex do not classify random native identifiers
+as compressed documents. Every recoverable output byte participates even if a
+new literal/hex codec guess later fails; incomplete declared raw/base64 streams
+retain their existing refusals. Decode-budget exhaustion always refuses. Existing raw/base64 codec refusals remain strict.
+
+| Persisted location | Native interpretation and audit verdict |
+| --- | --- |
+| Destruction current records, archives, owners and nonempty stages | Shared native decoder validates complete JSON schemas, names, kinds and identities. The representation scanner additionally visits every decoded JSON key/value, including escaped paths. Unknown storage still refuses before deletion. |
+| Destruction progress | Fixed binary magic, intent ID, entry count, SHA-256 binding and outcome bytes are verified. It contains no arbitrary string fields. Raw bytes are checked; the textual ID is also covered by its mandatory linked JSON intent. The existing checksum must-allow and raw-retention must-refuse cases remain. |
+| Purge receipts and fingerprint journal | Existing schema/checksum parsers retain authority. Shared JSON/hex/base64 inspection now covers decoded file/root fields, keys, digests and proposed audit bytes before mutation. |
+| Operation log and lease audits | JSONL records participate in the same semantic string scan. Sequence/command/summary/ref fields and audit keys cannot hide selected bytes behind JSON escapes. |
+| Index, config, HEAD, identity, authority, remotes, instance/link/view/dirty metadata and native control stages | Index JSON tuples, ordinary JSON records and native text retain their existing readers. All regular control bytes participate in materialized semantic inspection; verified PIDs retain their literal policy. Control-first inspection preserves the existing typed ref refusal. |
+| Private layers | Content was already base64-decoded and inspected. The audit found path/name/key metadata omitted with the `layers.json` exception; the full layer document now participates after existing content/ownership checks, preserving `erasure_layer_conflict`. |
+| Refs and native ref temporaries | Existing names, ObjectId values, pinned descriptors and namespace fences remain. Raw and canonical base64 bytes are checked; binary identity bytes decoded from canonical hex are now checked too. |
+| Loose and packed object identities | Every retained inventory ID is checked as literal and decoded hexadecimal bytes before deletion, and again in final descriptor-scoped accountability. A selected payload equal to a peer's binary identity refuses. |
+| Pack index and length-prefixed members | `PackStorage.index` validates exact four-field tuples: ordered IDs, contiguous offsets, positive lengths and fixed types; there are no arbitrary user-string fields. IDs receive the check above. Native range/framing/zlib decoding supplies every member to the streaming semantic scanner. Final physical raw inspection and checksum/identity barriers remain. |
+| Native payloads: tree, record, commit, manifest, conflict, tombstone and blobs | Every retained canonical frame is inspected after native decompression, both in preflight and final accounting. JSON-backed names/keys/values now decode before comparison; legacy raw names and messages retain raw inspection. Hex/base64/compressed composites also participate. |
+| Worktree files, link text and private bundle files | Existing content inspection now decodes JSON and hex too. Unowned filenames additionally participate, since a retained path can itself reveal the payload. Existing `erasure_worktree_conflict` is preserved. Protected tool artifacts retain their explicit scope boundary. |
+| Bundle header/body and admission | Native bundle parsing validates framing, object hashes and base64 members. A retained bundle is inspected as worktree content, including JSON header keys and recursively decoded body objects. Existing arrival digest/closure/attribution checks use the same expanded materialized decoder; their authority rules are unchanged. |
+
+Regression corpora cover the exact reviewer case, backslashes, `\u0001` and
+`\u0007`, literal and escaped non-ASCII text, surrogate pairs, and a containing
+path. They also cover native journal history, metadata keys, operation logs,
+lease audits, layer paths/content, filenames, loose/packed JSON and composite
+copies, binary IDs and native bundle headers/body. Each refuses while preserving
+the selected asset and leaving denial unpublished. Must-allow cases retain native
+ref literals, progress checksums, ordinary decoded values and every existing
+classification guard. Incremental cases exercise every input split and bounded
+4096-byte output slots against native JSON parsing.
+
+The decoded-state round has nine additional isolated behavioral reversion groups:
+
+| Reversion | Observed regression | Restored selection |
+| --- | --- | --- |
+| Remove materialized JSON string inspection | The reviewer's quoted-name case unexpectedly completes. | 1/1 |
+| Remove streaming JSON decoding | Retained JSON values/keys and composites escape native-object inspection. | 13/13 |
+| Remove streaming hex decoding | Hex and hex/compression copies escape native-object inspection. | 13/13 |
+| Remove full layer-document inspection | A selected value remains recoverable from a layer path. | 11/11 |
+| Remove retained filename inspection | A selected value remains in an unowned filename. | 11/11 |
+| Remove literal hex identity inspection | Native loose/pack/ref identities retain the selected binary bytes. | 4/4 |
+| Remove preflight identity inspection | Final verification refuses only after deleting the asset. | 4/4 |
+| Remove final descriptor identity inspection | A late native identity gets a completed receipt. | 1/1 |
+| Discard output when a newly decoded codec guess errors | Truncated hex/zlib metadata retains the recoverable selected prefix. | 11/11 |
+
+All failures are behavioral, not syntax or compilation failures. Each original
+is restored in `finally` before its passing selection and disposable-copy removal.
+The broader first diagnostic was 135/136 with one changed-refusal-priority failure;
+that priority is repaired. An earlier packed diagnostic refused at a journal guard
+for one crash image. A targeted current-source replay passes 25 nearby images;
+only the subsequent complete final-source matrix can count as a passing gate.
+
+Compatibility diagnostics found two additional ordering/interpretation details.
+New codec guesses derived from a decoded JSON/hex value must retain that origin
+through descendants: an incidental nested base64/zlib prefix in a native nonce
+is not a declared compressed document. Every recoverable prefix still participates
+and every original raw/base64 refusal stays strict. A native writer forced to
+produce nonce `654a7a2f000000000000000000000000` proves this must-allow case;
+reverting origin propagation fails, restoring it passes 1/1. This is the tenth
+isolated reversion group in the decoded-state round.
+
+The new logical identity check runs after the original post-scan control guard,
+so a directory replacement at a scan boundary keeps the established
+`unsupported_erasure_storage` refusal. Control checks and native ref priority
+remain intact. The corrected compatibility selection passes 14/14, including the
+protected tool boundary, ref literals/refusals, ID checks and journal races.
+The 142/144 diagnostic before these corrections is not a passing gate. One
+pre-correction power rerun was cancelled; its partial progress is not certification.
+
+## Decoded-state final validation
+
+| Gate on the corrected implementation | Result |
+| --- | --- |
+| PM-linked erasure/accountability/fragment-repair focus | 146/146, zero failures, skips or cancellations |
+| PM-linked JSON/codec and composition compatibility c8 cohort | 57/57; `json-strings.ts` and `representations.ts` each 100% statements, branches, functions and lines |
+| Complete packed power-loss matrix | 1/1; 5,546 native boundaries, 474 distinct complete crash images, two successful replays each |
+| PM-linked lifecycle focus | 42/42; 17/722 retired-instance and 18/934 interrupted-unpack native cuts |
+| Node 22 decoded-state and bounded streaming selection | 46/46; 32 MiB corpus retained 1,075,345 bytes and made two observed reads under unchanged bounds |
+| Complete fragment suite | 56/56, including retained whole-file-allocation and backing-store calibration assertions |
+| Ten isolated behavioral reversion groups | Every mutant fails; every restored selection passes |
+| Static/build/test compilation/docstrings | Passed; 92 production files, 574 documented declarations, zero duplicated lines |
+| Actual package privacy inspection | 328 files scanned, zero findings |
+
+Each test command uses one worker; at most two test workers run concurrently.
+The exact linked commands and outcomes are retained on `pm-vcs-phase6packs`.
+Every default lifecycle cut and the separate 512-seed model remain enabled in CI;
+local selection does not certify the complete lifecycle domain. Full npm/Bun release
+acceptance and fresh independent Codex review remain pending on the pushed head.
+No installer was retried. Tracker writes finish before changelog/archive generation;
+committed self-host verification and pushed-head CI receipts are reported on the PR.
