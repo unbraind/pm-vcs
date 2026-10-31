@@ -265,16 +265,16 @@ a denied FileId fail preflight before storing bytes or moving refs.
 The guarantee covers application-visible loose storage and known shared worktrees;
 it excludes external backups, independently owned clones, filesystem snapshots and
 physical-media recovery. The filesystem operator must exclude concurrent direct edits
-outside pm-vcs. There is no genuine pack backend: unknown storage is a refusal, never
-a successful erasure. Payload-only resumable upload batches refuse after erasure
+outside pm-vcs. Loose objects and indexed packs must be fully accountable; unknown
+storage refuses unless explicitly purged with a receipt and re-verification. Payload-only resumable upload batches refuse after erasure
 because that protocol carries no FileId provenance. Direct `ObjectStore.write` calls
 must then supply a non-denied FileId for new blob/record/manifest payloads.
 
-Physical erasure inspects retained loose-object copies, including raw frames,
-zlib and base64 wrappers, before publishing denial. Supported encodings exceeding
-bounded inspection cause refusal. Windows erasure refuses before deletion because
-Node cannot provide directory fsync; ordinary metadata uses fsynced atomic replacement
-with that directory-durability limit. See the shipped
+Physical erasure verifies every regular object-store file as a complete native
+representation and rechecks descriptor/pathname identity before completion.
+Fingerprint scans provide extra diagnostics. Windows uses file fsync plus
+synchronous namespace acknowledgment with a weaker power-loss guarantee than POSIX
+directory fsync. See the shipped
 [composition and erasure design](docs/links-layers-obliteration.md) for exact bounds.
 
 Engine APIs live in `engine/repo.ts`: `identity`, `setAuthority`, `stageLink`, `links`,
@@ -319,6 +319,55 @@ candidate; manual `skip` is also available. The final report names the first bad
 stable change and its provenance, or reports ambiguity when unresolved candidates
 could contain the regression. Start, per-change results, halts and the verdict
 are recorded as evidence on the item. See [the full bisect contract](docs/bisect.md).
+
+## Indexed pack storage
+
+Destructive operations validate the complete request before recording an exact
+deletion set. Crashes retain recoverable receipts; recovery never adds fresh
+files to an old set. Inspect bounded TOON/JSON status with
+`pm vcs destructive-receipts --json`. See [destructive operation receipts](docs/destructive-operations.md)
+for recovery, typed SDK refusals and the engine path audit.
+
+Pending native ref, detached HEAD, index, merge-state, audit and upload-pin
+publications also retain their object roots during GC. Conditional updates recover
+all destinations before checking the new predicate, under the store and namespace
+leases. A recovered peer value returns `ref_changed`/`head_changed` rather than
+being silently overwritten. See [publication recovery](docs/destructive-operations.md)
+for missing-target cancellation and bounded verification.
+
+`pm vcs compact` durably replaces loose objects with bounded indexed packs.
+SHA-256 identities still name the uncompressed typed frame, so refs, bundles,
+manifest ranges and upload pins keep the same addresses. Independently compressed
+members permit verified reads of a single range without decompressing a whole pack.
+The command returns compact TOON by default; add `--json` for JSON counts, physical
+bytes and explicit skip reasons (at most 20, with exact omission counts). It works in a plain tracker without Git.
+
+```sh
+pm vcs compact --json
+pm vcs verify
+pm vcs gc                 # preview reachability-based collection
+pm vcs gc --apply
+```
+
+The SDK exposes `ObjectStore.compact(): PackReport` and typed `PackRefusal`
+errors with `code` and `remedy`. Publication and retirement use the existing
+shared store lease. An interrupted writer requires `pm vcs recover-lock` before
+retrying; the retry removes only owned staging jobs and converges without
+changing object addresses. Unknown records are skipped and reported. Pack
+corruption refuses retirement and collection. Objects over the 16 MiB packing
+bound remain loose. Authorized erasure first materializes verified loose copies
+and retires every pack, then applies the existing permanent denial and physical
+deletion proof. GC rewrites packed survivors when collecting packed members.
+
+Relative SDK storage roots are bound when the handle is constructed; compaction,
+reads and recovery keep using that store after a working-directory change.
+
+See the [format, recovery and SDK example](docs/indexed-packs.md).
+
+Pack and loose reads share a generation protocol with up to eight resolution attempts. Streams
+retain an open representation through unpack/repack, and authorized denials stop
+subsequent output. The [pack storage guide](docs/indexed-packs.md#concurrent-readers-and-platform-durability)
+describes Windows durability and the real non-git GC acceptance test.
 
 ## Without git
 
@@ -800,6 +849,17 @@ sources, untested branches, forbidden syntax, short clones and hostile configura
 closed. It also invokes the operational scripts directly. `release:check` includes lint,
 duplication, docstrings and coverage; `prepublishOnly` requires that complete release gate.
 
+Every test entrypoint installs the session allowlist before importing the SDK. Test
+children select operational environment keys with `testEnvironment()` and supply
+agent identity only as an explicit fixture override; ambient Claude Code, Codex,
+`AI_AGENT` and `PM_AGENT_*` state cannot change provenance. Parent V8 instrumentation
+is retained in the allowlist for production tools; disposable fixtures explicitly
+disable child coverage. A real tool regression checks that instrumentation reaches
+the child. The environment regression runs the
+three provenance cases in clean and contaminated sessions and audits every child
+launch. Annotation fixtures settle their owned tasks, children and watchers before
+retry-bounded recursive removal; persistent teardown failures remain test failures.
+
 `pack:check` also runs in `release:check`. It packs without lifecycle scripts (the
 release gate builds first), scans every archive member's name and contents for private
 paths and credential-shaped strings, and reports categories and line numbers without
@@ -1015,6 +1075,32 @@ signature and requires explicit signing again. Wall-clock expiry, package/backen
 freshness and review approval remain separate policies. Keep receiver
 administration trusted and retain the core history alongside native bundles for
 independent receipt auditing.
+
+Indexed-pack and loose readers close owned descriptors before returning or
+finishing iteration, including early consumer cancellation. Streaming reads use
+a bounded synchronous decoder; see the [descriptor ownership contract](docs/indexed-packs.md#descriptor-ownership)
+and its per-operation, low-descriptor-limit regression checks.
+
+Obliteration certifies only fully accountable object storage: every regular file
+must be a complete native loose object or checksummed pack, and no accounted
+object may have an erased identity or payload. Foreign, renamed or partial files
+return `unverifiable`, even when no payload signature matches. Explicit
+`pm vcs obliterate <file-id> --purge-unaccounted` removes exactly the selected
+unaccounted files with an identity-bound receipt, then re-verifies. See
+[physical erasure verification](docs/indexed-packs.md#physical-erasure-verification)
+for authorization, bounded retries and SDK examples.
+
+Completed purge receipts remain valid audit history after an instance or pack is
+removed. Pending root-bound authority is cancelled with a typed reason when its
+root disappears or is recreated; a clean current store can then be certified.
+
+Verification refuses incomplete evidence. SDK errors carry `status: "unverified"`
+and a named `bound`; integrity and receipt reports carry an overall `verification`
+verdict independently of output pagination. Decode errors and exhausted work
+bounds cannot certify erasure, integrity, reachability or assurance receipts.
+An interrupted GC plan supersedes its former deletion authority when current
+reachability protects a recorded candidate, then publishes a fresh exact set.
+See the [destructive operation protocol](docs/destructive-operations.md).
 
 Every workflow job granted write permissions, including CodeQL, Dependabot and
 reusable workflow calls, requires the exact repository `unbraind/pm-vcs`.

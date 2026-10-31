@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real child heap ceiling rejects behaviorally correct full-list materialization. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -29,7 +31,7 @@ for (const format of ["v1", "paged"] as const) {
     for (const operation of ["read", "range"]) {
       const destination = join(dir.root, operation);
       const result = spawnSync(process.execPath, ["--max-old-space-size=48", "--expose-gc", join(packageRoot, "test/helpers/manifest-memory-worker.ts"), root, id, operation, destination, String(count)],
-        { env: { ...process.env }, encoding: "utf8", timeout: 600_000, maxBuffer: 1 << 20 });
+        { env: { ...testEnvironment() }, encoding: "utf8", timeout: 600_000, maxBuffer: 1 << 20 });
       assert.equal(result.status, 0, `${format} ${operation}: ${result.signal ?? result.error ?? "nonzero exit"}; ${result.stderr.slice(-5000)}`);
       const measurement = JSON.parse(readFileSync(destination + ".measurement.json", "utf8")) as { maximumHeap: number; samples: number };
       assert.equal(measurement.samples, 1); assert.ok(measurement.maximumHeap < 48 * 1024 * 1024);

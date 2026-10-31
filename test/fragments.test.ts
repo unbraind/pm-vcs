@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // Fragment and range storage tests.
 //
 // A file must never have to be resident in memory to be stored, read, or
@@ -389,7 +390,8 @@ function peakSamplingStore(root: string): {
     // garbage a streaming loop leaves behind rather than what it holds live —
     // for a 512-fragment read that reads as ~10 MB for a 2 MB file. Forcing a
     // collection makes each sample reflect live memory, which is the property
-    // under test.
+    // under test. Test commands also disable concurrent backing-store sweeping:
+    // a major GC alone can return before those unreachable stores are retired.
     global.gc?.();
     const now = bufferBytes();
     if (now > peak) peak = now;
@@ -407,9 +409,38 @@ function peakSamplingStore(root: string): {
   return { store, peak: () => peak, resetPeak: () => { peak = 0; } };
 }
 
+test("in-flight buffer samples exclude unreachable backing stores and include retained payloads", () => {
+  const { root } = freshStore();
+  const { store, peak, resetPeak } = peakSamplingStore(root);
+  const totalSize = 4096 * 128;
+  const bound = totalSize / 4;
+  /** Leave backing stores unreachable before the next native storage sample. */
+  const discardBuffers = (): void => {
+    const buffers = Array.from({ length: 32 }, () => Buffer.allocUnsafeSlow(totalSize));
+    assert.equal(buffers.length, 32);
+  };
+  // A synchronous GC can still delegate backing-store reclamation to another
+  // thread. Test commands disable that concurrent sweep: otherwise this
+  // counter measures unreachable storage as well as the live streaming data.
+  for (let round = 0; round < 30; round++) {
+    global.gc?.();
+    const baseline = bufferBytes();
+    resetPeak();
+    discardBuffers();
+    store.write("blob", Buffer.from("sampling calibration"));
+    assert.ok(peak() - baseline < bound, "unreachable backing stores must not count as live buffers");
+  }
+  global.gc?.();
+  const baseline = bufferBytes();
+  resetPeak();
+  const retained = Buffer.alloc(totalSize, 0xfe);
+  store.write("blob", retained);
+  assert.ok(peak() - baseline >= retained.length, "a retained whole-file payload must exceed the streaming bound");
+});
+
 test("writing a file larger than any single buffer never holds more than a fragment in memory", () => {
   const { root } = freshStore();
-  // The source is 512x the fragment size (2 MiB), far larger than any single
+  // The source is 128x the fragment size (512 KiB), far larger than any single
   // buffer a streaming implementation allocates.
   const fragmentSize = 4096;
   const fileMultiplier = 128;
@@ -591,11 +622,13 @@ test("decodeManifest rejects a missing total header", () => {
 });
 
 test("decodeManifest rejects a wrong format marker", () => {
-  const payload = Buffer.from(`pm-vcs-manifest 2\ntotal 0\n`, "utf8");
-  assert.throws(
-    () => decodeManifest(payload),
-    (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object",
-  );
+  for (const version of [2, 99]) {
+    const payload = Buffer.from(`pm-vcs-manifest ${version}\ntotal 0\n`, "utf8");
+    assert.throws(
+      () => decodeManifest(payload),
+      (error: unknown) => error instanceof ObjectStoreError && error.code === "malformed_object",
+    );
+  }
 });
 
 test("decodeManifest rejects a fragment line with the wrong field count", () => {

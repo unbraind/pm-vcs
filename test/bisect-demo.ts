@@ -1,3 +1,4 @@
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Reproduce bisect against 34 committed snapshots of a public package tracker. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -7,11 +8,11 @@ import { join, resolve } from "node:path";
 import { PmClient, runTest } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { effectiveChangeId, readCommit, readTree } from "../engine/model.ts";
-import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { installPackedExtension, pmExecutable } from "../scripts/pm-environment.ts";
 
 const source = resolve(process.argv[2]);
 const destination = resolve(process.argv[3]);
-const commits = execFileSync("git", ["-C", source, "log", "-34", "--format=%H", "--", ".agents/pm"], { encoding: "utf8" }).trim().split("\n").reverse();
+const commits = execFileSync("git", ["-C", source, "log", "-34", "--format=%H", "--", ".agents/pm"], { env: testEnvironment(), encoding: "utf8" }).trim().split("\n").reverse();
 assert.equal(commits.length, 34);
 const root = mkdtempSync(join(tmpdir(), "pm-vcs-public-bisect-"));
 const previousWorkspace = process.env.PM_SOURCE_WORKSPACE_ROOT;
@@ -30,8 +31,8 @@ try {
     const copy = join(root, "public-tracker");
     rmSync(copy, { recursive: true, force: true });
     mkdirSync(copy);
-    const archive = execFileSync("git", ["-C", source, "archive", commit, ".agents/pm"], { maxBuffer: 32 * 1024 * 1024 });
-    execFileSync("tar", ["-x", "--strip-components=2", "-C", copy], { input: archive });
+    const archive = execFileSync("git", ["-C", source, "archive", commit, ".agents/pm"], { env: testEnvironment(), maxBuffer: 32 * 1024 * 1024 });
+    execFileSync("tar", ["-x", "--strip-components=2", "-C", copy], { env: testEnvironment(), input: archive });
     if (index === 17) writeFileSync(join(root, "regression.flag"), "deliberate reproducer introduced with public snapshot 18\n");
     writeFileSync(join(root, "source-revision.txt"), `${commit}\n`);
     repository.stage([]);
@@ -45,7 +46,7 @@ try {
   }
   assert.ok(publicTrees.size >= 30, "at least 30 distinct public tracker trees must be imported");
   installPackedExtension(root);
-  const environment = { ...withoutPmContext(process.env), PM_SOURCE_WORKSPACE_ROOT: root, PM_AUTHOR: "demo-agent" };
+  const environment = { ...testEnvironment(), PM_SOURCE_WORKSPACE_ROOT: root, PM_AUTHOR: "demo-agent" };
   const run = (args: string[]) => execFileSync(process.execPath, [pmExecutable, "--author", "demo-agent", ...args], { cwd: root, env: environment, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
   run(["vcs", "bisect", "start", imported[0], imported[33], "--item", item, "--json"]);
   const result = JSON.parse(run(["vcs", "bisect", "run", "--json", "--full"])) as { bisect: { verdict: { commit: string; change: string }; steps: { by: string }[] } };

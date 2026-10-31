@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real writer transactions, batch arrivals and native failure receipts. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -105,7 +107,7 @@ for (const kind of writers) {
     const leaf = repo.objects.write("blob", bytes, owner.fileId);
     const standalone = { totalLength: bytes.length, fragments: [{ id: leaf, length: bytes.length }] };
     const signal = join(directory.root, "start"); const attempted = join(directory.root, "attempted"); const result = join(directory.root, "result");
-    const child = spawn(process.execPath, [join(packageRoot, "test/helpers/writer-erasure-worker.ts"), repo.root, signal, attempted, result], { env: { ...process.env, ...discardChildCoverage() }, stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 });
+    const child = spawn(process.execPath, [join(packageRoot, "test/helpers/writer-erasure-worker.ts"), repo.root, signal, attempted, result], { env: { ...testEnvironment(), ...discardChildCoverage() }, stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 });
     let errors = ""; child.stderr.on("data", chunk => { errors += String(chunk); });
     const closed = once(child, "close");
     try {
@@ -223,7 +225,7 @@ test("upload partial native failure records no failed-batch acceptance and retry
   const blocked = join(repo.controlDirectory, "objects", second.id.slice(0, 2), second.id.slice(2)); mkdirSync(blocked, { recursive: true });
   const rename = fs.renameSync; let native: unknown;
   mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => { try { return rename(...args); } catch (error) { native = error; throw error; } }); syncBuiltinESMExports();
-  await assert.rejects(transport.uploadObjects([first, second]), error => error === native && error instanceof Error);
+  await assert.rejects(transport.uploadObjects([first, second]), error => error instanceof Error && "code" in error && error.code === "EISDIR"); assert.equal(native, undefined, "a known directory destination must refuse before native rename");
   assert.equal(repo.objects.has(first.id), true); assert.equal(repo.objects.has(second.id), false); assert.equal(lease(repo), undefined);
   assert.deepEqual((await transport.publish([], false, new Date())).added, [earlier.id], "a failed native batch leaked optimistic arrival IDs into a publication receipt");
   mock.restoreAll(); syncBuiltinESMExports(); rmSync(blocked, { recursive: true });

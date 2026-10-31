@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import { grantRemoteLeases } from "./helpers/publication-consumers.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";

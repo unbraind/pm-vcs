@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import { exportBundle } from "../engine/bundle.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
 /** Multi-process socket publication and real PM TOON record convergence acceptance. */
@@ -12,7 +14,7 @@ import { Repository } from "../engine/repo.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
 import { acquirePublicationLeases, leasedPushTo as pushTo } from "./helpers/publication-consumers.ts";
 import { startRepositoryServer } from "../engine/serve.ts";
-import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { pmExecutable } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
@@ -31,7 +33,7 @@ async function preparePusher(root: string, url: string, branch: string): Promise
   const repository = Repository.open(root);
   const refs = ["refs/heads/main", "refs/heads/agent-a", "refs/heads/agent-b"];
   const proofs = await acquirePublicationLeases(new HttpTransport(url), refs.map(ref => ({ ref, expected: null, next: repository.resolve(branch) })), exportBundle(repository.objects, repository.refs, [`refs/heads/${branch}`]));
-  const worker = fork(join(packageRoot, "test/helpers/push-worker.ts"), [root, url, branch, JSON.stringify(proofs)], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  const worker = fork(join(packageRoot, "test/helpers/push-worker.ts"), [root, url, branch, JSON.stringify(proofs)], { env: testEnvironment(), stdio: ["ignore", "ignore", "inherit", "ipc"] });
   const ready = new Promise<void>((resolveReady, rejectReady) => {
     worker.on("error", rejectReady);
     worker.once("exit", (code) => rejectReady(new Error(`pusher exited ${code} before readiness`)));
@@ -84,7 +86,7 @@ test("two real processes race on one branch and both land on different branches"
 function pm(root: string, args: string[]): Record<string, unknown> {
   const result = spawnSync(process.execPath, [pmExecutable, ...args, "--json"], {
     cwd: root, encoding: "utf8", timeout: 120_000,
-    env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "acceptance" },
+    env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "acceptance" },
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout) as Record<string, unknown>;

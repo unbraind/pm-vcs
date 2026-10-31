@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Semantic validation on actual core trackers, immutable native snapshots and receiver publication. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -8,6 +10,7 @@ import { afterEach, test } from "node:test";
 import { PmClient, createAssuranceWorkspaceContext, evaluateAssuranceGate, recordAssuranceVerdict, type AssuranceDocument, type AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { attachCheckpoint, checkpointClaims, CheckpointRefusal, createSemanticCheckpoint, inspectCheckpoints, loadCheckpointReceipt, parseCheckpointPolicy, parseCheckpointRequest, parseCheckpointRequirement, updateCheckpointPolicy, CHECKPOINT_POLICY_FILE, type CheckpointRequest } from "../index.ts";
+import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
 import { assertCheckpointPublication, readCheckpointPolicy } from "../engine/checkpoints.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { decodeCommit, encodeCommit, encodeRecord, effectiveChangeId, readCommit, writeCommit, type Commit, type Signature } from "../engine/model.ts";
@@ -18,7 +21,7 @@ import { startRepositoryServer } from "../engine/serve.ts";
 import { signChange, verifyChangeSignature } from "../engine/signatures.ts";
 import { LeasedFileTransport, LeasedHttpTransport } from "./helpers/publication-consumers.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
-import { withoutPmContext, installPackedExtension } from "../scripts/pm-environment.ts";
+import { installPackedExtension } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 
 const owned: ReturnType<typeof makeTempDir>[] = [];
@@ -321,7 +324,7 @@ test("installed CLI attaches and inspects JSON and TOON in a non-git tracker wit
   const input = join(root, "checkpoint.json"); writeFileSync(input, JSON.stringify(request));
   installPackedExtension(root);
   const cli = join(packageRoot, "node_modules/@unbrained/pm-cli/dist/cli.js");
-  const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(root), PM_AUTHOR: "fixture" };
+  const env = { ...testEnvironment(), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(root), PM_AUTHOR: "fixture" };
   const run = (args: string[]) => execFileSync(process.execPath, [cli, ...args], { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const attached = JSON.parse(run(["vcs", "checkpoint", "attach", "HEAD", "--input", "checkpoint.json", "--json"])) as { ok: boolean };
   assert.equal(attached.ok, true);
@@ -389,4 +392,12 @@ for (const http of [false, true]) test(`native ${http ? "HTTP" : "file"} forge s
     assert.deepEqual(receiver.refs.list("refs/forge-review/"), []);
     assert.deepEqual(receiver.operations.read(), []);
   } finally { await server?.close(); }
+});
+
+
+test("a capped assurance history refuses even when the selected receipt is present",async()=>{
+ const f=await fixture();const before=verificationLimits.checkpointRecords;
+ try {verificationLimits.checkpointRecords=1;await assert.rejects(()=>loadCheckpointReceipt(f.pmRoot,f.request),error=>error instanceof VerificationRefusal&&error.status==="unverified"&&error.bound==="receipt_count");}
+ finally {Object.assign(verificationLimits,{checkpointRecords:before});}
+ assert.deepEqual(await loadCheckpointReceipt(f.pmRoot,f.request),f.verdict);
 });

@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import { createServer } from "node:http";
 import { HttpTransport } from "../engine/http-transport.ts";
 import { FileTransport } from "../engine/transport.ts";
@@ -143,10 +144,10 @@ test("legacy streaming validates all canonical lines including unused metadata a
   }
 });
 
-test("object stream deadline refuses a real unready decompression worker and cleans it up", () => {
+test("object stream deadline refuses an expired synchronous decode step and cleans it up", () => {
   const { dir } = fixture(); const path = join(dir.root, "stream");
   writeFileSync(path, deflateSync(Buffer.from("blob 1\0x")));
-  assert.throws(() => [...objectPayloadChunks(path, hashObject("blob", Buffer.from("x")), "blob", 1)], { code: "object_stream_timeout" });
+  assert.throws(() => [...objectPayloadChunks(path, hashObject("blob", Buffer.from("x")), "blob", 0)], { code: "object_stream_timeout" });
 });
 
 

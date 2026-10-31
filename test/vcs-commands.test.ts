@@ -1,7 +1,8 @@
+import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { after, test } from "node:test";
+import { after, mock, test } from "node:test";
 
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -66,7 +67,7 @@ function freshRepoDir(): { root: string; cleanup(): void } {
 const COMMANDS = [
   "vcs init", "vcs status", "vcs add", "vcs commit", "vcs log", "vcs diff",
   "vcs branch", "vcs switch", "vcs merge", "vcs resolve", "vcs undo", "vcs oplog",
-  "vcs export", "vcs import", "vcs tag", "vcs verify", "vcs gc",
+  "vcs export", "vcs import", "vcs tag", "vcs verify", "vcs gc", "vcs compact",
   "vcs remote", "vcs fetch", "vcs lease", "vcs push", "vcs clone",
   "vcs describe", "vcs rebase", "vcs squash", "vcs split",
   "vcs cherry-pick", "vcs revert", "vcs reset", "vcs restore", "vcs show",
@@ -76,14 +77,14 @@ const COMMANDS = [
   "vcs git preflight", "vcs git preview", "vcs git items",
 ];
 
-test("activation registers all 47 commands with no sibling dropped", async () => {
+test("activation registers all 48 commands with no sibling dropped", async () => {
   const harness = await activate();
   // A registration rejected by the loader aborts at that command and silently
   // drops every later sibling, so asserting each one's contract is the invariant.
   for (const command of COMMANDS) {
     harness.assertCommandContract({ command });
   }
-  assert.equal(COMMANDS.length, 47);
+  assert.equal(COMMANDS.length, 48);
 });
 
 test("native commands validate PM associations and resolve linked file changes", async () => {
@@ -495,4 +496,11 @@ test("vcs verify reports corruption when an object is tampered with", async () =
 
   const verify = await harness.runCommand({ command: "vcs verify", pmRoot: root });
   assert.ok(verify.errorMessage !== undefined || verify.handled === false);
+});
+
+
+test("verify command refuses a legacy unverified result even when its reason and failure rows are absent",async()=>{
+ const {root}=freshRepoDir();const harness=await activate();await harness.runCommand({command:"vcs init",pmRoot:root});const original=Repository.prototype.verify;
+ mock.method(Repository.prototype,"verify",function(this:Repository){return {...original.call(this),verification:{status:"unverified" as const,verifier:"integrity"}};});
+ try{const result=await harness.runCommand({command:"vcs verify",pmRoot:root});assert.match(result.errorMessage??"",/unverified: integrity\/decode_error/u);}finally{mock.restoreAll();}
 });

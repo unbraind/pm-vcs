@@ -154,9 +154,12 @@ by importing another archive, even into an empty repository. Fresh clones adopt
 the source identity before their first explicit identity creation. Self-host archives without repository metadata
 remain deterministic.
 
-The supported erasure backend is the loose zlib store. Unknown storage entries,
-pack/cache directories and unverifiable temporary copies refuse before mutation.
-Recognized loose temporary objects participate in inventory and cleanup. Denial
+The supported erasure backend accounts for complete loose zlib objects and indexed
+packs. Every regular object-store file must parse completely; foreign, renamed,
+partial and old temporary files return `unverifiable`. Explicit `--purge-unaccounted`
+authorizes identity-bound deletion with a receipt and complete re-verification;
+see [accountability and purge](indexed-packs.md#physical-erasure-verification).
+Denial
 is persisted and fsynced before removing bytes; interrupted cleanup blocks writes
 until authorized retry succeeds. FileId provenance is mandatory for new local
 payload writes once denial exists. Complete bundle imports preflight attribution;
@@ -254,11 +257,11 @@ Direct hostile filesystem mutation and writers bypassing the store lease are out
 the authorized application protocol. Operators must remove ambiguous retained copies
 explicitly before retrying; the engine never silently deletes an unrelated FileId.
 
-Physical erasure requires file and directory fsync. On Windows, Node cannot provide
-the required directory-flush guarantee, so erasure raises `unsupported_durability`
-before persisting denial or deleting bytes. Ordinary private metadata uses fsynced
-files and atomic replacement, plus directory fsync on supported systems; Windows
-metadata has the stated directory-durability limit. A pending denial survives cleanup
+Physical erasure uses the shared durability helper: files are fsynced before
+publication and directories after namespace changes where supported. Windows uses
+synchronous namespace acknowledgment after file fsync, with the documented weaker
+power-loss guarantee; see [platform durability](indexed-packs.md#concurrent-readers-and-platform-durability).
+A pending denial survives cleanup
 failure and refuses reads/publication until explicit authorized recovery. A crashed
 writer lease can be recovered with `vcs recover-lock`, without erasure credentials
 or payload deletion. New leases publish fsynced PID metadata with an atomic hard

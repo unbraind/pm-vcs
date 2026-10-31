@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Real durable-denial no-op transfers and immutable audit integrity regressions. */
 import assert from "node:assert/strict";
 import fs, { lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";

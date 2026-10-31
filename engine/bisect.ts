@@ -1,7 +1,10 @@
+import { prepareNamespaceDestruction } from "./destruction.ts";
+import { durability } from "./durability.ts";
+import { writePrivateJson } from "./composition.ts";
 /** Durable bisect sessions over stable change identities, driven by a recorded PM test. */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { collectCommitObjects } from "./bundle.ts";
@@ -181,15 +184,17 @@ export function writeBisectSession(repository: Repository, session: BisectSessio
   const temporary = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     writeFileSync(temporary, `${JSON.stringify(session)}\n`, { flag: "wx" });
-    renameSync(temporary, target);
+    durability.rename(temporary, target);
   } finally {
-    rmSync(temporary, { force: true });
+    durability.remove(temporary, { force: true });
   }
 }
 
 /** Remove a process receipt only when its owner is provably dead; unknown owners refuse recovery. */
 function recoverOwner(path: string): void {
-  if (!existsSync(path)) return;
+  const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  if (observed === undefined) return;
+  if (!observed.isFile()) throw new ObjectStoreError("bisect_locked", "Unknown bisect lock owner; inspect its namespace entry before recovery.");
   const pid = Number(readFileSync(path, "utf8"));
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new ObjectStoreError("bisect_locked", "Unknown bisect lock owner; inspect the private process receipt before recovery.");
   try {
@@ -198,7 +203,7 @@ function recoverOwner(path: string): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
-  rmSync(path);
+  durability.unlinkOwner(path, observed);
 }
 
 /** Refuse to remove a candidate directory while an orphaned SDK test process still uses it. */
@@ -209,19 +214,22 @@ export function recoverBisectWorker(repository: Repository): void {
 /** Serialize asynchronous bisect mutations; only a proven dead process permits automatic recovery. */
 export async function withBisectLease<T>(repository: Repository, action: () => Promise<T>): Promise<T> {
   const path = join(repository.controlDirectory, "BISECT_LOCK");
-  repository.objects.withWriteLock(() => {
-    recoverOwner(path);
-    writeFileSync(path, String(process.pid), { flag: "wx", mode: 0o600 });
+  const lease = repository.objects.withWriteLock(() => {
+    const current = lstatSync(path, { throwIfNoEntry: false });
+    // Released versions wrote decimal PID markers; retain their dead-owner recovery.
+    if (current?.isFile() && /^[0-9]+$/.test(readFileSync(path, "utf8"))) recoverOwner(path);
+    return durability.claim(path, "bisect_locked");
   });
-  try { return await action(); }
-  finally { rmSync(path); }
+  try { lease.verify(); return await action(); }
+  finally { lease.release(); }
 }
 
 /** Removes the session state, concluding or abandoning the walk. */
 export function clearBisectSession(repository: Repository): void {
   recoverBisectWorker(repository);
-  rmSync(statePath(repository), { force: true });
-  rmSync(join(repository.controlDirectory, "BISECT_WORKSPACE"), { recursive: true, force: true });
+  const plan = prepareNamespaceDestruction(statePath(repository), "bisect-reset", [{ path: statePath(repository) }, { path: join(repository.controlDirectory, "BISECT_WORKSPACE"), recursive: true }], false, "eligibility_changed");
+  for (const path of plan.paths) plan.remove(path);
+  plan.finish();
 }
 
 /** Ancestry is private to one candidate array and released with that walk. */
@@ -482,7 +490,7 @@ export async function runBisect(
       current = { ...current, pending: selected };
       writeBisectSession(repository, current);
       const workspaceRoot = join(repository.controlDirectory, "BISECT_WORKSPACE");
-      rmSync(workspaceRoot, { recursive: true, force: true });
+      durability.remove(workspaceRoot, { recursive: true, force: true });
       mkdirSync(workspaceRoot);
       const workspace = mkdtempSync(join(workspaceRoot, "candidate-"));
       let outcome: BisectRunOutcome | { readonly outcome: "conflicted"; readonly detail: string };
@@ -496,15 +504,21 @@ export async function runBisect(
             const scratch = Repository.init(workspace);
             const closure = collectCommitObjects(repository.objects, [selected.commit]);
             scratch.objects.accept([...closure].map((id) => ({ id, ...repository.objects.read(id) })), false);
+            // Only this candidate tree is copied; its deliberately absent parents
+            // form a native shallow boundary, shared with publication validation.
+            writePrivateJson(join(scratch.controlDirectory, "partial.json"), { remote: "bisect-source", shallow: [selected.commit], promised: [] });
             scratch.switchTo(selected.commit, options.now());
           } catch (error) {
             if (!(error instanceof ObjectStoreError)) throw error;
-            materializationError = `candidate could not be materialized: ${error.code}`;
+            // Publication now detects missing dependencies before checkout. Keep
+            // the persisted bisect outcome compatible with the same older miss.
+            const code = error.code === "publication_unverified" && error.bound === "missing_object" ? "object_not_found" : error.code;
+            materializationError = `candidate could not be materialized: ${code}`;
           }
           outcome = materializationError === undefined ? await runner(selected, workspace) : { outcome: "untestable", detail: materializationError };
         }
       } finally {
-        rmSync(workspaceRoot, { recursive: true, force: true });
+        durability.remove(workspaceRoot, { recursive: true, force: true });
       }
       const interrupted = signalled || ("interrupted" in outcome && outcome.interrupted === true);
       current = withStep({ ...current, pending: undefined }, { ...selected, outcome: interrupted ? "untestable" : outcome.outcome,

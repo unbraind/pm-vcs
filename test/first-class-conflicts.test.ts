@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Recorded disagreements remain live data through ordinary work, transfer, bounded history and explicit resolution. */
 import assert from "node:assert/strict";
 import { deflateSync } from "node:zlib";
@@ -22,7 +24,7 @@ import { cloneFrom, fetchFrom } from "../engine/sync.ts";
 import { exportBundle, importBundle, serializeBundle } from "../engine/bundle.ts";
 import { hashObject, ObjectStore, type ObjectId, type ObjectType } from "../engine/objects.ts";
 import { traceFile } from "../engine/attribution.ts";
-import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { installPackedExtension, pmExecutable } from "../scripts/pm-environment.ts";
 import { assertArrivalsAllowed } from "../engine/lifecycle.ts";
 import { LeasedFileTransport, leasedPushTo } from "./helpers/publication-consumers.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -101,7 +103,7 @@ test("real PM worktrees: two PM_AUTHOR identities keep working, a third resolves
   repo.linkInstance("agent-a", join(parent, "agent-a")); repo.linkInstance("agent-b", join(parent, "agent-b"));
   const a = Repository.open(join(parent, "agent-a")); const b = Repository.open(join(parent, "agent-b"));
   const pm = (repository: Repository, identity: string, args: string[]) => execFileSync(join(packageRoot, "node_modules/.bin/pm"), ["--no-extensions", "--json", ...args],
-    { cwd: repository.root, env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: identity }, encoding: "utf8" });
+    { cwd: repository.root, env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: identity }, encoding: "utf8" });
   pm(a, "agent-a", ["update", item, "--status", "in_progress", "--description", "Independent description"]);
   a.stage([]); a.commit({ message: "agent a", author: { ...author, name: "agent-a" } }, now);
   pm(b, "agent-b", ["update", item, "--status", "blocked", "--blocked-reason", "Review pending", "--priority", "1"]);
@@ -403,7 +405,7 @@ test("packed CLI resolves literal empty strings, spaces and EOF newlines through
   for (const [path, value, expected] of rawResolutionCases) {
     repo.reset(head, "hard", now);
     const result = JSON.parse(execFileSync(process.execPath, [pmExecutable, "--json", "vcs", "resolve", path, "--value", value], {
-      cwd: repo.root, env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "consumer-agent" },
+      cwd: repo.root, env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "consumer-agent" },
       encoding: "utf8", timeout: 120_000,
     }));
     assert.equal(result.ok, true);
@@ -590,7 +592,7 @@ test("packed CLI prints one unit per TOON/JSON row and Bun reads the same confli
   }
   repo.stage([]); repo.commit({ message: "install consumer extension", author }, now);
   const pm = (args: string[], executable = process.execPath) => execFileSync(executable, [pmExecutable, ...args], {
-    cwd: repo.root, env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: "consumer-agent" }, encoding: "utf8", timeout: 120_000,
+    cwd: repo.root, env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "consumer-agent" }, encoding: "utf8", timeout: 120_000,
   });
   const merge = JSON.parse(pm(["--json", "vcs", "merge", "other", "--record-conflicts"]));
   assert.equal(merge.ok, true); assert.equal(merge.merge.kind, "merged");
@@ -781,12 +783,14 @@ test("owned writer PID bytes cannot masquerade as zlib, while raw matches and fo
         assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /Control metadata retains selected payload/);
         assert.deepEqual(readFileSync(join(repo.root, "secret")), secret); assert.equal(repo.objects.denials().length, 0);
       } else {
-        repo.objects.withWriteLock(() => {
+        assert.throws(() => repo.objects.withWriteLock(() => {
           const lock = join(repo.controlDirectory, "objects.lock"); const owner = readFileSync(lock);
           writeFileSync(lock, deflateSync(secret));
           try { assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /Control metadata retains selected payload/); }
           finally { writeFileSync(lock, owner); }
-        });
+        }), { code: "worktree_path_changed" });
+        assert.equal(readFileSync(join(repo.controlDirectory, "objects.lock"), "utf8"), String(pid));
+        rmSync(join(repo.controlDirectory, "objects.lock"));
         writeFileSync(join(repo.controlDirectory, "dirty.json"), String(pid));
         assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /zlib data/);
         rmSync(join(repo.controlDirectory, "dirty.json"));

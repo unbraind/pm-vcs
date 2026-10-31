@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real-process forge acceptance, authorization, field convergence and receiver lease fences. */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -24,7 +26,7 @@ import { startRepositoryServer, TokenGrants } from "../engine/serve.ts";
 import { writeFragmented } from "../engine/fragments.ts";
 import { createSandbox } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
-import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { pmExecutable } from "../scripts/pm-environment.ts";
 
 const author = { name: "Agent", email: "agent@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
 const principal = { principal: "agent-a", breakLeases: false };
@@ -46,7 +48,7 @@ async function serverProcess(root: string) {
     { token: "token-reader", repository: "tenant-a", access: "read", principal: "reader" },
     { token: "token-b", repository: "tenant-b", access: "write", principal: "agent-b" },
   ]));
-  const worker = spawn(process.execPath, [join(packageRoot, "test/helpers/serve-worker.ts"), root, "127.0.0.1:0", auth], { cwd: packageRoot, stdio: ["ignore", "pipe", "inherit"] });
+  const worker = spawn(process.execPath, [join(packageRoot, "test/helpers/serve-worker.ts"), root, "127.0.0.1:0", auth], { env: testEnvironment(), cwd: packageRoot, stdio: ["ignore", "pipe", "inherit"] });
   const port = await new Promise<number>((ready, reject) => {
     let text = "";
     const timeout = setTimeout(() => reject(new Error("serve readiness timeout")), 30_000);
@@ -241,7 +243,7 @@ test("installed pm vcs commands propose fetch apply rederive review and land thr
     symlinkSync(join(packageRoot, "node_modules"), join(extensionRoot, "node_modules"), "junction");
     /** Invoke the repository-pinned host and real extension; all requests use the real HTTP process. */
     const cli = (args: string[]) => {
-      const result = spawnSync(process.execPath, [pmExecutable, "vcs", ...args, "--json"], { cwd: sandbox.root, env: { ...withoutPmContext(process.env), PM_VCS_TOKEN: "token-a" }, encoding: "utf8", timeout: 60_000 });
+      const result = spawnSync(process.execPath, [pmExecutable, "vcs", ...args, "--json"], { cwd: sandbox.root, env: { ...testEnvironment(), PM_VCS_TOKEN: "token-a" }, encoding: "utf8", timeout: 60_000 });
       assert.equal(result.status, 0, result.stderr + result.stdout); return JSON.parse(result.stdout) as RecordDocument;
     };
     const fileId = sender.readIndex()[0]!.fileId!;

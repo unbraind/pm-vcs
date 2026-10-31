@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // Command-surface behaviour at the edges of each handler.
 //
 // The main command test drives the happy path end to end. These cover the

@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Shared between-step race scenarios plus Linux descriptor-pinned syscall-boundary protection. */
 import assert from "node:assert/strict";
 import fs, { existsSync, mkdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -10,6 +11,8 @@ import { writeCommit, type Signature } from "../engine/model.ts";
 import { ObjectStoreError, type ObjectStore } from "../engine/objects.ts";
 import { Repository } from "../engine/repo.ts";
 import { buildTree, materializeTree } from "../engine/worktree.ts";
+import { destructionBoundary } from "../engine/destruction.ts";
+import { durability } from "../engine/durability.ts";
 import { WorktreeMutation, worktreeMutationCapabilities } from "../engine/worktree-mutation.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
@@ -17,7 +20,15 @@ let betweenSteps = false;
 let fixture: ReturnType<typeof makeTempDir> | undefined;
 const author: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
 
+/** Restrict syscall injection to leaf descriptor lifetimes; receipt and lease descriptors are independent operations. */
+function watchLeaf(): (fd: number) => boolean {
+  const open = fs.openSync; const stat = fs.fstatSync; const handles = new Map<number, { dev: bigint; ino: bigint }>();
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => { const fd = open(...args); if (String(args[0]).split(/[\\/]/).at(-1) === "leaf.txt") { const value = stat(fd, { bigint: true }); handles.set(fd, { dev: value.dev, ino: value.ino }); } return fd; });
+  return fd => { const expected = handles.get(fd); if (expected === undefined) return false; const value = stat(fd, { bigint: true }); return value.dev === expected.dev && value.ino === expected.ino; };
+}
+
 afterEach(() => {
+  destructionBoundary.visit = () => {};
   mock.restoreAll();
   syncBuiltinESMExports();
   fixture?.cleanup();
@@ -44,15 +55,20 @@ function setup(control: boolean = false): { repo: Repository; destination: strin
 }
 
 /** Hook both descriptor-safe syscalls and their old pathname equivalents for behavioral revert proofs. */
-function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: string, swap: () => void, erasure = false, observation = 0): () => boolean {
+function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: string, swap: () => void | boolean, erasure = false, observation = 0): () => boolean {
   let swapped = false;
   const trigger = (path: unknown): void => {
     if (!swapped && typeof path === "string" && path.endsWith(`/${leaf}`)) {
       swapped = true;
-      swap();
+      if (swap() === false) swapped = false;
     }
   };
   if (betweenSteps) {
+    let mutationDepth = 0;
+    const writeMutation = WorktreeMutation.prototype.write; const removeMutation = WorktreeMutation.prototype.remove; const pruneMutation = WorktreeMutation.prototype.prune;
+    mock.method(WorktreeMutation.prototype, "write", function (this: WorktreeMutation, ...args: Parameters<WorktreeMutation["write"]>) { mutationDepth++; try { return writeMutation.apply(this, args); } finally { mutationDepth--; } });
+    mock.method(WorktreeMutation.prototype, "remove", function (this: WorktreeMutation, ...args: Parameters<WorktreeMutation["remove"]>) { mutationDepth++; try { return removeMutation.apply(this, args); } finally { mutationDepth--; } });
+    mock.method(WorktreeMutation.prototype, "prune", function (this: WorktreeMutation, ...args: Parameters<WorktreeMutation["prune"]>) { mutationDepth++; try { return pruneMutation.apply(this, args); } finally { mutationDepth--; } });
     const lstat = fs.lstatSync;
     let observations = 0;
     let pruning = false;
@@ -65,15 +81,16 @@ function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: strin
       });
     }
     mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => {
-      if (String(args[0]).endsWith(`/${leaf}`)) {
+      if ((erasure || mutationDepth > 0) && String(args[0]).endsWith(`/${leaf}`)) {
         observations += 1;
         // Unlink's second observation (first with a retained erasure identity), open's post-unlink absence observation,
         // mkdir's first missing-child observation, or rmdir's repeated child check; an explicit observation overrides the calibration.
         const boundary = observation > 0 ? observation : operation === "unlink" ? (erasure ? 1 : 2) : operation === "open" ? 3 : 1;
-        if (operation === "rmdir" ? pruning : observations === boundary) trigger(args[0]);
+        if (operation === "rmdir" ? pruning : observations >= boundary) trigger(args[0]);
       }
       return lstat(...args);
     });
+    syncBuiltinESMExports();
     return () => swapped;
   }
   if (operation === "open") {
@@ -166,7 +183,8 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
                 repo.stage([path]);
                 repo.commit({ message: "selected identity", author }, new Date(1000));
               }
-              const replaceAncestor = (): void => {
+              const replaceAncestor = (): void | boolean => {
+                if (fs.lstatSync(join(repo.root, "branch"), { throwIfNoEntry: false }) === undefined) return false;
                 renameSync(join(repo.root, "branch"), join(repo.root, "parked"));
                 symlinkSync(destination, join(repo.root, "branch"), "dir");
               };
@@ -177,7 +195,7 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
                 const record = repo.objects.recordDenials;
                 mock.method(repo.objects, "recordDenials", (...args: Parameters<ObjectStore["recordDenials"]>) => {
                   record.apply(repo.objects, args);
-                  swapped = intercept(operation, "leaf.txt", replaceAncestor, true);
+                  if (swapped === undefined) swapped = intercept(operation, "leaf.txt", replaceAncestor, true);
                 });
               } else swapped = intercept(operation, operation === "mkdir" ? "new" : "leaf.txt", replaceAncestor);
               assert.throws(() => {
@@ -356,6 +374,7 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
         const mutation = new WorktreeMutation(repo.root, ".pmvcs");
         const unlink = fs.unlinkSync;
         mock.method(fs, "unlinkSync", (path: fs.PathLike) => {
+          if (!String(path).endsWith("leaf.txt")) return unlink(path);
           unlink(path);
           mkdirSync(path);
           writeFileSync(join(String(path), "sentinel"), "concurrent\n");
@@ -377,10 +396,10 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
             if (boundary === "chmod") symlinkSync(join(destination, "leaf.txt"), join(repo.root, "branch/leaf.txt"));
           };
           if (boundary === "fstat") {
-            const fstat = fs.fstatSync;
+            const fstat = fs.fstatSync; const ownedLeaf = watchLeaf();
             mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => {
               const stat = fstat(...args);
-              if (!swapped && stat.isFile()) swap();
+              if (!swapped && stat.isFile() && ownedLeaf(args[0])) swap();
               return stat;
             });
           } else {
@@ -398,10 +417,10 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
         for (const replacement of ["ancestor", "leaf"] as const) {
           test(`${operation} refuses a ${replacement} symlink swap and preserves its outside target`, () => {
             const { repo, destination, tip } = setup();
-            const original = fs[operation];
+            const original = fs[operation]; const ownedLeaf = watchLeaf();
             let swapped = false;
             mock.method(fs, operation, (...args: Parameters<typeof original>) => {
-              if (typeof args[0] === "number" && !swapped) {
+              if (typeof args[0] === "number" && !swapped && ownedLeaf(args[0])) {
                 swapped = true;
                 const path = replacement === "ancestor" ? join(repo.root, "branch") : join(repo.root, "branch/leaf.txt");
                 renameSync(path, `${path}-parked`);
@@ -532,7 +551,7 @@ test("platform capability probes select paths without directory descriptors or n
   const open = fs.openSync;
   let directoryOpens = 0;
   mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
-    if (typeof args[1] === "number" && (args[1] & fs.constants.O_CREAT) === 0) {
+    if (typeof args[1] === "number" && (args[1] & fs.constants.O_CREAT) === 0 && fs.statSync(args[0]).isDirectory()) {
       directoryOpens += 1;
       throw new Error("directory descriptors unavailable");
     }
@@ -586,4 +605,45 @@ test("store lock cleanup preserves a foreign lock and the original root-mutation
   });
   assert.throws(() => repo.restore(["branch/leaf.txt"], tip), { code: "worktree_path_changed" });
   assert.equal(readFileSync(join(destination, ".pmvcs/objects.lock"), "utf8"), "foreign owner");
+});
+
+
+test("erasure plans refuse a missing captured parent and map planning races to the public worktree refusal", () => {
+ for(const duringPlanning of [false,true]){
+  const {repo,destination}=setup();const leaf=join(repo.root,"branch/leaf.txt");const expected=fs.lstatSync(leaf,{bigint:true});
+  if(!duringPlanning)renameSync(join(repo.root,"branch"),join(repo.root,"parked"));
+  const mutation=new WorktreeMutation(repo.root,".pmvcs");let changed=false;
+  if(duringPlanning)destructionBoundary.visit=step=>{if(step==="owner-published"&&!changed){changed=true;renameSync(join(repo.root,"branch"),join(repo.root,"parked"));symlinkSync(destination,join(repo.root,"branch"),"dir");}};
+  try{assert.throws(()=>mutation.planErasure("a".repeat(32),new Map([["branch/leaf.txt",expected]])),{code:"worktree_path_changed"});}finally{destructionBoundary.visit=()=>{};mutation.close();}
+  assert.equal(readFileSync(join(destination,"leaf.txt"),"utf8"),"sentinel\n");fixture!.cleanup();fixture=undefined;
+ }
+});
+
+test("a prune receipt failure preserves completed deletions and the public worktree refusal", () => {
+ const {repo}=setup();const mutation=new WorktreeMutation(repo.root,".pmvcs");
+ try{mutation.write("fresh/deep/temporary",Buffer.from("owned"),0o600);mutation.remove("fresh/deep/temporary");destructionBoundary.visit=step=>{if(step==="receipt-persisted")throw new Error("receipt acknowledgment interrupted");};assert.throws(()=>mutation.prune(),{code:"worktree_path_changed"});assert.equal(readFileSync(join(repo.root,"branch/leaf.txt"),"utf8"),"sentinel\n");}finally{destructionBoundary.visit=()=>{};mutation.close();}
+});
+
+
+test("erasure removal errors retain a replayable plan and the public worktree refusal", () => {
+ const {repo}=setup();const mutation=new WorktreeMutation(repo.root,".pmvcs");
+ try{const expected=fs.lstatSync(join(repo.root,"branch/leaf.txt"),{bigint:true});const plan=mutation.planErasure("b".repeat(32),new Map([["branch/leaf.txt",expected]]));destructionBoundary.visit=step=>{if(step==="before-delete")throw new Error("retirement interrupted");};assert.throws(()=>plan.remove(plan.paths[0]),{code:"worktree_path_changed"});destructionBoundary.visit=()=>{};plan.remove(plan.paths[0]);assert.equal(plan.finish().deleted,1);}finally{destructionBoundary.visit=()=>{};mutation.close();}
+});
+
+
+test("a prune planning race preserves foreign directories and the public worktree refusal", () => {
+ const {repo,destination}=setup();const mutation=new WorktreeMutation(repo.root,".pmvcs");let changed=false;
+ try{mutation.write("fresh/deep/temporary",Buffer.from("owned"),0o600);mutation.remove("fresh/deep/temporary");destructionBoundary.visit=step=>{if(step==="owner-published"&&!changed){changed=true;renameSync(join(repo.root,"fresh"),join(repo.root,"parked"));symlinkSync(destination,join(repo.root,"fresh"),"dir");}};assert.throws(()=>mutation.prune(),{code:"worktree_path_changed"});assert.ok(changed);assert.equal(readFileSync(join(destination,"leaf.txt"),"utf8"),"sentinel\n");}finally{destructionBoundary.visit=()=>{};mutation.close();}
+});
+
+test("a leaf arriving after completed retirement is preserved by the final worktree check", () => {
+  const {repo}=setup(); const mutation=new WorktreeMutation(repo.root,".pmvcs"); const unlink=durability.unlink; let arrived=false;
+  mock.method(durability,"unlink",(...args:Parameters<typeof durability.unlink>)=>{const receipt=unlink(...args);if(args[0].endsWith("/leaf.txt")){writeFileSync(args[0],"peer arrival");arrived=true;}return receipt;});
+  try { assert.throws(()=>mutation.remove("branch/leaf.txt"),{code:"worktree_path_changed"});assert.ok(arrived);assert.equal(readFileSync(join(repo.root,"branch/leaf.txt"),"utf8"),"peer arrival"); } finally { mutation.close(); }
+});
+
+test("a pending prune resumes its retired directories without capturing new arrivals", () => {
+  const {repo}=setup(); const first=new WorktreeMutation(repo.root,".pmvcs"); let interrupted=false;
+  try { first.write("fresh/deep/temporary",Buffer.from("owned"),0o600);first.remove("fresh/deep/temporary");destructionBoundary.visit=(step,path)=>{if(step==="progress-persisted"&&path.endsWith("/fresh")){interrupted=true;throw new Error("prune acknowledgment interrupted");}};assert.throws(()=>first.prune(),{code:"worktree_path_changed"});assert.ok(interrupted); } finally { destructionBoundary.visit=()=>{};first.close(); }
+  const next=new WorktreeMutation(repo.root,".pmvcs");try { assert.equal(next.prune(),false);assert.equal(existsSync(join(repo.root,"fresh")),false);assert.equal(readFileSync(join(repo.root,"branch/leaf.txt"),"utf8"),"sentinel\n"); } finally { next.close(); }
 });

@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Capability contracts on real native repositories and SDK-created, non-Git trackers. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -12,11 +14,12 @@ import { parseBundle, serializeBundle } from "../engine/bundle.ts";
 import { canonicalRecordValue, encodeCommit, encodeManifest, encodeTree, readCommit, type RecordValue, type Signature, type TreeEntry } from "../engine/model.ts";
 import { encodeConflict } from "../engine/conflicts.ts";
 import { Repository } from "../engine/repo.ts";
+import { reachableObjects } from "../engine/reachability.ts";
 import { keyFingerprint, publicKeyText } from "../engine/signatures.ts";
 import { configureAuthority, writePrivateJson } from "../engine/composition.ts";
 import { updateTrustedKeys } from "../engine/signature-policy.ts";
 import { DEFAULT_CONFIG } from "../engine/config.ts";
-import { withoutPmContext, installPackedExtension } from "../scripts/pm-environment.ts";
+import { installPackedExtension } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
@@ -198,11 +201,16 @@ test("destination ref namespace collisions refuse the whole import before storin
   ];
   for (const { incoming, existing } of cases) {
     const receiver = Repository.init(temp());
+    if (existing.length > 0) for (const id of reachableObjects(f.repo.objects, [f.first])) {
+      const object = f.repo.objects.read(id); receiver.objects.write(object.type, object.payload);
+    }
     for (const name of existing) receiver.refs.compareAndSwap(name, null, f.first);
+    assert.equal(receiver.objects.has(f.last), false, "the incoming tip must remain absent before collision preflight");
     const scope = { ...f.scope, refs: incoming }; const policy = { ...f.policy, scope };
     const bytes = exportChangeBundle(f.repo.objects, Object.fromEntries(incoming.map(name => [name, f.last])), scope, author.email, keys.privateKey);
     const before = snapshot(receiver);
     refused(() => importChangeBundle(receiver, bytes, policy, Object.fromEntries(incoming.map(name => [name, null]))), "bundle_ref_conflict");
+    assert.equal(receiver.objects.has(f.last), false, "a rejected namespace must not admit incoming history");
     assert.deepEqual(snapshot(receiver), before);
     assert.equal(receiver.refs.read("refs/heads/0"), null);
     assert.equal(existsSync(join(receiver.controlDirectory, "refs/heads/0.lock")), false);
@@ -457,7 +465,7 @@ test("CLI handlers use explicit input, external signing keys and independent imp
 
 test("installed CLI emits compact JSON and TOON and imports in non-Git trackers with no git executable", async () => {
   const f = await fixture(); const external = temp(); const bins = temp();
-  const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(f.receiver.root), PM_AUTHOR: "fixture" };
+  const env = { ...testEnvironment(), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(f.receiver.root), PM_AUTHOR: "fixture" };
   const cli = join(packageRoot, "node_modules/@unbrained/pm-cli/dist/cli.js");
   const receiverPm = join(f.receiver.root, ".agents/pm");
   await new PmClient({ cwd: f.receiver.root, pmRoot: receiverPm, noExtensions: true }).init("receiver", { defaults: true, author: "fixture" });

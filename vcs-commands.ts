@@ -6,6 +6,7 @@ import { EMPTY_TRUST, readTrustedKeys } from "./engine/signature-policy.ts";
 import { annotatePath, type AnnotationRow } from "./engine/annotate.ts";
 import { explainChange, type ExplainedChange, type TrackerLens } from "./engine/tracker-lenses.ts";
 import { historyOptions, type HistoryOptions } from "./engine/partial.ts";
+import type { PackReport } from "./engine/packs.ts";
 import { collectGarbage, type GcReport } from "./engine/gc.ts";
 import { changeRemoteLease } from "./engine/lease-workflows.ts";
 import type { LeaseRequest } from "./engine/publication-leases.ts";
@@ -1284,8 +1285,16 @@ export function registerVcsCommands(api: ExtensionApi): void {
   });
 
   api.registerCommand({
+    name: "vcs compact",
+    description: "Compact loose objects into bounded indexed packs under the shared writer lease. Object identities, range reads and retention roots remain unchanged.",
+    run(context: CommandHandlerContext): VcsEnvelope & { compact: PackReport } {
+      return { ok: true, compact: openRepository(context).objects.compact() };
+    },
+  });
+
+  api.registerCommand({
     name: "vcs gc",
-    description: "Report unreachable objects; --apply collects them under the shared writer lock. Refs, the entire operation log, staged sparse instances, uploads and active publication leases retain objects.",
+    description: "Report unreachable objects; --apply collects them under the shared writer lock. Refs, the entire operation log, staged sparse instances, uploads, pending native publications and active publication leases retain objects.",
     flags: [{ long: "--apply", description: "Delete the unreachable objects after a fresh locked plan", value_type: "boolean" }],
     run(context: CommandHandlerContext): VcsEnvelope & { gc: GcReport } {
       return { ok: true, gc: collectGarbage(openRepository(context), context.options?.apply === true) };
@@ -1301,8 +1310,8 @@ export function registerVcsCommands(api: ExtensionApi): void {
       const repository = openRepository(context);
       const result = repository.verify();
       const failures = [...result.missing, ...result.corrupt];
-      if (failures.length > 0) {
-        throw new VcsError("corrupt_objects", `${failures.length} reachable objects did not verify: ${failures.join("; ")}.`,
+      if (result.verification.status === "unverified" || failures.length > 0) {
+        throw new VcsError("corrupt_objects", `unverified: integrity/${result.verification.bound ?? "decode_error"}; ${failures.length} reachable objects did not verify: ${failures.join("; ")}.`,
           "Repair missing or corrupt history from a trusted peer; incomplete erasure requires authorized cleanup.");
       }
       if (context.options?.signatures === true) {

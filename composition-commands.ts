@@ -1,3 +1,4 @@
+import { inspectDestructions } from "./engine/durability.ts";
 /** Native CLI operations for pinned links, private overlays and authorized erasure. */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -16,6 +17,12 @@ function credential(context: CommandHandlerContext, flag: string): string {
 
 /** Register complete engine-backed composition and lifecycle commands. */
 export function registerCompositionCommands(api: ExtensionApi): void {
+  api.registerCommand({
+    name: "vcs destructive-receipts",
+    description: "Inspect bounded pending/completed exact-set deletion receipts; foreign records are preserved and reported.",
+    /** Recovery status is observational and works on an ordinary non-git tracker. */
+    run(context: CommandHandlerContext) { const repo = openRepository(context); return { ok: true, destruction: inspectDestructions(repo.instanceLink?.controlDirectory ?? repo.controlDirectory) }; },
+  });
   api.registerCommand({
     name: "vcs recover-lock",
     description: "Recover a confirmed dead ordinary writer or an aged empty legacy lock without erasure authority.",
@@ -146,6 +153,7 @@ export function registerCompositionCommands(api: ExtensionApi): void {
     flags: [
       { long: "--erase-token-file", value_name: "file", value_type: "string", description: "Local permanent-erasure credential file" },
       { long: "--reason", value_name: "code", value_type: "string", description: "Bounded audit reason code" },
+      { long: "--purge-unaccounted", description: "Explicitly delete identity-checked unaccounted object-store files, receipt them and re-verify" },
       { long: "--recover-lock", description: "Explicitly recover a crashed writer lock before authorized cleanup" },
     ],
     /** Persist denial before byte deletion and return only the typed audit receipt. */
@@ -154,11 +162,7 @@ export function registerCompositionCommands(api: ExtensionApi): void {
       const token = credential(context, "eraseTokenFile");
       const reason = optionalString(context.options, "reason");
       if (reason === undefined) throw new ObjectStoreError("bad_tombstone", "An explicit --reason code is required.");
-      if (context.options?.recoverLock === true) {
-        authorize(repo.instanceLink?.controlDirectory ?? repo.controlDirectory, "erase", token);
-        repo.objects.recoverWriterLock();
-      }
-      return { ok: true, erasure: repo.obliterate(requiredArgument(context, 0, "FileId or indexed path", "pm vcs obliterate file --reason incident"), token, reason, new Date()) };
+      return { ok: true, erasure: repo.obliterate(requiredArgument(context, 0, "FileId or indexed path", "pm vcs obliterate file --reason incident"), token, reason, new Date(), { purgeUnaccounted: context.options?.purgeUnaccounted === true, recoverLock: context.options?.recoverLock === true }) };
     },
   });
 }

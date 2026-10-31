@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 // Operation log and undo.
 //
 // Every command that moves a ref appends what it moved, before and after. That
@@ -9,8 +10,8 @@
 // payload bytes permanently; undo can restore a pointer but cannot restore its
 // intentionally absent content.
 
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, mkdirSync, readFileSync, } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 import type { ObjectId } from "./objects.ts";
 import { ObjectStoreError } from "./objects.ts";
@@ -79,7 +80,7 @@ export class OperationLog {
    * @param path - Log file path. Its directory is created on demand.
    */
   constructor(path: string) {
-    this.path = path;
+    this.path = resolve(path);
   }
 
   /**
@@ -140,12 +141,7 @@ export class OperationLog {
   ): Operation {
     mkdirSync(dirname(this.path), { recursive: true });
     const lockPath = `${this.path}.lock`;
-    let descriptor: number;
-    try {
-      descriptor = openSync(lockPath, "wx");
-    } catch {
-      throw new ObjectStoreError("oplog_locked", `The operation log is locked by another process (${lockPath}).`);
-    }
+    const lease = durability.claim(lockPath, "oplog_locked");
     try {
       const operation: Operation = {
         sequence: this.read().length + 1,
@@ -155,12 +151,12 @@ export class OperationLog {
         refs,
         ...(head === undefined ? {} : { head }),
       };
-      validate?.(operation);
+      validate?.(operation); lease.verify();
       appendFileSync(this.path, `${JSON.stringify(operation)}\n`);
+      durability.persist(this.path);
       return operation;
     } finally {
-      closeSync(descriptor);
-      unlinkSync(lockPath);
+      lease.release();
     }
   }
 
@@ -203,17 +199,11 @@ export class OperationLog {
         + "Something moved HEAD since then; re-read it and retry.",
       );
     }
-    validate?.(target);
     refs.transaction(target.refs.map((transition) => ({
       name: transition.ref,
       expected: transition.after,
       next: transition.before,
-    })));
-    if (target.head !== undefined) {
-      const restored = target.head.before;
-      if (restored.startsWith("ref: ")) refs.setHeadToRef(restored.slice(5).trim());
-      else refs.setHeadDetached(restored);
-    }
+    })), () => validate?.(target), target.head === undefined ? undefined : { expected: target.head.after, next: target.head.before });
     const reversed: RefTransition[] = target.refs.map((transition) => ({
       ref: transition.ref,
       before: transition.after,

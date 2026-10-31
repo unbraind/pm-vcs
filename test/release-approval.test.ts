@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Audit every workflow's effective permissions, publication approval and npm authentication. */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';

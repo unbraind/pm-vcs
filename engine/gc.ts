@@ -1,8 +1,11 @@
-import { decodeConflict, conflictReferences } from "./conflicts.ts";
+import { reachableObjects, reachabilityBudget } from "./reachability.ts";
+import { isRootPublication, isDeferredPublication, publicationRootsFromFd } from "./publication.ts";
+import { inspectNamespacePublications, prepareDestruction, inspectDestructionCheckpoint, type PublicationInventory, type DestructionCheckpoint, type DestructionReceipt } from "./destruction.ts";
+import { packBoundary } from "./packs.ts";
+import { syncDirectory } from "./composition.ts";
 /** Conservative collection under the same interprocess transaction as writers. */
-import { lstatSync, readdirSync, readFileSync, realpathSync, unlinkSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { decodeCommit, decodeManifest, decodeSeries, decodeTree } from "./model.ts";
+import { lstatSync, readdirSync, readFileSync, realpathSync, } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ObjectStoreError, isObjectId, readControlJson, type ObjectId } from "./objects.ts";
 import { requireInstances } from "./instances.ts";
 import { PublicationLeases } from "./publication-leases.ts";
@@ -10,13 +13,18 @@ import { CONTROL_DIRECTORY, Repository } from "./repo.ts";
 
 /** Exact sweep receipt: candidate addresses are informational until an explicit apply. */
 export interface GcReport {
+  /** Prepared root capabilities remain retained until replay is impossible; foreign records remain explicit. */
+  readonly publications?: PublicationInventory;
+  readonly destruction?: DestructionReceipt;
+  /** Survivor rewrite state for preview or apply; foreign checkpoints remain explicitly unverified and preserved. */
+  readonly recovery?: DestructionCheckpoint;
   readonly applied: boolean;
   readonly retained: number;
   readonly candidates: readonly ObjectId[];
   readonly removed: number;
-  /** Compressed physical bytes planned for removal, including recognized temporary copies. */
+  /** Compressed candidate bytes including loose temporaries and apportioned pack index overhead. */
   readonly candidateBytes: number;
-  /** Compressed physical bytes actually unlinked by a completed apply. */
+  /** Net physical bytes reclaimed after a completed sweep and any survivor rewrite. */
   readonly reclaimedBytes: number;
   /** Active file leases conservatively retain unpublished, unattributed arrivals too. */
   readonly activeLeases: number;
@@ -97,11 +105,16 @@ function storageInstances(repository: Repository): Repository[] {
 
 /** Plan and optionally sweep only after all roots and all physical objects validate under one writer lock. */
 export function collectGarbage(repository: Repository, apply = false): GcReport {
+  if (typeof apply !== "boolean") throw new ObjectStoreError("invalid_gc_options", "Collection apply must be an explicit boolean.");
   return repository.objects.withWriteLock(/** Never reuse a stale plan across a publication or a retry. */ () => {
+    const check = reachabilityBudget();
+    check();
     const store = repository.objects;
+    if (apply && store.denials().some(entry => entry.pending)) throw new ObjectStoreError("pack_erasure_pending", "Resume authorized erasure before applying collection; no source was retired.");
     const shared = repository.instanceLink?.controlDirectory ?? repository.controlDirectory;
     const roots = new Set(refRoots(join(shared, "refs"), shared));
-    for (const instance of storageInstances(repository)) {
+    const instances = storageInstances(repository);
+    for (const instance of instances) {
       const head = instance.refs.resolveHead();
       if (head !== null) roots.add(head);
       for (const id of logRoots(instance.controlDirectory)) roots.add(id);
@@ -124,36 +137,42 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
         if (lease !== null && lease.active && lease.expiry > Date.now()) activeLeases++;
       }
     }
-    const inventory: { id: ObjectId; path: string; bytes: number }[] = [];
+    const inventory: { id: ObjectId; path: string; bytes: number; packed: boolean }[] = [];
     // Complete the physical preflight before unlinking even the first candidate.
     for (const item of store.walkInventory()) {
-      inventory.push({ id: item.id, path: item.path, bytes: lstatSync(item.path).size });
+      check();
+      inventory.push({ id: item.id, path: item.path, bytes: item.bytes, packed: item.packed !== undefined });
 
     }
-    const partial = store.partialState();
+    const publications: PublicationInventory[] = [];
+    for (const control of new Set([shared, ...instances.map(instance => instance.controlDirectory)])) publications.push(inspectNamespacePublications(control, isRootPublication, (fd, destination) => { for (const id of publicationRootsFromFd(fd, destination, store)) { if (isDeferredPublication(destination)) pinned.push(id); else roots.add(id); } }));
+    const pendingPublications = publications.reduce((sum, item) => sum + item.pending, 0); const skippedPublications = publications.reduce((sum, item) => sum + item.skippedCount, 0);
+    const publicationOutcome: PublicationInventory | undefined = pendingPublications === 0 && skippedPublications === 0 ? undefined : { pending: pendingPublications, skippedCount: skippedPublications, skipped: publications.flatMap(item => item.skipped).slice(0, 20), verification: publications.find(item => item.verification.status === "unverified")?.verification ?? { status: "verified", verifier: "receipts" } };
     const retained = new Set<ObjectId>(pinned);
-    if (activeLeases > 0) for (const item of inventory) retained.add(item.id);
-    const visited = new Set<ObjectId>();
-    const pending = [...roots];
-    while (pending.length > 0) {
-      const id = pending.pop()!;
-      if (visited.has(id) || store.denial(id) !== undefined) continue;
-      visited.add(id);
-      if (partial?.promised.includes(id) === true && !store.has(id)) continue;
-      const object = store.read(id);
-      retained.add(id);
-      if (object.type === "commit") { const commit = decodeCommit(object.payload); pending.push(commit.tree, ...commit.parents.filter(/** A shallow boundary permits absent parents, never deletion of an ancestor already held. */ (parent) => partial?.shallow.includes(id) !== true || store.has(parent))); }
-      else if (object.type === "tree") pending.push(...decodeTree(object.payload).flatMap(/** Trees own every sparse and visible payload and unresolved unit. */ (entry) => [entry.id, ...(entry.conflicts ?? [])]));
-      else if (object.type === "conflict") pending.push(...conflictReferences(decodeConflict(object.payload)));
-      else if (object.type === "manifest") { const manifest = decodeManifest(object.payload); pending.push(...(manifest.pages ?? manifest.fragments).map(/** Traverse bounded manifest pages and their leaves. */ (entry) => entry.id)); }
-      else if (object.type === "series") { const series = decodeSeries(object.payload); pending.push(series.base, ...series.patches.map(/** Review series keep all patch commits. */ (patch) => patch.commit)); }
-    }
+    if (activeLeases > 0 || publications.some(item => item.verification.status === "unverified")) for (const item of inventory) retained.add(item.id);
+    const visited = reachableObjects(store, roots, check);
+    for (const id of visited) if (store.has(id)) retained.add(id);
+    check();
     const candidates = inventory.filter(/** Physical copies of a retained address remain retained. */ (item) => !retained.has(item.id));
     const candidateBytes = candidates.reduce(/** Count physical bytes rather than logical uncompressed payloads. */ (sum, item) => sum + item.bytes, 0);
+    const physicalBefore = inventory.reduce((sum, item) => sum + item.bytes, 0);
+    const recovery = inspectDestructionCheckpoint(shared, "compact-loose");
+    let recoveryOutcome: DestructionCheckpoint | undefined = recovery.pending || recovery.skipped !== undefined ? recovery : undefined;
+    let reclaimedBytes = 0; let removed = 0; let destruction: DestructionReceipt | undefined;
+    check();
     if (apply) {
-      for (const candidate of candidates) unlinkSync(candidate.path);
-      store.releaseUploadRoots(visited);
+      const packed = candidates.some((candidate) => candidate.packed);
+      if (packed) store.unpack();
+      const deletion = prepareDestruction(shared, "gc-candidates", candidates.map(candidate => ({ path: candidate.packed ? join(store.storageRoot(), candidate.id.slice(0, 2), candidate.id.slice(2)) : candidate.path })), false, undefined, false, "reachability_changed");
+      for (const path of deletion.paths) {
+        store.markStorageGeneration(); deletion.remove(path); syncDirectory(dirname(path)); packBoundary.visit("collected");
+      }
+      destruction = deletion.finish();
+      removed = candidates.filter(item => lstatSync(item.path, { throwIfNoEntry: false }) === undefined).length;
+      if (recovery.skipped === undefined && (inventory.some((item) => item.packed) || recovery.pending)) { store.compact(); if (recovery.pending) recoveryOutcome = inspectDestructionCheckpoint(shared, "compact-loose"); }
+      store.releaseUploadRoots(visited); packBoundary.visit("released-pins");
+      reclaimedBytes = Math.max(0, physicalBefore - [...store.walkInventory()].reduce((sum, item) => sum + item.bytes, 0));
     }
-    return { applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed: apply ? candidates.length : 0, candidateBytes, reclaimedBytes: apply ? candidateBytes : 0, activeLeases };
+    return { ...(publicationOutcome === undefined ? {} : { publications: publicationOutcome }), ...(destruction === undefined ? {} : { destruction }), ...(recoveryOutcome === undefined ? {} : { recovery: recoveryOutcome }), applied: apply, retained: retained.size, candidates: [...new Set(candidates.map(/** Report addresses without exposing physical paths. */ (item) => item.id))].sort(), removed, candidateBytes, reclaimedBytes, activeLeases };
   });
 }

@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -45,7 +47,7 @@ afterEach(() => {
 
 /** Runs Git in a disposable real repository and returns trimmed output. */
 function git(root: string, arguments_: readonly string[], input?: string): string {
-  const result = spawnSync("git", arguments_, { cwd: root, encoding: "utf8", input });
+  const result = spawnSync("git", arguments_, { env: testEnvironment(), cwd: root, encoding: "utf8", input });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }

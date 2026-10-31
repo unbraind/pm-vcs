@@ -1,0 +1,297 @@
+# Destructive operation receipts
+
+Every engine namespace retirement uses three phases: validate the complete
+request, persist an exact intent, then retire only its members and finalize its
+receipt. Logical operations keep their existing domain authorization: erasure
+credentials and FileId attribution, GC reachability and publication leases,
+reference CAS, and captured working-tree identities. Invalid requests never
+acquire deletion authority. In particular, an absent but well-formed FileId with
+`--purge-unaccounted` returns `unknown_file` before purging unrelated storage.
+
+Obliteration first performs complete read-only storage, historical ownership,
+working-tree, layer, audit-format and flag validation. Unaccounted files are
+inventoried without deleting them. The immutable tombstone records the selected
+logical objects; separate frozen subplans record unaccounted files, working-tree
+leaves, pack retirement and the resulting loose representations. New files
+cannot join an interrupted plan. A new foreign copy makes verification refuse. A fresh explicit
+`--purge-unaccounted` request may record another separately identified batch;
+recovery never extends a prior batch. Purge receipts include bounded batch ids,
+revision digests and pending counts, while legacy receipt entries remain audit
+facts.
+
+`--recover-lock` uses the same read-only request validator before retiring a dead
+writer. An eight-attempt CAS includes authority/reachability metadata, every
+object-store namespace stamp and the observed writer lock. A fully written,
+flushed recovery guard is published exclusively, the revision is checked again,
+and the normal leased operation repeats validation. A live or unknown guard is
+preserved. A crash before publication can leave only an unpublished temporary.
+
+```sh
+pm vcs obliterate <file-id> --erase-token-file erase-token --reason incident --purge-unaccounted --recover-lock --json
+pm vcs destructive-receipts --json
+```
+
+Retry the **original operation**, with its original identity and authorization,
+to recover its immutable set. Receipt inspection is read-only and never grants
+permission to delete a path. The CLI uses the host SDK's tracker resolution and
+TOON/JSON renderers; both formats contain at most twenty receipt summaries and
+twenty skip reasons, with exact pending/completed/omitted counts. Pending,
+superseded and cancelled receipts take precedence over routine completions, so
+recovery evidence is not displaced by owner-cleanup history. Omission counts still
+make clear that the bounded page is not a complete historical lookup.
+
+```ts
+import { DestructionRefusal, inspectDestructions, ObjectStore } from "pm-vcs";
+
+const objects = new ObjectStore(".pmvcs/objects");
+try {
+  const result = objects.compact();
+  console.log(result.destruction.planned, result.destruction.deleted);
+} catch (error) {
+  if (!(error instanceof DestructionRefusal)) throw error;
+  console.error(error.code, error.remedy, error.receipt?.id);
+}
+console.log(inspectDestructions(".pmvcs", 10));
+```
+
+Each private intent has a random operation id, store revision, root lifetime,
+relative coordinates, parent lifetime, leaf identity including ctime, content
+checksum, optional destination identity and exact outcomes. A fixed-size progress
+bitmap binds each flushed acknowledgment to that immutable id and member count;
+publication writes remain linear in the number of members. A completed checkpoint
+retains the complete audit record. Public success/refusal receipts expose at most
+twenty entries, with counts for owned deletions, moves, peer-observed absences,
+skips and omissions. `DestructionRefusalCode` is an exhaustive SDK discriminator.
+
+Each live handle fingerprints the immutable revision, root lifetime and ordered
+member identities/destinations. Refresh refuses any authority change even when
+the operation id is unchanged; only progress outcomes may advance.
+
+Independent drainers serialize every journal read/modify/write under a fully
+published per-intent process lease. They reread state while holding it, preserve
+replaced sources/destinations, never extend an old set, and release ownership
+last. A peer that already finished is reported with its original receipt id.
+A missing source after an acknowledgment crash becomes an observed absence;
+a rename is recovered only when the destination retains the recorded inode and
+checksum. Recreated leaves are foreign. Root/parent retirement cancels pending
+authority with a typed reason; terminal entries remain historical. Skipped entries cease to block recovery once
+the peer leaves have disappeared; a clean store cannot remain stuck on an old
+skip. Observing a new leaf under an already retired name refuses without
+rewriting the original completed outcome. Foreign,
+malformed or changing journal records are preserved and reported. Owned lease
+cleanup keys include the captured owner stamp, so an unlink/acknowledgment crash
+cannot transfer an old cleanup set to a new lock at the same pathname. Read-only
+inspection reports absent or replaced member lifetimes as historical and never
+uses those records to delete their successors. An owner release finishes truthfully
+when a distinct peer acquires the lock name during receipt completion; reattaching
+the original inode still refuses. Fresh empty requests never replay paths from
+a completed nonempty set. Guarded worktree planning, retirement and receipt
+failures preserve the public `worktree_path_changed` refusal and leave their
+recorded sets available for recovery.
+An interrupted owner-temporary retirement retries its recorded set and refreshes
+the pinned owner stamp after removing its own hardlink; changed owner bytes remain
+foreign and are preserved. Pending pruning resumes already-retired directories
+without capturing later arrivals.
+
+CI gives each full release gate an owned scratch root and removes that root after
+all gate commands exit. Disposable fixture receipts stay inside that root, so the
+npm and Bun suites do not accumulate each other's audit files. Production receipt
+retention is unchanged.
+
+The namespace audit covers these paths:
+
+| Engine paths | Validation and intent |
+| --- | --- |
+| `erasure.ts`, `erasure-accountability.ts` | Complete FileId/credential/ownership/control/worktree preflight; frozen purge, logical object and physical retirement sets. |
+| `gc.ts` | Validate all roots and reachability under the writer lease before frozen candidate retirement; unpack and survivor compaction have separate recorded sets. |
+| `packs.ts` | Validate every published and loose source before duplicate removal or staging recovery; immutable loose-source and pack-retirement sets. Owned staging leaves and empty directories use the same namespace helper. |
+| `worktree-mutation.ts` | Capture the whole erasure/pruning set and parent descriptors before retirement; descriptor-relative mutation preserves topology fences. |
+| `refs.ts` | Validate every ref/CAS and preflight callback under all ref locks before a frozen ref-retirement batch. |
+| `objects.ts`, `bisect.ts`, `instances.ts`, `oplog.ts`, `repo.ts` | Verify dead or descriptor-owned lease identities before cleanup; preserve new owners. Bisect reset freezes state/workspace deletion together. |
+| `credentials.ts`, `composition.ts`, `fragments.ts`, `sync.ts`, remaining `repo.ts` publication/rollback paths | Atomic rename or captured recursive cleanup through `durability`, including owned temporaries, merge/index state, failed clones/instances, and layer views. |
+
+`durability.ts` is the only production module allowed to call native rename,
+unlink, rmdir or fsync. Its namespace adapters always invoke the intent protocol.
+The finite bootstrap consists only of atomic journal publication, single-byte
+progress acknowledgment and exclusive descriptor-owned unpublished process-owner
+or journal-mutex cleanup; these use
+that same platform-aware helper and cannot recursively create deletion intents.
+Bootstrap temporaries cannot authorize payload deletion. POSIX flushes directory
+entries; Windows flushes files and acknowledges synchronous namespace operations.
+
+The pinned PM SDK provides asynchronous `commitWorkspaceTransaction` and
+item/workspace locks, but no synchronous descriptor-bound binary-store deletion
+transaction or compressed-range pack primitive. The engine preserves its
+synchronous public storage API and native writer lease; PM lookup, history,
+settings, item transactions and rendering continue through the existing SDK.
+Domain deletion receipts live with the store. Ordinary atomic publication and
+lease-cleanup intents use a private namespace ledger keyed by the owning root;
+they do not alter logical control snapshots or tracker metadata. Copied ledgers
+remain foreign to a different root. Private receipt/checkpoint auxiliaries are
+retained for audit; this command does
+not erase receipt history.
+
+Tests use real non-git SDK trackers, independent tree hashes and a tripwire,
+seeded valid/invalid request sets, actual SIGKILL at owner/intent/progress/receipt
+boundaries, competing native drainers, foreign records, replaced parents and
+leaves, and injected I/O failures. A static AST audit rejects direct namespace
+or durability calls outside the one helper.
+
+A caller that has revalidated every current precondition may supersede an obsolete
+pending plan. GC uses `reachability_changed`; compaction, unpacking, erasure,
+worktree pruning, ref retirement and bisect reset use `eligibility_changed`.
+The old exact set is durably marked `superseded` and remaining authority is
+cancelled with `preconditions_changed` before its receipt is archived or a fresh
+revision-bound set is published. A crash at either publication boundary resumes
+this handoff. An obsolete handle cannot delete through the replacement plan.
+Owned lease and temporary cleanup keeps its original identity authority and
+cannot opt into this domain revalidation. Extra arrivals alone never expand a
+pending set. A new ref protecting an interrupted GC candidate therefore preserves
+that object while the freshly validated collectible set can still be retired.
+
+Working-tree erasure keeps its original inode authority across recovery. A peer
+replacement remains foreign on every retry, including after a terminal refusal;
+a FileId or reused pathname alone cannot authorize adopting it into a new set.
+Remove or resolve that foreign leaf explicitly before retrying. Validated GC
+reachability changes can supersede a plan without granting authority over a
+working-tree replacement.
+
+Recovery records are durable before the first destructive syscall. The shared
+helper flushes the file, its parent, and every ancestor on POSIX, even when an
+ancestor was created by a previously interrupted process. The source and
+replacement destination parents are flushed again after rename; unlink and
+empty-directory retirement flush their parent after removal. Windows retains
+the documented synchronous namespace acknowledgment policy.
+
+Atomic publications use the normalized destination as their stable receipt key.
+A fresh randomized source temporary therefore reconciles the original pending
+rename before publishing a replacement. Completed renames are recognized by the
+retained inode and payload digest. Previously released source-keyed receipts are
+migrated under their original lease, with bounded, fail-closed enumeration.
+Recovery never extends the old deletion set or adopts a peer replacement.
+
+Ref, operation-log, instance-registry and bisect process leases publish a flushed,
+exclusive process marker before entering protected work. Known dead markers can
+be reclaimed; unknown and live markers are preserved with a typed refusal. Owner
+descriptors close last, and protected values are rechecked after callbacks.
+Acknowledged operation-log appends and bootstrap format/index files flush their
+data and ancestry before returning.
+
+The namespace power-loss harness observes every native write, file flush,
+directory flush, link, rename, unlink and directory retirement boundary. It
+restores actual files from the durable directory-entry graph and flushed inode
+bytes, then runs native recovery twice. Identical complete crash images share a
+recovery proof. Metadata publication also replays every individual boundary.
+The matrix covers ref retirement/replacement, compaction, unpack/repack, loose
+and packed GC, lease cleanup, pruning, operation logs, deep journals, writer
+recovery and authorized obliteration. Each replay checks a retained object,
+a foreign tripwire and the absence of pending receipts.
+
+A staging marker may disappear before its empty directory is retired. Recovery
+uses the existing directory receipt and its original inode lifetime to finish
+that exact deletion. It preserves missing, foreign, replaced and nonempty
+entries, and reports an already completed peer receipt truthfully. Publication
+recovery also checks the receipt's action, sole member and destination inside
+the receipt lease; copying another receipt into that slot cannot certify a write.
+
+The power model records ancestor flushes above its owned store as well as store
+mutations. Its incremental namespace is checked against a complete native scan,
+and cached durable images are checked against the uncached oracle. Crash-free
+convergence replays retain native I/O and identity checks without retaining mock
+call histories or recomputing future power images. Separate directory,
+publication and legacy publication recovery matrices inject power loss during
+recovery itself. Inode keys include birth identity so native inode reuse cannot
+alias a retired model entry.
+
+Erasure prepares its validated immutable audit objects before freezing purge
+membership. It activates the pending denial only after that intent is durable.
+An interrupted purge therefore cannot introduce a new unaccounted audit-object
+temporary or use a cancelled earlier erasure as authority for another payload.
+
+Native process-owner temporaries are accounted only when their complete bounded
+record matches the owning inode lifetime, parent and explicit lease destination.
+Recovery keeps live, in-flight and foreign records. Under the final lease, it
+records an exact retirement set for dead or proven abandoned native markers,
+then finishes that set. Erasure always acquires the operation-log lease before
+checking whether its original operation was recorded, so an acknowledged append
+can recover its owner without appending a duplicate.
+
+A published staging payload may share an inode with a canonical pack or loose
+object. Removing that alias changes ctime. Recovery pins the alias descriptor,
+records only the effects of its own acknowledged unlink, and fences the original
+canonical source against that result before creating a deletion snapshot.
+Replacements and unrelated byte, size, mtime or ctime changes are preserved and
+refused. The public staging-recovery method also holds the store writer lease
+and validates authoritative representations first.
+
+GC previews and applies inspect the same exact survivor-compaction checkpoint.
+A pending rewrite resumes even if interruption left only loose live objects and
+no unreachable candidates. Apply reports the checkpoint observed after recovery;
+foreign checkpoints remain untouched with an explicit unverified recovery
+result. Receipt work bounds refuse before candidate deletion. The power-loss
+model preserves mtime across restoration and namespace-only operations while
+continuing to observe actual content writes.
+
+
+Publication recovery is a state transition, so it precedes every fresh conditional
+observation. Ref batches acquire the store lease and every ref/HEAD lease, reconcile
+all their destinations, and only then check every expected value. They repeat the
+checks after policy callbacks and immediately before replacing a destination.
+Native ref writes accept only `HEAD` and `refs/...` destinations, so a custom
+pathname cannot bypass root retention or overwrite another control file. Existing
+legacy paths remain readable, and standalone ref stores retain their namespace API.
+Literal HEAD predicates participate in the same batch, including guarded undo and
+detached commits. Index cache updates likewise recover before checking the staged
+generation. A retry whose recorded transition itself finishes reports that success
+without publishing it twice; a different recovered peer value refuses the stale
+predicate. Invalid fresh identities or unavailable targets refuse before replay.
+Released inline checkpoints whose member is already moved are finalized before
+a fresh publication, including legacy source-key receipts. A successful retry
+therefore reports the value it actually published rather than an older replay.
+
+Every native rename and recovery drainer uses the actual shared object-store
+lease. Reentrancy requires the live owner descriptor, its matching pathname, and
+the same root lifetime; a journal scope alone grants no storage ownership.
+Publication codecs and GC share one bounded logical traversal, including tree,
+manifest, conflict and series descendants and declared shallow/promise policy.
+Ref/HEAD, merge-state and audit roots must physically exist even when a partial
+history promises an identity. Staged promised blobs and terminal denied index rows
+retain their existing metadata meaning without making missing or erased payloads
+readable.
+GC reads original pending ref, HEAD, index, merge-state and denial-audit sources
+through pinned descriptors, including private linked-instance controls. Upload
+pins may precede their arrivals and retain only existing pinned identities.
+Receipt inventory is complete independently of the twenty-entry output limit;
+foreign records are preserved with reasons, and bounds never certify verification.
+An unverifiable publication inventory conservatively retains every physical object;
+GC reports the unverified bound and deletes no candidates. Resolve the foreign
+receipt evidence or restore its verified source before expecting collection.
+GC's optional `publications` field reports pending and skipped counts in both SDK
+and CLI renderer formats, without source bytes or physical paths.
+
+An old pending publication whose target was collected or permanently denied
+cannot expose that root. Recovery durably cancels its original authority with
+`publication_target_unavailable`, then retires only its still-identical,
+recognized engine temporary under a separate exact-set receipt. A crash before
+or after that cleanup resumes the original receipts. Foreign replacement files
+remain untouched. Cancellation reasons remain visible in compact receipt summaries,
+including after detailed entries are omitted. Corruption, I/O failures and exhausted
+verification budgets refuse and preserve evidence rather than masquerading as
+absence or authorizing cancellation.
+Bounded receipt views prioritize pending authority, supersession and cancellation
+ahead of routine completed cleanup, independently of randomized receipt names.
+
+The seeded pending-root corpus covers six native formats in loose and packed
+stores. Actual child-process termination tests exercise prepared publication and
+termination during replay. Native directory-entry-loss matrices also cover
+conditional replay and cancellation, rerunning recovery twice and requiring no
+missing retained object, duplicate publication, leaked descriptor or pending
+receipt.
+
+
+The namespace helper keeps its module graph independent of the repository stack.
+The object layer installs the native publication adapter when initialized. Bare
+namespace workers can still perform standalone durability operations; attempting
+native publication without that adapter returns `publication_unverified` with
+`store_adapter`, before any namespace mutation. Public ObjectStore/Repository
+imports install the actual shared lease and verifier automatically.

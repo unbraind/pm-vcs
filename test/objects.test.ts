@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { deflateSync, inflateSync } from "node:zlib";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -237,8 +238,8 @@ test("write cleans up its temp file and rethrows when the rename fails", () => {
   mkdirSync(destination);
   assert.throws(
     () => store.write("blob", payload),
-    // The rethrown error is the filesystem's, not an ObjectStoreError.
-    (error: unknown) => !(error instanceof ObjectStoreError),
+    // The complete publication preflight refuses a directory before native replacement.
+    { code: "EISDIR" },
   );
   // The temp file was removed rather than left behind.
   const leftovers = readdirSync(join(root, "objects", id.slice(0, 2))).filter(

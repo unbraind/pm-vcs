@@ -1,0 +1,19 @@
+id: pm-vcs-erasureprooftransport
+title: Carry optional erasure diagnostics across transports
+description: "Native-file accountability and tombstone object IDs/payload digests now decide physical-store certificates; fingerprint transport is not required for certification. Preserve optional positive-copy diagnostics across transports with versioned, validated metadata and no erased bytes. Missing diagnostics remain a reported limitation rather than an absence proof."
+type: Feature
+status: open
+priority: 3
+tags: []
+created_at: "2026-10-25T14:52:31.224Z"
+updated_at: "2026-10-25T21:00:16.661Z"
+author: codex-agent
+acceptance_criteria: Optional diagnostic metadata is capability-negotiated and validated without payload bytes; foreign metadata is preserved and reported; native accountability and permanent denial identities remain independent; file and HTTP transports work outside Git.
+parent: pm-vcs-b7cb
+files[3]{path,scope}:
+  engine/erasure-scan.ts,project
+  engine/erasure.ts,project
+  engine/lifecycle.ts,project
+docs[1]{path,scope}:
+  docs/indexed-packs.md,project
+body: ""

@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Real private-registry and post-erasure native writer regressions. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";

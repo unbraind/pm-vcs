@@ -10,7 +10,7 @@
 // repository merges.
 
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { environmentToken, readCredentials, redactRemoteUrl, redactUserinfo, splitRemoteCredentials, writeRemoteMap } from "./credentials.ts";
 
 import { ObjectStoreError, assertRegistryName } from "./objects.ts";
@@ -89,8 +89,8 @@ export class RemoteStore {
    * @param path - File the remotes are stored in. Need not exist yet.
    */
   constructor(path: string) {
-    this.path = path;
-    this.credentialsPath = join(dirname(path), "credentials.json");
+    this.path = resolve(path);
+    this.credentialsPath = join(dirname(this.path), "credentials.json");
   }
 
   /**

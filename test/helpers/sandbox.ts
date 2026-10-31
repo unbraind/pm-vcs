@@ -1,3 +1,4 @@
+import { testEnvironment } from "./test-environment.ts";
 /**
  * Real repositories for the test suite.
  *
@@ -90,7 +91,7 @@ function run(file: string, args: readonly string[], cwd: string): string {
     // A stuck `pm` or `git` should fail one test rather than stall the whole CI
     // job with no output.
     timeout: 120_000,
-    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0", ...discardChildCoverage() },
+    env: { ...testEnvironment(), GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0", ...discardChildCoverage() },
   }).trim();
 }
 

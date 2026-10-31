@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 // The served repository's own rules: one denial for everything a caller may
 // not learn from, bounds that leave the repository untouched, and a name rule
 // that keeps a request inside the served root.
@@ -1089,13 +1091,13 @@ test("absent legacy config uses defaults through FileTransport and HTTP", async 
   assert.throws(() => readConfig(join(path, "child")), bad);
 });
 
-const bunAvailable = spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
+const bunAvailable = spawnSync("bun", ["--version"], { env: testEnvironment(), stdio: "ignore" }).status === 0;
 for (const runtime of ["node", "bun"]) {
   const skip = runtime === "bun" && !bunAvailable ? "Bun is unavailable (bun --version failed)" : false;
   test(`denial wire bytes stay identical across seconds under native ${runtime}`, { timeout: 30_000, skip }, async () => {
     const root = tempRoot();
     const worker = spawn(runtime, [join(packageRoot, "test/helpers/denial-worker.ts"), root],
-      { stdio: ["ignore", "pipe", "pipe"] });
+      { env: testEnvironment(), stdio: ["ignore", "pipe", "pipe"] });
     const closed = once(worker, "close");
     try {
       const port = await new Promise<number>((resolvePort, reject) => {

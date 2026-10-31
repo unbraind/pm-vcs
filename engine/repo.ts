@@ -1,3 +1,6 @@
+import type { BigIntStats } from "node:fs";
+import { durability } from "./durability.ts";
+import { withPublicationLock, publicationRootIds, validatePublicationIds } from "./publication.ts";
 import type { AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
 import { attachCheckpoint, createSemanticCheckpoint, type CheckpointRequest } from "./checkpoints.ts";
 import { signChange } from "./signatures.ts";
@@ -15,7 +18,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes, type KeyObject } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -39,7 +42,7 @@ import {
 import { type ObjectId, type PayloadState, ObjectStore, ObjectStoreError, hashObject, isObjectId, assertRegistryName, readControlJson } from "./objects.ts";
 
 import { assertCompositionPath, assertSafeFilePath, authorize, configureAuthority, decodeLink, encodeLink, pathsOverlap, readLayers, writePrivateJson, type AuthorityChangeAuthorization, type LocalLayer, type RepositoryLink } from "./composition.ts";
-import { eraseFile, type ErasureReceipt } from "./erasure.ts";
+import { eraseFile, validateErasureRequest, assertErasureOptions, type ErasureReceipt, type ErasureOptions } from "./erasure.ts";
 import { CDC_STAGING_THRESHOLD, STAGING_CDC_PARAMS, blobFileContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmented, writeCdcFragmentedFile } from "./fragments.ts";
 
 
@@ -342,9 +345,9 @@ export class Repository {
    *   is missing — an instance without its shared store cannot answer anything.
    */
   constructor(root: string, config?: RepositoryConfig, pmRoot?: string) {
-    this.root = root;
-    this.controlDirectory = join(root, CONTROL_DIRECTORY);
-    this.instanceLink = resolveInstanceLink(this.controlDirectory, root);
+    this.root = resolve(root);
+    this.controlDirectory = join(this.root, CONTROL_DIRECTORY);
+    this.instanceLink = resolveInstanceLink(this.controlDirectory, this.root);
     const shared = this.instanceLink?.controlDirectory ?? this.controlDirectory;
     this.objects = this.instanceLink === null
       ? new ObjectStore(join(shared, "objects"))
@@ -399,8 +402,8 @@ export class Repository {
     mkdirSync(join(repository.controlDirectory, "objects"), { recursive: true });
     mkdirSync(join(repository.controlDirectory, "refs", "heads"), { recursive: true });
     mkdirSync(join(repository.controlDirectory, "refs", "tags"), { recursive: true });
-    writeFileSync(formatPath, `${REPOSITORY_FORMAT}\n`);
-    writeFileSync(join(repository.controlDirectory, "index"), "");
+    writeFileSync(formatPath, `${REPOSITORY_FORMAT}\n`); durability.persist(formatPath);
+    writeFileSync(join(repository.controlDirectory, "index"), ""); durability.persist(join(repository.controlDirectory, "index"));
     writeConfig(join(repository.controlDirectory, "config.json"), config);
     initializeInstanceRegistry(repository.controlDirectory);
     repository.refs.setHeadToRef(`${BRANCH_PREFIX}${branch}`);
@@ -497,15 +500,15 @@ export class Repository {
     const temporary = `${this.mergeStatePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
     try {
       writeFileSync(temporary, JSON.stringify(state), { flag: "wx" });
-      renameSync(temporary, this.mergeStatePath);
+      durability.rename(temporary, this.mergeStatePath);
     } finally {
-      rmSync(temporary, { force: true });
+      durability.remove(temporary, { force: true });
     }
   }
 
   /** Removes the in-progress merge state, completing or abandoning the merge. */
   private clearMergeState(): void {
-    rmSync(this.mergeStatePath, { force: true });
+    durability.remove(this.mergeStatePath, { force: true });
   }
 
   /**
@@ -602,6 +605,16 @@ export class Repository {
    * @returns False only when a compare-and-swap observed a newer index.
    */
   private replaceIndex(entries: readonly IndexEntry[], expectedContents: string | null): boolean {
+    return withPublicationLock(this.indexPath, () => {
+    if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
+    const contents = encodeIndex(entries);
+    try { validatePublicationIds(this.indexPath, publicationRootIds(this.indexPath, contents)); }
+    catch (error) {
+      // Status may refresh stat hints on an older index with unavailable payloads.
+      // Preserve that readable state; an explicit staging write still validates.
+      if (expectedContents !== null && error instanceof ObjectStoreError && error.code === "publication_unverified") return false;
+      throw error;
+    }
     const lockPath = `${this.indexPath}.lock`;
     let descriptor: number;
     try {
@@ -615,18 +628,26 @@ export class Repository {
       );
     }
     let temporary: string | null = null;
+    let lockOwner: BigIntStats | undefined;
+    const changed = new ObjectStoreError("index_changed", "The index changed during publication recovery; re-read it and retry.");
+    /** The same predicate guards initial derivation and the final namespace mutation. */
+    const validate = (): void => { if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) throw changed; };
     try {
-      if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
+      lockOwner = fstatSync(descriptor, { bigint: true });
+      durability.recoverPublication(this.indexPath); validate();
       temporary = `${this.indexPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-      writeFileSync(temporary, encodeIndex(entries), { flag: "wx" });
-      renameSync(temporary, this.indexPath);
+      writeFileSync(temporary, contents, { flag: "wx" });
+      durability.rename(temporary, this.indexPath, validate);
       temporary = null;
       return true;
+    } catch (error) {
+      if (error !== changed) throw error;
     } finally {
-      if (temporary !== null) rmSync(temporary, { force: true });
-      closeSync(descriptor);
-      rmSync(lockPath, { force: true });
+      if (temporary !== null) durability.remove(temporary, { force: true });
+      durability.release(lockPath, descriptor, lockOwner);
     }
+    return false;
+    });
   }
 
   /**
@@ -1153,7 +1174,7 @@ export class Repository {
 
   /** Verify the entire ref closure, including fragments and intentional terminal absence. */
   verify(): ClosureReport {
-    const targets = [...this.refs.list(BRANCH_PREFIX), ...this.refs.list(TAG_PREFIX)].map(/** Branches and tags require complete typed commit structure. */ (entry) => entry.target);
+    const targets = [...this.refs.list(BRANCH_PREFIX, true), ...this.refs.list(TAG_PREFIX, true)].map(/** Branches and tags require complete typed commit structure. */ (entry) => entry.target);
     return inspectClosure(this.objects, targets, [], this.objects.denials(), true);
   }
 
@@ -1197,8 +1218,20 @@ export class Repository {
   }
 
   /** Permanently erase all payloads of a FileId, including every shared instance. */
-  obliterate(selector: string, credential: string, reason: string, now: Date): ErasureReceipt {
-    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+  obliterate(selector: string, credential: string, reason: string, now: Date, options: ErasureOptions = {}): ErasureReceipt {
+    assertErasureOptions(options);
+    if (options.recoverLock === true) {
+      const requested = { purgeUnaccounted: options.purgeUnaccounted };
+      return this.objects.withRecoveryValidation(
+        () => validateErasureRequest(this, this.erasureScopes(), selector, credential, reason, now, requested),
+        () => this.obliterate(selector, credential, reason, now, requested),
+      );
+    }
+    return this.objects.withWriteLock(() => eraseFile(this, this.erasureScopes(), selector, credential, reason, now, options));
+  }
+
+  /** Resolve every currently accountable instance scope inside the writer lease or read-only recovery CAS. */
+  private erasureScopes(): Repository[] {
       let pmRoot = this.pmRoot;
       if (pmRoot !== undefined && pmRoot !== "") {
         const absolute = resolve(this.root, pmRoot);
@@ -1209,12 +1242,10 @@ export class Repository {
       }
       const paths = [this.hubRoot, ...readInstances(this.sharedControlDirectory).map(/** Registered instances share this denial and physical cleanup scope. */ (entry) => resolve(this.hubRoot, entry.path))];
       paths.push(...this.retiredInstances().map(/** Unlink never silently relinquishes held private or working bytes. */ (path) => resolve(this.hubRoot, path)));
-      const instances = [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
+      return [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
         if (path !== this.hubRoot && !this.instanceIsBound(path)) throw new ObjectStoreError("unbound_instance", "An inventoried instance is missing or no longer linked to this hub; explicitly prune retired paths before erasure.");
         return Repository.open(path, pmRoot);
       });
-      return eraseFile(this, instances, selector, credential, reason, now);
-    });
   }
 
   /**
@@ -1348,8 +1379,8 @@ export class Repository {
       let registeredHere = false;
       try {
         mkdirSync(instanceControl, { recursive: true });
-        writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`);
-        writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`);
+        writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`); durability.persist(join(instanceControl, "format"));
+        writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`); durability.persist(join(instanceControl, INSTANCE_LINK_FILE));
         if (include.length > 0) writeView(instanceControl, { include });
         const instance = new Repository(instanceRoot);
         instance.refs.setHeadToRef(branchRef);
@@ -1370,10 +1401,10 @@ export class Repository {
           // Removing just the control directory would leave the caller with a
           // half-materialized tree in a directory they handed over empty.
           if (createdRoot) {
-            rmSync(instanceRoot, { recursive: true, force: true });
+            durability.remove(instanceRoot, { recursive: true, force: true });
           } else {
             for (const entry of readdirSync(instanceRoot)) {
-              rmSync(join(instanceRoot, entry), { recursive: true, force: true });
+              durability.remove(join(instanceRoot, entry), { recursive: true, force: true });
             }
           }
           if (registeredHere) unregisterInstance(this.sharedControlDirectory, name);
@@ -1538,7 +1569,7 @@ export class Repository {
         mutation.prune();
         if (view === null) {
           const viewPath = join(this.controlDirectory, VIEW_FILE);
-          if (existsSync(viewPath)) unlinkSync(viewPath);
+          if (existsSync(viewPath)) durability.unlink(viewPath);
         } else {
           writeView(this.controlDirectory, view);
         }
@@ -1689,13 +1720,13 @@ export class Repository {
     now: Date,
   ): void {
     if (head.kind === "branch") {
-      this.refs.compareAndSwap(head.ref, expected, next);
+      this.refs.transaction([{ name: head.ref, expected, next }], undefined, { expected: `ref: ${head.ref}` });
       this.operations.append(command, summary, [{ ref: head.ref, before: expected, after: next }], now);
       return;
     }
     // Detached HEAD advances HEAD itself. Recorded as a transition on the literal
     // name "HEAD" so undo has something to compare and swap against.
-    this.refs.setHeadDetached(next);
+    this.refs.setHeadDetached(next, expected ?? undefined);
     this.operations.append(command, summary, [{ ref: "HEAD", before: expected, after: next }], now);
   }
 

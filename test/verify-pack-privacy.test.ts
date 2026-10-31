@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Real npm packs prove the allowlist and privacy gate reject contaminated shipped documentation. */
 import assert from "node:assert/strict";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -55,8 +56,8 @@ test("the package ships README-linked docs and examples, excluding evidence and 
     }
     const result = verifyPack(root);
     assert.deepEqual(result.failures, []);
-    // Eleven consumer docs, README, package manifest and one compiled fixture file.
-    assert.equal(result.count, 14);
+    // Thirteen consumer docs, README, package manifest and one compiled fixture file.
+    assert.equal(result.count, 16);
     assert.match(manifest.scripts["release:check"], /&& npm run pack:check &&/u);
     assert.equal(manifest.scripts["pack:check"], "node scripts/verify-pack-privacy.ts");
   } finally { rmSync(root, { recursive: true, force: true }); }

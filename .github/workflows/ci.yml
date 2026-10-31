@@ -75,10 +75,37 @@ jobs:
           ./node_modules/.bin/pm health --check-only --strict-exit --require-merge-drivers
 
       - name: Full npm release gate
-        run: npm run release:check
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate_tmp="$(mktemp -d "${RUNNER_TEMP}/pm-vcs-npm.XXXXXXXX")"
+          storage_report() {
+            printf 'gate storage %s\n' "$1"
+            df -Pk "${gate_tmp}"
+            df -Pi "${gate_tmp}"
+            du -sk -- "${gate_tmp}"
+            if [ -d coverage ]; then du -sk -- coverage; fi
+          }
+          trap 'gate_status=$?; storage_report before-cleanup || true; rm -rf -- "${gate_tmp}"; df -Pk "${RUNNER_TEMP}" || true; df -Pi "${RUNNER_TEMP}" || true; exit "${gate_status}"' EXIT
+          export TMPDIR="${gate_tmp}"
+          storage_report before-gate || true
+          npm run release:check
 
       - name: Full Bun release gate
+        shell: bash
         run: |
+          set -euo pipefail
+          gate_tmp="$(mktemp -d "${RUNNER_TEMP}/pm-vcs-bun.XXXXXXXX")"
+          storage_report() {
+            printf 'gate storage %s\n' "$1"
+            df -Pk "${gate_tmp}"
+            df -Pi "${gate_tmp}"
+            du -sk -- "${gate_tmp}"
+            if [ -d coverage ]; then du -sk -- coverage; fi
+          }
+          trap 'gate_status=$?; storage_report before-cleanup || true; rm -rf -- "${gate_tmp}"; df -Pk "${RUNNER_TEMP}" || true; df -Pi "${RUNNER_TEMP}" || true; exit "${gate_status}"' EXIT
+          export TMPDIR="${gate_tmp}"
+          storage_report before-gate || true
           bun run release:check
           bun test --timeout 120000 ./test/tracker-lenses.test.ts ./test/change-bundles.test.ts
 
@@ -119,3 +146,9 @@ jobs:
 
       - name: Verify the installed PM CLI launcher
         run: node scripts/accept-native-toon.ts --init-only
+
+      - name: Build Windows storage acceptance
+        run: npm run build
+
+      - name: Verify Windows GC apply on a non-git tracker
+        run: node --test --test-concurrency=1 --test-name-pattern="Windows GC|native root case" test/durability.test.ts test/ref-publication-recovery.test.ts

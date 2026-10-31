@@ -1,0 +1,25 @@
+id: pm-vcs-annotationteardown
+title: Settle annotation fixture owners before retry-bounded teardown
+description: "Fix owner issue 151: Node 22 annotation teardown can encounter ENOTEMPTY in test-owned PM lock directories. Run SDK mutation refresh in supported foreground test mode, join every owned child/watcher/task, then use asynchronous recursive force removal with bounded retries. Preserve permanent cleanup failures and all attribution assertions."
+type: Issue
+status: in_progress
+priority: 2
+tags[1]: "gh:unbraind/pm-vcs#151"
+created_at: "2026-10-26T06:15:07.937Z"
+updated_at: "2026-10-30T13:57:25.809Z"
+assignee: codex-agent
+claim_principal: codex-agent
+author: codex-agent
+acceptance_criteria: No test-owned writers survive cleanup; native transient ENOTEMPTY is retried; persistent failures remain visible; exact-head Node 22/npm/Bun gates pass.
+comments[3]{created_at,author,text}:
+  "2026-10-26T06:15:11.228Z",codex-agent,"The pinned SDK exposes no PmClient disposal or pending-worker drain API. Its supported foreground search refresh mode makes awaited SDK mutations finish their work before fixture teardown; annotation subprocesses are synchronous and return after child completion. Add a managed fixture for explicitly owned asynchronous child close, watcher close and pending tasks, followed by fs.promises.rm with recursive/force/maxRetries. Real native ENOTEMPTY injection must pass with retries and fail when the retry option alone is reverted; retain persistent errors. PR 150 will say Fixes #151. Ambient agent-session failures were separately reproduced and will be fixed in the next commit without weakening provenance assertions."
+  "2026-10-26T06:32:39.481Z",codex-agent,"Issue 151 implementation: annotation uses a managed fixture; async afterEach waits for owned task settlement, child close (including pipes) and watcher close, then calls fs.promises.rm with recursive=true, force=true, maxRetries=8 and retryDelay=25. Early resource rejections are observed immediately and retained for teardown failure; permanent removal errors remain visible as aggregate failures. SDK mutation refresh runs in supported foreground test mode, and synchronous annotation subprocesses finish before teardown. Full annotation plus fixture regressions pass 28/28 on Node 24 and 28/28 on Node 22. Revert proofs: setting only cleanup maxRetries to zero makes the native ENOTEMPTY regression fail 0/1; restoring it passes 1/1. Removing only the resource join makes the child/watcher teardown regression fail 0/1 (child still running); restoring it passes 1/1. Commands: node --test --test-name-pattern=\"fixture cleanup retries\" test/fixture-lifetime.test.ts; node --test --test-name-pattern=\"fixture teardown joins\" test/fixture-lifetime.test.ts. Existing provenance assertions are unchanged. SDK gap: PmClient has no lifecycle disposal/pending-worker drain API, so supported foreground refresh prevents detached SDK work. Exact-head full CI and Fixes #151 PR body follow after the separate session-isolation commit."
+  "2026-10-30T13:57:25.807Z",codex-agent,"Reverified issue 151 in a disposable source copy: removing only maxRetries makes the native transient-ENOTEMPTY fixture fail; restoring passes 1/1. Removing only resource settlement makes the child/watcher/task regression fail; restoring passes 1/1. Commands: node --test --test-concurrency=1 --test-name-pattern=\"fixture cleanup retries\" test/fixture-lifetime.test.ts; node --test --test-concurrency=1 --test-name-pattern=\"fixture teardown joins\" test/fixture-lifetime.test.ts. Permanent failures remain visible. Existing fixing commit aee95e4 is retained. Complete final-source release gates follow."
+files[3]{path,scope}:
+  test/annotate.test.ts,project
+  test/fixture-lifetime.test.ts,project
+  test/helpers/managed-temp.ts,project
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/annotate.test.ts test/fixture-lifetime.test.ts,project,240,codex-agent,"2026-10-26T06:32:40.641Z",local_mutation,feat/indexed-pack-storage
+  node --test test/fixture-lifetime.test.ts,project,60,codex-agent,"2026-10-26T06:32:42.110Z",local_mutation,feat/indexed-pack-storage
+body: ""

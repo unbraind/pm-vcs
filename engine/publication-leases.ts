@@ -1,7 +1,8 @@
+import { durability } from "./durability.ts";
 /** Receiver-owned stable FileId leases, fenced generations and durable audit. */
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { type ClosureMetadata } from "./closure.ts";
 import { syncDirectory } from "./composition.ts";
 import { readCommit, readTree, type FileId } from "./model.ts";
@@ -127,7 +128,7 @@ export class PublicationLeases {
   constructor(store: ObjectStore, controlDirectory: string, principal: ReceiverPrincipal = filesystemPrincipal()) {
     this.store = store;
     this.principal = principal;
-    this.directory = join(controlDirectory, "leases");
+    this.directory = resolve(controlDirectory, "leases");
   }
 
   /** Read the authoritative append-only audit, refusing truncation or invalid generations. */
@@ -160,7 +161,7 @@ export class PublicationLeases {
     const fd = openSync(join(this.directory, `${lease.fileId}.jsonl`), "a", 0o600);
     try {
       writeFileSync(fd, JSON.stringify({ action, actor: this.principal.principal, at, lease }) + "\n");
-      fsyncSync(fd);
+      durability.file(fd);
     } finally { closeSync(fd); }
     syncDirectory(this.directory, false);
     return lease;

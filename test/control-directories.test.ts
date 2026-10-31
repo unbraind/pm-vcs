@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Real-tracker regressions for nested control state, filesystem aliases and hostile stored trees. */
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
@@ -7,7 +8,7 @@ import { afterEach, test } from "node:test";
 import { Repository } from "../engine/repo.ts";
 import { writeCommit, type Signature } from "../engine/model.ts";
 import { isControlPath, isIgnored, isPrunableDirectory, parseIgnore } from "../engine/ignore.ts";
-import { buildTree, flattenTree, isProtectedWorktreePath, listWorkingTree, pruneEmptyDirectories } from "../engine/worktree.ts";
+import { buildTree, encodeIndex, flattenTree, isProtectedWorktreePath, listWorkingTree, pruneEmptyDirectories } from "../engine/worktree.ts";
 import { runPm } from "../scripts/pm-environment.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
@@ -125,7 +126,8 @@ test("symlink aliases cannot stage control content or receive writes from hostil
   assert.equal(isProtectedWorktreePath(repo.root, "alias/sentinel", true), true);
   assert.equal(isProtectedWorktreePath(repo.root, "leaf-chain", true), true);
   const cleanIndex = repo.readIndex();
-  repo.writeIndex([...cleanIndex, { path: "alias/sentinel", id: "f".repeat(64), mode: "100644", sparse: true }]);
+  const aliasPayload = repo.objects.write("blob", Buffer.from("hostile alias metadata fixture"));
+  repo.writeIndex([...cleanIndex, { path: "alias/sentinel", id: aliasPayload, mode: "100644", sparse: true }]);
   assert.throws(() => repo.commit({ message: "refuse alias\n", author }, now), { code: "path_ignored" });
   assert.ok(repo.stage([]).includes("alias/sentinel"));
   const unsafe = hostileTree(repo, [...protectedPaths.filter((path) => path !== "alias"), "ordinary-link", "safe/new.txt"]);
@@ -273,13 +275,16 @@ test("sparse view writes and removals fence legacy control and alias entries bef
   symlinkSync("child/.pmvcs/sentinel", join(repo.root, "alias"));
   const id = "f".repeat(64); // Missing objects prove that fenced paths are not even read.
   for (const sparse of [true, false]) {
-    repo.writeIndex(["child/.pmvcs/sentinel", "child/.PMVCS/format", "alias"].map((path) => ({ path, id, mode: "100644" as const, sparse })));
+    const entries = ["child/.pmvcs/sentinel", "child/.PMVCS/format", "alias"].map((path) => ({ path, id, mode: "100644" as const, sparse }));
+    assert.throws(() => repo.writeIndex(entries), { code: "publication_unverified" });
+    // Persist the released index format directly: legacy protected entries must still be fenced before reads.
+    writeFileSync(join(repo.controlDirectory, "index"), encodeIndex(entries));
     repo.setView(sparse ? null : ["visible/**"]);
     assert.deepEqual(repo.readIndex(), []);
     assert.equal(readFileSync(join(child.controlDirectory, "sentinel"), "utf8"), "private\n");
     assert.equal(readlinkSync(join(repo.root, "alias")), "child/.pmvcs/sentinel");
   }
-  repo.writeIndex([{ path: "alias/private", id, mode: "100644" }]);
+  writeFileSync(join(repo.controlDirectory, "index"), encodeIndex([{ path: "alias/private", id, mode: "100644" }]));
   assert.deepEqual(repo.scan().dirty, []);
 });
 

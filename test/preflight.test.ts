@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
@@ -102,7 +104,7 @@ test("a fresh clone has no drivers and fails loudly, then passes after merge ins
     // Same reason as test/helpers/sandbox.ts: the runner re-injects
     // NODE_V8_COVERAGE into children, which then corrupt the parent's report.
     env: withoutPmContext({
-      ...process.env,
+      ...testEnvironment(),
       ...discardChildCoverage(),
     }),
   });
