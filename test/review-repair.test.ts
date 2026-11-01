@@ -4,15 +4,16 @@ import assert from "node:assert/strict";
 import fs, { chmodSync, existsSync, fstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import crypto, { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import path, { join } from "node:path";
+import path, { dirname, join } from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { spawnSync } from "node:child_process";
 import { afterEach, mock, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { ObjectStore, hashObject } from "../engine/objects.ts";
-import { derivations } from "../engine/derivations.ts";
+import { derivations, provenanceLimits } from "../engine/derivations.ts";
 import { objectFiles } from "../engine/object-files.ts";
+import { VerificationRefusal } from "../engine/object-error.ts";
 import { recordPayloadOwner } from "../engine/payload-owners.ts";
 import { durability } from "../engine/durability.ts";
 import { assertDestructionStorage, destructionBoundary, DestructionRefusal, prepareDestruction, prepareNamespaceDestruction } from "../engine/destruction.ts";
@@ -26,7 +27,7 @@ import { writeBundleFile } from "../engine/managed-exports.ts";
 import { exportBundle } from "../engine/bundle.ts";
 import { reachableObjects } from "../engine/reachability.ts";
 import { encodeTree, encodeManifest } from "../engine/model.ts";
-import { readFragmentedToFile, writeFragmented, writeCdcFragmented, writeFragmentsFromFd, writeCdcFragmentsFromFd } from "../engine/fragments.ts";
+import { DEFAULT_CDC_PARAMS, cdcFragmentedFileContentId, readFragmented, readFragmentedToFile, writeFragmented, writeCdcFragmented, writeFragmentsFromFd, writeCdcFragmentsFromFd } from "../engine/fragments.ts";
 import { benchmarkPhase6 } from "../scripts/phase6-benchmark.ts";
 import { prepareControlPublication } from "./helpers/prepared-publication.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
@@ -473,4 +474,141 @@ test("unrecognized empty lease audit names refuse before deletion", async () => 
  const foreign = join(leases, "foreign-backup"); writeFileSync(foreign, ""); const selected = readFileSync(join(f.dir.root, "asset"));
  assert.throws(() => f.repo.obliterate(f.entry.fileId!, "erase-fixture", "lease-name", new Date(1)), { code: "unsupported_erasure_storage" });
  assert.equal(f.repo.objects.denials().length, 0); assert.deepEqual(readFileSync(join(f.dir.root, "asset")), selected); assert.equal(existsSync(foreign), true);
+});
+
+
+for (const operation of ["fixed", "cdc", "write", "arrival", "worktree", "export"] as const) test(`native ${operation} publication snapshots caller-owned bytes before certification`, async () => {
+ const f = await fixture(); const input = Buffer.from("private snapshot input 739115"); const expected = Buffer.from(input); let injected = false;
+ if (operation === "fixed" || operation === "cdc") {
+  const write = f.repo.objects.write; mock.method(f.repo.objects, "write", (...args: Parameters<typeof write>) => { if (!injected) { injected = true; input.fill(88); } return Reflect.apply(write, f.repo.objects, args); });
+  const result = operation === "fixed" ? writeFragmented(f.repo.objects, input, 5) : writeCdcFragmented(f.repo.objects, input, { minChunkSize: 3, maxChunkSize: 7, mask: 3 }); assert.deepEqual(readFragmented(f.repo.objects, result.manifestId), expected);
+ } else if (operation === "write" || operation === "arrival") {
+  const arrival = { id: hashObject("blob", input), type: "blob" as const, payload: input }; const preflight = f.repo.objects.preflight;
+  mock.method(f.repo.objects, "preflight", (...args: Parameters<typeof preflight>) => { injected = true; input.fill(88); arrival.id = hashObject("blob", input); return Reflect.apply(preflight, f.repo.objects, args); });
+  if (operation === "write") { const id = f.repo.objects.write("blob", input); assert.equal(id, hashObject("blob", expected)); }
+  else f.repo.objects.accept([arrival], true);
+  assert.equal(f.repo.objects.has(hashObject("blob", expected)), true); assert.deepEqual(f.repo.objects.read(hashObject("blob", expected)).payload, expected);
+ } else if (operation === "worktree") {
+  const open = fs.openSync; mock.method(fs, "openSync", (...args: Parameters<typeof open>) => { if (String(args[0]).endsWith("snapshot-output")) { injected = true; input.fill(88); } return Reflect.apply(open, fs, args); }); syncBuiltinESMExports();
+  f.repo.objects.withWriteLock(() => { const mutation = new WorktreeMutation(f.repo.root, ".pmvcs", f.repo.objects); try { mutation.write("snapshot-output", input, 0o600, { objects: [f.entry.id] }); } finally { mutation.close(); } }); assert.deepEqual(readFileSync(join(f.repo.root, "snapshot-output")), expected);
+ } else {
+  const write = fs.writeFileSync; mock.method(fs, "writeFileSync", (...args: Parameters<typeof write>) => { if (typeof args[0] === "string" && args[0].includes("exports.json.") && args[0].endsWith(".tmp")) { injected = true; input.fill(88); } return Reflect.apply(write, fs, args); }); syncBuiltinESMExports();
+  writeBundleFile(f.repo, join(f.repo.root, "snapshot-export"), () => input, () => [f.entry.id]); assert.deepEqual(readFileSync(join(f.repo.root, "snapshot-export")), expected);
+ }
+ assert.equal(injected, true); assert.notDeepEqual(input, expected);
+});
+
+test("arrival publication rejects bytes that differ from their supplied identity before storing any", async () => {
+ const f = await fixture(); const before = f.repo.objects.inventory().map(row => row.id).sort(); const bytes = Buffer.from("actual arrival bytes");
+ assert.throws(() => f.repo.objects.accept([{ type: "blob", id: hashObject("blob", Buffer.from("other bytes")), payload: bytes }], true), { code: "corrupt_object" }); assert.deepEqual(f.repo.objects.inventory().map(row => row.id).sort(), before);
+});
+
+for (const mode of ["fixed", "cdc"] as const) test(`verified ${mode} source blocks reject an in-place change before publishing changed bytes`, async () => {
+ const f = await fixture(); const path = join(f.dir.root, "source"); const bytes = Buffer.alloc(131072, 65); writeFileSync(path, bytes); const fd = fs.openSync(path, "r");
+ const changed = Buffer.from(bytes); changed.fill(88, 65536); const identify = (): void => { writeFileSync(path, changed); fs.utimesSync(path, new Date(0), new Date(0)); };
+ try { assert.throws(() => mode === "fixed" ? writeFragmentsFromFd(f.repo.objects, fd, bytes.length, 65536, path, undefined, undefined, identify) : writeCdcFragmentsFromFd(f.repo.objects, fd, bytes.length, { minChunkSize: 65536, maxChunkSize: 65536, mask: 0 }, path, undefined, undefined, identify), { code: "source_changed" }); }
+ finally { fs.closeSync(fd); }
+ assert.equal(f.repo.objects.has(hashObject("blob", changed.subarray(65536))), false); assert.deepEqual(f.repo.objects.read(hashObject("blob", bytes.subarray(0, 65536))).payload, bytes.subarray(0, 65536));
+});
+
+for (const offset of [-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER]) test(`descriptor publication refuses invalid explicit source offset ${offset}`, async () => {
+ const f = await fixture(); const path = join(f.dir.root, "asset"); const fd = fs.openSync(path, "r"); const before = f.repo.objects.inventory().map(row => row.id).sort();
+ try { assert.throws(() => writeFragmentsFromFd(f.repo.objects, fd, 3, 3, path, undefined, undefined, undefined, offset), { code: "invalid_source_offset" }); }
+ finally { fs.closeSync(fd); } assert.deepEqual(f.repo.objects.inventory().map(row => row.id).sort(), before);
+});
+
+
+for (const mode of ["partial-write", "zero-write", "proof-short", "open-error", "close-error", "cleanup-error", "source-plus-close", "source-plus-cleanup", "close-plus-cleanup"] as const) test(`source commitment lifecycle preserves evidence and the primary failure (${mode})`, async () => {
+ const f = await fixture(); const source = join(f.dir.root, "asset"); const expected = readFileSync(source); const fd = fs.openSync(source, "r"); let proofFd = -1; let proofRoot = ""; let short = false; let zeroWrites = 0; let emptyReads = 0;
+ const open = objectFiles.open; const remove = durability.discardTemporary;
+ mock.method(objectFiles, "open", (...args: Parameters<typeof open>) => {
+  const proof = String(args[0]).endsWith("checksums");
+  if (proof) { proofRoot = dirname(String(args[0])); if (mode === "open-error") throw Object.assign(new Error("proof open fault"), { code: "EACCES" }); }
+  const file = Reflect.apply(open, objectFiles, args);
+  if (proof) {
+   proofFd = file.fd;
+   if (mode === "close-error" || mode === "source-plus-close" || mode === "close-plus-cleanup") { const close = file.close; mock.method(file, "close", () => { close(); throw Object.assign(new Error("proof close fault"), { code: "EIO" }); }); }
+  }
+  return file;
+ });
+ const write = fs.writeSync; mock.method(fs, "writeSync", (...args: unknown[]) => {
+  if (args[0] === proofFd) {
+   if (mode === "zero-write") { if (++zeroWrites === 1) return 0; throw Object.assign(new Error("repeated zero write"), { code: "EIO" }); }
+   if (mode === "partial-write" && !short) { short = true; return Reflect.apply(write, fs, [args[0], args[1], args[2], 16]); }
+  }
+  return Reflect.apply(write, fs, args);
+ });
+ const read = fs.readSync; mock.method(fs, "readSync", (...args: unknown[]) => { if (mode === "proof-short" && args[0] === proofFd && ++emptyReads > 1) throw Object.assign(new Error("repeated empty proof read"), { code: "EIO" }); return Reflect.apply(read, fs, args); }); syncBuiltinESMExports();
+ if (mode === "cleanup-error" || mode === "source-plus-cleanup" || mode === "close-plus-cleanup") mock.method(durability, "discardTemporary", (path: string, recursive?: boolean) => { if (path === proofRoot) throw Object.assign(new Error("proof cleanup fault"), { code: "ENOTEMPTY" }); return remove(path, recursive); });
+ const identify = (): void => { if (mode === "proof-short") fs.ftruncateSync(proofFd, 0); if (mode === "source-plus-close" || mode === "source-plus-cleanup") writeFileSync(source, Buffer.alloc(expected.length, 88)); };
+ try {
+  const action = () => writeFragmentsFromFd(f.repo.objects, fd, expected.length, 5, source, undefined, undefined, identify);
+  if (mode === "partial-write") { const fragments = action(); assert.equal(short, true); assert.deepEqual(Buffer.concat(fragments.map(row => f.repo.objects.read(row.id).payload)), expected); }
+  else assert.throws(action, { code: mode === "zero-write" ? "source_proof_failed" : mode === "proof-short" ? "short_read" : mode === "open-error" ? "EACCES" : mode === "source-plus-close" || mode === "source-plus-cleanup" ? "source_changed" : mode === "cleanup-error" ? "ENOTEMPTY" : "EIO" });
+  assert.notEqual(proofRoot, ""); assert.equal(objectFiles.active.size, 0);
+  if (mode !== "cleanup-error" && mode !== "source-plus-cleanup" && mode !== "close-plus-cleanup") assert.equal(existsSync(proofRoot), false);
+ } finally { fs.closeSync(fd); mock.restoreAll(); syncBuiltinESMExports(); if (proofRoot !== "") remove(proofRoot, true); }
+});
+
+
+test("descriptor commitment work observes the primary deadline before any publication", async () => {
+ const f = await fixture(); const source = join(f.dir.root, "source"); writeFileSync(source, Buffer.alloc(131072, 65)); const fd = fs.openSync(source, "r"); const before = f.repo.objects.inventory().map(row => row.id).sort(); let clock = 0; let advanced = false;
+ mock.method(performance, "now", () => clock); const read = fs.readSync;
+ mock.method(fs, "readSync", (...args: unknown[]) => { const result = Reflect.apply(read, fs, args); if (args[0] === fd) { clock = provenanceLimits.timeMs + 1; advanced = true; } return result; }); syncBuiltinESMExports();
+ try { assert.throws(() => writeFragmentsFromFd(f.repo.objects, fd, 131072, 65536, source), error => error instanceof VerificationRefusal && error.verifier === "provenance" && error.bound === "time_ms"); }
+ finally { fs.closeSync(fd); mock.restoreAll(); syncBuiltinESMExports(); } assert.equal(advanced, true); assert.deepEqual(f.repo.objects.inventory().map(row => row.id).sort(), before);
+});
+
+
+test("descriptor commitment stops reading immediately when its native store lease changes", async () => {
+ const f = await fixture(); const source = join(f.dir.root, "source"); writeFileSync(source, Buffer.alloc(131072, 65)); const fd = fs.openSync(source, "r"); const lock = join(f.repo.controlDirectory, "objects.lock"); let reads = 0;
+ const read = fs.readSync; mock.method(fs, "readSync", (...args: unknown[]) => { const result = Reflect.apply(read, fs, args); if (args[0] === fd) { if (++reads === 1) writeFileSync(lock, "peer replacement lock"); } return result; }); syncBuiltinESMExports();
+ try { assert.throws(() => writeFragmentsFromFd(f.repo.objects, fd, 131072, 65536, source), { code: "store_locked" }); }
+ finally { fs.closeSync(fd); mock.restoreAll(); syncBuiltinESMExports(); }
+ assert.equal(reads, 1); assert.equal(readFileSync(lock, "utf8"), "peer replacement lock");
+});
+
+
+test("streamed CDC identification refuses source EOF after measuring its descriptor", async () => {
+ const f = await fixture(); const source = join(f.dir.root, "source"); writeFileSync(source, "measured CDC input"); let sourceFd = -1; let reads = 0;
+ const open = fs.openSync; mock.method(fs, "openSync", (...args: Parameters<typeof open>) => { const fd = Reflect.apply(open, fs, args); if (args[0] === source) sourceFd = fd; return fd; });
+ const read = fs.readSync; mock.method(fs, "readSync", (...args: unknown[]) => { if (args[0] === sourceFd) { if (++reads > 1) throw Object.assign(new Error("repeated empty source read"), { code: "EIO" }); writeFileSync(source, ""); } return Reflect.apply(read, fs, args); }); syncBuiltinESMExports();
+ assert.throws(() => cdcFragmentedFileContentId(source), { code: "short_read" }); assert.equal(reads, 1); assert.throws(() => fs.fstatSync(sourceFd), { code: "EBADF" });
+});
+
+
+test("completed erasure rejects recertifying its whole bytes through every fragment input mode", async () => {
+ const f = await fixture(); const payload = readFileSync(join(f.dir.root, "asset")); f.repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+ f.repo.obliterate(f.entry.fileId!, "erase-fixture", "fragment-denied-source", new Date(1));
+ const source = join(f.dir.root, "independent-source"); writeFileSync(source, payload); const fd = fs.openSync(source, "r");
+ let identified = false; const identify = (): void => { identified = true; }; const before = f.repo.objects.inventory().map(row => row.id).sort(); const certificates = readdirSync(join(f.repo.controlDirectory, "derivations")).sort();
+ try {
+  for (const action of [() => writeFragmented(f.repo.objects, payload, 8, "c".repeat(32)), () => writeCdcFragmented(f.repo.objects, payload, undefined, "c".repeat(32)), () => writeFragmentsFromFd(f.repo.objects, fd, payload.length, 8, source, "c".repeat(32), undefined, identify), () => writeCdcFragmentsFromFd(f.repo.objects, fd, payload.length, DEFAULT_CDC_PARAMS, source, "c".repeat(32), undefined, identify)]) assert.throws(action, { code: "object_obliterated" });
+ } finally { fs.closeSync(fd); }
+ assert.deepEqual(f.repo.objects.inventory().map(row => row.id).sort(), before); assert.deepEqual(readFileSync(source), payload); assert.equal(identified, false, "denied content never reaches the producer certification callback"); assert.deepEqual(readdirSync(join(f.repo.controlDirectory, "derivations")).sort(), certificates);
+ const independent = Buffer.from("independent content remains stageable after erasure"); const fresh = writeFragmented(f.repo.objects, independent, 8, "d".repeat(32)); assert.deepEqual(readFragmented(f.repo.objects, fresh.manifestId), independent);
+});
+
+
+test("a live store owner outlasting the publication deadline is preserved without running the writer", async () => {
+ const f = await fixture(); const lock = join(f.repo.controlDirectory, "objects.lock"); const owner = String(process.pid); writeFileSync(lock, owner); let entered = false; const started = performance.now(); const link = durability.link;
+ // Bound a faulty implementation that discards its deadline; retain real native contention until then.
+ mock.method(durability, "link", (...args: Parameters<typeof link>) => { if (args[1] === lock && performance.now() - started > 6500) throw Object.assign(new Error("contended publication exceeded its deadline"), { code: "EIO" }); return link(...args); });
+ assert.throws(() => f.repo.objects.withWriteLock(() => { entered = true; }), { code: "store_locked" });
+ assert.equal(entered, false); assert.equal(readFileSync(lock, "utf8"), owner); assert.ok(performance.now() - started >= 4500);
+});
+
+for (const changed of ["size", "mtime", "unchanged"] as const) test(`failed store publication preserves an owner whose ${changed} changes during temporary retirement`, async () => {
+ const f = await fixture(); const lock = join(f.repo.controlDirectory, "objects.lock"); const unlink = durability.unlink; let calls = 0; let owner = "";
+ mock.method(durability, "unlink", (...args: Parameters<typeof unlink>) => {
+  if (path.basename(args[0]).startsWith("objects.lock.") && args[0].endsWith(".tmp")) {
+   if (++calls === 1) throw Object.assign(new Error("publication retirement fault"), { code: "EIO" });
+   const result = unlink(...args); owner = readFileSync(lock, "utf8");
+   if (changed === "size") { owner += "foreign"; writeFileSync(lock, owner); } else if (changed === "mtime") fs.utimesSync(lock, new Date(1000), new Date(1000));
+   return result;
+  }
+  return unlink(...args);
+ });
+ assert.throws(() => f.repo.objects.withWriteLock(() => assert.fail("a failed publication cannot run its writer")), { code: "EIO" });
+ assert.equal(calls, 2); assert.equal(existsSync(lock), changed !== "unchanged", "cleanup retires only the unchanged native owner"); if (changed !== "unchanged") assert.equal(readFileSync(lock, "utf8"), owner); assert.equal(objectFiles.active.size, 0);
 });

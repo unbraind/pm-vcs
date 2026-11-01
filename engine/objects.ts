@@ -477,6 +477,7 @@ export class ObjectStore {
    */
   write(type: ObjectType, payload: Buffer, fileId?: string, sources: readonly ObjectId[] = []): ObjectId {
     return this.withWriteLock(/** Check permanent denial while holding the publication lock. */ () => {
+      payload = Buffer.from(payload);
       const id = hashObject(type, payload);
       this.preflight([{ type, payload, id }], fileId !== undefined);
       const payloadType = ["blob", "record", "manifest", "link", "conflict"].includes(type);
@@ -815,7 +816,9 @@ export class ObjectStore {
   /** Store a batch that has passed whole-batch provenance validation under the same lock. */
   accept(objects: readonly ObjectArrival[], attributed: boolean): void {
     this.withWriteLock(/** Prevent erasure from interleaving with arrival preflight and publication. */ () => {
+      objects = objects.map(object => ({ ...object, payload: Buffer.from(object.payload) }));
       this.preflight(objects, attributed);
+      for (const object of objects) if (hashObject(object.type, object.payload) !== object.id) throw new ObjectStoreError("corrupt_object", "Arrival payload differs from its certified object identity.");
       for (const object of objects) this.writeRaw(object.type, object.payload);
       for (const object of objects) if (object.type === "manifest") {
         const representation = this.representation(object.id, object);

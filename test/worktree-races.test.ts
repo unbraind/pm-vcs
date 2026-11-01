@@ -247,7 +247,7 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
               assert.equal(statSync(join(destination, sentinel)).mode & 0o777, 0o600);
             }
             assert.ok(failure instanceof ObjectStoreError);
-            assert.equal(failure.code, operation === "rmdir" ? "ENOTEMPTY" : "worktree_path_changed");
+            assert.equal(failure.code, operation === "rmdir" && betweenSteps ? "ENOTEMPTY" : "worktree_path_changed");
             assert.deepEqual(repo.view(), recorded, "a refused view change keeps the previous view recorded");
             assert.deepEqual(repo.readIndex(), index, "a refused view change keeps the index untouched");
           });
@@ -261,7 +261,7 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
           renameSync(join(repo.root, "branch"), join(repo.root, "parked"));
           symlinkSync(destination, join(repo.root, "branch"), "dir");
         });
-        assert.throws(() => repo.materialize(null), { code: "ENOTEMPTY" });
+        assert.throws(() => repo.materialize(null), { code: betweenSteps ? "ENOTEMPTY" : "worktree_path_changed" });
         assert.equal(swapped(), true);
         assert.equal(readFileSync(join(destination, "droppable/sentinel"), "utf8"), "sentinel\n");
       });

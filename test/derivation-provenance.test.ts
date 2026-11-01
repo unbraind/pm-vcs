@@ -1,7 +1,7 @@
 import "./helpers/isolate-session.ts";
 /** Native derivation edges are a primary erasure proof, including historical unknowns and bounded DAGs. */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, symlinkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readSync, existsSync, mkdirSync, readdirSync, symlinkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { constants as zlibConstants, deflateSync } from "node:zlib";
 import { afterEach, test } from "node:test";
@@ -18,7 +18,7 @@ import { competingResolutions, carryConflicts, encodeConflict, fieldSide, readCo
 import { mergePath, mergeTrees } from "../engine/rewrite.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { frameObject, hashObject, ObjectStore, type ObjectId, type StoredObject } from "../engine/objects.ts";
-import { writeFragmented, writeCdcFragmented, writeFragmentedFile, readFragmented } from "../engine/fragments.ts";
+import { writeFragmented, writeCdcFragmented, writeFragmentedFile, writeFragmentsFromFd, writeCdcFragmentsFromFd, readFragmented } from "../engine/fragments.ts";
 import { erasureScanBoundary } from "../engine/erasure-scan.ts";
 import { WorktreeMutation } from "../engine/worktree-mutation.ts";
 import { nativeOutputs } from "../engine/native-outputs.ts";
@@ -831,4 +831,42 @@ for (const type of ["record", "link", "conflict"] as const) for (const packed of
   if (packed) repo.objects.compact();
   assert.ok(collectGarbage(repo, true).candidates.includes(record)); assert.equal(repo.objects.has(record), false);
   erase(repo, entry.fileId!, [entry.id, selected, record, derived]); assert.equal(existsSync(join(repo.root, "derived.txt")), false);
+});
+
+
+for (const mode of ["fixed", "cdc"] as const) for (const packed of [false, true]) for (const explicit of [false, true]) test(`advanced descriptor certifies exactly stored ${mode} bytes (${packed ? "packed" : "loose"}, ${explicit ? "explicit" : "default"} offset)`, async () => {
+ const { repo, entry, secret } = await fixture(); const prefix = Buffer.from("harmless-prefix::"); const content = Buffer.concat([prefix, Buffer.from(secret), prefix]); const path = join(repo.root, "descriptor-input"); writeFileSync(path, content);
+ const fd = openSync(path, "r"); let whole = ""; let fragments; let nextByte = -1;
+ try {
+  readSync(fd, Buffer.alloc(prefix.length), 0, prefix.length, null);
+  const identify = (id: string): void => { whole = id; };
+  fragments = mode === "fixed" ? writeFragmentsFromFd(repo.objects, fd, secret.length, 5, path, undefined, undefined, identify, explicit ? prefix.length : 0) : writeCdcFragmentsFromFd(repo.objects, fd, secret.length, { minChunkSize: 3, maxChunkSize: 7, mask: 3 }, path, undefined, undefined, identify, explicit ? prefix.length : 0);
+  const probe = Buffer.alloc(1); if (readSync(fd, probe, 0, 1, null) === 1) nextByte = probe[0]!;
+ } finally { closeSync(fd); }
+ const stored = Buffer.concat(fragments.map(fragment => repo.objects.read(fragment.id).payload)); const expected = content.subarray(explicit ? prefix.length : 0, (explicit ? prefix.length : 0) + secret.length);
+ const other = "a".repeat(32); const derived = repo.objects.write("record", encodeRecord({ value: stored.toString() }), other, [whole, ...fragments.map(fragment => fragment.id)]);
+ repo.materialize(buildTree(repo.objects, new Map([["derived.json", { id: derived, fileId: other, mode: "100644" as const }]]))); repo.commit({ message: "descriptor derived output", author }, new Date(1));
+ if (packed) repo.objects.compact(); collectGarbage(repo, true);
+ const receipt = repo.obliterate(entry.fileId!, "erase-fixture", "descriptor", new Date(1));
+ if (expected.includes(secret)) { assert.ok(receipt.removed.includes(derived)); assert.equal(existsSync(join(repo.root, "derived.json")), false); assert.throws(() => repo.objects.read(derived), { code: "object_obliterated" }); }
+ else assert.equal(repo.objects.read(derived).payload.includes(secret), false);
+ assert.deepEqual(stored, expected); assert.equal(whole, hashObject("blob", stored)); assert.equal(receipt.storage.accountable, true); assert.equal(nextByte, content[prefix.length]);
+});
+
+test("descriptor provenance property covers arbitrary explicit starts independently of caller cursors and GC", async () => {
+ const { repo, entry, secret } = await fixture(); const derived: string[] = []; let random = 971831;
+ for (let sample = 0; sample < 16; sample++) {
+  random = (Math.imul(random, 1664525) + 1013904223) >>> 0; const start = sample === 0 ? 0 : random % 257; const prefix = Buffer.alloc(start, 88); const path = join(repo.root, "source-input"); writeFileSync(path, Buffer.concat([prefix, Buffer.from(secret), Buffer.alloc(512, 89)]));
+  const fd = openSync(path, "r"); let whole = ""; let fragments;
+  try {
+   const cursor = (start + 3) % (start + 1); readSync(fd, Buffer.alloc(cursor), 0, cursor, null);
+   const identify = (id: string): void => { whole = id; };
+   fragments = sample & 1 ? writeCdcFragmentsFromFd(repo.objects, fd, secret.length, { minChunkSize: 3, maxChunkSize: 9, mask: 3 }, path, undefined, undefined, identify, start) : writeFragmentsFromFd(repo.objects, fd, secret.length, 7, path, undefined, undefined, identify, start);
+  } finally { closeSync(fd); }
+  const bytes = Buffer.concat(fragments.map(fragment => repo.objects.read(fragment.id).payload)); assert.deepEqual(bytes, Buffer.from(secret)); assert.equal(whole, entry.id);
+  const output = repo.objects.write("blob", Buffer.concat([bytes, Buffer.from(` native ${sample}`)]), undefined, [whole, ...fragments.map(fragment => fragment.id)]); derived.push(output);
+  const mutation = new WorktreeMutation(repo.root, ".pmvcs", repo.objects); try { mutation.write(`output-${sample}`, repo.objects.read(output).payload, 0o644, { objects: [output] }); } finally { mutation.close(); }
+  if (sample % 3 === 0) { if (sample & 1) repo.objects.compact(); collectGarbage(repo, true); }
+ }
+ collectGarbage(repo, true); erase(repo, entry.fileId!, [entry.id, ...derived]); for (let sample = 0; sample < 16; sample++) assert.equal(existsSync(join(repo.root, `output-${sample}`)), false);
 });

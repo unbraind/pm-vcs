@@ -176,6 +176,7 @@ export class WorktreeMutation {
 
   /** Replace a leaf without ever truncating a link or hardlink; write and chmod only its new fd. */
   write(path: string, content: Buffer, mode: number, source?: NativeOutputSource): void {
+    content = Buffer.from(content);
     if (this.store !== undefined && source !== undefined) recordNativeOutput(join(this.root, this.controlDirectory), this.store, path, content, source);
     const parent = this.parent(path, true)!;
     const before = fs.lstatSync(parent.address, { bigint: true, throwIfNoEntry: false });

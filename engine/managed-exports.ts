@@ -31,7 +31,7 @@ export function managedExports(control: string, name = "exports.json"): ManagedE
 /** Register before writing so interruption cannot leave an unaccounted local archive; never follow repository links. */
 export function writeBundleFile(repository: Repository, destination: string, produce: () => Buffer, sources?: () => readonly ObjectId[], exclusive = false): number {
   return repository.objects.withWriteLock(() => {
-    const bytes = produce();
+    const bytes = Buffer.from(produce());
     const path = relative(repository.root, resolve(destination)).split(sep).join("/");
     if (isAbsolute(path) || /^[a-zA-Z]:/.test(path) || path.startsWith("../") || path === "..") { writeFileSync(destination, bytes, exclusive ? { flag: "wx", mode: 0o600 } : undefined); return bytes.length; }
     const exports = managedExports(repository.controlDirectory);

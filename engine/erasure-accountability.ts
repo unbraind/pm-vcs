@@ -114,7 +114,7 @@ function physicalDigest(fd: number, size: number, check: () => void): string {
   check();
   return hash.digest("hex");
 }
-/** Verify every regular file, retrying a replaced file and then the whole catalogue before certification. */
+/** Require two matching complete passes; every final rehash precedes its namespace barrier. */
 function inspectStorage(scope: string | readonly string[], options: AccountabilityOptions, planning?: Map<string, UnaccountedFile>): ErasureAccountabilityReport {
   for (const callback of [options.inspection, options.physical]) if (callback !== undefined) requireSynchronousCallback(callback);
   const started = performance.now(); let visited = 0;
@@ -124,6 +124,7 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
   const roots = [...new Set((typeof scope === "string" ? [scope] : scope).map(root => resolve(root)))];
   const packs = new Map(roots.map((root) => [root, new PackStorage(root)]));
   const root = roots[0] ?? ".";
+  let previous: string | undefined;
   for (let pass = 0; pass < ACCOUNTABILITY_ATTEMPTS; pass++) {
     planning?.clear();
     const snapshots = new Map<string, { stamp: string; sha256: string; bytes: number }>(); const directories = new Map<string, string>();
@@ -216,11 +217,6 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
       if (purged) throw new Changed();
       accountabilityBoundary.visit("pass-check", root, pass);
       check();
-      for (const path of missing) if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) throw new Changed();
-      for (const [path, expected] of directories) {
-        const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-        if (!stat?.isDirectory() || `${stat.dev}:${stat.ino}:${JSON.stringify(catalogue(path).sort())}` !== expected) throw new Changed();
-      }
       for (const [path, expected] of snapshots) {
         const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
         if (!stat?.isFile() || identity(stat) !== expected.stamp) throw new Changed();
@@ -231,10 +227,19 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
           if (!named?.isFile() || identity(named) !== expected.stamp || identity(fstatSync(file.fd, { bigint: true })) !== expected.stamp) throw new Changed();
         } finally { file.close(); }
       }
+      // Reopens and hashes may themselves interleave a writer: the namespace barrier must follow them.
+      for (const path of missing) if (lstatSync(path, { throwIfNoEntry: false }) !== undefined) throw new Changed();
+      for (const [path, expected] of directories) {
+        const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+        if (!stat?.isDirectory() || `${stat.dev}:${stat.ino}:${JSON.stringify(catalogue(path).sort())}` !== expected) throw new Changed();
+      }
+      check();
+      const current = JSON.stringify([[...missing].sort(), [...directories].sort(), [...snapshots].sort()]);
+      if (current !== previous) { previous = current; continue; }
       check();
       return { files, objects, foreign: 0, accountable: true, classes };
     } catch (error) {
-      if (error instanceof Changed || (error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      if (error instanceof Changed || (error as NodeJS.ErrnoException).code === "ENOENT") { previous = undefined; continue; }
       if (error instanceof ErasureStorageRefusal || error instanceof VerificationRefusal) throw error;
       throw new ErasureStorageRefusal("unverifiable", "object-root");
     }

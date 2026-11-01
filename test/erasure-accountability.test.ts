@@ -19,7 +19,8 @@ import { VerificationRefusal, verificationLimits } from "../engine/object-error.
 import { objectFiles } from "../engine/object-files.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 const temps: ReturnType<typeof makeTempDir>[]=[];
-afterEach(()=>{mock.restoreAll();syncBuiltinESMExports();accountabilityBoundary.visit=()=>{};erasureScanBoundary.visit=()=>{};for(const dir of temps.splice(0))dir.cleanup();assert.equal(objectFiles.active.size,0);});
+// Bun native cases install no Node MockTracker patches; its compatibility layer lacks restoreAll.
+afterEach(()=>{mock.restoreAll?.();syncBuiltinESMExports();accountabilityBoundary.visit=()=>{};erasureScanBoundary.visit=()=>{};for(const dir of temps.splice(0))dir.cleanup();assert.equal(objectFiles.active.size,0);});
 /** Initialize through the real host SDK outside any Git repository. */
 async function fixture(bytes=Buffer.from("ordinary retained live data")){
  const dir=makeTempDir();temps.push(dir);await new PmClient({cwd:dir.root,pmRoot:join(dir.root,".agents/pm"),noExtensions:true}).init("accountable",{defaults:true,author:"fixture"});
@@ -94,12 +95,13 @@ test("replacement at EVERY verification boundary retries clean peers and never c
    accountabilityBoundary.visit=()=>{};cells++;
   }
  }
- assert.equal(cells,32);t.diagnostic("32 boundary cells: 8 verification boundaries x loose/pack x clean/erased replacement");
+ assert.equal(cells,64);t.diagnostic("64 boundary cells: two complete passes x 8 verification boundaries x loose/pack x clean/erased replacement");
 });
 
 test("final operation rechecks a clean descriptor's replaced pathname before completion",async()=>{
- const f=await fixture(Buffer.from("selected operation payload 517639"));const live=f.repo.objects.write("blob",Buffer.from("retained clean object"));const path=join(f.repo.objects.storageRoot(),live.slice(0,2),live.slice(2));let passes=0;let changed=false;
- accountabilityBoundary.visit=(step,name)=>{if(step==="pass-start")passes++;if(passes===3&&step==="file-opened"&&name===path&&!changed){changed=true;replace(path,f.bytes,f.dir.root);}};
+ const f=await fixture(Buffer.from("selected operation payload 517639"));const live=f.repo.objects.write("blob",Buffer.from("retained clean object"));const path=join(f.repo.objects.storageRoot(),live.slice(0,2),live.slice(2));let final=false;let changed=false;
+ erasureScanBoundary.visit=step=>{if(step==="receipt")final=true;};
+ accountabilityBoundary.visit=(step,name)=>{if(final&&step==="file-opened"&&name===path&&!changed){changed=true;replace(path,f.bytes,f.dir.root);}};
  assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),{code:"unverifiable"});assert.ok(changed);assert.ok(f.repo.objects.denials()[0].pending);assert.equal(f.repo.operations.read().filter(x=>x.command==="obliterate").length,0);
 });
 
@@ -454,4 +456,34 @@ test("a root withdrawn during purge publication cannot acquire a new deletion ba
  let report: ReturnType<typeof accountErasureStorage> | undefined;
  assert.doesNotThrow(() => { report = accountErasureStorage(root, { ...empty, purge: purge.purge }); }); assert.ok(report);
  assert.equal(injected, true); assert.equal(report.accountable, true); assert.equal(report.files, 0); assert.equal(existsSync(path), false); assert.equal(readFileSync(join(retired, "foreign"), "utf8"), "retired foreign bytes"); assert.equal(existsSync(join(f.repo.controlDirectory, "erasure-purge.json")), false);
+});
+
+
+for (const restorePass of [1, 2]) for (const packed of [false, true]) test(`final reopen cannot certify a restored ${packed ? "pack" : "loose object"} (matching pass ${restorePass})`, async () => {
+ const f = await fixture(Buffer.from("selected reopen secret 917351")); f.repo.objects.write("blob", Buffer.from("retained public object")); if (packed) f.repo.objects.compact();
+ const physical = f.repo.objects.inventory().find(row => row.id === f.entry.id)!.path; const bytes = readFileSync(physical); let final = false; let reopen = false; let injected = false; let finalPass = 0;
+ erasureScanBoundary.visit = step => { if (step === "receipt") final = true; };
+ accountabilityBoundary.visit = step => { if (step === "pass-check" && final) reopen = ++finalPass === restorePass; };
+ objectFiles.opened = (_file, path) => {
+  if (!reopen || injected || !path.startsWith(f.repo.objects.storageRoot())) return;
+  injected = true; mkdirSync(dirname(physical), { recursive: true }); writeFileSync(physical, bytes);
+ };
+ try {
+  assert.throws(() => f.repo.obliterate(f.entry.fileId!, "erase-fixture", "reopen-race", new Date(1)), { code: "erasure_retained_copy" });
+  assert.equal(injected, true); assert.equal(f.repo.objects.denials()[0].pending, true); assert.deepEqual(readFileSync(physical), bytes);
+ } finally { objectFiles.opened = () => {}; }
+});
+
+test("accountability bounds a namespace that never repeats", () => {
+ const dir = makeTempDir(); temps.push(dir); const root = join(dir.root, "objects"); mkdirSync(root); let passes = 0;
+ const store = new ObjectStore(root); const ids = [store.write("blob", Buffer.from("first generation")), store.write("blob", Buffer.from("other generation"))]; const paths = ids.map(id => join(root, id.slice(0, 2), id.slice(2))); const bytes = paths.map(path => readFileSync(path));
+ passes = 0; accountabilityBoundary.visit = step => { if (step !== "pass-start") return; const current = passes++ % 2; for (let i = 0; i < paths.length; i++) if (i === current) writeFileSync(paths[i], bytes[i]); else rmSync(paths[i], { force: true }); };
+ assert.throws(() => accountErasureStorage(root, empty), error => error instanceof VerificationRefusal && error.bound === "storage_attempts"); assert.equal(passes, ACCOUNTABILITY_ATTEMPTS);
+});
+
+
+test("accountability requires two agreeing complete passes even for an empty native scope", () => {
+ const dir = makeTempDir(); temps.push(dir); const root = join(dir.root, "objects"); mkdirSync(root); let passes = 0;
+ accountabilityBoundary.visit = step => { if (step === "pass-start") passes++; };
+ assert.equal(accountErasureStorage(root, empty).accountable, true); assert.equal(passes, 2);
 });

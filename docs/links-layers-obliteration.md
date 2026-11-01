@@ -627,3 +627,11 @@ or manifest representation retains its independent role and the existing
 `erasure_dedup_conflict` refusal. Whole-content edges are recorded separately from
 explicit native transformation inputs; they cannot silently relabel an
 independently supplied file as a derived output.
+
+
+Descriptor fragment ingestion takes an explicit start offset (default zero) and
+preserves the caller cursor. Checksum-bound source blocks and private buffer
+snapshots ensure the certified bytes are the published bytes. Accountability
+requires two matching passes and a namespace check after final rehashes under
+the native store lease. See the [seventh-review class audit and concurrency
+scope](validation/pr150-seventh-review.md).

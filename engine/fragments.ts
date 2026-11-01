@@ -10,8 +10,10 @@ import { durability } from "./durability.ts";
 // writes whose content is present.
 //
 // The write path is genuinely streaming: `writeFragmentedFile` reads the source
-// through a file descriptor in fixed-size chunks, writes each chunk as a blob,
-// and never allocates a buffer larger than the fragment size. The read path is
+// through a pinned descriptor at an explicit offset. Checksum-only temporary
+// metadata binds bounded source blocks to the identity checked before publication;
+// memory does not grow with the descriptor input length. Buffer convenience APIs
+// take a private snapshot before hashing and publication. The read path is
 // equally incremental: `readFragmentedToFile` reads one fragment at a time and
 // writes it to the destination, so a multi-gigabyte file is restored within a
 // fixed memory ceiling. Range reads skip fragments that do not overlap the
@@ -22,10 +24,16 @@ import {
   closeSync,
   fstatSync,
   openSync,
+  mkdtempSync,
   readSync,
   writeSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { objectFiles } from "./object-files.ts";
+import { provenanceLimits } from "./derivations.ts";
+import { assertVerificationBound } from "./object-error.ts";
 
 import {
   hashObject,
@@ -49,29 +57,67 @@ function assertSourceLength(length: number): void {
   if (!Number.isInteger(length) || length < 0) throw new ObjectStoreError("invalid_total_length", `Total length ${length} is not a non-negative integer.`);
 }
 
-/** Hash the pinned source before any write, using positional reads so the caller's descriptor position is unchanged. */
-function assertFragmentSource(store: ObjectStore, fd: number, length: number): ObjectId {
-  const framed = createHash("sha256").update(`blob ${length}\0`); const digest = createHash("sha256");
-  const bytes = Buffer.alloc(65_536); let offset = 0;
-  while (offset < length) {
-    const count = readSync(fd, bytes, 0, Math.min(bytes.length, length - offset), offset);
-    if (count === 0) throw new ObjectStoreError("short_read", "Fragment source was truncated during provenance preflight.");
-    const chunk = bytes.subarray(0, count); framed.update(chunk); digest.update(chunk); offset += count;
+/** A source cursor is explicit and private; caller descriptor offsets never determine certified bytes. */
+type SourceRead = (buffer: Buffer, offset: number, length: number, position: number) => number;
+/** Fill a bounded pinned range without advancing any descriptor cursor. */
+function sourceRange(fd: number, bytes: Buffer, position: number): void {
+  let filled = 0;
+  while (filled < bytes.length) {
+    const count = readSync(fd, bytes, filled, bytes.length - filled, position + filled);
+    if (count === 0) throw new ObjectStoreError("short_read", "Fragment source or proof was truncated.");
+    filled += count;
   }
-  const whole = framed.digest("hex"); assertWholeContent(store, whole, digest.digest("hex")); return whole;
 }
 
-/** Validate and identify one caller-owned descriptor without advancing its cursor during the identity pass. */
-function descriptorContent<T>(store: ObjectStore, fd: number, length: number, identified: ((id: ObjectId) => void) | undefined, fileId: FileId | undefined, action: () => T): T {
+/** Hash source blocks once, retaining only checksum metadata on disk, then verify each stored block before use. */
+function descriptorContent<T>(store: ObjectStore, fd: number, length: number, identified: ((id: ObjectId) => void) | undefined, fileId: FileId | undefined, startOffset: number, action: (read: SourceRead) => T): T {
   assertSourceLength(length);
-  return store.withWriteLock(() => { const whole = assertFragmentSource(store, fd, length); identified?.(whole); return store.withWholeContent(whole, action, fileId); });
+  if (!Number.isSafeInteger(startOffset) || startOffset < 0 || !Number.isSafeInteger(startOffset + length)) throw new ObjectStoreError("invalid_source_offset", "Fragment input requires a safe non-negative explicit byte range.");
+  return store.withWriteLock(() => {
+    const started = performance.now();
+    /** Source commitment work observes the same primary deadline and publication lease as provenance. */
+    const check = (): void => { store.assertWriteLease(); assertVerificationBound("provenance", "time_ms", performance.now() - started, provenanceLimits.timeMs); };
+    check();
+    const directory = mkdtempSync(join(tmpdir(), "pm-vcs-source-proof-")); let proof: ReturnType<typeof objectFiles.open> | undefined; let result!: T; let failure: { error: unknown } | undefined;
+    try {
+      proof = objectFiles.open(join(directory, "checksums"), "wx+");
+      const blockSize = 32_768; const source = Buffer.alloc(Math.min(blockSize, length)); const framed = createHash("sha256").update(`blob ${length}\0`); const digest = createHash("sha256");
+      for (let position = 0; position < length; position += blockSize) {
+        check(); const bytes = source.subarray(0, Math.min(blockSize, length - position)); sourceRange(fd, bytes, startOffset + position); framed.update(bytes); digest.update(bytes);
+        const checksum = createHash("sha256").update(bytes).digest(); let written = 0;
+        while (written < checksum.length) { const count = writeSync(proof.fd, checksum, written, checksum.length - written); if (count === 0) throw new ObjectStoreError("source_proof_failed", "Fragment source checksum metadata was not written."); written += count; }
+      }
+      const whole = framed.digest("hex"); assertWholeContent(store, whole, digest.digest("hex")); identified?.(whole);
+      let cachedStart = -1; let cached = Buffer.alloc(0);
+      /** Only bytes matching the preflight commitment enter a fragment buffer or native publication. */
+      const verified: SourceRead = (buffer, offset, size, position) => {
+        check(); let copied = 0;
+        while (copied < size) {
+          const start = Math.floor((position + copied) / blockSize) * blockSize;
+          if (cachedStart !== start) {
+            check(); const bytes = source.subarray(0, Math.min(blockSize, length - start)); sourceRange(fd, bytes, startOffset + start);
+            const checksum = Buffer.alloc(32); sourceRange(proof!.fd, checksum, start / blockSize * 32);
+            if (!createHash("sha256").update(bytes).digest().equals(checksum)) throw new ObjectStoreError("source_changed", "Fragment input changed after certification; unverified bytes were not published.");
+            cached = bytes; cachedStart = start;
+          }
+          const within = position + copied - start; const count = Math.min(size - copied, cached.length - within); cached.copy(buffer, offset + copied, within, within + count); copied += count;
+        }
+        return copied;
+      };
+      result = store.withWholeContent(whole, () => action(verified), fileId);
+    } catch (error) { failure = { error }; }
+    try { proof?.close(); } catch (error) { failure ??= { error }; }
+    try { durability.discardTemporary(directory, true); } catch (error) { failure ??= { error }; }
+    if (failure !== undefined) throw failure.error;
+    return result;
+  });
 }
 
-/** Hash actual buffer input once for provenance, computing the second denial digest only when needed. */
-function bufferContent<T>(store: ObjectStore, content: Buffer, fileId: FileId | undefined, action: (whole: ObjectId) => T): T {
-  const whole = hashObject("blob", content);
-  if (store.denials().length > 0) assertWholeContent(store, whole, createHash("sha256").update(content).digest("hex"));
-  return store.withWholeContent(whole, () => action(whole), fileId);
+/** Snapshot caller-owned buffers before hashing; publication consumes only this private byte snapshot. */
+function bufferContent<T>(store: ObjectStore, content: Buffer, fileId: FileId | undefined, action: (whole: ObjectId, bytes: Buffer) => T): T {
+  const bytes = Buffer.from(content); const whole = hashObject("blob", bytes);
+  if (store.denials().length > 0) assertWholeContent(store, whole, createHash("sha256").update(bytes).digest("hex"));
+  return store.withWholeContent(whole, () => action(whole, bytes), fileId);
 }
 
 /** Finalize the producer's known whole identity after bounded manifest construction, before releasing the lease. */
@@ -174,6 +220,7 @@ function* fixedChunks(content: Buffer, fragmentSize: number): IterableIterator<B
  * @param fileId - Owning stable identity for every fragment; optional before
  *   erasure, required after it. Store denial and byte inspection remain active.
  * @param accept - Optional incremental sink; when present no full entry list is retained.
+ * @param startOffset - Explicit starting byte offset, default zero; the caller cursor is never consumed.
  * @returns The ordered fragment entries, or an empty list when an incremental sink is supplied.
  * @throws ObjectStoreError When `readSync` returns fewer bytes than requested.
  */
@@ -182,10 +229,11 @@ export function writeFragmentsFromFd(
   fd: number,
   totalLength: number,
   fragmentSize: number,
-  sourcePath: string,
+  _sourcePath: string,
   fileId?: FileId,
   accept?: (entry: FragmentEntry) => void,
   identified?: (id: ObjectId) => void,
+  startOffset = 0,
 ): FragmentEntry[] {
   // This helper is exported, so its callers are not only the two in this module
   // that validate first. A fragmentSize of 0 makes `toRead` 0, the inner read
@@ -193,28 +241,15 @@ export function writeFragmentsFromFd(
   // writing empty blobs, which is a worse failure than a rejected argument. A
   // negative or non-integer totalLength is equally not a length.
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
-  return descriptorContent(store, fd, totalLength, identified, fileId, () => {
+  return descriptorContent(store, fd, totalLength, identified, fileId, startOffset, read => {
     const fragments: FragmentEntry[] = [];
     const buffer = Buffer.allocUnsafe(fragmentSize);
     let remaining = totalLength;
     while (remaining > 0) {
       const toRead = Math.min(fragmentSize, remaining);
-      // readSync may return fewer bytes than asked for without the file being
-      // truncated, so fill the fragment across as many reads as it takes. Only a
-      // read that returns 0 means there are no more bytes, and that is the one
-      // case where the file really is shorter than its recorded length. Treating
-      // any partial return as short_read reports corruption on a healthy file.
-      let filled = 0;
-      while (filled < toRead) {
-        const bytesRead = readSync(fd, buffer, filled, toRead - filled, null);
-        if (bytesRead === 0) {
-          throw new ObjectStoreError(
-            "short_read",
-            `Short read on ${sourcePath}: expected ${toRead} bytes, got ${filled}.`,
-          );
-        }
-        filled += bytesRead;
-      }
+      // The private commitment reader fills this range completely or throws short_read.
+      // Native partial reads and EOF are handled once by sourceRange, before publication.
+      read(buffer, 0, toRead, totalLength - remaining);
       const chunk = buffer.subarray(0, toRead);
       const id = store.write("blob", chunk, fileId);
       if (accept === undefined) fragments.push({ id, length: toRead });
@@ -248,9 +283,9 @@ export function writeFragmented(
 ): FragmentWriteResult {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
   return store.withWriteLock(/** Publish all fixed fragments and their manifest under one reentrant lease. */ () => {
-    return bufferContent(store, content, fileId, whole => {
+    return bufferContent(store, content, fileId, (whole, bytes) => {
     const writer = new ManifestWriter(store, fileId);
-    for (const chunk of fixedChunks(content, fragmentSize)) {
+    for (const chunk of fixedChunks(bytes, fragmentSize)) {
       writer.add({ id: store.write("blob", chunk, fileId), length: chunk.length });
     }
     return finishContent(store, writer, whole, fileId);
@@ -650,6 +685,7 @@ function cdcBoundaries(
  * @param fileId - Owning stable identity for every fragment; optional before
  *   erasure, required after it. Store denial and byte inspection remain active.
  * @param accept - Optional incremental sink; when present no full entry list is retained.
+ * @param startOffset - Explicit starting byte offset, default zero; the caller cursor is never consumed.
  * @returns The ordered fragment entries, or an empty list when an incremental sink is supplied.
  * @throws ObjectStoreError When CDC parameters are invalid, or a short read is
  *   encountered on the source file.
@@ -663,21 +699,22 @@ export function writeCdcFragmentsFromFd(
   fileId?: FileId,
   accept?: (entry: FragmentEntry) => void,
   identified?: (id: ObjectId) => void,
+  startOffset = 0,
 ): FragmentEntry[] {
   assertCdcParams(params, "invalid_cdc_params");
-  return descriptorContent(store, fd, totalLength, identified, fileId, () => {
+  return descriptorContent(store, fd, totalLength, identified, fileId, startOffset, read => {
     const fragments: FragmentEntry[] = [];
     streamCdcChunks(fd, totalLength, params, sourcePath, /** Publish a bounded chunk before retiring its metadata. */ (chunk) => {
       const entry = { id: store.write("blob", chunk, fileId), length: chunk.length };
       if (accept === undefined) fragments.push(entry);
       else accept(entry);
-    });
+    }, read);
     return fragments;
   });
 }
 
 /** Consume descriptor bytes in bounded CDC chunks shared by pure identification and publication. */
-function streamCdcChunks(fd: number, totalLength: number, params: CdcParams, sourcePath: string, consume: (chunk: Buffer) => void): void {
+function streamCdcChunks(fd: number, totalLength: number, params: CdcParams, sourcePath: string, consume: (chunk: Buffer) => void, read: SourceRead = (buffer, offset, length, position) => readSync(fd, buffer, offset, length, position)): void {
   const { minChunkSize, maxChunkSize, mask } = params;
   const readSize = Math.min(8192, maxChunkSize);
   const readBuf = Buffer.allocUnsafe(readSize);
@@ -694,7 +731,7 @@ function streamCdcChunks(fd: number, totalLength: number, params: CdcParams, sou
     const toRead = Math.min(readSize, remaining);
     let filled = 0;
     while (filled < toRead) {
-      const bytesRead = readSync(fd, readBuf, filled, toRead - filled, null);
+      const bytesRead = read(readBuf, filled, toRead - filled, totalLength - remaining + filled);
       if (bytesRead === 0) {
         throw new ObjectStoreError(
           "short_read",
@@ -756,9 +793,9 @@ export function writeCdcFragmented(
 ): FragmentWriteResult {
   assertCdcParams(params, "invalid_cdc_params");
   return store.withWriteLock(/** Publish all content-defined fragments and their manifest in one lease. */ () => {
-    return bufferContent(store, content, fileId, whole => {
+    return bufferContent(store, content, fileId, (whole, bytes) => {
     const writer = new ManifestWriter(store, fileId, "cdc");
-    cdcBoundaries(content, params, /** Store each CDC payload before referring to it. */ (chunk) => store.write("blob", chunk, fileId),
+    cdcBoundaries(bytes, params, /** Store each CDC payload before referring to it. */ (chunk) => store.write("blob", chunk, fileId),
       /** Retain only the partial bounded node. */ (entry) => writer.add(entry));
     return finishContent(store, writer, whole, fileId);
     });
