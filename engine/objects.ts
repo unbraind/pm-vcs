@@ -1,4 +1,4 @@
-import { recordDerivation } from "./derivations.ts";
+import { recordDerivation, nativeDerivationInputs } from "./derivations.ts";
 import { recordPayloadOwner } from "./payload-owners.ts";
 import "./publication.ts";
 import { destructionBoundary, measureDestructionRevision } from "./destruction.ts";
@@ -482,13 +482,15 @@ export class ObjectStore {
       }
       if (["blob", "record", "manifest", "link", "conflict"].includes(type)) {
         if (fileId !== undefined && !/^[0-9a-f]{32}$/.test(fileId)) throw new ObjectStoreError("invalid_file_id", "Payload ownership requires a canonical FileId.");
-        // Manifest and conflict formats already carry their native children. Erasure decodes
-        // those edges itself; this low-level store retains its pre-existing opaque-write contract.
-        const inputs = [...new Set([...sources, ...(derivationInputs.get(resolve(this.root)) ?? [])])];
+        // Preserve native member edges before GC can retire their container. Malformed opaque
+        // low-level writes remain readable, but cannot establish complete erasure provenance.
+        const native = nativeDerivationInputs({ type, payload });
+        const inputs = [...new Set([...sources, ...(derivationInputs.get(resolve(this.root)) ?? []), ...(native ?? [])])];
         if (inputs.some(source => this.denial(source) !== undefined)) throw new ObjectStoreError("object_obliterated", "Native derivation refers to permanently denied inputs.");
-        recordDerivation(dirname(this.root), id, inputs, fileId, this.has(id), type !== "conflict" && sources.length === 0 && (derivationInputs.get(resolve(this.root))?.length ?? 0) === 0);
+        recordDerivation(dirname(this.root), id, inputs, fileId, this.has(id), type !== "conflict" && sources.length === 0 && (derivationInputs.get(resolve(this.root))?.length ?? 0) === 0, source => this.has(source) ? this.read(source) : undefined, () => this.assertWriteLease(), native !== undefined);
         if (fileId !== undefined) recordPayloadOwner(dirname(this.root), id, fileId);
       }
+      else recordDerivation(dirname(this.root), id, [], undefined, this.has(id), true, source => this.has(source) ? this.read(source) : undefined, () => this.assertWriteLease());
       return this.writeRaw(type, payload);
     });
   }

@@ -572,3 +572,32 @@ Node, native Bun, and the pinned project-installed CLI consumer. Selected docstr
 coverage remains a measured declaration subset (previous denominator 290), not
 whole internal documentation coverage. The declared minimum SDK runtime and
 independent true-global CLI proof remain historical and are not renewed here.
+
+
+### Provenance across garbage collection
+
+The clone-private `pm-vcs-derivation-2` certificate is self-contained: its sorted,
+deduplicated `sources` contain every transitive native input identity, including
+intermediate objects, manifest pages and fragments. `unknown` retains any ancestry
+whose native origin could not be established. GC retains these metadata records
+even when it collects their objects. Erasure never needs an intermediate payload
+to follow a version-two certificate.
+
+Before a sweep, GC upgrades version-one direct-parent records while their native
+structures are still available. Erasure also upgrades them before granting any
+deletion authority. A missing old object, an uncatalogued payload ancestor, or a
+missing input certificate makes its derived objects unknown; erasure refuses with
+`uncatalogued_provenance` naming the affected derived identities. Registered native
+outputs establish their native blob kind without requiring a physical object-store
+copy. Structural frames contain identity references and caller metadata rather
+than derived payload snapshots; their certified origin facts are also retained.
+Old objects still read and export. A conservative unknown flag is retained rather
+than erased by an ordinary rewrite.
+
+Certificate construction and upgrade deduplicate inputs, memoize each inspected
+object and check the pinned lease and deadline throughout traversal. Primary
+limits are one million objects/edges, 256 traversal levels for old direct-parent
+graphs, and 300 seconds; reaching a limit grants no complete certificate. These
+limits are separate from composition hashing and the diagnostic residue audit.
+Only authorized erasure retires selected certificates, after recoverable bytes
+and their output registrations have been removed. Normal GC never retires them.

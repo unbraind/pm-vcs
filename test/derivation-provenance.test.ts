@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { constants as zlibConstants, deflateSync } from "node:zlib";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { clearDerivations, recordDerivation, derivations, derivationClosure, UncataloguedProvenance } from "../engine/derivations.ts";
+import { collectGarbage } from "../engine/gc.ts";
+import { type DerivationRecord, unknownDerivations, upgradeDerivations, provenanceLimits, clearDerivations, recordDerivation, derivations, derivationClosure, UncataloguedProvenance } from "../engine/derivations.ts";
 import { allowsDeniedRoot, assertArrivalsAllowed, encodeTombstone, type ErasureTombstone } from "../engine/lifecycle.ts";
 import { compositionLimits, manifestIdentities, manifestIdentity } from "../engine/erasure-provenance.ts";
 import { serveForge } from "../engine/forge.ts";
@@ -442,11 +443,17 @@ for (const kind of ["bundle", "record-rendering", "large-output"] as const) test
 });
 
 
-test("unchanged large blob staging preserves its native identity without a manifest conversion", async () => {
+test("large native output certificates retain collected input ancestry through unchanged staging", async () => {
   const { repo, entry } = await fixture(); const bytes = Buffer.alloc(1024 * 1024 + 1, 51);
-  const legacy = repo.objects.write("blob", bytes, entry.fileId, [entry.id]); writeFileSync(join(repo.root, "asset"), bytes);
+  const middle = repo.objects.write("blob", bytes, undefined, [entry.id]);
+  const legacy = repo.objects.write("blob", Buffer.concat([bytes, Buffer.from("tail")]), entry.fileId, [middle]);
+  writeFileSync(join(repo.root, "asset"), repo.objects.read(legacy).payload);
   repo.writeIndex([{ path: "asset", id: legacy, mode: "100644", fileId: entry.fileId }]);
+  assert.ok(derivations(repo.controlDirectory, () => {}).get(legacy)!.sources.includes(entry.id));
+  assert.ok(collectGarbage(repo, true).candidates.includes(middle)); assert.equal(repo.objects.has(middle), false);
   repo.stage(["asset"]); assert.equal(repo.readIndex()[0].id, legacy); assert.equal(repo.objects.read(legacy).type, "blob");
+  const certificate = derivations(repo.controlDirectory, () => {}).get(legacy)!;
+  assert.ok(certificate.sources.includes(entry.id)); assert.ok(certificate.sources.includes(middle));
 });
 
 
@@ -486,4 +493,193 @@ for (const kind of ["partial", "replaced"] as const) test(`staging preserves ind
   const bytes = readFileSync(join(repo.root, path));
   assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), { code: kind === "partial" ? "erasure_dedup_conflict" : "worktree_path_changed" });
   assert.equal(repo.objects.denials().length, 0); assert.deepEqual(readFileSync(join(repo.root, path)), bytes);
+});
+
+
+for (const old of [false, true]) test(`GC cannot hide unknown legacy merge ancestry (${old ? "direct-parent upgrade" : "self-contained"})`, async () => {
+  const { repo, entry, secret } = await fixture(); const other = "0".repeat(32);
+  const base = repo.objects.write("record", encodeRecord({ common: "base" }), other);
+  const ours = repo.objects.write("record", encodeRecord({ common: "base", public: "ours" }), other);
+  const payload = encodeRecord({ common: "base", secret }); const legacy = hashObject("record", payload);
+  const directory = join(repo.objects.storageRoot(), legacy.slice(0, 2)); mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, legacy.slice(2)), deflateSync(frameObject("record", payload), { level: zlibConstants.Z_BEST_SPEED }));
+  const result = mergePath({ store: repo.objects, config: repo.config, committer: author }, "joined.json", base, ours, legacy, undefined, other);
+  repo.materialize(buildTree(repo.objects, new Map([["joined.json", { id: result.id, fileId: other, mode: "100644" as const }]])));
+  if (old) writePrivateJson(join(repo.controlDirectory, "derivations", `${result.id}.json`), { format: "pm-vcs-derivation-1", sources: [legacy], independent: [], derived: [other] });
+  const gc = collectGarbage(repo, true); assert.ok(gc.candidates.includes(legacy)); assert.equal(repo.objects.has(legacy), false);
+  const before = repo.objects.inventory().map(row => row.id).sort(); const working = readFileSync(join(repo.root, "joined.json"));
+  assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), error => error instanceof UncataloguedProvenance && error.objects.includes(result.id));
+  assert.deepEqual(repo.objects.inventory().map(row => row.id).sort(), before); assert.equal(repo.objects.denials().length, 0);
+  assert.deepEqual(readFileSync(join(repo.root, "joined.json")), working); assert.ok(working.includes(secret));
+});
+
+for (const old of [false, true]) test(`collected manifest retains fragment and page ancestry in native output (${old ? "upgrade" : "new"})`, async () => {
+  const { repo, entry, secret } = await fixture(); const suffix = repo.objects.write("blob", Buffer.from(" public suffix"));
+  const length = (Buffer.byteLength(secret) + 14) * 64;
+  const leaf = repo.objects.write("manifest", encodeManifest({ totalLength: length, fragments: Array.from({ length: 64 }, () => [{ id: entry.id, length: Buffer.byteLength(secret) }, { id: suffix, length: 14 }]).flat() }));
+  const root = repo.objects.write("manifest", encodePagedManifest({ totalLength: length * 2, fragments: [], height: 1, pages: Array.from({ length: 2 }, () => ({ id: leaf, length, count: 128 })) }));
+  if (old) for (const id of [leaf, root]) writePrivateJson(join(repo.controlDirectory, "derivations", `${id}.json`), { format: "pm-vcs-derivation-1", sources: [], independent: [], derived: [] });
+  const content = readFragmented(repo.objects, root); const mutation = new WorktreeMutation(repo.root, ".pmvcs", repo.objects);
+  try { mutation.write("rendered", content, 0o644, { objects: [root] }); } finally { mutation.close(); }
+  const output = nativeOutputs(repo.controlDirectory).find(row => row.path === "rendered")!;
+  // Simulate the previous native-output writer too; GC must recover every edge while containers remain.
+  if (old) writePrivateJson(join(repo.controlDirectory, "derivations", `${output.id}.json`), { format: "pm-vcs-derivation-1", sources: [root], independent: [], derived: [] });
+  // Virtual output IDs need no physical object: their explicit old input list is retained evidence.
+  const gc = collectGarbage(repo, true); assert.ok(gc.candidates.includes(root)); assert.ok(gc.candidates.includes(leaf));
+  assert.equal(repo.objects.has(root), false); assert.equal(repo.objects.has(leaf), false);
+  const row = derivations(repo.controlDirectory, () => {}).get(output.id)!;
+  erase(repo, entry.fileId!, [entry.id, root, leaf, output.id]); assert.equal(existsSync(join(repo.root, "rendered")), false); assert.ok(row.sources.includes(entry.id));
+});
+
+test("GC-anywhere histories preserve complete certificates or refuse before deletion", async () => {
+  for (let seed = 1; seed <= 8; seed++) {
+    const { repo, entry, secret } = await fixture(); let input = entry.id; const produced: ObjectId[] = []; let state = seed;
+    const unknown = seed % 3 === 0;
+    if (unknown) { const payload = Buffer.from(secret + " legacy"); input = hashObject("blob", payload); repo.objects.accept([{ id: input, type: "blob", payload }], true); }
+    for (let step = 0; step < 4; step++) {
+      state = (state * 1664525 + 1013904223) >>> 0; const payload = Buffer.from(`${secret} derived ${seed}/${step}`);
+      input = step % 2 === 0 ? repo.objects.write("blob", payload, undefined, [input]) : repo.objects.withDerivation([input], () => writeFragmented(repo.objects, payload, 7).manifestId); produced.push(input);
+      const mutation = new WorktreeMutation(repo.root, ".pmvcs", repo.objects);
+      try { mutation.write(`derived-${step}`, payload, 0o644, { objects: [input] }); } finally { mutation.close(); }
+      if (state & 1) { if (state & 2) repo.objects.compact(); collectGarbage(repo, true); }
+    }
+    const bundle = join(repo.root, "generated.bundle"); writeBundleFile(repo, bundle, () => exportBundle(repo.objects, repo.refs, []));
+    repo.operations.append("native-gc-summary", secret + " summary", [], new Date(0)); collectGarbage(repo, true);
+    if (unknown) {
+      const before = repo.objects.inventory().map(row => row.id).sort();
+      assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), { code: "uncatalogued_provenance" });
+      assert.deepEqual(repo.objects.inventory().map(row => row.id).sort(), before); assert.equal(repo.objects.denials().length, 0);
+      for (let step = 0; step < 4; step++) assert.ok(readFileSync(join(repo.root, `derived-${step}`)).includes(secret));
+    } else {
+      const receipt = repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1));
+      assert.ok(receipt.tombstone); for (const id of produced) { assert.throws(() => repo.objects.read(id), { code: "object_obliterated" }); assert.throws(() => readFragmented(repo.objects, id), { code: "object_obliterated" }); }
+      for (let step = 0; step < 4; step++) assert.equal(existsSync(join(repo.root, `derived-${step}`)), false);
+      assert.equal(existsSync(bundle), false); assert.equal(repo.operations.read().some(row => row.summary.includes(secret)), false);
+    }
+  }
+});
+
+for (const missing of ["old-object", "old-object-erasure", "certificate"] as const) test(`absent ${missing} ancestry remains unknown before erasure`, async () => {
+  const { repo, entry, secret } = await fixture();
+  const input = repo.objects.write("blob", Buffer.from(secret + " intermediate"), undefined, [entry.id]);
+  const output = repo.objects.write("blob", Buffer.from(secret + " derived"), undefined, [input]);
+  const mutation = new WorktreeMutation(repo.root, ".pmvcs", repo.objects);
+  try { mutation.write("retained", repo.objects.read(output).payload, 0o644, { objects: [output] }); } finally { mutation.close(); }
+  if (missing.startsWith("old-object")) {
+    writePrivateJson(join(repo.controlDirectory, "derivations", `${input}.json`), { format: "pm-vcs-derivation-1", sources: [entry.id], independent: [], derived: [] });
+    rmSync(join(repo.objects.storageRoot(), input.slice(0, 2), input.slice(2)));
+    if (missing === "old-object") collectGarbage(repo, true);
+  } else { collectGarbage(repo, true); rmSync(join(repo.controlDirectory, "derivations", `${input}.json`)); }
+  assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), error => error instanceof UncataloguedProvenance && error.objects.includes(output));
+  assert.equal(repo.objects.denials().length, 0); assert.ok(readFileSync(join(repo.root, "retained")).includes(secret));
+});
+
+test("direct-parent certificate upgrade retains complete known roots before GC", async () => {
+  const { repo, entry, secret } = await fixture();
+  const first = repo.objects.write("blob", Buffer.from(secret + " first"), undefined, [entry.id]);
+  const last = repo.objects.write("blob", Buffer.from(secret + " last"), undefined, [first]);
+  for (const [id, sources] of [[first, [entry.id]], [last, [first]]] as const) writePrivateJson(join(repo.controlDirectory, "derivations", `${id}.json`), { format: "pm-vcs-derivation-1", sources, independent: [], derived: [] });
+  const before = readFileSync(join(repo.controlDirectory, "derivations", `${last}.json`));
+  const preview = collectGarbage(repo); assert.deepEqual(readFileSync(join(repo.controlDirectory, "derivations", `${last}.json`)), before);
+  const applied = collectGarbage(repo, true); assert.deepEqual(applied.candidates, preview.candidates);
+  const certificate = derivations(repo.controlDirectory, () => {}).get(last)!;
+  assert.equal(certificate.format, "pm-vcs-derivation-2"); assert.deepEqual(certificate.unknown, []);
+  assert.ok(certificate.sources.includes(entry.id)); assert.ok(certificate.sources.includes(first));
+  assert.equal(repo.objects.has(first), false); assert.equal(repo.objects.has(last), false);
+  erase(repo, entry.fileId!, [entry.id, first, last]);
+});
+
+test("certificate upgrade bounds, cycles, malformed records and lease loss never grant provenance", async () => {
+  const { repo, entry } = await fixture(); const a = repo.objects.write("blob", Buffer.from("cycle a")); const b = repo.objects.write("blob", Buffer.from("cycle b"));
+  const old = (id: ObjectId, sources: readonly ObjectId[]) => writePrivateJson(join(repo.controlDirectory, "derivations", `${id}.json`), { format: "pm-vcs-derivation-1", sources, independent: [], derived: [] });
+  old(a, [b]); old(b, [a]);
+  const read = (id: ObjectId) => repo.objects.has(id) ? repo.objects.read(id) : undefined;
+  for (const bound of ["timeMs", "objects", "depth", "edges"] as const) {
+    const before = provenanceLimits[bound]; provenanceLimits[bound] = bound === "edges" ? 1 : 0;
+    try { assert.throws(() => repo.objects.withWriteLock(() => upgradeDerivations(repo.controlDirectory, derivations(repo.controlDirectory, () => {}), read, () => repo.objects.assertWriteLease())), { code: "unverified" }); }
+    finally { provenanceLimits[bound] = before; }
+  }
+  repo.objects.withWriteLock(() => upgradeDerivations(repo.controlDirectory, derivations(repo.controlDirectory, () => {}), read, () => repo.objects.assertWriteLease()));
+  assert.ok(derivations(repo.controlDirectory, () => {}).get(a)!.unknown!.length > 0);
+  old(a, [entry.id]); let reads = 0;
+  assert.throws(() => repo.objects.withWriteLock(() => upgradeDerivations(repo.controlDirectory, derivations(repo.controlDirectory, () => {}), id => { const result = read(id); if (++reads === 1) rmSync(join(repo.controlDirectory, "objects.lock")); return result; }, () => repo.objects.assertWriteLease())), { code: "store_locked" });
+  for (const unknown of [undefined, null, ["foreign"]]) {
+    writePrivateJson(join(repo.controlDirectory, "derivations", `${a}.json`), { format: "pm-vcs-derivation-2", sources: [], independent: [], derived: [], ...(unknown === undefined ? {} : { unknown }) });
+    assert.throws(() => derivations(repo.controlDirectory, () => {}), { code: "unsupported_erasure_storage" });
+  }
+});
+
+test("certificate migration preserves replaced catalog parents and certifies only native structural inputs", async () => {
+  const { repo, entry } = await fixture(); const store = repo.objects;
+  const tree = encodeTree([]); const id = hashObject("tree", tree);
+  // An imported structural frame has no local certificate, but holds no payload snapshot.
+  store.accept([{ id, type: "tree", payload: tree }], true);
+  rmSync(join(repo.controlDirectory, "derivations", `${id}.json`), { force: true });
+  const legacyOutput = store.write("blob", Buffer.from("old structural fixture"));
+  writePrivateJson(join(repo.controlDirectory, "derivations", `${legacyOutput}.json`), { format: "pm-vcs-derivation-1", sources: [id], independent: [], derived: [] });
+  store.withWriteLock(() => upgradeDerivations(repo.controlDirectory, derivations(repo.controlDirectory, () => {}), source => store.has(source) ? store.read(source) : undefined, () => store.assertWriteLease()));
+  assert.equal(derivations(repo.controlDirectory, () => {}).get(id)!.format, "pm-vcs-derivation-2");
+  rmSync(join(repo.controlDirectory, "derivations", `${id}.json`));
+  const output = store.write("blob", Buffer.from("structural fixture"), undefined, [id]);
+  assert.deepEqual(derivations(repo.controlDirectory, () => {}).get(output)!.unknown, []);
+  assert.equal(derivations(repo.controlDirectory, () => {}).get(id)!.format, "pm-vcs-derivation-2");
+  for (const type of ["manifest", "conflict"] as const) {
+    const opaque = store.write(type, Buffer.from("legacy opaque fixture"));
+    assert.equal(store.read(opaque).type, type); assert.ok(derivations(repo.controlDirectory, () => {}).get(opaque)!.unknown!.includes(opaque));
+  }
+  writePrivateJson(join(repo.controlDirectory, "derivations", `${output}.json`), { format: "pm-vcs-derivation-1", sources: [entry.id], independent: [], derived: [] });
+  const catalog = derivations(repo.controlDirectory, () => {}); const directory = join(repo.controlDirectory, "derivations"); const retained = directory + "-original";
+  renameSync(directory, retained); mkdirSync(directory); writeFileSync(join(directory, "foreign"), "keep foreign bytes");
+  try {
+    assert.throws(() => store.withWriteLock(() => upgradeDerivations(repo.controlDirectory, catalog, input => store.has(input) ? store.read(input) : undefined, () => store.assertWriteLease())), { code: "unsupported_erasure_storage" });
+    assert.equal(readFileSync(join(directory, "foreign"), "utf8"), "keep foreign bytes"); assert.equal(existsSync(join(directory, `${output}.json`)), false);
+  } finally { rmSync(directory, { recursive: true }); renameSync(retained, directory); }
+});
+
+
+test("certificate unknown sets remain explicit through self edges, defaults and read-only migration", async () => {
+  const { repo, entry } = await fixture(); const id = "a".repeat(64); const absent = "b".repeat(64);
+  recordDerivation(repo.controlDirectory, id, [absent], undefined, false);
+  assert.deepEqual(derivations(repo.controlDirectory, () => {}).get(id)!.unknown, [absent]);
+  const original = { format: "pm-vcs-derivation-1" as const, sources: [entry.id], independent: [], derived: [] };
+  writePrivateJson(join(repo.controlDirectory, "derivations", `${entry.id}.json`), original);
+  const before = readFileSync(join(repo.controlDirectory, "derivations", `${entry.id}.json`));
+  const upgraded = upgradeDerivations(repo.controlDirectory, derivations(repo.controlDirectory, () => {}), input => repo.objects.has(input) ? repo.objects.read(input) : undefined, () => {}, false);
+  assert.deepEqual(upgraded.get(entry.id)!.unknown, [entry.id]); assert.deepEqual(readFileSync(join(repo.controlDirectory, "derivations", `${entry.id}.json`)), before);
+  assert.deepEqual(unknownDerivations(new Map([[entry.id, original]]), [entry.id], () => {}), [entry.id]);
+  const complete = { format: "pm-vcs-derivation-2" as const, sources: [entry.id], unknown: [], independent: [], derived: [] };
+  assert.deepEqual(unknownDerivations(new Map<ObjectId, DerivationRecord>([[id, complete], [entry.id, original]]), [id], () => {}), [id]);
+});
+
+
+test("native writers retain unknown absent inputs and legacy structural identities", async () => {
+  const { repo, entry, secret } = await fixture(); const store = repo.objects; const absent = "b".repeat(64);
+  writePrivateJson(join(repo.controlDirectory, "derivations", `${entry.id}.json`), { format: "pm-vcs-derivation-1", sources: [], independent: [entry.fileId], derived: [] });
+  store.write("blob", Buffer.from(secret), entry.fileId); assert.deepEqual(derivations(repo.controlDirectory, () => {}).get(entry.id)!.unknown, []);
+  const derived = store.write("blob", Buffer.from(secret + " unknown input"), undefined, [absent]);
+  assert.deepEqual(derivations(repo.controlDirectory, () => {}).get(derived)!.unknown, [absent]);
+  const mutation = new WorktreeMutation(repo.root, ".pmvcs", store);
+  try { mutation.write("unknown-output", Buffer.from(secret + " output"), 0o644, { objects: [absent] }); } finally { mutation.close(); }
+  const tree = encodeTree([]); const id = store.write("tree", tree);
+  writePrivateJson(join(repo.controlDirectory, "derivations", `${id}.json`), { format: "pm-vcs-derivation-1", sources: [], independent: [], derived: [] });
+  store.write("tree", tree); assert.deepEqual(derivations(repo.controlDirectory, () => {}).get(id)!.unknown, []);
+  writePrivateJson(join(repo.controlDirectory, "derivations", `${id}.json`), { format: "pm-vcs-derivation-1", sources: [], independent: [], derived: [] });
+  rmSync(join(store.storageRoot(), id.slice(0, 2), id.slice(2))); store.write("tree", tree);
+  assert.equal(store.read(id).type, "tree"); assert.deepEqual(derivations(repo.controlDirectory, () => {}).get(id)!.unknown, [id]);
+  assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), error => error instanceof UncataloguedProvenance && error.objects.includes(derived));
+  assert.equal(store.denials().length, 0); assert.ok(readFileSync(join(repo.root, "unknown-output")).includes(secret));
+});
+
+
+test("first erasure upgrades direct-parent evidence before its pending boundary and resumes", async () => {
+  const { repo, entry, secret } = await fixture();
+  const first = repo.objects.write("blob", Buffer.from(secret + " first erasure"), undefined, [entry.id]);
+  const last = repo.objects.write("blob", Buffer.from(secret + " last erasure"), undefined, [first]);
+  writePrivateJson(join(repo.controlDirectory, "derivations", `${last}.json`), { format: "pm-vcs-derivation-1", sources: [first], independent: [], derived: [] });
+  const before = erasureScanBoundary.visit; erasureScanBoundary.visit = step => { if (step === "pending") throw new Error("upgraded pending boundary"); };
+  try { assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), /upgraded pending boundary/); }
+  finally { erasureScanBoundary.visit = before; }
+  const certificate = derivations(repo.controlDirectory, () => {}).get(last)!;
+  assert.equal(certificate.format, "pm-vcs-derivation-2"); assert.ok(certificate.sources.includes(entry.id)); assert.deepEqual(certificate.unknown, []);
+  erase(repo, entry.fileId!, [entry.id, first, last]);
 });

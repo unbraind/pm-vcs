@@ -1,4 +1,4 @@
-import { derivations, clearDerivations, UncataloguedProvenance } from "./derivations.ts";
+import { derivations, upgradeDerivations, unknownDerivations, clearDerivations, UncataloguedProvenance } from "./derivations.ts";
 import { nativeOutputs, outputBirth } from "./native-outputs.ts";
 import { parseFileLeaseAudit } from "./publication-leases.ts";
 import { payloadOwners } from "./payload-owners.ts";
@@ -273,8 +273,10 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       if (path === undefined) throw new ObjectStoreError("incomplete_erasure_inventory", "A native composition references an absent payload.");
       return store.readErasureObject(id, path);
     };
-    const catalog = derivations(control, check);
-    const unknown = [...inventory].filter(([id, object]) => ["blob", "record", "manifest", "link", "conflict"].includes(object.type) && !catalog.has(id)).map(([id]) => id).sort();
+    const outputs = instances.flatMap(instance => nativeOutputs(instance.controlDirectory));
+    const virtual = new Set(outputs.map(output => output.id));
+    const catalog = upgradeDerivations(control, derivations(control, check), id => physicalLocation.has(id) ? readNative(id) : undefined, check, !validateOnly, virtual);
+    const unknown = unknownDerivations(catalog, [...virtual, ...[...inventory].filter(([_id, object]) => ["blob", "record", "manifest", "link", "conflict"].includes(object.type)).map(([id]) => id)], check);
     if (unknown.length > 0) throw new UncataloguedProvenance(unknown);
     const logical = existing === undefined ? manifestIdentities([...inventory].filter(([_id, object]) => object.type === "manifest").map(([id]) => id), readNative, check) : new Map<ObjectId, { id: ObjectId; digest: string }>();
     const artifacts = instances.flatMap(instance => [...managedExports(instance.controlDirectory), ...nativeOutputs(instance.controlDirectory).map(output => ({ ...output, sha256: "" }))]);
@@ -460,7 +462,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const summary = `Obliterated FileId ${fileId}; tombstone ${id}.`;
       const operation = { sequence: repository.operations.read().length + 1, command: "obliterate", at: now.toISOString(), summary, refs: [] };
       for (const bytes of [payload, Buffer.from(JSON.stringify(next)), Buffer.from(JSON.stringify(completed)), Buffer.from(JSON.stringify(operation))]) observe(bytes, true);
-      // Every authorization, logical identity, ownership, worktree and audit check above is read-only.
+      // Payload authorization, identity, ownership, worktree and audit checks are read-only.
+      // Certificate migrations above only retain native evidence; they never remove payload bytes.
       // Only this frozen set can be purged, even if a new foreign file arrives during execution.
       const signatures = [...new Map(payloads.map(item => [`${item.length}:${item.rolling}:${item.digest}`, item])).values()];
       const updatedProofs = { ...proofs, [id]: signatures };
@@ -505,7 +508,6 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         deletion.remove(path); directories.add(dirname(path)); erasureScanBoundary.visit("object-deleted");
       }
       const objectReceipt = deletion.finish();
-      clearDerivations(control, selected, catalog, check);
       for (const instance of instances) {
         const outputs = nativeOutputs(instance.controlDirectory);
         const remaining = outputs.filter(output => !selected.has(output.id) && !output.objects.some(id => selected.has(id)));
@@ -514,6 +516,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         const retained = exports.filter(artifact => !artifact.objects.some(id => selected.has(id)));
         if (retained.length !== exports.length) writePrivateJson(join(instance.controlDirectory, "exports.json"), retained);
       }
+      clearDerivations(control, selected, catalog, check);
       for (const directory of directories) syncDirectory(directory);
       accountStorage(true);
       erasureScanBoundary.visit("storage-verified");

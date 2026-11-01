@@ -1,3 +1,5 @@
+import { nativeOutputs } from "./native-outputs.ts";
+import { derivations, upgradeDerivations } from "./derivations.ts";
 import { reachableObjects, reachabilityBudget } from "./reachability.ts";
 import { isRootPublication, isDeferredPublication, publicationRootsFromFd } from "./publication.ts";
 import { inspectNamespacePublications, prepareDestruction, inspectDestructionCheckpoint, type PublicationInventory, type DestructionCheckpoint, type DestructionReceipt } from "./destruction.ts";
@@ -160,6 +162,8 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
     let recoveryOutcome: DestructionCheckpoint | undefined = recovery.pending || recovery.skipped !== undefined ? recovery : undefined;
     let reclaimedBytes = 0; let removed = 0; let destruction: DestructionReceipt | undefined;
     check();
+    // Preview uses the same provenance proof; only apply persists upgrades before retiring inputs.
+    upgradeDerivations(shared, derivations(shared, check), id => store.has(id) ? store.read(id) : undefined, () => { check(); store.assertWriteLease(); }, apply, new Set(instances.flatMap(instance => nativeOutputs(instance.controlDirectory).map(output => output.id))));
     if (apply) {
       const packed = candidates.some((candidate) => candidate.packed);
       if (packed) store.unpack();

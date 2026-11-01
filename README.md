@@ -276,6 +276,12 @@ exports remain supported. Composition proofs memoize distinct objects and check
 the deadline and store lease per node/edge; logical content at 256 MiB, aggregate
 cache at 512 MiB or one million edges refuses before deletion.
 
+Native derivation certificates retain the complete transitive input set, including
+manifest pages and fragments, after GC removes intermediate objects. GC upgrades
+old direct-parent certificates before sweeping; missing old ancestry or missing
+input certificates remains unknown and refuses erasure before deletion. Normal
+GC retains the certificates. See [provenance across garbage collection](docs/links-layers-obliteration.md#provenance-across-garbage-collection).
+
 User-authored files and metadata, including alternate encodings, are independent
 data. Their coincidental resemblance to selected content does not establish
 provenance. Caller-owned export buffers, external export destinations, legacy

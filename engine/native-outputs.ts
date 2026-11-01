@@ -42,7 +42,7 @@ export function recordNativeOutput(control: string, store: ObjectStore, path: st
   const id = hashObject("blob", content);
   if (stat === undefined) { store.preflight([{ id, type: "blob", payload: content }], true); return; }
   if (source.fileId !== undefined) for (const object of source.objects) recordPayloadOwner(join(store.storageRoot(), ".."), object, source.fileId);
-  recordDerivation(join(store.storageRoot(), ".."), id, source.objects, source.fileId, store.has(id));
+  store.withWriteLock(() => recordDerivation(join(store.storageRoot(), ".."), id, source.objects, source.fileId, store.has(id), false, input => store.has(input) ? store.read(input) : undefined, () => store.assertWriteLease()));
   const records = nativeOutputs(control);
   writePrivateJson(join(control, "outputs.json"), [...records.filter(record => record.path !== path), { path, id, birth: outputBirth(stat), complete, objects: [...source.objects], ...(source.fileId === undefined ? {} : { fileId: source.fileId }) }]);
 }

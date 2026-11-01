@@ -295,3 +295,106 @@ All tracker writes precede changelog regeneration, archive generation, commit an
 committed-HEAD self-host acceptance. Unknown legacy/imported provenance is an
 intentional pre-deletion refusal; catalog portability/scale remains separate work
 tracked by `pm-vcs-provenance-catalog-scale`.
+
+## Fifth review: provenance survives garbage collection
+
+The fifth-review instruction for `8ee69ad` retains the accepted native-provenance
+guarantee: normal GC must never turn unknown ancestry into a successful erasure.
+The repair changes the certificate, rather than retaining intermediate payloads.
+
+`pm-vcs-derivation-2` records the sorted, deduplicated complete native input set in
+`sources`, including intermediate identities and every manifest page/fragment.
+The writer unions each parent's complete inputs before publishing bytes. Explicit
+`unknown` identities survive propagation and ordinary rewrites. All certificate
+metadata survives GC, including records whose payloads have been collected.
+Erasure uses that retained metadata and checks both present payloads and registered
+native output identities; no physical intermediate is required for version two.
+A missing certificate or unknown input makes the derived identity unknown and
+produces `uncatalogued_provenance` before payload deletion or denial publication.
+
+Version-one direct-parent records are upgraded from native structures while the
+inputs remain available. GC preview and apply call the same upgrader; preview
+leaves persisted bytes unchanged, while apply flushes upgrades before its sweep.
+First erasure also upgrades before its pending boundary. Missing old physical
+ancestors remain unknown. Registered native outputs establish their actual blob
+kind without requiring a separate object-store copy. Ordinary legacy reads and
+exports stay supported; rewriting an address cannot certify its unknown past.
+
+| Location / class | Result |
+| --- | --- |
+| `objects.ts:write`, `derivations.ts:recordDerivation` | Complete monotonic input sets precede bytes; inherited unknowns remain explicit |
+| Manifest/page/fragment and conflict producers | Native member references are recorded at publication, even when containers later disappear |
+| `native-outputs.ts` | Registered renderings retain transitive input evidence before recoverable bytes |
+| `gc.ts:collectGarbage` | Preview shares the proof; apply upgrades before retirement; certificates are never collection candidates |
+| `erasure.ts` | Unknown ancestry refuses for physical and virtual outputs; catalog edges survive absent intermediate objects |
+| Pack/unpack and imports | Identity-preserving storage does not weaken certificates or invent payload origins |
+| Certificate migration/retirement | Classified directory lifetime stays pinned; output registrations retire before selected certificates |
+
+Certificate traversal memoizes inspected identities and bounds object/edge work
+at one million, old direct-parent depth at 256 and time at 300 seconds. Every
+node, copied input and unknown input checks the deadline and pinned lease. Primary
+proof bounds remain separate from the nonblocking diagnostic audit. No threshold,
+ownership refusal, destruction classification or physical-copy plan was weakened.
+Two redundant `parent.unknown` fallbacks were removed: the resolver returns only
+validated version-two records, constructed upgrades or version-two cycle markers;
+each always defines the array. This proof is also recorded on the PM item.
+
+The GC-anywhere property exercises eight deterministic histories, four derivations
+each, with blobs, fragments, packed storage, native outputs, registered bundles,
+operation summaries and GC between derivations. Six known histories erase every
+owned derived output and deny reconstruction; two legacy-unknown histories refuse
+without deleting payloads or publishing denial. The manifest regression includes
+native pages and fragments, then collects both containers before erasure. The
+legacy merge regressions collect the uncatalogued envelope before erasure, with
+both new and upgraded direct-parent evidence. Additional cases cover missing
+certificates, first-erasure upgrade/retry, read-only migration and replaced catalog
+parents. The old unchanged-large-blob assertion now checks complete ancestry
+before GC, then preserves the native identity through unchanged staging.
+
+### Fifth-review revert controls
+
+All mutations ran in disposable source copies; the package sources were unchanged
+by the controls. Each mutant fails and each restored selection passes. The stricter
+catalog-presence-only mutation reinstates the old decision while retaining the
+existing physical-ownership refusals.
+
+| Reverted behavior | Behavioral selection | Mutant failures / restored passes |
+| --- | --- | --- |
+| Restore the old direct-parent writer alone | Large native output certificate before GC | 1 / 1 |
+| Remove unknown-ancestry refusal | Both collected legacy merges and GC-anywhere property | 3 / 3 |
+| Omit implicit manifest member inputs | Collected native manifest output | 1 / 1 |
+| Omit transitive input flattening | Large native output certificate | 1 / 1 |
+| Remove upgrade before GC | Known old direct-parent roots and collected old manifest output | 2 / 2 |
+| Treat an absent old object as known | Missing old ancestor | 1 / 1 |
+| Ignore a missing input certificate | Lost certificate after GC | 1 / 1 |
+| Restore catalog-presence-only checking | Both collected legacy merge cases | 2 / 2 |
+
+Total: **8 mutation groups, 12 expected failures, 12 restored passes**. No timeout
+or import failure is counted as a behavioral proof.
+
+### Fifth-review gates
+
+| Gate | Result |
+| --- | --- |
+| Final-source provenance corpus | 45/45; both proof modules at 100% statements, branches, functions and lines |
+| Combined provenance/erasure corpus | 108/108; later integration selection 5/5; these overlapping cohorts are not summed |
+| Accountability, storage, GC, packs, fixed/CDC fragments and legacy fetch repair | 341/341 |
+| Lifecycle | 43/43, sampling 18/818 and 18/1006 actual native cuts |
+| Packed power-loss matrix | 1/1, 6,225 boundaries / 538 distinct crash images / two convergent replays each |
+| Bun provenance corpus | 45/45 |
+| Node 22 focused selection | 12/12 |
+| Static/privacy | Typecheck, source/test builds, lint, zero duplicates, 95 files / 590 documented declarations, 340 packaged files / zero findings |
+
+Every intended test command caps workers at one. An unfiltered PM execution was
+stopped after it began historical linked commands; none of those interrupted
+results is counted. Subsequent PM runs select one linked index and use the
+isolated child environment and shared-host-safe defaults. PM reports execution
+results but its existing `tracking_disabled` policy prevents storing run receipts;
+sanitized evidence remains in PM comments and this document.
+
+No installer timeout was retried. Full npm/Bun release gates, complete lifecycle
+cuts and the 512-seed model remain CI work. Tracker writes finish before changelog
+and archive generation; committed-HEAD self-host acceptance verifies without
+regeneration. The prior merge/archive commits remain ancestors, main is included,
+and tracker history extends main byte for byte. Catalog portability and retained
+metadata scale remain on `pm-vcs-provenance-catalog-scale`.
