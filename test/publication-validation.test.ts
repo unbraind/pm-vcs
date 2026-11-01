@@ -141,7 +141,7 @@ for (const mode of ["push", "publish"] as const) {
   });
 }
 
-test("publication fresh binary staging after unrelated erasure retains malformed encoding refusal", async () => {
+test("publication treats arbitrary binary encodings as user data after unrelated erasure", async () => {
   const { repo } = await fixture(); repo.setAuthority("fixture", "read-fixture", "erase-fixture");
   const marker = Buffer.from("unrelated synthetic erasure marker for binary contract");
   writeFileSync(join(repo.root, "marker.bin"), marker); repo.stage(["marker.bin"]); repo.commit({ message: "marker", author: signature }, new Date());
@@ -150,14 +150,14 @@ test("publication fresh binary staging after unrelated erasure retains malformed
   const ordinary = Buffer.from([0, 255, 17, 0, 128]); writeFileSync(join(repo.root, "fresh.bin"), ordinary);
   assert.deepEqual(repo.stage(["fresh.bin"]), ["fresh.bin"]);
   assert.deepEqual(repo.objects.read(repo.readIndex().find(entry => entry.path === "fresh.bin")!.id).payload, ordinary);
-  for (const [name, bytes, code] of [
+  for (const [name, bytes] of [
     ["malformed.bin", Buffer.from([0x78, 0x9c, 0xff]), "uninspectable_payload"],
     ["encoded-malformed.bin", Buffer.from(Buffer.from([0x78, 0x9c, 0xff]).toString("base64")), "uninspectable_payload"],
     ["retained.bin", deflateSync(frameObject("blob", marker)), "object_obliterated"],
   ] as const) {
     writeFileSync(join(repo.root, name), bytes);
-    assert.throws(() => repo.stage([name]), (error: unknown) => error instanceof ObjectStoreError && error.code === code);
-    assert.deepEqual(readFileSync(join(repo.root, name)), bytes); assert.equal(repo.readIndex().some(entry => entry.path === name), false);
+    assert.deepEqual(repo.stage([name]), [name]);
+    assert.deepEqual(readFileSync(join(repo.root, name)), bytes); assert.equal(repo.readIndex().some(entry => entry.path === name), true);
   }
   assert.deepEqual(readFileSync(join(repo.controlDirectory, "denials.json")), denied);
 });

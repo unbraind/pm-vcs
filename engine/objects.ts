@@ -1,3 +1,4 @@
+import { recordPayloadOwner } from "./payload-owners.ts";
 import "./publication.ts";
 import { destructionBoundary, measureDestructionRevision } from "./destruction.ts";
 import { objectFiles, type ObjectFile } from "./object-files.ts";
@@ -463,7 +464,7 @@ export class ObjectStore {
    * @param fileId - Owning stable file identity for a locally produced payload.
    *   Optional before erasure and for structural objects; blob, record and
    *   manifest writes require it once a denial exists. Attribution never skips
-   *   denied-byte/representation inspection or permits a denied identity.
+   *   native content-identity inspection or permits a denied identity.
    * @returns The id the content is stored under.
    */
   write(type: ObjectType, payload: Buffer, fileId?: string): ObjectId {
@@ -473,6 +474,7 @@ export class ObjectStore {
       if (fileId !== undefined && this.cachedDenials().files.has(fileId)) {
         throw new ObjectStoreError("file_obliterated", "This FileId is permanently denied.");
       }
+      if (fileId !== undefined && ["blob", "record", "manifest", "link", "conflict"].includes(type)) recordPayloadOwner(dirname(this.root), id, fileId);
       return this.writeRaw(type, payload);
     });
   }
@@ -730,7 +732,8 @@ export class ObjectStore {
 
   /** Preflight a complete arrival before storing even its first payload. */
   preflight(objects: readonly ObjectArrival[], attributed: boolean): void {
-    assertArrivalsAllowed(this.denials(), objects, attributed);
+    const arrivals = new Map(objects.map(object => [object.id, object]));
+    assertArrivalsAllowed(this.denials(), objects, attributed, id => arrivals.get(id) ?? this.read(id));
   }
 
   /** Store a batch that has passed whole-batch provenance validation under the same lock. */

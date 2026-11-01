@@ -245,24 +245,20 @@ and the complete scope have eight attempts; continued mutation returns
 This pathname check belongs to certification: ordinary pinned object readers keep
 using their descriptor when compaction retires its pathname, as described above.
 
-Native accountability is required and byte/fingerprint inspection supplies an additional
-conservative check of supported representations. Neither check substitutes for an
-incomplete other check. The private checksummed journal stores only lengths and
-digests. A positive hit refuses cleanup. Missing or corrupt evidence, a decode
-error, or reaching a depth, stream, context, byte or time bound returns typed
-`unverified` with the exact bound; it never returns `accountable: true`.
-Every surviving native member is inspected separately, including members sharing
-a pack with the selected object. Final native parsing feeds the representation
-inspector from bounded slots while holding the same file descriptor used by raw
-inspection and the final pathname identity barrier. Directory catalogues are
-checked together before certification. A late copy therefore cannot fall between
-separate native and byte-proof snapshots. Preflight purge exclusions expire;
-anything recreated at a retired pathname is a current file and is inspected again. Complete canonical native framing alone cannot
-certify a blob that conceals selected bytes under additional encodings.
-Base64 quartets stream through a bounded buffer so large supported words do not
-require a buffer proportional to their length. Optional evidence transport is
-tracked separately; restore the original inspection journal before requesting a
-new physical certificate after a transfer that omitted it.
+Native accountability and provenance are required. Exact object identities,
+complete physical-copy plans, native composition edges and source records select
+owned representations. Every pack member is verified through the native parser
+and its held descriptor; namespace barriers prevent a late native copy from
+escaping the plan. Unsupported storage and incomplete primary inventories refuse.
+
+Fingerprint inspection is a secondary, bounded diagnostic. It checks raw native
+members and physical bytes, plus decoded native JSON strings and keys, within
+16 MiB and eight JSON levels. Receipts report suspected residue and exhausted or
+missing diagnostic evidence. This audit cannot establish universal absence and
+never gates benign erasure or staging. It does not guess base64, hex, URL escapes
+or compressed streams inside opaque user input. Independent user encodings and
+metadata, caller-owned exports, backups and external copies are outside the
+native-provenance certificate; see the [erasure contract](links-layers-obliteration.md).
 
 Integrity reports separate `checked` objects from the overall `verification`
 result; `verified` is zero when the proof is incomplete. Reachability exhaustion

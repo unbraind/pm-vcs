@@ -1,6 +1,6 @@
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Typed erasure metadata and provenance checks at every object arrival boundary. */
-import { inspectRepresentations } from "./representations.ts";
+import { manifestIdentity } from "./erasure-provenance.ts";
 import { createHash } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
@@ -86,7 +86,7 @@ export interface ObjectArrival extends StoredObject {
 }
 
 /** Refuse payload resurrection and novel bytes assigned to a denied FileId. */
-export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects: readonly ObjectArrival[], attributed: boolean): void {
+export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects: readonly ObjectArrival[], attributed: boolean, read?: (id: ObjectId) => StoredObject): void {
   if (denials.length === 0) return;
   if (denials.some(/** An interrupted erasure never permits publication. */ (denial) => denial.pending)) {
     throw new ObjectStoreError("erasure_incomplete", "Authorized cleanup must finish before store writes resume.");
@@ -95,7 +95,7 @@ export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects
   const digests = new Set(denials.flatMap(/** Deny both original loose frames and type-independent payload bytes. */ (denial) => [...denial.tombstone.objects, ...denial.tombstone.payloads]));
   const files = new Map(denials.map(/** Index terminal identities independently of their current paths. */ (denial) => [denial.tombstone.fileId, denial]));
   for (const object of objects) {
-    if (deniedObjects.has(object.id) || (object.payload.length > 0 && digests.has(payloadDigest(object.payload))) || inspectRepresentations(object.payload, /** Nonempty frames and payloads remain denied beneath supported encodings; empty content retains its exact typed address. */ (bytes) => bytes.length > 0 && digests.has(payloadDigest(bytes)))) throw new ObjectStoreError("object_obliterated", "Arrival contains permanently denied payload bytes.");
+    if (deniedObjects.has(object.id) || (object.payload.length > 0 && digests.has(payloadDigest(object.payload)))) throw new ObjectStoreError("object_obliterated", "Arrival contains permanently denied payload bytes.");
     if (object.type === "tree") {
       for (const entry of decodeTree(object.payload)) {
         const denial = files.get(entry.fileId ?? "");
@@ -116,6 +116,10 @@ export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects
       if (conflictReferences(decodeConflict(object.payload)).some((id) => deniedObjects.has(id))) throw new ObjectStoreError("object_obliterated", "Conflict refers to permanently denied alternatives.");
     } else if (object.type === "manifest") {
       const manifest = decodeManifest(object.payload);
+      if (read !== undefined) {
+        const identity = manifestIdentity(object.id, read);
+        if (deniedObjects.has(identity.id) || digests.has(identity.digest)) throw new ObjectStoreError("object_obliterated", "Native composition reconstructs permanently denied content.");
+      }
       if ((manifest.pages ?? manifest.fragments).some(/** A new manifest cannot retain erased fragments. */ (fragment) => deniedObjects.has(fragment.id))) {
         throw new ObjectStoreError("object_obliterated", "Arrival manifest refers to permanently denied fragments.");
       }

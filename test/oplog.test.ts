@@ -101,3 +101,20 @@ test("undo refuses when a ref has since moved on", () => {
     (error: unknown) => error instanceof ObjectStoreError && error.code === "ref_changed",
   );
 });
+
+
+test("undo fences HEAD and validates the target before restoring its exact prior binding", () => {
+  const { log, refs } = fresh();
+  refs.setHeadToRef("refs/heads/main");
+  const before = refs.rawHead(); refs.setHeadToRef("refs/heads/review"); const after = refs.rawHead();
+  const target = log.append("switch", "native head transition", [], new Date(0), { before, after });
+  refs.setHeadToRef("refs/heads/foreign");
+  assert.throws(() => log.undo(refs, target.sequence, new Date(1)), { code: "head_changed" });
+  assert.equal(refs.rawHead(), "ref: refs/heads/foreign"); assert.equal(log.read().length, 1);
+  refs.setHeadToRef("refs/heads/review");
+  const denial = new Error("validation refusal");
+  assert.throws(() => log.undo(refs, target.sequence, new Date(1), () => { throw denial; }), error => error === denial);
+  assert.equal(refs.rawHead(), after); assert.equal(log.read().length, 1);
+  const undo = log.undo(refs, target.sequence, new Date(1), operation => assert.equal(operation.sequence, target.sequence));
+  assert.equal(refs.rawHead(), before); assert.deepEqual(undo.head, { before: after, after: before });
+});

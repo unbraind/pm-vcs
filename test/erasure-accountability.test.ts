@@ -14,7 +14,7 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { ObjectStore, ObjectStoreError, frameObject, hashObject } from "../engine/objects.ts";
 import { accountErasureStorage, accountabilityBoundary, erasurePurge, planErasureStorage, ACCOUNTABILITY_ATTEMPTS } from "../engine/erasure-accountability.ts";
-import { erasureScanBoundary, erasureScanLimits, createErasureInspection, inspectErasureFile, fingerprint } from "../engine/erasure-scan.ts";
+import { erasureScanBoundary, createErasureInspection, inspectErasureFile, fingerprint } from "../engine/erasure-scan.ts";
 import { VerificationRefusal, verificationLimits } from "../engine/object-error.ts";
 import { objectFiles } from "../engine/object-files.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -31,12 +31,12 @@ function place(root:string,name:string,bytes:Buffer):string{const path=join(root
 function replace(path:string,bytes:Buffer,scratch:string):void{const temp=join(scratch,"replacement");writeFileSync(temp,bytes);renameSync(temp,path);}
 const empty={forbiddenIds:new Set<string>(),forbiddenPayloads:new Set<string>()};
 
-test("verification bounds never certify a native object containing eight recoverable base64 layers",async()=>{
+test("user-authored base64 layers are outside the native provenance certificate",async()=>{
  for(const packed of [false,true]){
   const f=await fixture();let encoded=f.bytes;for(let layer=0;layer<8;layer++)encoded=Buffer.from(encoded.toString("base64"));
   const copy=f.repo.objects.write("blob",encoded);if(packed)f.repo.objects.compact();
-  assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),error=>{assert.ok(error instanceof Error);assert.match(error.message,/unverified.*(?:decode_depth|decode_error|incomplete_stream)/u);return true;});
-  assert.equal(f.repo.objects.denials().length,0);assert.deepEqual(f.repo.objects.read(copy).payload,encoded);assert.deepEqual(readFileSync(join(f.repo.root,"asset")),f.bytes);
+  const receipt=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)); assert.equal(receipt.guarantee.kind,"native-provenance"); assert.ok(receipt.guarantee.excluded.includes("user-authored alternate encodings"));
+  assert.equal(f.repo.objects.denials()[0].pending,false);assert.deepEqual(f.repo.objects.read(copy).payload,encoded);assert.equal(existsSync(join(f.repo.root,"asset")),false);
  }
 });
 
@@ -130,13 +130,11 @@ test("complete native framing rejects malformed, trailing, truncated and oversiz
  const path=place(root,`packs/${createHash("sha256").update(pack).digest("hex")}.pack`,pack);assert.throws(()=>accountErasureStorage(root,empty),{code:"unverifiable"});rmSync(path);
 });
 
-test("missing, corrupt or bounded fingerprint evidence never issues an erasure certificate",async()=>{
+test("missing or bounded audit evidence does not gate provenance, while corrupt native metadata refuses",async()=>{
  const f=await fixture();f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1));const journal=join(f.repo.controlDirectory,"erasure-verification.json");const original=readFileSync(journal);rmSync(journal);
- assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),/unverified.*missing_evidence/u);
+ assert.equal(f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)).guarantee.kind,"native-provenance");
  writeFileSync(journal,"foreign diagnostic format");assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),/unverified.*decode_error/u);assert.equal(readFileSync(journal,"utf8"),"foreign diagnostic format");
  writeFileSync(journal,original);assert.equal(f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)).storage.accountable,true);
- const limited=await fixture();limited.repo.objects.write("blob",Buffer.alloc(100_000,122));const budget={...erasureScanLimits};
- try { erasureScanLimits.minimum=1;erasureScanLimits.ratio=0;assert.throws(()=>limited.repo.obliterate(limited.entry.fileId!,"erase-fixture","incident",new Date(1)),/unverified.*decoded_bytes/u);assert.equal(limited.repo.objects.denials().length,0);assert.deepEqual(readFileSync(join(limited.repo.root,"asset")),limited.bytes); } finally { Object.assign(erasureScanLimits,budget); }
  place(f.repo.objects.storageRoot(),"cache",Buffer.from("unrelated foreign bytes"));assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),{code:"unverifiable"});
 });
 
@@ -289,19 +287,19 @@ test("a fresh purge batch cannot overwrite an operation id already owned by anot
  erasurePurge(f.repo.controlDirectory,id,roots,true).begin([]);const journal=JSON.parse(readFileSync(path,"utf8")) as {operations:Record<string,unknown[]>;plans:Record<string,{id:string}[]>};assert.deepEqual(journal.operations[id],[]);assert.notEqual(journal.plans[id][0].id,id);assert.equal(journal.plans[other][0].id,id);
 });
 
-test("final verification cannot exclude a native encoded copy recreated at a purged pathname",async()=>{
- const f=await fixture();let encoded=f.bytes;for(let i=0;i<8;i++)encoded=Buffer.from(encoded.toString("base64"));const id=hashObject("blob",encoded);const path=place(f.repo.objects.storageRoot(),`${id.slice(0,2)}/${id.slice(2)}`,Buffer.alloc(0));let replaced=false;
- erasureScanBoundary.visit=step=>{if(step==="completed"&&!replaced){replaced=true;writeFileSync(path,deflateSync(frameObject("blob",encoded)));}};
- assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true}),/unverified/u);assert.equal(replaced,true);assert.equal(f.repo.objects.denials()[0].pending,true);assert.deepEqual(f.repo.objects.read(id).payload,encoded);
+test("final verification cannot exclude a native typed copy recreated at a purged pathname",async()=>{
+ const f=await fixture();const encoded=f.bytes;const id=hashObject("record",encoded);const path=place(f.repo.objects.storageRoot(),`${id.slice(0,2)}/${id.slice(2)}`,Buffer.alloc(0));let replaced=false;
+ erasureScanBoundary.visit=step=>{if(step==="completed"&&!replaced){replaced=true;writeFileSync(path,deflateSync(frameObject("record",encoded)));}};
+ assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true}),{code:"erasure_retained_copy"});assert.equal(replaced,true);assert.equal(f.repo.objects.denials()[0].pending,true);assert.deepEqual(f.repo.objects.read(id).payload,encoded);
  erasureScanBoundary.visit=()=>{};rmSync(path);const receipt=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true});assert.equal(receipt.storage.accountable,true);assert.equal(receipt.purge.deleted,1);assert.equal(f.repo.objects.denials()[0].pending,false);assert.equal(f.repo.operations.read().filter(entry=>entry.command==="obliterate").length,1);
 });
 
 
-test("a valid encoded copy introduced at EVERY erasure boundary cannot receive a completion certificate",async t=>{
+test("a native typed copy introduced at EVERY erasure boundary cannot receive a completion certificate",async t=>{
  const steps=["proof-persisted","pending","object-deleted","storage-verified","completed","receipt","file-opened","file-chunk","file-verified"];
  for(const step of steps){
-  const f=await fixture();let encoded=f.bytes;for(let i=0;i<8;i++)encoded=Buffer.from(encoded.toString("base64"));const id=hashObject("blob",encoded);const path=place(f.repo.objects.storageRoot(),`${id.slice(0,2)}/${id.slice(2)}`,Buffer.alloc(0));let injected=false;
-  erasureScanBoundary.visit=current=>{if(current===step&&!injected){injected=true;writeFileSync(path,deflateSync(frameObject("blob",encoded)));}};
+  const f=await fixture();const encoded=f.bytes;const id=hashObject("record",encoded);const path=place(f.repo.objects.storageRoot(),`${id.slice(0,2)}/${id.slice(2)}`,Buffer.alloc(0));let injected=false;
+  erasureScanBoundary.visit=current=>{if(current===step&&!injected){injected=true;writeFileSync(path,deflateSync(frameObject("record",encoded)));}};
   assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true}),error=>error instanceof ObjectStoreError&&error.status==="unverified",step);assert.equal(injected,true,step);assert.equal(f.repo.objects.denials()[0].pending,true);assert.deepEqual(f.repo.objects.read(id).payload,encoded);
   erasureScanBoundary.visit=()=>{};rmSync(path);const receipt=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true});assert.equal(receipt.storage.accountable,true);assert.equal(f.repo.objects.denials()[0].pending,false);assert.equal(f.repo.operations.read().filter(entry=>entry.command==="obliterate").length,1);
  }
@@ -311,7 +309,7 @@ test("a valid encoded copy introduced at EVERY erasure boundary cannot receive a
 test("decoded and physical proofs share the final native descriptor and catalogue at EVERY verification boundary",async t=>{
  const steps=["pass-start","file-resolve","file-opened","object-verified","file-parsed","file-check","file-verified","pass-check"];let cells=0;
  for(const packed of [false,true])for(const copiedPack of [false,true])for(const step of steps){
-  const f=await fixture();if(packed)f.repo.objects.compact();const marker=Buffer.from("late independently encoded selected marker 826391");let encoded=marker;for(let i=0;i<8;i++)encoded=Buffer.from(encoded.toString("base64"));
+  const f=await fixture();if(packed)f.repo.objects.compact();const marker=Buffer.from("late independently encoded selected marker 826391");const encoded=marker;
   let name:string;let bytes:Buffer;
   if(copiedPack){const supplier=new ObjectStore(join(f.dir.root,"supplier"));supplier.write("blob",encoded);supplier.compact();const file=supplier.inventory()[0];name=`packs/${file.path.split(/[\\/]/u).at(-1)}`;bytes=readFileSync(file.path);}else{const id=hashObject("blob",encoded);name=`${id.slice(0,2)}/${id.slice(2)}`;bytes=deflateSync(frameObject("blob",encoded));}
   const patterns=[fingerprint(marker)];const root=f.repo.objects.storageRoot();let injected=false;let late="";
@@ -369,7 +367,7 @@ test("streamed representation proofs require the whole range and cannot certify 
  const closed=createErasureInspection(patterns,bytes.length);closed.close();assert.throws(()=>closed.finish(),error=>error instanceof VerificationRefusal&&error.bound==="inspection_incomplete");assert.throws(()=>closed.feed(bytes),{status:"unverified"});
  const complete=createErasureInspection(patterns,bytes.length);complete.feed(bytes);complete.finish();complete.finish();assert.throws(()=>complete.feed(bytes),error=>error instanceof VerificationRefusal&&error.bound==="inspection_contract");assert.throws(()=>complete.finish(),{status:"unverified"});complete.close();
  const fault=createErasureInspection([fingerprint(bytes)],bytes.length);mock.method(crypto,"createHash",()=>{throw undefined;});syncBuiltinESMExports();try{assert.throws(()=>fault.feed(bytes),error=>error instanceof VerificationRefusal&&error.bound==="decode_error");}finally{mock.restoreAll();syncBuiltinESMExports();}assert.throws(()=>fault.finish(),error=>error instanceof VerificationRefusal&&error.bound==="decode_error");fault.close();
- const prior={...erasureScanLimits};try{erasureScanLimits.minimum=0;erasureScanLimits.ratio=0;const bounded=createErasureInspection(patterns,bytes.length);assert.throws(()=>bounded.feed(bytes),error=>error instanceof VerificationRefusal&&error.bound==="decoded_bytes");assert.throws(()=>bounded.finish(),error=>error instanceof VerificationRefusal&&error.bound==="decoded_bytes");bounded.close();}finally{Object.assign(erasureScanLimits,prior);}
+
 });
 
 test("borrowed inspection slots cannot alter native payload-denial accounting",async()=>{
@@ -381,7 +379,7 @@ test("borrowed inspection slots cannot alter native payload-denial accounting",a
 test("an operational diagnostic failure refuses before any denial or selected-file deletion",async()=>{
  const f=await fixture();const original=f.repo.objects.walkErasureInventory;let passes=0;
  mock.method(f.repo.objects,"walkErasureInventory",function*(...args:Parameters<typeof original>){if(++passes===3)throw new Error("injected byte-inspection failure");yield* Reflect.apply(original,f.repo.objects,args);});
- assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),error=>error instanceof VerificationRefusal&&error.bound==="decode_error");assert.equal(passes,3);assert.deepEqual(f.repo.objects.denials(),[]);assert.deepEqual(readFileSync(join(f.repo.root,"asset")),f.bytes);mock.restoreAll();assert.equal(f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)).storage.accountable,true);
+ assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),/injected byte-inspection failure/u);assert.equal(passes,3);assert.deepEqual(f.repo.objects.denials(),[]);assert.deepEqual(readFileSync(join(f.repo.root,"asset")),f.bytes);mock.restoreAll();assert.equal(f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)).storage.accountable,true);
 });
 
 test("purge authorization revoked after complete preflight refuses before deleting the recorded foreign set",async()=>{

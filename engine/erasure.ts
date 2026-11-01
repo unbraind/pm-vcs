@@ -1,8 +1,14 @@
-import { accountErasureStorage, planErasureStorage, erasurePurge, type ErasurePurgeReceipt, type ErasureAccountabilityReport } from "./erasure-accountability.ts";
+import { nativeOutputs, outputBirth } from "./native-outputs.ts";
+import { parseFileLeaseAudit } from "./publication-leases.ts";
+import { payloadOwners } from "./payload-owners.ts";
+import { accountErasureStorage, planErasureStorage, erasurePurge, parseErasurePurgeJournal, type ErasurePurgeReceipt, type ErasureAccountabilityReport } from "./erasure-accountability.ts";
 import { assertDestructionStorage, prepareDestruction, type DestructionReceipt } from "./destruction.ts";
 import { assertRefName } from "./refs.ts";
-import { deflateSync } from "node:zlib";
-import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, inspectErasureRepresentation, createErasureInspection, inspectErasureFile, erasureScanBoundary, ErasureStorageRefusal, type ErasureFingerprint } from "./erasure-scan.ts";
+import { createHash } from "node:crypto";
+import { manifestIdentity, recordRepresentations } from "./erasure-provenance.ts";
+import { erasureOperations } from "./oplog.ts";
+import { managedExports } from "./managed-exports.ts";
+import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, erasureScanBoundary, ErasureStorageRefusal, type ErasureFingerprint } from "./erasure-scan.ts";
 import { durability } from "./durability.ts";
 import { VerificationRefusal, assertVerificationBound, verificationLimits } from "./object-error.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
@@ -11,11 +17,10 @@ import { constants, type BigIntStats, existsSync, fstatSync, lstatSync, readdirS
 import { objectFiles, type ObjectFile } from "./object-files.ts";
 import { dirname, join } from "node:path";
 import { authorize, readLayers, assertCompositionPath, syncDirectory, writePrivateJson } from "./composition.ts";
-import { payloadDigest, encodeTombstone, type ErasureDenial } from "./lifecycle.ts";
+import { payloadDigest, encodeTombstone, validateDenials, type ErasureDenial } from "./lifecycle.ts";
 import { decodeManifest, decodeTree } from "./model.ts";
-import { frameObject, hashObject, isObjectId, OBJECT_TYPES, readControlJson, ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
+import { frameObject, hashObject, isObjectId, readControlJson, ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
 import { inspectClosure } from "./closure.ts";
-import { inspectRepresentations } from "./representations.ts";
 import { ALWAYS_IGNORED } from "./ignore.ts";
 import { listWorkingTree, type IndexEntry } from "./worktree.ts";
 import { WorktreeMutation } from "./worktree-mutation.ts";
@@ -36,6 +41,10 @@ export interface ErasureReceipt {
   readonly removed: readonly ObjectId[];
   /** Every surviving regular storage file is a complete, verified native representation. */
   readonly storage: ErasureAccountabilityReport;
+  /** The primary certificate concerns native object derivation, not arbitrary re-encodings of user data. */
+  readonly guarantee: { readonly kind: "native-provenance"; readonly objects: readonly ObjectId[]; readonly excluded: readonly string[] };
+  /** A bounded, nonblocking diagnostic is never evidence of absence. */
+  readonly audit: { readonly suspected_residue: boolean; readonly limited: boolean; readonly scope: readonly string[]; readonly limits: { readonly bytes: number; readonly depth: number } };
 }
 
 /** Whole-store planning metadata excludes leaf buffers and retains only ownership and payload references. */
@@ -66,22 +75,60 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, Inventory
 }
 
 /** Refuse unsupported control storage and temporary metadata copies before reporting physical erasure. */
-function assertSupportedControl(control: string, payloads: readonly ErasureFingerprint[] = []): void {
-  const supported = new Set(["objects", "refs", "leases", "destruction", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "remotes.json",
+function assertSupportedControl(control: string, observe?: (bytes: Buffer, binary: boolean) => void): void {
+  const supported = new Set(["objects", "refs", "leases", "destruction", "payload-owners", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "exports.json", "outputs.json", "remotes.json",
     "partial.json", "upload-roots.json", "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "objects.recovery.lock", "objects.generation", "erasure-verification.json", "erasure-purge.json", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
   for (const entry of readdirSync(control, { withFileTypes: true })) {
-    if (supported.has(entry.name) && (["objects", "refs", "leases", "destruction"].includes(entry.name) ? !entry.isDirectory() : !entry.isFile())) {
+    if (supported.has(entry.name) && (["objects", "refs", "leases", "destruction", "payload-owners"].includes(entry.name) ? !entry.isDirectory() : !entry.isFile())) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Control storage must retain its supported native kind.");
     }
     const nativeOwner = entry.isFile() && ["oplog.jsonl.lock", "instances.json.lock"].some(name => durability.processMarker(join(control, entry.name), join(control, name)));
-    if ((!supported.has(entry.name) && !nativeOwner && !(entry.isFile() && /^(?:objects\.(?:(?:recovery\.)?lock\.[0-9]+|generation)|(?:erasure-verification|erasure-purge|denials)\.json)\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
+    if ((!supported.has(entry.name) && !nativeOwner && !(entry.isFile() && /^(?:objects\.(?:(?:recovery\.)?lock\.[0-9]+|generation)|(?:(?:erasure-verification|erasure-purge|denials|exports|outputs)\.json|oplog\.jsonl))\.[0-9a-f]{12}\.tmp$/.test(entry.name))) || entry.isSymbolicLink()) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Unknown control storage or symlinks prevent a complete erasure receipt.");
     }
+    if (entry.isFile() && /\.json$/.test(entry.name) && !["erasure-purge.json", "erasure-verification.json", "denials.json", "layers.json", "exports.json", "outputs.json"].includes(entry.name)) {
+      const value = readControlJson(join(control, entry.name), "unsupported_erasure_storage", "native control JSON");
+      if (value === null ? entry.name !== "view.json" : typeof value !== "object") throw new ObjectStoreError("unsupported_erasure_storage", "Unknown native control JSON shape was preserved.");
+    }
+    if (entry.isFile() && /^objects\.(?:recovery\.)?lock(?:\.[0-9]+\.[0-9a-f]{12}\.tmp)?$/.test(entry.name)) {
+      const text = readFileSync(join(control, entry.name), "utf8");
+      if (text !== "" && (!/^[1-9][0-9]*$/.test(text) || !Number.isSafeInteger(Number(text)) || Number(text) > 2_147_483_647)) throw new ObjectStoreError("unsupported_erasure_storage", "Unknown writer lease bytes were preserved.");
+    }
+    if (entry.isFile() && ["identity", "objects.generation"].includes(entry.name)) {
+      const value = readControlJson(join(control, entry.name), "unsupported_erasure_storage", "native identity");
+      if (!(entry.name === "objects.generation" && value === null) && (typeof value !== "string" || !/^[0-9a-f]{32}$/.test(value))) throw new ObjectStoreError("unsupported_erasure_storage", "Unknown native identity bytes were preserved.");
+    }
+    if (entry.isFile() && ["HEAD", "format"].includes(entry.name)) {
+      const text = readFileSync(join(control, entry.name), "utf8").trim();
+      try {
+        if (entry.name === "format") { if (text !== "pmvcs-1") throw new Error("Unknown format."); }
+        else if (text.startsWith("ref: ")) assertRefName(text.slice(5).trim());
+        else if (!isObjectId(text)) throw new Error("Unknown HEAD.");
+      } catch { throw new ObjectStoreError("unsupported_erasure_storage", "Unknown native control text was preserved."); }
+    }
+    if (entry.isFile() && /^(?:objects\.generation|(?:erasure-verification|erasure-purge|denials|exports|outputs)\.json)\.[0-9a-f]{12}\.tmp$/.test(entry.name)) {
+      const bytes = readFileSync(join(control, entry.name));
+      if (bytes.length > 0) {
+        try {
+          const value: unknown = JSON.parse(bytes.toString("utf8"));
+          if (entry.name.startsWith("erasure-verification.")) readFingerprints(value);
+          else if (entry.name.startsWith("denials.")) validateDenials(value);
+          else if (entry.name.startsWith("exports.")) managedExports(control, entry.name);
+          else if (entry.name.startsWith("outputs.")) nativeOutputs(control, entry.name);
+          else if (entry.name.startsWith("erasure-purge.")) parseErasurePurgeJournal(control, [], value);
+          else if (typeof value !== "string" || !/^[0-9a-f]{32}$/.test(value)) throw new Error("Invalid generation.");
+        } catch { throw new ObjectStoreError("unsupported_erasure_storage", "Unknown native control-stage bytes were preserved."); }
+      }
+    }
+    if (entry.isFile() && /^oplog\.jsonl(?:\.[0-9a-f]{12}\.tmp)?$/.test(entry.name)) {
+      const operations = erasureOperations(join(control, entry.name));
+      if (entry.name !== "oplog.jsonl" && operations.some(operation => operation.summary !== "Summary removed by authorized erasure." && !(operation.command === "obliterate" && /^Obliterated FileId [0-9a-f]{32}; tombstone [0-9a-f]{64}\.$/.test(operation.summary)))) throw new ObjectStoreError("unsupported_erasure_storage", "Unknown operation-log stage bytes were preserved.");
+    }
+
   }
-  assertDestructionStorage(control, (bytes, binaryProgress) => {
-    // The verified bitmap is a fixed binary frame, not an encoded document.
-    if (payloads.length > 0 && (binaryProgress ? matchesFingerprints(bytes, payloads) : containsSelectedBytes(bytes, payloads))) throw new ObjectStoreError("unsupported_erasure_storage", "Destruction metadata retains selected payload bytes.");
-  });
+  assertDestructionStorage(control, observe);
+  managedExports(control);
+  payloadOwners(control);
   /** Every reference leaf is native metadata, never an opaque backup namespace. */
   const inspectRefs = (directory: string, prefix: string): void => {
     const original = lstatSync(directory, { bigint: true });
@@ -101,7 +148,6 @@ function assertSupportedControl(control: string, payloads: readonly ErasureFinge
           const bytes = readFileSync(file.fd);
           if (!isObjectId(bytes.toString("utf8").trim())) throw new Error("invalid reference bytes");
           // A verified ObjectId is literal metadata, not a compressed stream.
-          if (payloads.length > 0 && containsLiteralBytes(bytes, payloads)) throw new Error("retained reference payload");
           const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
           if (current === undefined || controlStamp(current) !== controlStamp(before) || controlStamp(fstatSync(file.fd, { bigint: true })) !== controlStamp(before)) throw new Error("changed reference");
         }
@@ -119,8 +165,19 @@ function assertSupportedControl(control: string, payloads: readonly ErasureFinge
       if (!entry.isFile() || !/^[0-9a-f]{32}\.jsonl$/.test(entry.name)) {
         throw new ObjectStoreError("unsupported_erasure_storage", "Unknown lease audit storage prevents a complete erasure receipt.");
       }
+      const path = join(leases, entry.name); let file: ObjectFile | undefined;
+      try {
+        file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const before = fstatSync(file.fd, { bigint: true }); const bytes = readFileSync(file.fd);
+        if (!before.isFile() || before.size !== BigInt(bytes.length)) throw new Error("Changed lease audit.");
+        if (bytes.length > 0) parseFileLeaseAudit(bytes.toString("utf8"), entry.name.slice(0, 32));
+        const named = lstatSync(path, { bigint: true });
+        if (controlStamp(before) !== controlStamp(named) || controlStamp(before) !== controlStamp(fstatSync(file.fd, { bigint: true }))) throw new Error("Changed lease audit.");
+      } catch { throw new ObjectStoreError("unsupported_erasure_storage", "Unknown lease audit bytes were preserved."); }
+      finally { file?.close(); }
     }
   }
+  nativeOutputs(control);
   if (existsSync(join(control, "MERGE_STATE"))) {
     throw new ObjectStoreError("erasure_merge_in_progress", "Finish or abort the merge before permanent erasure.");
   }
@@ -128,27 +185,6 @@ function assertSupportedControl(control: string, payloads: readonly ErasureFinge
 
 /** Fence content and namespace replacement across one pinned native control read. */
 function controlStamp(stat: BigIntStats): string { return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`; }
-
-/** Detect recoverable selected bytes in raw, compressed and base64 worktree representations. */
-function containsSelectedBytes(bytes: Buffer, payloads: readonly ErasureFingerprint[]): boolean {
-  return inspectRepresentations(bytes, /** A retained full payload or fragment prevents a false physical-erasure receipt. */ (candidate) => matchesFingerprints(candidate, payloads));
-}
-
-/** Inspect a schema-validated PID or ObjectId literally, including canonical base64, without treating an 80 prefix as zlib. */
-function containsLiteralBytes(bytes: Buffer, payloads: readonly ErasureFingerprint[]): boolean {
-  if (matchesFingerprints(bytes, payloads)) return true;
-  const text = bytes.toString("utf8").trim();
-  if (/^(?:[0-9a-f]{2})+$/.test(text) && matchesFingerprints(Buffer.from(text, "hex"), payloads)) return true;
-  const decoded = Buffer.from(text, "base64");
-  return decoded.toString("base64") === text && containsSelectedBytes(decoded, payloads);
-}
-
-/** Validate proposed and actual audit representations without retaining a selected payload in generated metadata. */
-function assertAuditSafe(candidates: readonly Buffer[], payloads: readonly ErasureFingerprint[]): void {
-  for (const candidate of candidates) if (containsSelectedBytes(candidate, payloads)) {
-    throw new ObjectStoreError("erasure_audit_conflict", "Generated audit metadata retains selected bytes; choose nonconflicting bounded metadata before retrying.");
-  }
-}
 
 /** Internal success sentinel closes all pinned preflight resources without executing an erasure. */
 class ErasureValidated extends Error {}
@@ -218,23 +254,60 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       entries.push(...index);
     }
     entries.push(...entries.flatMap((entry) => (entry.conflicts ?? []).map((id) => ({ id, fileId: entry.fileId }))));
+    const ownership = payloadOwners(control);
+    entries.push(...ownership.filter(owner => owner.fileId !== fileId && inventory.has(owner.id)));
     const roots = new Set(existing?.tombstone.roots ?? []);
     for (const entry of entries) if (entry.fileId === fileId) roots.add(entry.id);
+    if (roots.size === 0) for (const owner of ownership) if (owner.fileId === fileId && inventory.has(owner.id)) roots.add(owner.id);
     if (roots.size === 0) throw new ObjectStoreError("unknown_file", "No payload is attributable to this FileId.");
-    const selected = new Set(existing?.tombstone.objects ?? []);
-    for (const root of roots) for (const id of payloadClosure(root, inventory, store)) selected.add(id);
+    const selected = new Set([...(existing?.tombstone.objects ?? []), ...ownership.filter(owner => owner.fileId === fileId).map(owner => owner.id)]);
+    for (const root of new Set([...roots, ...ownership.filter(owner => owner.fileId === fileId && inventory.has(owner.id)).map(owner => owner.id)])) for (const id of payloadClosure(root, inventory, store)) selected.add(id);
+    const physicalLocation = new Map(locations.map(location => [location.id, location.path]));
+    /** Read verified native payloads even while resuming an authorized pending denial. */
+    const readNative = (id: ObjectId) => {
+      const path = physicalLocation.get(id);
+      if (path === undefined) throw new ObjectStoreError("incomplete_erasure_inventory", "A native composition references an absent payload.");
+      return store.readErasureObject(id, path);
+    };
+    const logical = new Map<ObjectId, { id: ObjectId; digest: string }>();
+    if (existing === undefined) for (const [id, object] of inventory) {
+      if (object.type === "manifest") logical.set(id, manifestIdentity(id, readNative));
+    }
+    const artifacts = instances.flatMap(instance => [...managedExports(instance.controlDirectory), ...nativeOutputs(instance.controlDirectory).map(output => ({ ...output, sha256: "" }))]);
+    const selectedDigests = new Set([...(existing?.tombstone.payloads ?? []), ...[...selected].flatMap(id => inventory.has(id) ? [inventory.get(id)!.digest] : [])]);
+    // Composition identity is native provenance: changing chunk layout does not create a new independent payload.
+    for (const id of [...selected]) {
+      const identity = logical.get(id);
+      if (identity !== undefined) { selected.add(identity.id); selectedDigests.add(identity.digest); }
+    }
+    const rendered = new Set<ObjectId>();
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const id of [...selected]) if (inventory.get(id)?.type === "record" && !rendered.has(id)) {
+        rendered.add(id);
+        for (const bytes of recordRepresentations(readNative(id).payload)) {
+          const output = hashObject("blob", bytes);
+          if (!selected.has(output)) { selected.add(output); expanded = true; }
+          selectedDigests.add(payloadDigest(bytes));
+        }
+      }
+      for (const artifact of artifacts) if (!selected.has(artifact.id) && artifact.objects.some(id => selected.has(id))) { selected.add(artifact.id); if (artifact.sha256 !== "") selectedDigests.add(artifact.sha256); expanded = true; }
+      for (const [id, object] of inventory) {
+        if (selected.has(id)) continue;
+        const identity = logical.get(id);
+        const equivalent = ["blob", "record", "link", "manifest", "conflict"].includes(object.type) && selectedDigests.has(object.digest) || identity !== undefined && (selected.has(identity.id) || selectedDigests.has(identity.digest));
+        const wrapper = (object.type === "manifest" || object.type === "conflict") && object.references.some(reference => selected.has(reference));
+        if (!equivalent && !wrapper) continue;
+        selected.add(id); expanded = true;
+        if (equivalent && (object.type === "manifest" || object.type === "conflict")) for (const child of payloadClosure(id, inventory, store)) selected.add(child);
+        for (const child of selected) if (inventory.has(child)) selectedDigests.add(inventory.get(child)!.digest);
+      }
+    }
     for (const entry of entries) {
       if (entry.fileId === fileId) continue;
       for (const id of payloadClosure(entry.id, inventory, store)) {
         if (selected.has(id)) throw new ObjectStoreError("erasure_dedup_conflict", "Another FileId or legacy file owns bytes selected for erasure.");
-      }
-    }
-    // Unattributed manifests and conflicts can retain selected payloads. They
-    // cannot be erased under someone else's FileId or left recoverable.
-    for (const [id, object] of inventory) {
-      if ((object.type === "manifest" || object.type === "conflict") && !selected.has(id)
-        && object.references.some(/** Refuse unknown payload owners before mutation. */ (reference) => selected.has(reference))) {
-        throw new ObjectStoreError("erasure_dedup_conflict", "An unrelated manifest or conflict references payloads selected for erasure.");
       }
     }
     const authorization = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true, true);
@@ -249,31 +322,45 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       if (!selected.has(id) || loaded.has(id)) continue;
       const object = store.readErasureObject(id, path);
       loaded.add(id);
-      const frame = frameObject(object.type, object.payload);
-      payloads.push(fingerprint(frame));
-      // Payload denial is type-independent, including native members retyped before their wrappers were stripped.
-      for (const kind of object.payload.length === 0 ? [object.type] : OBJECT_TYPES) {
-        const member = frameObject(kind, object.payload);
-        for (const level of [1, 6, 9]) payloads.push(fingerprint(deflateSync(member, { level }).subarray(2, -4)));
-      }
-      if (object.type !== "manifest" && object.payload.length > 0) payloads.push(fingerprint(object.payload), fingerprint(Buffer.from(object.payload.toString("base64"))));
+      payloads.push(fingerprint(frameObject(object.type, object.payload)));
+      if (object.payload.length > 0) payloads.push(fingerprint(object.payload));
     }
     const deleting = new Set(locations.filter(({ id }) => selected.has(id)).map(({ path }) => path));
     for (const file of purgeFiles) deleting.add(file.path);
-    /** Both native accountability and complete byte inspection are required for a certificate. */
+    const audit = { suspected_residue: false, limited: existing !== undefined && (proofs[existing.id]?.length ?? 0) === 0,
+      scope: ["raw native members", "decoded native JSON strings", "raw physical storage"],
+      limits: { bytes: 16 * 1024 * 1024, depth: 8 } };
+    let auditRemaining = audit.limits.bytes;
+    /** Inspect only declared JSON strings; all budgets truncate diagnostics rather than deny benign data. */
+    const observe = (bytes: Buffer, json = false): void => {
+      if (bytes.length > auditRemaining) { audit.limited = true; return; }
+      auditRemaining -= bytes.length;
+      audit.suspected_residue ||= matchesFingerprints(bytes, payloads);
+      if (!json) return;
+      /** Visit native JSON values and keys without recursively guessing their encodings. */
+      const visit = (value: unknown, depth: number): void => {
+        if (depth > audit.limits.depth) { audit.limited = true; return; }
+        if (typeof value === "string") observe(Buffer.from(value));
+        else if (Array.isArray(value)) for (const child of value) visit(child, depth + 1);
+        else if (value !== null && typeof value === "object") for (const [key, child] of Object.entries(value)) { observe(Buffer.from(key)); visit(child, depth + 1); }
+      };
+      try { visit(JSON.parse(bytes.toString("utf8")), 0); } catch { /* A non-JSON native text record has only its raw representation. */ }
+    };
+    /** Diagnostic residue cannot replace native identity, ownership and namespace accountability. */
     const diagnose = (excluded: ReadonlySet<string>, decoded = true): void => {
-      if (payloads.length === 0) throw new VerificationRefusal("erasure", "missing_evidence", "Restore the original physical inspection evidence before certification.");
-      try {
-        // Parse the known native encoding once; compressed byte noise is not a nested representation.
-        // Every surviving pack member participates, even when its pack also holds selected bytes.
-        if (decoded) for (const { id, object } of store.walkErasureInventory("all", new Set(purgeFiles.filter(file => excluded.has(file.path)).map(file => file.path)))) {
-          if (!selected.has(id)) inspectErasureRepresentation(frameObject(object.type, object.payload), payloads);
+      if (decoded) for (const { id, object } of store.walkErasureInventory("all", new Set(purgeFiles.filter(file => excluded.has(file.path)).map(file => file.path)))) {
+        if (!selected.has(id)) observe(object.payload, object.type === "record" || object.type === "tombstone");
+      }
+      for (const root of objectRoots.filter(path => existsSync(path))) {
+        try {
+          if (auditRemaining <= 0) { audit.limited = true; continue; }
+          scanErasureStorage(root, payloads, excluded, false, bytes => { auditRemaining -= bytes; if (auditRemaining < 0) { audit.limited = true; throw audit; } });
         }
-        for (const root of objectRoots.filter((path) => existsSync(path))) scanErasureStorage(root, payloads, excluded, false);
-      } catch (error) {
-        if (error instanceof ObjectStoreError && error.code === "erasure_retained_copy") throw error;
-        if (error instanceof VerificationRefusal) throw error;
-        throw new VerificationRefusal("erasure", "decode_error", "Byte inspection did not complete; native accountability cannot replace that proof.");
+        catch (error) {
+          if (error === audit) audit.limited = true;
+          else if (error instanceof ObjectStoreError && error.code === "erasure_retained_copy") audit.suspected_residue = true;
+          else throw error;
+        }
       }
     };
     // A second complete verified pass checks identity/path stability without retaining unrelated leaves.
@@ -290,29 +377,13 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     /** Native control records must not become a hidden selected-byte copy during cleanup either. */
     const diagnoseControl = (): void => {
       for (const instanceControl of new Set([control, ...instances.map(instance => instance.controlDirectory)])) {
-        assertSupportedControl(instanceControl, payloads);
+        assertSupportedControl(instanceControl, (bytes, binary) => observe(bytes, !binary));
       }
     };
     diagnoseControl();
-    for (const id of inventory.keys()) if (!selected.has(id) && containsLiteralBytes(Buffer.from(id), payloads)) throw new ErasureStorageRefusal("erasure_retained_copy", "verification-metadata");
     for (const instance of instances) {
-      const leaseDirectory = join(instance.controlDirectory, "leases");
-      if (existsSync(leaseDirectory)) {
-        for (const name of readdirSync(leaseDirectory)) {
-          if (containsSelectedBytes(readFileSync(join(leaseDirectory, name)), payloads)) {
-            throw new ObjectStoreError("unsupported_erasure_storage", "Lease audit metadata retains selected payload bytes; clean the ambiguous copy before retrying.");
-          }
-        }
-      }
       for (const entry of readdirSync(instance.controlDirectory, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name !== "layers.json") {
-          const bytes = readFileSync(join(instance.controlDirectory, entry.name));
-          // A verified live writer's decimal PID is typed control metadata, not an encoded payload.
-          // Other lock contents retain full representation inspection; raw selected bytes remain forbidden.
-          const ownedPid = (entry.name === "objects.lock" || entry.name === "objects.recovery.lock" || /^objects\.(?:recovery\.)?lock\.[0-9]+\.[0-9a-f]{12}\.tmp$/.test(entry.name)) && /^[1-9][0-9]*$/.test(bytes.toString("utf8"));
-          const retained = ownedPid ? containsLiteralBytes(bytes, payloads) : containsSelectedBytes(bytes, payloads);
-          if (retained) throw new ObjectStoreError("unsupported_erasure_storage", "Control metadata retains selected payload bytes; clean the ambiguous copy before retrying.");
-        }
+        if (entry.isFile()) observe(readFileSync(join(instance.controlDirectory, entry.name)), entry.name.endsWith(".json"));
       }
     }
     const mutations = new Map<Repository, WorktreeMutation>();
@@ -328,13 +399,27 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         const owned = new Set(index.filter(/** Worktree removal follows identity, not a historical path now reused by another file. */ (entry) => entry.fileId === fileId).map(/** Collect current paths belonging to the selected identity. */ (entry) => entry.path));
         for (const layer of readLayers(instance.controlDirectory, rules)) {
           for (const file of layer.files) {
-            if (owned.has(file.path) || containsSelectedBytes(Buffer.from(file.content, "base64"), payloads)) {
+            if (owned.has(file.path) || file.source !== undefined && selected.has(file.source) || selectedDigests.has(payloadDigest(Buffer.from(file.content, "base64")))) {
               throw new ObjectStoreError("erasure_layer_conflict", "Remove affected private layers before authorized erasure.");
             }
           }
         }
         const layerPath = join(instance.controlDirectory, "layers.json");
-        if (existsSync(layerPath) && containsSelectedBytes(readFileSync(layerPath), payloads)) throw new ObjectStoreError("erasure_layer_conflict", "Private layer metadata retains selected bytes; remove the copy before retrying.");
+        if (existsSync(layerPath)) observe(readFileSync(layerPath), true);
+        for (const output of nativeOutputs(instance.controlDirectory)) {
+          if (owned.has(output.path) || !output.objects.some(id => selected.has(id)) && !selected.has(output.id)) continue;
+          const leaf = mutation.inspectForErasure(output.path);
+          if (leaf === undefined) continue;
+          if (outputBirth(leaf.stat) !== output.birth || output.complete && hashObject("blob", leaf.content) !== output.id) throw new ObjectStoreError("worktree_path_changed", "A native output was replaced; foreign bytes were preserved.");
+          owned.add(output.path);
+        }
+        for (const artifact of managedExports(instance.controlDirectory)) {
+          if (!artifact.objects.some(id => selected.has(id))) continue;
+          const leaf = mutation.inspectForErasure(artifact.path);
+          if (leaf === undefined) continue;
+          if (!nativeOutputs(instance.controlDirectory).some(output => output.path === artifact.path && !output.complete && outputBirth(leaf.stat) === output.birth) && createHash("sha256").update(leaf.content).digest("hex") !== artifact.sha256) throw new ObjectStoreError("worktree_path_changed", "A managed export was replaced; foreign bytes were preserved.");
+          owned.add(artifact.path);
+        }
         // Inspect observed leaves first, then any absent or excluded owned paths.
         const observed = new Set(listWorkingTree(instance.root, ".pmvcs", { patterns: [], negations: [], runtime: rules.runtime }, true));
         for (const path of new Set([...observed, ...owned])) {
@@ -347,12 +432,10 @@ export function eraseFile(repository: Repository, instances: readonly Repository
             throw new ObjectStoreError("worktree_path_changed", "An inspected working-tree leaf disappeared during erasure.");
           }
           if (owned.has(path)) paths.set(path, leaf.stat);
-          else if (containsSelectedBytes(Buffer.from(JSON.stringify(path)), payloads) || containsSelectedBytes(leaf.content, payloads)) {
-            throw new ObjectStoreError("erasure_worktree_conflict", "An unrelated or untracked file retains selected bytes; remove the copy before retrying.");
-          }
+          else { observe(Buffer.from(path)); observe(leaf.content); }
         }
       }
-      const tombstone = existing?.tombstone ?? { version: 1 as const, fileId, roots: [...roots], objects: [...selected], payloads: [...selected].map(/** Hash actual physical payloads without copying them into audit metadata. */ (id) => inventory.get(id)!.digest), principal, timestamp: now.toISOString(), reason };
+      const tombstone = existing?.tombstone ?? { version: 1 as const, fileId, roots: [...roots], objects: [...selected], payloads: [...selectedDigests], principal, timestamp: now.toISOString(), reason };
       const payload = encodeTombstone(tombstone);
       const id = hashObject("tombstone", payload);
       const denial: ErasureDenial = { id, tombstone, pending: true };
@@ -360,16 +443,15 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const completed = next.map(/** Completion follows durable deletion and never precedes it. */ (entry) => entry.id === id ? { ...entry, pending: false } : entry);
       const summary = `Obliterated FileId ${fileId}; tombstone ${id}.`;
       const operation = { sequence: repository.operations.read().length + 1, command: "obliterate", at: now.toISOString(), summary, refs: [] };
-      assertAuditSafe([frameObject("tombstone", payload), Buffer.from(JSON.stringify(next)), Buffer.from(JSON.stringify(completed)), Buffer.from(`${JSON.stringify(operation)}\n`)], payloads);
+      for (const bytes of [payload, Buffer.from(JSON.stringify(next)), Buffer.from(JSON.stringify(completed)), Buffer.from(JSON.stringify(operation))]) observe(bytes, true);
       // Every authorization, logical identity, ownership, worktree and audit check above is read-only.
       // Only this frozen set can be purged, even if a new foreign file arrives during execution.
       const signatures = [...new Map(payloads.map(item => [`${item.length}:${item.rolling}:${item.digest}`, item])).values()];
       const updatedProofs = { ...proofs, [id]: signatures };
-      assertAuditSafe([Buffer.from(JSON.stringify(fingerprintJournal(updatedProofs)))], payloads);
+      observe(Buffer.from(JSON.stringify(fingerprintJournal(updatedProofs))), true);
       const probe = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true, true);
       if (purgeFiles.length > 0 && !probe.canPurge) throw new ErasureStorageRefusal("unverifiable", purgeFiles[0].fileClass);
       if (validateOnly) {
-        if (containsLiteralBytes(Buffer.from(String(process.pid)), payloads)) throw new ObjectStoreError("erasure_audit_conflict", "Proposed recovery lease metadata retains selected bytes; no existing lease was retired.");
         throw new ErasureValidated();
       }
       check();
@@ -379,14 +461,9 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const purge = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true);
       if (purgeFiles.length > 0 && !purge.canPurge) throw new ErasureStorageRefusal("unverifiable", purgeFiles[0].fileClass);
       const planned = new Map(purgeFiles.map(file => [file.path, file]));
-      const accountStorage = (strict = false, representations = false): ErasureAccountabilityReport => accountErasureStorage(objectRoots, {
+      const accountStorage = (strict = false): ErasureAccountabilityReport => accountErasureStorage(objectRoots, {
         forbiddenIds: strict ? new Set([...selected, ...store.denials().flatMap(entry => entry.tombstone.objects)]) : new Set(),
         forbiddenPayloads: strict ? new Set([...store.denials().flatMap(entry => entry.tombstone.payloads), ...[...selected].flatMap(id => inventory.has(id) ? [inventory.get(id)!.digest] : [])]) : new Set(),
-        inspection: representations ? (id, frameBytes, kind) => {
-          if (containsLiteralBytes(Buffer.from(id), payloads)) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
-          return createErasureInspection(payloads, frameBytes, kind);
-        } : undefined,
-        physical: representations ? (fd, bytes, kind, budget) => inspectErasureFile(fd, bytes, payloads, kind, budget) : undefined,
         purge: purge.canPurge ? (file, remove) => {
           const expected = planned.get(file.path);
           if (expected === undefined || expected.identity !== file.identity || expected.sha256 !== file.sha256) throw new ErasureStorageRefusal("unverifiable", file.fileClass);
@@ -399,6 +476,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       erasureScanBoundary.visit("proof-persisted");
       store.recordDenials(next);
       erasureScanBoundary.visit("pending");
+      for (const instance of instances) instance.operations.redactForErasure(selected);
       accountStorage();
       store.unpack();
       physical.clear();
@@ -411,6 +489,14 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         deletion.remove(path); directories.add(dirname(path)); erasureScanBoundary.visit("object-deleted");
       }
       const objectReceipt = deletion.finish();
+      for (const instance of instances) {
+        const outputs = nativeOutputs(instance.controlDirectory);
+        const remaining = outputs.filter(output => !selected.has(output.id) && !output.objects.some(id => selected.has(id)));
+        if (remaining.length !== outputs.length) writePrivateJson(join(instance.controlDirectory, "outputs.json"), remaining);
+        const exports = managedExports(instance.controlDirectory);
+        const retained = exports.filter(artifact => !artifact.objects.some(id => selected.has(id)));
+        if (retained.length !== exports.length) writePrivateJson(join(instance.controlDirectory, "exports.json"), retained);
+      }
       for (const directory of directories) syncDirectory(directory);
       accountStorage(true);
       erasureScanBoundary.visit("storage-verified");
@@ -420,7 +506,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       assertSupportedControl(control);
       diagnoseControl();
       check(); diagnose(new Set(), false);
-      const certified = { purgeReceipt: purge.receipt(), storage: accountStorage(true, true) };
+      const certified = { purgeReceipt: purge.receipt(), storage: accountStorage(true) };
       check();
       const { purgeReceipt } = certified;
       const storage = certified.storage;
@@ -428,12 +514,12 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       store.recordDenials(completed);
       const alreadyRecorded = new Error("The original erasure operation is already recorded.");
       try {
-        repository.operations.append("obliterate", summary, [], now, undefined, /** Reconcile owners and deduplicate under the operation log's own lease. */ (receipt) => {
+        repository.operations.append("obliterate", summary, [], now, undefined, /** Reconcile owners and deduplicate under the operation log's own lease. */ (_receipt) => {
           if (repository.operations.read().some(entry => entry.command === "obliterate" && entry.summary === summary)) throw alreadyRecorded;
-          assertAuditSafe([Buffer.from(`${JSON.stringify(receipt)}\n`)], payloads);
+          observe(Buffer.from(JSON.stringify(_receipt)), true);
         });
       } catch (error) { if (error !== alreadyRecorded) throw error; }
-      return { destruction: { objects: objectReceipt, worktrees: worktreeReceipts.slice(0, 20), omittedWorktrees: Math.max(0, worktreeReceipts.length - 20) }, fileId, tombstone: id, removed: [...selected].sort(), storage, purge: purgeReceipt };
+      return { destruction: { objects: objectReceipt, worktrees: worktreeReceipts.slice(0, 20), omittedWorktrees: Math.max(0, worktreeReceipts.length - 20) }, guarantee: { kind: "native-provenance", objects: [...selected].sort(), excluded: ["independent user files", "user-authored alternate encodings", "independent names and metadata", "caller-owned exports and external copies"] }, audit, fileId, tombstone: id, removed: [...selected].sort(), storage, purge: purgeReceipt };
     } finally {
       for (const mutation of mutations.values()) mutation.close();
     }

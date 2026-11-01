@@ -37,6 +37,31 @@ import type { CdcParams, FileId, FragmentEntry, FragmentManifest, FragmentWriteR
 
 import { ManifestWriter, manifestFragments, manifestHeader } from "./manifest-pages.ts";
 
+/** Refuse a known whole-content identity before publishing any partial derived representation. */
+function assertWholeContent(store: ObjectStore, id: ObjectId, digest: string): void {
+  const denials = store.denials();
+  if (denials.some(denial => denial.pending)) throw new ObjectStoreError("erasure_incomplete", "Finish authorized cleanup before writing fragments.");
+  if (denials.some(denial => denial.tombstone.objects.includes(id) || denial.tombstone.payloads.includes(digest))) throw new ObjectStoreError("object_obliterated", "Fragment source is permanently denied native content.");
+}
+
+/** Validate the shared fixed/CDC descriptor length before taking a publication lease. */
+function assertSourceLength(length: number): void {
+  if (!Number.isInteger(length) || length < 0) throw new ObjectStoreError("invalid_total_length", `Total length ${length} is not a non-negative integer.`);
+}
+
+/** Hash the pinned source before any write, using positional reads so the caller's descriptor position is unchanged. */
+function assertFragmentSource(store: ObjectStore, fd: number, length: number): void {
+  if (store.denials().length === 0) return;
+  const framed = createHash("sha256").update(`blob ${length}\0`); const digest = createHash("sha256");
+  const bytes = Buffer.alloc(65_536); let offset = 0;
+  while (offset < length) {
+    const count = readSync(fd, bytes, 0, Math.min(bytes.length, length - offset), offset);
+    if (count === 0) throw new ObjectStoreError("short_read", "Fragment source was truncated during provenance preflight.");
+    const chunk = bytes.subarray(0, count); framed.update(chunk); digest.update(chunk); offset += count;
+  }
+  assertWholeContent(store, framed.digest("hex"), digest.digest("hex"));
+}
+
 /** Default fragment size: 1 MiB. Large enough to amortise per-fragment overhead, small enough to bound memory. */
 export const DEFAULT_FRAGMENT_SIZE = 1 << 20;
 
@@ -140,13 +165,9 @@ export function writeFragmentsFromFd(
   // writing empty blobs, which is a worse failure than a rejected argument. A
   // negative or non-integer totalLength is equally not a length.
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
-  if (!Number.isInteger(totalLength) || totalLength < 0) {
-    throw new ObjectStoreError(
-      "invalid_total_length",
-      `Total length ${totalLength} is not a non-negative integer.`,
-    );
-  }
+  assertSourceLength(totalLength);
   return store.withWriteLock(/** Hold one lease across every descriptor read and fragment publication. */ () => {
+    assertFragmentSource(store, fd, totalLength);
     const fragments: FragmentEntry[] = [];
     const buffer = Buffer.allocUnsafe(fragmentSize);
     let remaining = totalLength;
@@ -201,6 +222,7 @@ export function writeFragmented(
 ): FragmentWriteResult {
   assertFragmentSize(fragmentSize, "invalid_fragment_size");
   return store.withWriteLock(/** Publish all fixed fragments and their manifest under one reentrant lease. */ () => {
+    assertWholeContent(store, hashObject("blob", content), createHash("sha256").update(content).digest("hex"));
     const writer = new ManifestWriter(store, fileId);
     for (const chunk of fixedChunks(content, fragmentSize)) {
       writer.add({ id: store.write("blob", chunk, fileId), length: chunk.length });
@@ -629,13 +651,9 @@ export function writeCdcFragmentsFromFd(
   accept?: (entry: FragmentEntry) => void,
 ): FragmentEntry[] {
   assertCdcParams(params, "invalid_cdc_params");
-  if (!Number.isInteger(totalLength) || totalLength < 0) {
-    throw new ObjectStoreError(
-      "invalid_total_length",
-      `Total length ${totalLength} is not a non-negative integer.`,
-    );
-  }
+  assertSourceLength(totalLength);
   return store.withWriteLock(/** Hold one lease across the rolling read and every content-defined fragment. */ () => {
+    assertFragmentSource(store, fd, totalLength);
     const fragments: FragmentEntry[] = [];
     streamCdcChunks(fd, totalLength, params, sourcePath, /** Publish a bounded chunk before retiring its metadata. */ (chunk) => {
       const entry = { id: store.write("blob", chunk, fileId), length: chunk.length };
@@ -726,6 +744,7 @@ export function writeCdcFragmented(
 ): FragmentWriteResult {
   assertCdcParams(params, "invalid_cdc_params");
   return store.withWriteLock(/** Publish all content-defined fragments and their manifest in one lease. */ () => {
+    assertWholeContent(store, hashObject("blob", content), createHash("sha256").update(content).digest("hex"));
     const writer = new ManifestWriter(store, fileId, "cdc");
     cdcBoundaries(content, params, /** Store each CDC payload before referring to it. */ (chunk) => store.write("blob", chunk, fileId),
       /** Retain only the partial bounded node. */ (entry) => writer.add(entry));

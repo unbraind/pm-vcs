@@ -12,14 +12,13 @@ import { Repository } from "../engine/repo.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { prepareDestruction, inspectDestructions } from "../engine/destruction.ts";
 import { accountErasureStorage, accountabilityBoundary } from "../engine/erasure-accountability.ts";
-import { inspectErasureRepresentation, erasureScanLimits, fingerprint } from "../engine/erasure-scan.ts";
-import { inspectRepresentations } from "../engine/representations.ts";
+import { inspectErasureRepresentation, fingerprint } from "../engine/erasure-scan.ts";
 import { ObjectStoreError, VerificationRefusal, verificationLimits } from "../engine/object-error.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 
 const owned: ReturnType<typeof makeTempDir>[] = [];
-const limits = { ...verificationLimits }; const scans = { ...erasureScanLimits };
-afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); Object.assign(verificationLimits, limits); Object.assign(erasureScanLimits, scans); accountabilityBoundary.visit = () => {}; for (const dir of owned.splice(0)) dir.cleanup(); });
+const limits = { ...verificationLimits };
+afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); Object.assign(verificationLimits, limits); accountabilityBoundary.visit = () => {}; for (const dir of owned.splice(0)) dir.cleanup(); });
 /** Real SDK initialization and native committed history expose every verification path without Git discovery. */
 async function fixture() {
  const dir=makeTempDir();owned.push(dir);await new PmClient({cwd:dir.root,pmRoot:join(dir.root,".agents/pm"),noExtensions:true}).init("bounds",{defaults:true,author:"fixture"});
@@ -64,23 +63,10 @@ test("erasure wall-clock exhaustion preserves selected data and creates no termi
  const {repo}=await fixture();repo.setAuthority("fixture","read-fixture","erase-fixture");const entry=repo.readIndex()[0];verificationLimits.erasureMs=0;refused(()=>repo.obliterate(entry.fileId!,"erase-fixture","incident",new Date(1)),"erasure","time_ms");assert.equal(repo.objects.denials().length,0);assert.ok(existsSync(join(repo.root,"asset")));assert.ok(repo.objects.has(entry.id));
 });
 
-for(const [key,bound] of [["depth","decode_depth"],["contexts","decode_contexts"],["streams","decode_streams"],["wordBytes","base64_word_bytes"]] as const)test(`representation scanner ${bound} exhaustion never returns a no-copy certificate`,()=>{
- const patterns=[fingerprint(Buffer.from("selected payload signature"))];erasureScanLimits[key]=0;refused(()=>inspectErasureRepresentation(deflateSync(Buffer.from("ordinary text")),patterns),"erasure",bound);
+test("raw diagnostics never guess malformed or oversized user encoding candidates", () => {
+  const patterns = [fingerprint(Buffer.from("absent-selected"))];
+  for (const bytes of [Buffer.from("YWJjZA=="), Buffer.from("blob 3\0x"), Buffer.from([0x78, 0x9c, 0x07]), deflateSync(Buffer.alloc(100_000))]) assert.doesNotThrow(() => inspectErasureRepresentation(bytes, patterns));
 });
-
-test("representation decoders refuse depth, byte, malformed frame, checksum and incomplete-stream boundaries",()=>{
- const noMatch=()=>false;
- refused(()=>inspectRepresentations(Buffer.from("YWJjZA=="),noMatch,0),"representations","decode_depth");
- refused(()=>inspectRepresentations(deflateSync(Buffer.alloc(100_000,0)),noMatch,1,1),"representations","decoded_bytes");
- refused(()=>inspectRepresentations(Buffer.from("blob 3\0x"),noMatch),"representations","decode_error");
- refused(()=>inspectErasureRepresentation(Buffer.from([0x78,0x9c,0x07]),[fingerprint(Buffer.from("absent-selected"))]),"erasure","decode_error");
- const encoded=deflateSync(Buffer.from("ordinary representation"));const invalid=Buffer.from(encoded);invalid[invalid.length-1]^=1;
- refused(()=>inspectRepresentations(invalid,noMatch),"representations","decode_error");
- refused(()=>inspectErasureRepresentation(invalid,[fingerprint(Buffer.from("absent-selected"))]),"erasure","decode_error");
- refused(()=>inspectErasureRepresentation(encoded.subarray(0,-1),[fingerprint(Buffer.from("absent-selected"))]),"erasure","incomplete_stream");
- erasureScanLimits.minimum=0;erasureScanLimits.ratio=0;refused(()=>inspectErasureRepresentation(Buffer.from("ordinary"),[fingerprint(Buffer.from("absent-selected"))]),"erasure","decoded_bytes");
-});
-
 
 test("integrity cannot certify an empty result after a corrupt ref was omitted by a display listing",async()=>{
  const {repo}=await fixture();const path=join(repo.controlDirectory,"refs/heads/main");const original=readFileSync(path);writeFileSync(path,"truncated ref");assert.deepEqual(repo.refs.list("refs/heads/"),[]);refused(()=>repo.verify(),"integrity","ref_decode");writeFileSync(path,original);assert.ok(repo.verify().verified>0);

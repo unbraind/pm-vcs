@@ -120,13 +120,13 @@ for (const stagedLink of [false, true]) for (const ignored of [false, true]) {
   });
 }
 
-test("erasure refuses selected bytes retained in unrelated external leaf target text before denial", async () => {
+test("erasure preserves user-authored unrelated link text outside native provenance", async () => {
   const { repo, scratch } = await fixture(); const selected = "retained-link-text-marker-635284";
   writeFileSync(join(repo.root, "secret"), selected); repo.stage(["secret"]); repo.commit({ message: "selected", author }, new Date());
   const destination = join(scratch, selected); writeFileSync(destination, "independent outside bytes");
-  symlinkSync(destination, join(repo.root, "retained.link")); const before = state(repo);
-  assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", new Date()), { code: "erasure_worktree_conflict" });
-  assert.deepEqual(state(repo), before); assert.equal(readlinkSync(join(repo.root, "retained.link")), destination);
+  symlinkSync(destination, join(repo.root, "retained.link"));
+  assert.equal(repo.obliterate("secret", "erase-fixture", "incident", new Date()).guarantee.kind, "native-provenance");
+  assert.equal(readlinkSync(join(repo.root, "retained.link")), destination);
   assert.equal(readFileSync(destination, "utf8"), "independent outside bytes");
 });
 

@@ -443,6 +443,8 @@ test("CLI handlers use explicit input, external signing keys and independent imp
   const run = (action: string, args: string[], options: Record<string, unknown>, root = f.root) => harness.runCommand({ command: `vcs bundle ${action}`, args, options, pmRoot: join(root, ".agents/pm") });
   assert.equal((await run("export", [output], { input: request, keyFile })).errorMessage, undefined);
   const written = readFileSync(output);
+  const local = join(f.root, "selected.bundle");
+  assert.equal((await run("export", [local], { input: request, keyFile })).errorMessage, undefined);
   assert.match((await run("export", [output], { input: request, keyFile })).errorMessage!, /new writable output/);
   assert.deepEqual(readFileSync(output), written);
   const inspected = await run("inspect", [output], { authorization }, f.receiver.root);
@@ -461,6 +463,9 @@ test("CLI handlers use explicit input, external signing keys and independent imp
     writeFileSync(request, text); assert.match((await run("export", [output], { input: request, keyFile })).errorMessage!, /JSON object/);
   }
   truncateSync(request, 33554433); assert.match((await run("export", [output], { input: request, keyFile })).errorMessage!, /JSON object/);
+  f.repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+  f.repo.obliterate(f.repo.readIndex().find(entry => entry.path === f.path)!.fileId!, "erase-fixture", "native-signed-output", new Date(3));
+  assert.equal(existsSync(local), false); assert.deepEqual(readFileSync(output), written);
 });
 
 test("installed CLI emits compact JSON and TOON and imports in non-Git trackers with no git executable", async () => {

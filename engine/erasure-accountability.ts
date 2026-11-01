@@ -15,7 +15,7 @@ import { classifyErasureFile, ErasureStorageRefusal, type ErasureFileClass, type
 export const accountabilityBoundary: { visit(step: string, path: string, attempt: number): void } = { visit() {} };
 /** Both per-file and whole-namespace retries are bounded. */
 export const ACCOUNTABILITY_ATTEMPTS = 8;
-/** Complete native-format accounting; the erasure caller additionally requires complete representation inspection. */
+/** Complete native-format accounting remains authoritative; additional representation diagnostics are optional. */
 export interface ErasureAccountabilityReport extends ErasureStorageReport { readonly accountable: true; readonly objects: number }
 /** Exact identity selected by an explicit purge; content is never retained in its receipt. */
 export interface UnaccountedFile { readonly path: string; readonly fileClass: ErasureFileClass; readonly sha256: string; readonly bytes: number; readonly identity: string }
@@ -254,13 +254,8 @@ export interface ErasurePurgeEntry {
 }
 /** Agent-sized purge receipt preserves historical counts and explicitly reports cancelled pending authority. */
 export interface ErasurePurgeReceipt { readonly intents: readonly { readonly id: string; readonly revision: string; readonly planned: number; readonly pending: number }[]; readonly omittedIntents: number; readonly deleted: number; readonly observedAbsent: number; readonly replaced: number; readonly cancelled: number; readonly bytes: number; readonly omitted: number; readonly files: readonly ErasurePurgeEntry[] }
-/** Recover only package-written authorization under the caller's owning writer lease. */
-export function erasurePurge(control: string, fileId: string, roots: readonly string[], authorized: boolean, readOnly = false): { readonly canPurge: boolean; purge: NonNullable<AccountabilityOptions["purge"]>; begin(files: readonly UnaccountedFile[]): void; plan(files: readonly UnaccountedFile[], resume?: boolean): void; receipt(): ErasurePurgeReceipt } {
-  control = resolve(control); roots = [...new Set(roots.map(root => resolve(root)))];
-  const path = join(control, "erasure-purge.json");
-  let raw: unknown;
-  try { raw = readControlJson(path, "unverifiable", "purge journal", { format: "pm-vcs-erasure-purge-1", operations: {} }); }
-  catch { throw new ErasureStorageRefusal("unverifiable", "verification-metadata"); }
+/** Validate a current or staged native purge journal with the same complete schema and path rules. */
+export function parseErasurePurgeJournal(control: string, roots: readonly string[], raw: unknown) {
   /** Paths remain canonical audit text even after their root ceases to exist; they never grant authority alone. */
   const canonical = (file: unknown): file is string => typeof file === "string" && file !== "" && !file.includes("\0") && !isAbsolute(file) && relative(control, resolve(control, file)) === file;
   /** Prefix membership is checked against current roots only when exercising pending deletion authority. */
@@ -291,6 +286,17 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
     }
   }
   if (claimed.size !== Object.keys(journal.operations).length) throw new ErasureStorageRefusal("unverifiable", "verification-metadata");
+  return { journal, scoped };
+}
+
+/** Recover only package-written authorization under the caller's owning writer lease. */
+export function erasurePurge(control: string, fileId: string, roots: readonly string[], authorized: boolean, readOnly = false): { readonly canPurge: boolean; purge: NonNullable<AccountabilityOptions["purge"]>; begin(files: readonly UnaccountedFile[]): void; plan(files: readonly UnaccountedFile[], resume?: boolean): void; receipt(): ErasurePurgeReceipt } {
+  control = resolve(control); roots = [...new Set(roots.map(root => resolve(root)))];
+  const path = join(control, "erasure-purge.json");
+  let raw: unknown;
+  try { raw = readControlJson(path, "unverifiable", "purge journal", { format: "pm-vcs-erasure-purge-1", operations: {} }); }
+  catch { throw new ErasureStorageRefusal("unverifiable", "verification-metadata"); }
+  const { journal, scoped } = parseErasurePurgeJournal(control, roots, raw);
   /** Root birth identity is stable through ordinary file arrivals and changes when a directory is recreated. */
   const rootStamp = (root: string): string | undefined => {
     const stat = lstatSync(root, { bigint: true, throwIfNoEntry: false });

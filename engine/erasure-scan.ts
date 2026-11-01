@@ -1,10 +1,7 @@
-/** Name-independent, resumable proof that owned object storage contains no selected payload representation. */
+/** Bounded raw-byte diagnostics and one-way signatures; native provenance supplies the erasure guarantee. */
 import { createHash } from "node:crypto";
 import { constants, fstatSync, lstatSync, readdirSync, readSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ZStream, zlibInflateInit2, zlibInflate, zlibInflateEnd, Z_SYNC_FLUSH, Z_STREAM_END, Z_OK, Z_BUF_ERROR } from "pako";
-import { JsonStrings } from "./json-strings.ts";
-import { UrlBytes, nativeUrlRepresentations } from "./url-bytes.ts";
 import { objectFiles } from "./object-files.ts";
 import { ObjectStoreError, VerificationRefusal } from "./object-error.ts";
 
@@ -31,8 +28,6 @@ export class ErasureStorageRefusal extends ObjectStoreError {
 }
 /** Write/crash and storage-scan observations run inside the existing owning erasure lease. @internal */
 export const erasureScanBoundary: { visit(step: string): void } = { visit() {} };
-/** Forced decode-budget seam; ordinary scans allow six passes at the maximum DEFLATE expansion ratio. @internal */
-export const erasureScanLimits = { minimum: 16 * 1024 * 1024, ratio: 1032 * 6, depth: 6, streams: 32, contexts: 512, wordBytes: 16 * 1024 * 1024 };
 /** Use one bounded suffix filter and a full SHA-256 proof, independent of the number of pattern lengths. */
 export function fingerprint(bytes: Buffer): ErasureFingerprint {
   let rolling = 0;
@@ -139,189 +134,32 @@ export function classifyErasureFile(parts: readonly string[]): { kind: ErasureFi
   const kind = leaf.endsWith(".tmp") ? "temporary-storage" : parts[0] === "packs" ? "pack-storage" : parts.length <= 1 ? "object-root" : /^[0-9a-f]{2}$/.test(parts[0]) ? "loose-storage" : "foreign-directory";
   return { kind, foreign: !knownLoose && !knownPack };
 }
-/** One file shares decode accounting and a terminal hit across all nested representations. */
-interface InspectionState { remaining: number; hit: boolean; blocked?: string; live: number }
-/** Each native zlib context owns its output inspector until completion, cancellation or fault. */
-interface Codec { recognized: boolean; stream: ZStream; output: Uint8Array<ArrayBuffer>; child: EncodedInspector }
-/** Four alignments retain at most a partial quartet and a short undecidable decoded prefix. */
-interface Base64Phase { skip: number; pending: string; prefix: Buffer; child?: EncodedInspector }
-/** Bounded streaming inspection composes embedded zlib and canonical/partial base64 at arbitrary offsets. */
-class EncodedInspector {
-  private readonly patterns: readonly ErasureFingerprint[];
-  private readonly state: InspectionState;
-  private readonly kind: ErasureFileClass;
-  private readonly depth: number;
+/** One raw diagnostic shares a terminal hit without interpreting arbitrary bytes as codecs. */
+interface InspectionState { hit: boolean }
+/** The object reader owns format decoding; this inspector only compares its supplied native slots. */
+class RawInspector {
   private readonly matcher: Matcher;
-  private readonly template: Matcher;
-  private readonly codecs: Codec[] = [];
-  private previous = -1;
-  private consumed = 0;
-  private word: Base64Phase[] | undefined;
+  private readonly state: InspectionState;
   private closed = false;
-  private readonly speculative: boolean;
-  private jsonPhase: Base64Phase | undefined;
-  private readonly json: JsonStrings;
-  private urlPhase: Base64Phase | undefined;
-  private readonly url: UrlBytes | undefined;
-  private hex: Base64Phase[] | undefined;
-  /** Reuse immutable matcher tables; lazy windows grow only with actually observed bytes. */
-  constructor(patterns: readonly ErasureFingerprint[], state: InspectionState, kind: ErasureFileClass, depth = 0, template?: Matcher, speculative = false, urls = true) {
-    this.speculative = speculative;
-    this.patterns = patterns; this.state = state; this.kind = kind; this.depth = depth;
-    this.matcher = new Matcher(patterns, template); this.template = template ?? this.matcher; state.live++;
-    this.json = new JsonStrings(bytes => { this.jsonPhase ??= { skip: 0, pending: "", prefix: Buffer.alloc(0) }; this.decoded(this.jsonPhase, bytes, true); }, () => { this.jsonPhase?.child?.finish(); this.jsonPhase?.child?.close(); this.jsonPhase = undefined; });
-    if (urls) this.url = new UrlBytes(bytes => { this.urlPhase ??= { skip: 0, pending: "", prefix: Buffer.alloc(0) }; this.decoded(this.urlPhase, bytes, true, false); }, bytes => {
-      for (const candidate of nativeUrlRepresentations(bytes)) {
-        const child = this.child(true, false);
-        if (child !== undefined) { try { child.feed(candidate); child.finish(); } finally { child.close(); } }
-      }
-    });
-  }
-  /** Reject excessive supported encodings rather than certifying their uninspected remainder. */
-  private child(speculative = this.speculative, urls = true): EncodedInspector | undefined {
-    if (this.depth >= erasureScanLimits.depth) { this.state.blocked ??= "decode_depth"; return undefined; }
-    if (this.state.live >= erasureScanLimits.contexts) { this.state.blocked ??= "decode_contexts"; return undefined; }
-    return new EncodedInspector(this.patterns, this.state, this.kind, this.depth + 1, this.template, speculative, urls);
-  }
-  /** Delay tiny decoded prefixes only until they can contain a supported stream or selected signature. */
-  private decoded(phase: Base64Phase, bytes: Buffer, speculative = this.speculative, urls = true): void {
-    if (phase.child === undefined) {
-      const prefix = Buffer.concat([phase.prefix, bytes]);
-      if (prefix.length < 4 && !this.patterns.some(pattern => pattern.length <= prefix.length)) { phase.prefix = prefix; return; }
-      phase.child = this.child(speculative, urls); phase.prefix = Buffer.alloc(0); if (phase.child === undefined) return;
-      phase.child.feed(prefix);
-    } else phase.child.feed(bytes);
-  }
-  /** Decode bounded quartets incrementally; long supported words never require an unbounded token buffer. */
-  private feedWord(text: string): void {
-    this.word ??= [0,1,2,3].map(skip => ({ skip, pending: "", prefix: Buffer.alloc(0) }));
-    const capacity = Math.min(65_536, Math.floor((erasureScanLimits.wordBytes - 1) / 4) * 4);
-    for (const phase of this.word) {
-      const skip = Math.min(phase.skip, text.length); phase.skip -= skip;
-      const encoded = phase.pending + text.slice(skip); let offset = 0;
-      while (encoded.length - offset >= 4) {
-        if (capacity < 4) { this.state.blocked ??= "base64_word_bytes"; phase.pending = ""; return; }
-        const length = Math.min(capacity, Math.floor((encoded.length - offset) / 4) * 4);
-        this.decoded(phase, Buffer.from(encoded.slice(offset, offset + length), "base64")); offset += length;
-        if (this.state.hit) return;
-      }
-      phase.pending = encoded.slice(offset);
-      if (phase.pending.length >= erasureScanLimits.wordBytes) { this.state.blocked ??= "base64_word_bytes"; phase.pending = ""; return; }
-    }
-  }
-  /** Finish all alignments, including unpadded final groups, then release every child on all exits. */
-  private endWord(): void {
-    const word = this.word; this.word = undefined;
-    if (word === undefined) return;
-    try {
-      for (const phase of word) {
-        if (phase.pending.length >= 2) this.decoded(phase, Buffer.from(phase.pending, "base64"));
-        phase.child?.finish(); if (this.state.hit) return;
-      }
-    } finally { for (const phase of word) phase.child?.close(); }
-  }
-  /** Close each dictionary exactly once, even when a deeper inspection refuses or finds a copy. */
-  private closeCodec(codec: Codec): void {
-    try { codec.child.close(); } finally { zlibInflateEnd(codec.stream); }
-  }
-  /** Unanchored zero-output header guesses are format nonmatches; recognized streams never hide decode faults. */
-  private push(codec: Codec, bytes: Uint8Array): boolean {
-    codec.stream.input = Uint8Array.from(bytes); codec.stream.next_in = 0; codec.stream.avail_in = bytes.length;
-    do {
-      codec.stream.output = codec.output; codec.stream.next_out = 0; codec.stream.avail_out = codec.output.length;
-      const status = zlibInflate(codec.stream, Z_SYNC_FLUSH);
-      codec.child.feed(codec.output.subarray(0, codec.stream.next_out));
-      codec.recognized ||= codec.stream.total_out > 0;
-      if (this.state.hit || (status !== Z_OK && status !== Z_BUF_ERROR)) {
-        if (!this.state.hit && status !== Z_STREAM_END && codec.recognized && !this.speculative) this.state.blocked ??= "decode_error";
-        codec.child.finish(); this.closeCodec(codec); return true;
-      }
-    } while (codec.stream.avail_in > 0 || codec.stream.avail_out === 0);
-    return false;
-  }
-  /** Consume source or decoded slots; no namespace lookup or unbounded object materialization occurs here. */
+  /** No guessed hex, URL, base64 or compressed child streams are created. */
+  constructor(patterns: readonly ErasureFingerprint[], state: InspectionState, _kind: ErasureFileClass) { this.matcher = new Matcher(patterns); this.state = state; }
+  /** Consume a raw borrowed slot; its interpretation is fixed by the native producer. */
   feed(bytes: Uint8Array): void {
     if (this.closed) throw new VerificationRefusal("erasure", "inspection_contract", "A closed inspection cannot accept more bytes.");
-    if (bytes.length === 0 || this.state.hit) return;
-    const start = this.consumed; this.consumed += bytes.length;
-    this.state.remaining -= bytes.length;
-    if (this.state.remaining <= 0) throw new VerificationRefusal("erasure", "decoded_bytes", "Decoded representation bytes could not be fully inspected.", "unsupported_erasure_storage");
-    if (this.matcher.feed(bytes)) { this.state.hit = true; return; }
-    for (const codec of [...this.codecs]) if (this.push(codec, bytes)) this.codecs.splice(this.codecs.indexOf(codec), 1);
-    if (this.state.hit) return;
-    for (let i = 0; i < bytes.length; i++) {
-      const byte = bytes[i];
-      if (this.previous >= 0 && (this.previous & 15) === 8 && (this.previous >> 4) <= 7 && ((this.previous << 8) + byte) % 31 === 0) {
-        if (this.codecs.length >= erasureScanLimits.streams) this.state.blocked ??= "decode_streams";
-        else {
-          const child = this.child();
-          if (child !== undefined) {
-            const stream = new ZStream(); zlibInflateInit2(stream, 15);
-            const codec: Codec = { recognized: start + i === 1 && !this.speculative, stream, output: new Uint8Array(16_384), child }; this.codecs.push(codec);
-            const input = i === 0 ? Buffer.concat([Buffer.from([this.previous]), bytes]) : bytes.subarray(i - 1);
-            if (this.push(codec, input)) this.codecs.splice(this.codecs.indexOf(codec), 1);
-          }
-        }
-      }
-      this.previous = byte; if (this.state.hit) return;
-    }
-    this.json.feed(bytes); this.url?.feed(bytes);
-    const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("latin1");
-    let hexEnd = 0;
-    for (const match of text.matchAll(/[0-9a-fA-F]+/g)) {
-      if (match.index > hexEnd) this.endHex();
-      this.hex ??= [0, 1].map(skip => ({ skip, pending: "", prefix: Buffer.alloc(0) }));
-      for (const phase of this.hex) {
-        const skip = Math.min(phase.skip, match[0].length); phase.skip -= skip;
-        const word = phase.pending + match[0].slice(skip); const length = Math.floor(word.length / 2) * 2;
-        this.decoded(phase, Buffer.from(word.slice(0, length), "hex"), true); phase.pending = word.slice(length);
-      }
-      hexEnd = match.index + match[0].length;
-    }
-    if (hexEnd < text.length) this.endHex();
-    let end = 0;
-    for (const match of text.matchAll(/[A-Za-z0-9+/]+={0,2}/g)) {
-      if (match.index > end) this.endWord();
-      this.feedWord(match[0]);
-      end = match.index + match[0].length;
-      if (match[0].endsWith("=")) this.endWord();
-      if (this.state.hit) return;
-    }
-    if (end < text.length) this.endWord();
+    this.state.hit ||= this.matcher.feed(bytes);
   }
-  /** Hex carries complete bytes only; each alignment owns an independent bounded decoder. */
-  private endHex(): void { const phases = this.hex; this.hex = undefined; try { for (const phase of phases ?? []) phase.child?.finish(); } finally { for (const phase of phases ?? []) phase.child?.close(); } }
-  /** Flush final partial words and recoverable streams, then close dictionaries before returning or throwing. */
-  finish(): void {
-    try {
-      this.json.finish(); this.url?.finish(); this.urlPhase?.child?.finish(); this.endHex();
-      this.endWord();
-      while (this.codecs.length > 0) {
-        const codec = this.codecs.shift()!;
-        if (codec.recognized && !this.speculative) this.state.blocked ??= "incomplete_stream";
-        try { codec.child.finish(); } finally { this.closeCodec(codec); }
-      }
-    } finally { this.close(); }
-  }
-  /** Release all remaining dictionaries on early hit, exception or normal completion. */
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    for (const codec of this.codecs) this.closeCodec(codec);
-    for (const phase of [...(this.word ?? []), ...(this.hex ?? [])]) phase.child?.close();
-    this.jsonPhase?.child?.close(); this.jsonPhase = undefined; this.hex = undefined;
-    this.urlPhase?.child?.close(); this.urlPhase = undefined;
-    this.url?.close();
-    this.word = undefined; this.codecs.length = 0; this.state.live--;
-  }
+  /** Finish the diagnostic without claiming absence beyond the declared representation. */
+  finish(): void { this.close(); }
+  /** Closing releases no nested dictionaries because there are no speculative children. */
+  close(): void { this.closed = true; }
 }
 
 /** Streaming proof belongs to its caller's pinned native member and closes on every exit. */
 export interface ErasureRepresentationInspection { feed(bytes: Uint8Array): void; finish(): void; close(): void }
 /** Build the same bounded proof for materialized and descriptor-streamed canonical members. @internal */
 export function createErasureInspection(patterns: readonly ErasureFingerprint[], frameBytes: number, kind: ErasureFileClass = "loose-storage"): ErasureRepresentationInspection {
-  const state: InspectionState = { remaining: Math.max(erasureScanLimits.minimum, frameBytes * erasureScanLimits.ratio), hit: false, live: 0 };
-  const inspector = new EncodedInspector(patterns, state, kind);
+  const state: InspectionState = { hit: false };
+  const inspector = new RawInspector(patterns, state, kind);
   let observed = 0; let finished = false; let failure: ObjectStoreError | undefined;
   /** Failed or aborted proof state is sticky, even if a caller ignores its first exception. */
   const inspect = (action: () => void): void => {
@@ -337,11 +175,10 @@ export function createErasureInspection(patterns: readonly ErasureFingerprint[],
         if (observed !== frameBytes) throw new VerificationRefusal("erasure", "representation_bytes", "The native member's complete byte range was not inspected.");
         inspector.finish();
         if (state.hit) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
-        if (state.blocked !== undefined) throw new VerificationRefusal("erasure", state.blocked, `A supported ${kind} representation remains uninspected.`, "uninspectable_payload");
         finished = true;
       }); } finally { inspector.close(); }
     },
-    /** The owner releases remaining dictionaries after parse errors and early termination too. */
+    /** The owner closes diagnostics after parse errors and early termination too. */
     close() { if (!finished && failure === undefined) failure = new VerificationRefusal("erasure", "inspection_incomplete", "The native inspection was closed before a complete proof."); inspector.close(); },
   };
 }
@@ -363,7 +200,7 @@ export function inspectErasureFile(fd: number, size: number, patterns: readonly 
   }
 }
 /** Independently scan all regular storage files; callers hold the package writer lease throughout deletion and this final proof. */
-export function scanErasureStorage(root: string, patterns: readonly ErasureFingerprint[], excluded: ReadonlySet<string> = new Set(), encodings = true): ErasureStorageReport {
+export function scanErasureStorage(root: string, patterns: readonly ErasureFingerprint[], excluded: ReadonlySet<string> = new Set(), encodings = true, observe?: (bytes: number) => void): ErasureStorageReport {
   root = resolve(root); excluded = new Set([...excluded].map(path => resolve(path)));
   const classes: Partial<Record<ErasureFileClass, number>> = {}; let files = 0; let foreign = 0;
   /** Descend real directories only, including arbitrary foreign and temporary subdirectories. */
@@ -383,14 +220,15 @@ export function scanErasureStorage(root: string, patterns: readonly ErasureFinge
         if (!before.isFile() || before.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new ErasureStorageRefusal("unsupported_erasure_storage", kind);
         const size = Number(before.size);
         const input = Buffer.alloc(65_536); let offset = 0;
-        const state: InspectionState = { remaining: Math.max(erasureScanLimits.minimum, size * erasureScanLimits.ratio), hit: false, live: 0 };
-        const inspector = encodings ? new EncodedInspector(patterns, state, kind) : undefined;
+        const state: InspectionState = { hit: false };
+        const inspector = encodings ? new RawInspector(patterns, state, kind) : undefined;
         const raw = inspector === undefined ? new Matcher(patterns) : undefined;
         try {
           erasureScanBoundary.visit("file-opened");
           while (offset < size) {
             const count = readSync(file.fd, input, 0, Math.min(input.length, size - offset), offset);
             if (count === 0) throw new ErasureStorageRefusal("unsupported_erasure_storage", kind);
+            observe?.(count);
             const bytes = input.subarray(0, count);
             if (inspector === undefined) state.hit = raw!.feed(bytes); else inspector.feed(bytes);
             if (state.hit) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
@@ -398,14 +236,13 @@ export function scanErasureStorage(root: string, patterns: readonly ErasureFinge
           }
           inspector?.finish();
           if (state.hit) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
-          if (state.blocked !== undefined) throw new VerificationRefusal("erasure", state.blocked, "A supported representation remains uninspected.", "uninspectable_payload");
         } finally { inspector?.close(); }
         const after = fstatSync(file.fd, { bigint: true });
         if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs) throw new ErasureStorageRefusal("unsupported_erasure_storage", kind);
         files++; if (isForeign) foreign++; classes[kind] = (classes[kind] ?? 0) + 1;
         erasureScanBoundary.visit("file-verified");
       } catch (error) {
-        if (error instanceof ErasureStorageRefusal || error instanceof VerificationRefusal) throw error;
+        if (observe !== undefined || error instanceof ErasureStorageRefusal || error instanceof VerificationRefusal) throw error;
         throw new ErasureStorageRefusal("unsupported_erasure_storage", kind);
       } finally { file?.close(); }
     }

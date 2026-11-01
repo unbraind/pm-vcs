@@ -1,331 +1,159 @@
-# PR 150 erasure review repair
+# PR 150 provenance repair
 
-The latest repair closes the escaped-JSON retention finding from the re-review
-of `6dfc776` and percent-escaped retention found in the native-URL audit. Its
-representation-class audit and validation are below; the
-earlier ownership and physical-copy repairs remain documented as baseline evidence.
+The orchestrator's third independent review of `ccc4942` reproduced five
+failures. Its instruction replaces universal decoded-content claims with native
+provenance. More speculative decoders cannot establish complete erasure. Earlier
+codec validation in this document's history is not a certificate for this contract.
 
-The independent Codex review of `f4d4cf6` blocked on two reproducible erasure
-defects. The main merge `d2c4768` and archive regeneration `f4d4cf6` are retained.
+## Guarantee
 
-| Defect | General rule | Repair and regression |
-| --- | --- | --- |
-| Opaque `destruction/` contents survive a successful erasure. | A control-directory name cannot confer ownership on its contents. Classification must finish before payload deletion. | Reuse the complete intent decoder; validate current and archived records, progress framing and states, native staged artifacts, and inode-bound owner records. Reject unknown names, extra fields, wrong kinds and links with `unsupported_erasure_storage`. Pin each file and recheck the directory lifetime and complete namespace. Public-erasure tests cover foreign backups, malformed native-looking records, supported historical artifacts and namespace races. |
-| One location per ObjectId loses owned copies after interrupted unpack. | Logical deduplication cannot discard physical deletion candidates. | Retain every `{ id, path }` in erasure preflight. Deduplicate only logical fingerprints; include every selected loose and pack location in the physical exclusion set. Unpack verifies an existing, intentionally denied loose copy through the existing writer-lease-scoped physical reader. Public reads still enforce permanent denial. Extend both existing lifecycle and power-loss matrices with pending packed erasure. |
+Every pm-vcs-derived content representation of the selected object identities is
+removed from owned native object storage, fragment compositions, registered local
+exports and inventoried shared working copies. Native legacy operation summaries
+are conservatively redacted. Identifier-only ancestry, indexes, refs, tombstones,
+paths and journal facts remain; authoritative terminal denial changes their read
+meaning to `obliterated`. They cannot reconstruct the erased content.
 
-## Engine audit
+Independent user files, user-authored alternate encodings, names and metadata, caller-owned
+buffers, external destinations and legacy unregistered exports are outside this
+certificate, together with backups, snapshots, other clones and physical media.
+A copied user filename is independent naming metadata, not evidence that its
+bytes were derived from an object's content. The receipt explicitly lists these
+exclusions. It never certifies universal absence of arbitrary encodings.
 
-`assertSupportedControl` also admitted opaque refs and directories under native
-metadata-file names. It now enforces the native file/directory kinds and descends
-the reference tree, applying the existing ref-name and object-identity rules.
-Only regular native ref temporaries get the reserved-lock-name exception.
-Ref bytes are parsed and inspected on the same pinned descriptor, with file and
-directory namespace checks. Verified literal identities use the existing literal
-PID inspection policy: raw and canonical-base64 evidence still participates, but
-an `80`-prefixed hexadecimal identity is not misclassified as a zlib stream. The
-writer-produced `native ref literal 38` fixture reproduces that ambiguity; a
-separate retained-copy fixture preserves the refusal for selected ref bytes.
+The secondary audit checks raw native payload/physical bytes and decoded native
+JSON keys and string values, with a shared 16 MiB work budget and eight JSON
+levels. It reports `suspected_residue`, `limited`, `scope` and `limits`. A false
+residue flag proves no absence. Missing/exhausted diagnostics and encoding-shaped
+benign data cannot refuse erasure or staging. Native ownership/corruption and
+namespace failures remain hard refusals.
 
-Object directories already use complete native accountability. Lease directories
-already enumerate regular audit entries and inspect their bytes. Destruction
-metadata now participates in selected-byte inspection before deletion and before
-certification, including supported records whose path fields retain selected
-bytes. Fully verified binary progress frames receive raw fingerprint inspection;
-their cryptographic checksums are not encoded documents. A deterministic native
-writer fixture proves that incidental base64-shaped checksum bytes must remain
-accepted, while selected bytes equal to that checksum still refuse before deletion.
-The earlier broad rerun exposed this ambiguity (62/63); it is not counted as a
-passing gate. No supported refusal or threshold is weakened.
+## Class audit
 
-Real SIGKILL probes also cover exclusive owner, intent and progress creation
-before their first write. Those native operations can leave an exact regular
-zero-byte `.tmp` stage. The classifier recognizes that empty creation state;
-it neither grants checkpoint authority nor deletes the artifact. Empty canonical
-records, unknown empty names, invalid owner PIDs and malformed stages containing
-bytes still refuse. Removing this creation-state recognition makes the native
-creation regression fail; restoring it passes all three crash cases.
+| Persisted location | Provenance rule and verdict |
+| --- | --- |
+| Loose objects, native write stages and every pack member | Exact object IDs and payload identities select every owned location. Native parsers, zlib framing, checksums, pack offsets/index and descriptor/namespace fences remain mandatory. Audit sees decoded native members; arbitrary blob content has no implied encoding. |
+| Fragment manifests and pages | Ordered native edges, lengths, child types and page heights define composition. Streamed canonical whole-blob identity finds equivalent fragment layouts. All contributing fragments and reverse manifest/conflict wrappers join denial/deletion before mutation. Reads cannot reconstruct a denied root. |
+| Future fixed/CDC fragment writes and arrivals | Whole-source content identity is checked before partial publication; composed incoming manifests use the same identity rule across held and carried objects. Exact IDs/digests and FileId/role checks remain. Arbitrary user encoding is not decoded or refused. |
+| Native payload ownership | Zero-byte native records bind an object ID to each producing FileId before object publication. Exact names, kinds, empty bodies and directory/descriptor fences classify the namespace. Erasure includes unpublished writes and refuses shared ownership even without an index or commit edge. Interrupted intent publication contains only IDs, never source bytes. |
+| Operation logs and receipts | Legacy summaries lack source IDs, so all prior summaries are conservatively replaced under the log lease. Atomic native publication removes old bytes; replay is idempotent. Every repository-owned append shares the store lease through its log lease, so a peer cannot append between redaction and erasure completion. Sequence/command/time and safe transitions remain; erased payload endpoints are nulled. Unknown log records refuse ownership. New erasure receipts contain identities and bounded audit facts. |
+| Destruction journals, archives, owners, progress and stages | Exact names, kinds, schemas, inode bindings, progress checksums and namespace fences retain authority. Unknown bytes under destruction refuse before deletion. These records carry paths and object/file identity facts rather than payload bodies. Declared JSON strings participate in the nonblocking audit; arbitrary string encodings are not guessed. |
+| Purge and fingerprint journals | Strict formats/checksums remain ownership gates. Digests and window signatures are one-way facts; absent diagnostic signatures only mark the audit limited. No payload body is written here. |
+| Series, checkpoints, attestations and signatures | Series patches contain commit IDs, not patches with payload bodies. Checkpoint projections hash native record fields and store encoded tree/identity or digest facts; claims/signatures are verification evidence, not reversible selected content. User-authored descriptions/messages remain independent metadata. |
+| Pack indexes, refs, HEAD and historical tree/index entries | Canonical structural IDs and lengths contain no reversible payload encoding. Historical FileId/root edges resolve through the terminal denial registry. A digest byte coincidence is not provenance. No promise to erase identifier-only ancestry or independent ref/path names is made. |
+| Registered CLI bundle files, including signed change bundles | Native input inventory, canonical output blob ID, SHA-256 bytes and relative path are recorded before local publication. Affected artifacts use pinned worktree destruction; registry entries are removed. Changed bytes refuse and remain foreign. Native bundle parsing supplies ordinary archives; the signed exporter supplies its actual included-object inventory under the same source lease. Neither path guesses encodings. |
+| Returned ordinary/signed bundle buffers and external/legacy exports | Returning/transferring bytes crosses the managed boundary. These copies are caller-owned; no local command can revoke them. Repository source `selfhost.bundle` is an independently versioned artifact, not an unregistered managed export owned by a target history. Its owner must regenerate it when source changes. |
+| Private layer snapshots | Native canonical base64 is decoded by the layer reader. Resolved snapshots persist their native source IDs before materialization. The actual record renderer defines JSON and TOON output identities, including legacy snapshots. Selected sources, paths or produced content identities retain the layer ownership refusal. User-written independent layer names or alternate encodings remain outside provenance. |
+| Config, remotes, credentials, authority, views and instance metadata | Native producers write identifiers, bindings, grants or user input, not reversible representations of object content. Existing JSON/kind and authorization checks remain. User-entered URLs and encoded strings are independent metadata, including double percent escapes and native URL normalization variants. |
+| Lease audits and process markers | The same native audit decoder validates exact event/lease keys, FileId, generations and record types; descriptor/name fences reject replacement. Native PID and generation stages retain their grammar. Unknown fields/bytes refuse ownership. Resource/owner identities and process facts contain no object payload derivation; identifier coincidence does not deny benign writes. |
+| Inventoried working files and linked instances | Removal follows selected FileId ownership and exact pinned preflight identities. Every native writer records source IDs, output identity and device/inode/birth identity in `outputs.json` before writing bytes. A final publication fact distinguishes complete content from interrupted output. Native copies remain attributable before index publication; unrelated replacements refuse. Retired outputs leave only identity facts. Unrelated user files, links and protected tools remain outside the certificate; shared native content owned by another FileId still refuses. |
 
-GC retains physical inventory arrays; pack compaction keys candidates by physical
-path. Other ObjectId-keyed maps cache logical graph metadata. Erasure's single-path
-map was the deletion-preflight exception. Its later path-keyed inventory remains
-appropriate after unpack retires the packs.
+## Reviewer cases and regression evidence
 
-## Regression and revert evidence
+`test/erasure-provenance.test.ts` drives real repository APIs for the five cases:
+double-percent user data; whitespace/control-normalized backslash file URLs;
+concatenated compressed streams in a native log summary; two split fragments
+reconstructing a selected whole blob; and 1,024 repeated `3` bytes before erasure
+and during later staging. Generated histories also combine loose/packed objects,
+fragments, operation logs, registered bundle outputs, terminal historical reads,
+fresh exports and idempotent cleanup. Ownership negatives preserve replaced
+exports and unknown registry/destruction artifacts.
 
-All mutations run in disposable copies. Originals are restored in `finally`,
-then the selected regression is rerun. No syntax/build failure counts as proof.
+Control-stage classification shares the actual purge, denial, fingerprint and
+export/output decoders. Complete valid stages and empty native bootstrap stages remain
+accepted. Opaque bodies and unknown fields refuse before deletion. An operation-log
+replacement stage contains only the redactor's fixed summaries or canonical erasure
+audit summaries; legacy body-bearing summaries cannot masquerade as that stage.
+Normal logs retain their original compatibility reader; strict erasure classification
+never silently drops an unrecognized record.
 
-| Isolated behavioral reversion | Failing behavior | Restored result |
-| --- | --- | --- |
-| Disable destruction-artifact classification. | The public control-refusal corpus reports a missing expected exception for the selected foreign backup. | 1/1 passes. |
-| Collapse preflight locations back to the last path per ObjectId. | The existing packed transaction recovery matrix refuses with `erasure_retained_copy`. | 1/1 passes. |
-| Restore the ordinary reader for an existing loose unpack copy. | The same recovery matrix refuses with `object_obliterated`. | 1/1 passes. |
-| Reject every zero-length stage as an invalid record. | The real creation-stage SIGKILL corpus refuses with `unsupported_erasure_storage`. | 1/1 passes, covering three native creation boundaries. |
-| Decode a verified literal ref as arbitrary compressed data. | A real native `80`-prefixed object identity refuses with `unsupported_erasure_storage`. | 1/1 passes; selected bytes in ref metadata still refuse. |
-| Treat a verified progress bitmap as an encoded document. | A native checksum produces `unsupported_erasure_storage` on a clean erasure. | 1/1 passes; raw selected checksum bytes still refuse. |
+| Finding / class regression | New outcome | Behavioral reversion | Restored result |
+| --- | --- | --- | --- |
+| Double-percent user data | Retained as independent data; receipt explicitly excludes user encodings. | Removing the receipt exclusion fails 1/1. | 1/1 |
+| Concatenated compressed streams in native log summary | Summary removed by record provenance, without guessing its codec. | Removing native summary redaction fails 1/1. | 1/1 |
+| Native-normalized whitespace/backslash file URL | Native parsing reproduction is asserted; user-authored address remains explicitly outside the certificate. | Removing the receipt exclusion fails 1/1. | 1/1 |
+| Two split fragments reconstruct a selected whole | Native composition identity closes the manifest and fragments; read APIs and fresh compositions refuse. | Disabling native composition identity fails 1/1. | 1/1 |
+| Benign 1,024 repeated digits | Erasure and later attributed staging succeed. | Restoring the `ccc4942` speculative arrival decoder fails 1/1. | 1/1 |
+| Registered export/property history | Five generated loose/packed histories, including a shared-instance export, cannot retain a live native representation. | Removing export cleanup fails all five children and their parent. | 6/6 |
+| Whole-content fragment publication | A denied source cannot leave newly published partial fragments. | Disabling whole-source preflight fails 1/1. | 1/1 |
+| Unpublished native FileId writes | Native ownership persists before bytes, including objects with no index/tree edge. | Removing ownership publication fails 1/1. | 1/1 |
+| Interrupted working outputs | Both complete and partial unindexed native copies are removed through durable source edges. | Removing only output publication fails both children and their parent. | 3/3 |
+| Legacy record rendering | Native TOON aliases remain selected without any newer output registry. | Removing only the native TOON renderer identity fails 1/1. | 1/1 |
+| Signed local archive | Actual native input inventory attributes the signed output to its source. | Removing only the exporter's source capture fails 1/1. | 1/1 |
+| Native log producer race | Peer append after redaction cannot enter the erasure transaction. | Removing only the shared store lease fails 1/1. | 1/1 |
+| Denied output FileId | A surviving source cannot create new working bytes assigned to a permanently denied FileId. | Removing only the producer FileId guard fails 1/1. | 1/1 |
+| Indexed FileId edits | Current selected FileId authority continues to cover edits after native checkout. Output-only ownership retains its birth/content fence. | Applying the output-only fence to an already selected indexed path fails 1/1. | 1/1 |
 
-The control corpus includes native writer-produced checkpoints, archived records,
-progress bitmaps, staged records and owner markers. Sparse control layouts and
-native reference temporaries remain accepted. Malformed fields, retained payload
-bytes, changed descriptors, vanished records, replaced directories and links
-refuse while leaving the asset, readable payload and denial state unchanged.
+Every mutation executes in an isolated source copy, restores every engine module
+and reruns the same behavioral selection. Only failing mutants with passing restored
+controls count as proof. Workspace production sources are never mutated by the harness.
 
-The lifecycle fixture uses a real SIGKILL after the last `unpacked` member. A
-selected object then has one loose representation and entries in two independently
-produced native packs. Both original packs remain, and the erasure is pending.
-Every native lifecycle-journal cut is registered as a named subtest; CI runs all
-cuts by default. Local focused runs select named cuts with the standard Node test
-filter. Recovery checks physical absence, accountable storage, a retained peer,
-the same idempotent tombstone and one operation-log receipt.
+The redundant composition depth guard was removed with a structural proof:
+`decodePagedManifest` permits heights 1 through 7, and `assertManifestChild`
+requires every child height to be exactly its parent's height minus one. Legacy
+nodes are leaves. Traversal cannot exceed seven page edges, so `depth > 8` was
+unreachable for decoded native inputs. Kind, length and child-role refusals remain.
 
-The power-loss matrix adds `obliterate-packed` to its existing sequence domain.
-It restores every distinct crash image, retries twice, checks pending-receipt
-completion and verifies selected physical copies are absent. The existing
-acknowledged-transaction matrix also interrupts exactly at `unpacked`.
+## Validation
 
-Exact commands, counts and revert outcomes are recorded on `pm-vcs-phase6packs`.
-The full release matrix is left to CI under the updated orchestrator instruction.
+All commands use isolated credentials-free child environments and owned scratch,
+with at most two test workers. No installer was retried. The first native Bun attempt passed five behaviors but failed cleanup because Bun lacks the Node mocking API; portable cleanup now checks API availability, with Node mock restoration and every assertion retained. The corrected Bun run has zero cleanup errors. Superseded diagnostics,
+expectation failures and deliberately stopped implementation matrices are not
+passing evidence. Full npm/Bun release CI and independent review remain required;
+local focused results are not a full release certificate.
 
-## Earlier CI repair retained
+Catalog scale is tracked separately in `pm-vcs-provenance-catalog-scale`. Identity-only
+ownership edge files consume control-directory inodes, and native output publication
+rewrites its current registry. The existing public pack benchmark measures the object
+root; it does not establish total-clone metadata cost or checkout throughput. Any
+catalog compaction must preserve source-before-bytes durability, strict classification,
+legacy reads and every recovery guard.
 
-The original 17-record mapping remains in `pr150-ci-repair.md`. The completed
-diagnostic npm run on `1c36eaf` reported 2,304 passes, one failure and zero skips or
-cancellations. All four originally failing source files reached 100% in all
-coverage dimensions. Its sole failure was the fragmented-read counter reporting
-164,327 bytes against the unchanged 131,072-byte bound. The retained synchronous
-backing-store-sweep calibration passed on Node 22 and Node 26, including its
-whole-file-allocation negative control. That diagnostic run is not a passing
-release gate.
+| Focused gate | Result |
+| --- | --- |
+| Broad erasure, accountability, fragment-repair and provenance command | 228/228; zero failures, skips or cancellations |
+| Packed power-loss matrix | 1/1; 6,007 native boundaries, 518 distinct complete crash images, two convergent replays each |
+| Focused c8 cohort | 73/73; all five targeted modules reach 100% in each dimension |
+| New provenance modules | `erasure-provenance.ts`, `managed-exports.ts`, `native-outputs.ts`, `oplog.ts` and `payload-owners.ts`: 100% statements, branches, functions and lines in the focused c8 cohort |
+| Node 22 provenance runtime selection | 18/18, zero failures/skips/cancellations |
+| Native Bun reviewer cases | 5/5; no cleanup errors after portable harness repair |
+| Signed export / undo CLI | 2/2 |
+| Packs | 38/38; includes real SIGKILL and competing-writer cases |
+| Fragments | 56/56 |
+| Lifecycle local selection | 43/43; 18/800 and 18/988 native interruption cuts, plus two process interleavings; full cuts and 512-seed model remain CI |
+| Behavioral mutation groups | All fourteen mutants fail; every restored selection passes |
 
-## Focused validation for 6dfc776
+Exact commands and focused results are recorded on `pm-vcs-phase6packs`;
+committed-head self-host evidence and CI run URLs accompany the pushed head. Native
+ownership and primary verification limits, coverage thresholds and every default
+CI matrix cut remain unchanged.
 
-All focused commands use an isolated child environment and owned scratch, with
-one test worker per command and at most two active test workers.
 
-- The linked Node 26 c8 control selection passes 9/9 after the bitmap repair;
-  the new destruction validator, reference walker and literal inspection helpers
-  have no uncovered branch records in that focused report. File-wide and
-  repository-wide coverage are separate release gates.
-- Node 22 controls plus acknowledged packed recovery pass 10/10 after the bitmap
-  repair. The reported annotation, fixture-lifetime and scratch cases pass 5/5.
-- The final-source PM-linked lifecycle matrix passes 42/42 locally: 35 selected native cuts
-  (17/722 retired-instance and 18/934 interrupted-unpack), two matrix parents and
-  five ordinary cases. CI retains every native cut by default. The larger
-  interrupted-unpack fixture has a bounded 120-second setup/child deadline;
-  expected SIGKILL and all recovery assertions remain mandatory.
-- Packed power-loss recovery passes 1/1 across 5,546 native boundaries and 474
-  distinct complete crash images, each replayed twice. The subsequent bitmap
-  format refinement is covered by the deterministic control and acknowledged
-  recovery tests above.
-- The complete pack file passes 38/38 on the final source, including all 90
-  relative-root SIGKILL cuts with two successful replays each.
-- Typecheck, build, test compilation, lint, zero duplication, docstrings (91 files,
-  570 declarations) and real package privacy inspection pass.
+## Reproduce the focused checks
 
-The broad three-file focused rerun passes 103/103, with zero failures, skips or
-cancellations, including all 168 randomized foreign-store cases. Final pack and
-lifecycle rerun counts, committed self-host proof and pushed-head CI receipts
-are recorded on the feature item and PR. The earlier
-failed broad run and cancelled diagnostic probes are excluded from passing counts.
-No installer was retried. Full npm/Bun release acceptance remains for CI under
-the updated orchestrator instruction.
-
-The broad focused command is:
-
-```sh
-node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern=SIGKILL test/erasure-accountability.test.ts test/erasure-fragment-repairs.test.ts test/erasure-storage.test.ts
-```
-
-The locally selected lifecycle command leaves all default matrix cuts in source:
+Use Node with at most two test workers and a fresh, credential-free child
+configuration. The recorded commands use one worker:
 
 ```sh
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern=SIGKILL test/erasure-provenance.test.ts test/erasure-accountability.test.ts test/erasure-fragment-repairs.test.ts test/erasure-storage.test.ts
+node_modules/.bin/c8 --include=engine/erasure-provenance.ts --include=engine/managed-exports.ts --include=engine/payload-owners.ts --include=engine/native-outputs.ts --include=engine/oplog.ts --100 --per-file --reports-dir=coverage/provenance-final2 --reporter=text --reporter=json node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/erasure-provenance.test.ts test/oplog.test.ts
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern="EVERY native obliterate-packed boundary" test/journal-durability.test.ts
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/packs.test.ts
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/fragments.test.ts
 node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern="512 seeded|cut (?!(?:1|2|25|50|100|150|200|250|300|350|400|450|500|550|600|650|700|750):)" test/erasure-lifecycle.test.ts
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern="CLI handlers use explicit|undo fences HEAD" test/change-bundles.test.ts test/oplog.test.ts
+bun test --parallel=1 --max-concurrency=1 --timeout=120000 --test-name-pattern="user-authored|native operation summaries|native split manifests|benign repeated digits" test/erasure-provenance.test.ts
+npm run check
+npm run build:test
+npm run docstring
+npm run pack:check
+npm run changelog:check
 ```
 
-An expanded local lifecycle command accidentally included the separate 512-seed
-model in a 900-second orchestration bound. It timed out after all 35 selected
-native cuts passed, with no assertion failure reported; it is not a passing gate.
-That model took 1,499,756 ms in the earlier full diagnostic run. The intended
-focused command above excludes it locally, while CI retains it unchanged.
-The original branch-coverage fault file also passes 15/15 on the final source.
-
-## Decoded-state re-review of 6dfc776
-
-The reviewer reproduced a completed receipt while the escaped destruction path
-retained `selected secret "quoted bytes" 937184`. Raw JSON text is not its string
-value. Every declared encoding must be decoded before comparing selected bytes.
-
-`JsonStrings` now shares one bounded UTF-8/UTF-16 JSON string decoder between
-materialized and streaming inspection. It visits keys as well as values, handles
-all JSON escapes and surrogate pairs across input slots, and never joins adjacent
-strings. Existing strict destruction-record parsing and classification still run
-before semantic inspection. Hex words receive both byte alignments; decoded JSON,
-hex, base64, loose frames and zlib compose under the existing depth, work, context
-and time bounds. Raw inspection remains mandatory. New speculative codec guesses
-inside literal strings or decoded hex do not classify random native identifiers
-as compressed documents. Every recoverable output byte participates even if a
-new literal/hex codec guess later fails; incomplete declared raw/base64 streams
-retain their existing refusals. Decode-budget exhaustion always refuses. Existing raw/base64 codec refusals remain strict.
-
-| Persisted location | Native interpretation and audit verdict |
-| --- | --- |
-| Destruction current records, archives, owners and nonempty stages | Shared native decoder validates complete JSON schemas, names, kinds and identities. The representation scanner additionally visits every decoded JSON key/value, including escaped paths. Unknown storage still refuses before deletion. |
-| Destruction progress | Fixed binary magic, intent ID, entry count, SHA-256 binding and outcome bytes are verified. It contains no arbitrary string fields. Raw bytes are checked; the textual ID is also covered by its mandatory linked JSON intent. The existing checksum must-allow and raw-retention must-refuse cases remain. |
-| Purge receipts and fingerprint journal | Existing schema/checksum parsers retain authority. Shared JSON/hex/base64 inspection now covers decoded file/root fields, keys, digests and proposed audit bytes before mutation. |
-| Operation log and lease audits | JSONL records participate in the same semantic string scan. Sequence/command/summary/ref fields and audit keys cannot hide selected bytes behind JSON escapes. |
-| Index, config, HEAD, identity, authority, remotes, instance/link/view/dirty metadata and native control stages | Index JSON tuples, ordinary JSON records and native text retain their existing readers. All regular control bytes participate in materialized semantic inspection; verified PIDs retain their literal policy. Control-first inspection preserves the existing typed ref refusal. |
-| Native remote URL fields and URL-bearing retained payloads | `transport.ts` and `objects.ts` use `fileURLToPath`; `http-transport.ts` uses native URL parsing; `credentials.ts` decodes URL userinfo. Both scanners inspect percent bytes, canonical addresses and native filesystem paths. The same native parser handles slash/dot normalization. Complete locators at native payload and decoded-string boundaries receive the same projection in streaming inspection; a locator exceeding the 64 KiB normalization window refuses before deletion. Raw inspection remains mandatory. |
-| Private layers | Content was already base64-decoded and inspected. The audit found path/name/key metadata omitted with the `layers.json` exception; the full layer document now participates after existing content/ownership checks, preserving `erasure_layer_conflict`. |
-| Refs and native ref temporaries | Existing names, ObjectId values, pinned descriptors and namespace fences remain. Raw and canonical base64 bytes are checked; binary identity bytes decoded from canonical hex are now checked too. |
-| Loose and packed object identities | Every retained inventory ID is checked as literal and decoded hexadecimal bytes before deletion, and again in final descriptor-scoped accountability. A selected payload equal to a peer's binary identity refuses. |
-| Pack index and length-prefixed members | `PackStorage.index` validates exact four-field tuples: ordered IDs, contiguous offsets, positive lengths and fixed types; there are no arbitrary user-string fields. IDs receive the check above. Native range/framing/zlib decoding supplies every member to the streaming semantic scanner. Final physical raw inspection and checksum/identity barriers remain. |
-| Native payloads: tree, record, commit, manifest, conflict, tombstone and blobs | Every retained canonical frame is inspected after native decompression, both in preflight and final accounting. JSON-backed names/keys/values now decode before comparison; legacy raw names and messages retain raw inspection. Hex/base64/compressed composites also participate. |
-| Worktree files, link text and private bundle files | Existing content inspection now decodes JSON and hex too. Unowned filenames additionally participate, since a retained path can itself reveal the payload. Existing `erasure_worktree_conflict` is preserved. Protected tool artifacts retain their explicit scope boundary. |
-| Bundle header/body and admission | Native bundle parsing validates framing, object hashes and base64 members. A retained bundle is inspected as worktree content, including JSON header keys and recursively decoded body objects. Existing arrival digest/closure/attribution checks use the same expanded materialized decoder; their authority rules are unchanged. |
-
-Regression corpora cover the exact reviewer case, backslashes, `\u0001` and
-`\u0007`, literal and escaped non-ASCII text, surrogate pairs, and a containing
-path. They also cover native journal history, metadata keys, operation logs,
-lease audits, layer paths/content, filenames, loose/packed JSON and composite
-copies, binary IDs and native bundle headers/body. Each refuses while preserving
-the selected asset and leaving denial unpublished. Must-allow cases retain native
-ref literals, progress checksums, ordinary decoded values and every existing
-classification guard. Incremental cases exercise every input split and bounded
-4096-byte output slots against native JSON parsing.
-
-The final native-decoder search also found percent-escaped URLs. A disposable
-public-erasure probe against `5019dad` completed with selected bytes retained in
-the decoded path of a file remote. `UrlBytes` now shares bounded output slots with
-the JSON decoder. Supported schemes and percent
-triplets survive arbitrary input splits. Literal ASCII tab/newline characters
-removed by native URL parsing are removed in this interpretation; encoded control
-bytes remain present. Literal controls are removed before triplet recognition,
-including controls inside a triplet. Native `URL` and `fileURLToPath` projections
-also cover address/path normalization, using the same parser as transport.
-Streaming projection captures at most 64 KiB for a complete locator beginning
-at a native member or decoded-string boundary. Larger locators give the typed
-`uninspectable_payload` refusal before deletion; truncated projection cannot
-certify erasure. An unrelated 32 KiB locator and a 70 KiB JSON document with a
-short URL remain accepted. Ordinary binary slots retain only the bounded scheme
-suffix. Malformed and interrupted escapes retain their literal
-bytes while every complete percent byte is inspected. The unchanged raw scan
-still covers literal percent text. URL-derived inspection does not recursively
-reinterpret its unchanged scheme; actual JSON/base64/hex/compression transforms
-continue to compose under the original bounds. Native remote-writer regressions
-cover quotes, controls and non-ASCII text, with loose/packed and composite copies
-and an ordinary-URL must-allow case. No new native codec family was found beyond
-JSON, canonical base64, hexadecimal identities, native framing, zlib and URLs.
-
-All ten earlier decoded-state reversion groups were repeated after adding URL
-inspection. Eight URL groups were then repeated on the final implementation.
-Each mutation runs in a disposable copy, restores the original in `finally`,
-reruns the selection and removes the copy.
-
-| Final URL behavioral mutation | Mutant result | Restored selection |
-| --- | --- | --- |
-| Remove materialized URL inspection | 8/18 fail: native remote fields and a metadata key escape the pre-deletion guard. | 18/18 |
-| Remove streamed URL inspection | 11/18 fail: retained loose, packed and composite URL bodies escape the guard. | 18/18 |
-| Stop percent-byte decoding | 4/18 fail: encoded HTTP paths and embedded retained data escape inspection. | 18/18 |
-| Drop the carried scheme suffix on non-URL slots | The real streaming split-input regression fails at a scheme crossing the input boundary. | 1/1 |
-| Remove control filtering before triplet recognition | 2/18 fail: an embedded URI with a control inside a triplet receives untruthful completion. | 18/18 |
-| Remove materialized native URL projection | 3/18 fail: normalized file/HTTP addresses retain selected bytes. | 18/18 |
-| Remove streamed native URL projection | 4/18 fail: normalized loose/packed/HTTP bodies retain selected bytes. | 18/18 |
-| Remove the normalization-window refusal | The oversized-locator public-erasure regression unexpectedly completes using a truncated projection. | 1/1 |
-
-Together with the ten semantic-repair groups, these are eighteen behavioral
-mutation groups. The binary-slot optimization skips byte-by-byte scheme probing
-when a slot contains no colon and retains only the six-byte recognition suffix.
-The every-split corpus exercises both sides of that path. It adds no ownership,
-classification or refusal exception.
-
-The decoded-state round has nine additional isolated behavioral reversion groups:
-
-| Reversion | Observed regression | Restored selection |
-| --- | --- | --- |
-| Remove materialized JSON string inspection | The reviewer's quoted-name case unexpectedly completes. | 1/1 |
-| Remove streaming JSON decoding | Retained JSON values/keys and composites escape native-object inspection. | 13/13 |
-| Remove streaming hex decoding | Hex and hex/compression copies escape native-object inspection. | 13/13 |
-| Remove full layer-document inspection | A selected value remains recoverable from a layer path. | 11/11 |
-| Remove retained filename inspection | A selected value remains in an unowned filename. | 11/11 |
-| Remove literal hex identity inspection | Native loose/pack/ref identities retain the selected binary bytes. | 4/4 |
-| Remove preflight identity inspection | Final verification refuses only after deleting the asset. | 4/4 |
-| Remove final descriptor identity inspection | A late native identity gets a completed receipt. | 1/1 |
-| Discard output when a newly decoded codec guess errors | Truncated hex/zlib metadata retains the recoverable selected prefix. | 11/11 |
-
-All failures are behavioral, not syntax or compilation failures. Each original
-is restored in `finally` before its passing selection and disposable-copy removal.
-The broader first diagnostic was 135/136 with one changed-refusal-priority failure;
-that priority is repaired. An earlier packed diagnostic refused at a journal guard
-for one crash image. A targeted current-source replay passes 25 nearby images;
-only the subsequent complete final-source matrix can count as a passing gate.
-
-Compatibility diagnostics found two additional ordering/interpretation details.
-New codec guesses derived from a decoded JSON/hex value must retain that origin
-through descendants: an incidental nested base64/zlib prefix in a native nonce
-is not a declared compressed document. Every recoverable prefix still participates
-and every original raw/base64 refusal stays strict. A native writer forced to
-produce nonce `654a7a2f000000000000000000000000` proves this must-allow case;
-reverting origin propagation fails, restoring it passes 1/1. This is the tenth
-isolated reversion group in the decoded-state round.
-
-The new logical identity check runs after the original post-scan control guard,
-so a directory replacement at a scan boundary keeps the established
-`unsupported_erasure_storage` refusal. Control checks and native ref priority
-remain intact. The corrected compatibility selection passes 14/14, including the
-protected tool boundary, ref literals/refusals, ID checks and journal races.
-The 142/144 diagnostic before these corrections is not a passing gate. One
-pre-correction power rerun was cancelled; its partial progress is not certification.
-
-## Decoded-state validation at `5019dad`
-
-| Gate on the corrected implementation | Result |
-| --- | --- |
-| PM-linked erasure/accountability/fragment-repair focus | 146/146, zero failures, skips or cancellations |
-| PM-linked JSON/codec and composition compatibility c8 cohort | 57/57; `json-strings.ts` and `representations.ts` each 100% statements, branches, functions and lines |
-| Complete packed power-loss matrix | 1/1; 5,546 native boundaries, 474 distinct complete crash images, two successful replays each |
-| PM-linked lifecycle focus | 42/42; 17/722 retired-instance and 18/934 interrupted-unpack native cuts |
-| Node 22 decoded-state and bounded streaming selection | 46/46; 32 MiB corpus retained 1,075,345 bytes and made two observed reads under unchanged bounds |
-| Complete fragment suite | 56/56, including retained whole-file-allocation and backing-store calibration assertions |
-| Ten isolated behavioral reversion groups | Every mutant fails; every restored selection passes |
-| Static/build/test compilation/docstrings | Passed; 92 production files, 574 documented declarations, zero duplicated lines |
-| Actual package privacy inspection | 328 files scanned, zero findings |
-
-Each test command uses one worker; at most two test workers run concurrently.
-The exact linked commands and outcomes are retained on `pm-vcs-phase6packs`.
-Every default lifecycle cut and the separate 512-seed model remain enabled in CI;
-local selection does not certify the complete lifecycle domain. Full npm/Bun release
-acceptance and fresh independent Codex review remain pending on the pushed head.
-No installer was retried. Tracker writes finish before changelog/archive generation;
-committed self-host verification and pushed-head CI receipts are reported on the PR.
-
-## Final URL-class validation
-
-All counts below use the final production implementation. No installer was retried.
-
-| Gate | Result |
-| --- | --- |
-| Erasure/accountability/fragment-repair cohort | 166/166, zero failures, skips or cancellations |
-| Decoder/composition c8 cohort | 77/77; `json-strings.ts`, `url-bytes.ts` and `representations.ts` each 100% statements, branches, functions and lines |
-| Node 22 decoder and bounded streaming cohort | 66/66; 32 MiB corpus retains 1,075,345 bytes and makes two observed reads under unchanged bounds |
-| Complete packed power-loss matrix | 1/1; 5,546 native boundaries, 474 distinct complete crash images, two convergent replays each |
-| Lifecycle focus | 42/42; 17/722 retired-instance and 18/934 interrupted-unpack native cuts |
-| Complete pack suite | 38/38; 13 compact, 32 unpack and 45 GC native SIGKILL cuts, two successful replays each |
-| Complete fragment suite | 56/56 |
-| Behavioral reversion groups | All eighteen mutants fail behaviorally; all restored selections pass |
-| Static, production/test compilation and docstrings | Passed; 93 production files, 582 documented declarations and zero duplicated lines |
-| Actual package privacy inspection | 332 files, zero findings |
-
-The combined pack/fragment attempt expired at its mistaken 900-second harness
-budget without an assertion failure. The final standalone pack run uses the
-pre-existing 3,600-second linked-command budget, and fragments run separately.
-The redundant combined link is removed through the CLI; diagnostic history is
-retained. Earlier deliberately stopped implementation runs and the initial
-120-second broad runner timeout do not count as passing gates. None of these
-changes modifies a production, memory, coverage or CI threshold.
-
-The exact commands and results are linked on `pm-vcs-phase6packs`. At most two
-workers run concurrently, with one test worker per command. Full npm/Bun release
-acceptance and fresh independent review remain CI/orchestrator work on the pushed
-head. Every default lifecycle cut and the 512-seed model remain enabled there.
-All tracker writes finish before changelog/archive generation; the committed
-archive is then verified at HEAD without regeneration during that verification.
+The provenance runtime selection recorded on the pm item also runs on Node 22.
+The local lifecycle command samples 18 cuts from each of its two interruption
+matrices and omits the 512-seed model; CI retains the complete default matrices.
+The complete npm/Bun release gate is CI evidence, not a local focused claim.
+All pm writes precede `npm run changelog:full`, `npm run self-host:write`, the
+commit, and `npm run accept:self-host` at HEAD. Archive verification never
+regenerates its input.

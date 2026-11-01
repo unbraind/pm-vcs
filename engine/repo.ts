@@ -353,7 +353,7 @@ export class Repository {
       ? new ObjectStore(join(shared, "objects"))
       : new SharedObjectStore(join(shared, "objects"));
     this.refs = new RefStore(shared, this.controlDirectory);
-    this.operations = new OperationLog(join(this.controlDirectory, "oplog.jsonl"));
+    this.operations = new OperationLog(join(this.controlDirectory, "oplog.jsonl"), this.objects);
     this.remotes = new RemoteStore(join(shared, "remotes.json"));
     this.config = config ?? readConfig(join(shared, "config.json"));
     this.pmRoot = pmRoot;
@@ -1030,7 +1030,7 @@ export class Repository {
   }
 
   /** Add an instance-private overlay after proving ownership, cleanliness and safe paths. */
-  addLayer(name: string, files: ReadonlyMap<string, { content: Buffer; executable: boolean }>): LocalLayer {
+  addLayer(name: string, files: ReadonlyMap<string, { content: Buffer; executable: boolean; source?: ObjectId }>): LocalLayer {
     return this.objects.withWriteLock(/** Layer publication cannot race staging or erasure. */ () => {
       this.objects.preflight([], true);
       const layers = this.layers();
@@ -1043,19 +1043,21 @@ export class Repository {
       const layer: LocalLayer = { name, files: [...files].map(/** Store snapshots only in private control metadata. */ ([path, value]) => {
         assertCompositionPath(path, this.ignoreRules());
         assertSafeFilePath(this.root, path, this.ignoreRules());
+        if (value.source !== undefined && !isObjectId(value.source)) throw new ObjectStoreError("bad_layers", "Layer source must be a native object identity.");
+        if (value.source !== undefined && this.objects.denial(value.source) !== undefined) throw new ObjectStoreError("object_obliterated", "Layer source is permanently denied.");
         this.objects.preflight([{ type: "blob", payload: value.content, id: hashObject("blob", value.content) }], true);
         if (dirty.has(path) || (existsSync(join(this.root, ...path.split("/"))) && !index.has(path))
           || [...owned, ...files.keys()].some(/** Parent collisions and existing private ownership are never implicit. */ (other) => (other !== path || owned.has(path)) && pathsOverlap(other, path))
           || this.objects.denial(index.get(path)?.id ?? "") !== undefined) {
           throw new ObjectStoreError("layer_collision", "Layer would overwrite dirty, untracked, obliterated or privately owned content.");
         }
-        return { path, content: value.content.toString("base64"), executable: value.executable };
+        return { path, content: value.content.toString("base64"), executable: value.executable, ...(value.source === undefined ? {} : { source: value.source }) };
       }).sort(/** Make local metadata stable for inspection and recovery. */ (a, b) => compareByteOrder(a.path, b.path)) };
       writePrivateJson(join(this.controlDirectory, "layers.json"), [...layers, layer]);
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
         for (const file of layer.files) {
-          mutation.write(file.path, Buffer.from(file.content, "base64"), file.executable ? 0o755 : 0o644);
+          mutation.write(file.path, Buffer.from(file.content, "base64"), file.executable ? 0o755 : 0o644, file.source === undefined ? undefined : { objects: [file.source] });
         }
       } finally {
         mutation.close();
@@ -1082,12 +1084,12 @@ export class Repository {
         const entry = index.get(file.path);
         if (entry !== undefined && entry.sparse !== true) restore.set(file.path, this.workingContent(file.path, this.objects.read(entry.id)));
       }
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
         for (const file of layer.files) {
           const content = restore.get(file.path);
           if (content === undefined) mutation.remove(file.path);
-          else mutation.write(file.path, content, index.get(file.path)!.mode === "100755" ? 0o755 : 0o644);
+          else mutation.write(file.path, content, index.get(file.path)!.mode === "100755" ? 0o755 : 0o644, { objects: [index.get(file.path)!.id], fileId: index.get(file.path)!.fileId });
         }
       } finally {
         mutation.close();
@@ -1110,9 +1112,9 @@ export class Repository {
       if (previous !== undefined && this.status(readWorkingFile, false).unstaged.some(/** Preserve edits to an existing descriptor. */ (entry) => entry.path === path)) throw new ObjectStoreError("link_collision", "Descriptor has unstaged edits.");
       const fileId = previous?.fileId ?? randomBytes(16).toString("hex");
       const id = this.objects.write("link", payload, fileId);
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
-        mutation.write(path, payload, 0o644);
+        mutation.write(path, payload, 0o644, { objects: [id], fileId });
       } finally {
         mutation.close();
       }
@@ -1140,7 +1142,7 @@ export class Repository {
         if (descriptor === undefined) throw new ObjectStoreError("unknown_link", "No typed link exists at that descriptor path.");
         if (target.identity() !== descriptor.link.repository) throw new ObjectStoreError("link_identity_mismatch", "Target repository identity does not match the immutable pin.");
         const tree = flattenTree(target.objects, readCommit(target.objects, descriptor.link.revision).tree);
-        const files = new Map<string, { content: Buffer; executable: boolean }>();
+        const files = new Map<string, { content: Buffer; executable: boolean; source: ObjectId }>();
         for (const mapping of descriptor.link.mappings) {
           assertCompositionPath(mapping.source, target.ignoreRules());
           assertSafeFilePath(target.root, mapping.source, target.ignoreRules());
@@ -1148,7 +1150,7 @@ export class Repository {
           if (entry === undefined) throw new ObjectStoreError("link_subset_missing", "Pinned revision does not contain a mapped source file.");
           const object = target.objects.read(entry.id);
           if (object.type === "link") throw new ObjectStoreError("nested_link", "Explicit resolution does not recursively follow links.");
-          files.set(mapping.destination, { content: target.workingContent(mapping.source, object), executable: entry.mode === "100755" });
+          files.set(mapping.destination, { content: target.workingContent(mapping.source, object), executable: entry.mode === "100755", source: entry.id });
         }
         return this.addLayer(layerName, files);
     }));
@@ -1539,7 +1541,7 @@ export class Repository {
         }
         if (!wasVisible && nowVisible) materialized.set(entry.path, this.workingContent(entry.path, this.objects.read(entry.id)));
       }
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
         for (const entry of index) {
           const wasVisible = entry.sparse !== true;
@@ -1555,7 +1557,7 @@ export class Repository {
           }
           if (!wasVisible && nowVisible) {
             widened.push(entry.path);
-            mutation.write(entry.path, materialized.get(entry.path) as Buffer, entry.mode === "100755" ? 0o755 : 0o644);
+            mutation.write(entry.path, materialized.get(entry.path) as Buffer, entry.mode === "100755" ? 0o755 : 0o644, { objects: [entry.id], fileId: entry.fileId });
             // Materialized afresh from the object, so the staged identity carries
             // over but the sparse flag goes and no cached stat exists yet.
             const { sparse: _sparse, stat: _stat, ...rest } = entry;
@@ -2797,7 +2799,7 @@ export class Repository {
       const source = flattenTree(this.objects, readCommit(this.objects, this.resolve(revision)).tree);
       const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
       const restored: string[] = [];
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
         for (const path of normalized) {
           const entry = source.get(path);
@@ -2806,7 +2808,7 @@ export class Repository {
             index.delete(path);
           } else {
             const content = this.workingContent(path, this.objects.read(entry.id));
-            mutation.write(path, content, entry.mode === "100755" ? 0o755 : 0o644);
+            mutation.write(path, content, entry.mode === "100755" ? 0o755 : 0o644, { objects: [entry.id], fileId: entry.fileId });
             index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644",
               ...(entry.fileId === undefined ? {} : { fileId: entry.fileId }),
               ...(entry.copiedFrom === undefined ? {} : { copiedFrom: entry.copiedFrom }),

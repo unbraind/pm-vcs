@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags[3]: "gh:unbraind/pm-vcs#150","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#158"
 created_at: "2026-10-21T14:49:57.681Z"
-updated_at: "2026-10-31T22:20:21.433Z"
+updated_at: "2026-11-01T02:45:09.701Z"
 author: codex-agent
 acceptance_criteria: Pack and loose representations retain the same logical identities; range reads and GC work across both; corruption and interrupted compaction fail safely.
 parent: pm-vcs-b7cb
-comments[173]{created_at,author,text}:
+comments[193]{created_at,author,text}:
   "2026-10-25T00:35:13.935Z",codex-agent,"Design: indexed independently compressed object frames preserve uncompressed SHA-256 identities. Compaction, GC and authorized erasure share the existing ObjectStore writer lease; durable publication precedes loose retirement. Add mixed-storage differential, crash-boundary and competing-writer regressions in non-git trackers; benchmark a public tracker copy. Item remains in progress for orchestrator verification."
   "2026-10-25T00:50:06.625Z",codex-agent,"Implementation: bounded independently compressed indexed packs, actual physical member ranges in InventoryEntry, typed PackRefusal remedies, SDK ObjectStore.compact and vcs compact TOON/JSON counts. GC uses the complete existing retention-root walk; authorized erasure materializes verified loose copies and retires packs before the existing permanent-denial/deletion proof. Every transition reads under ObjectStore.withWriteLock and releases last; retries retire duplicate representations. Foreign staging records remain untouched with explicit skip reasons. SDK gap: the host ExtensionCommandSdk has no binary object-pack or compressed-range-storage primitive; binary storage reuses the package-owned store lease and filesystem backend."
   "2026-10-25T00:50:09.311Z",codex-agent,"Revert proofs: disabling only PackStorage.compact caused 18 new regressions to fail (3 unrelated validation/read tests still passed); bypassing only PackStorage.index validation made the malformed-index regression fail; restoring only the original ObjectStore.read made the peer-retirement retry regression fail; restoring only the original collectGarbage made its exhaustive crash schedule regression fail. All functions were restored immediately after each proof. Targeted existing ObjectStore/GC regressions passed 43/43; new storage and benchmark source reached 100% statements/lines/functions, with the final missing malformed-JSON branch now covered."
@@ -184,14 +184,38 @@ comments[173]{created_at,author,text}:
   "2026-10-31T21:36:02.531Z",codex-agent,"Complete URI normalization now shares one pure native URL projection between materialized and streamed inspection. Streaming capture is limited to a complete locator at a native frame-body or decoded-string boundary, with a 65536-byte normalization window; exceeding it refuses with uninspectable_payload before deletion. This prevents incomplete native URL interpretation from granting a receipt. Must-allow controls include an unrelated 32768-byte locator and a 70000-byte JSON document containing a short locator; raw/percent inspection of embedded text remains incremental. Focused URI corpus passes 20/20, including retained loose/packed/native-HTTP normalized paths, embedded controls inside percent triplets, and the oversized-locator refusal. Static checks pass with zero duplication. Current full decoder and packed-crash gates are running."
   "2026-10-31T22:17:02.046Z",codex-agent,"Final current-source evidence: erasure/accountability/fragment-repair cohort 166/166; decoder/composition c8 77/77, with json-strings.ts, url-bytes.ts and representations.ts at 100% statements/branches/functions/lines; Node 22 corpus 66/66 including the unchanged 32 MiB bound (1075345 retained bytes, two reads); full fragments 56/56; lifecycle focus 42/42 across 35 selected native cuts (17/722 retired-instance, 18/934 interrupted-unpack); complete packed obliteration matrix 5546 native boundaries and 474 distinct crash images, each replayed twice. Eighteen behavioral mutation groups fail with the corresponding protection removed and pass restored; final URI reverts include both native URL projections and the bounded-window refusal. All source/build/test compilation/static/docstring/privacy gates pass (93 production files, 582 declarations, zero duplication, 332 package files and zero privacy findings). A combined pack/fragment linked command exceeded its mistaken 900-second harness budget without an assertion failure; separate fragments passed, and the pre-existing standalone pack command is running under its registered 3600-second budget. The timed-out run is not a pass. Installer retries: zero. Fresh main fetch confirms no missing main commits."
   "2026-10-31T22:20:20.391Z",codex-agent,"Final local gates all pass on the frozen implementation: broad erasure/accountability/fragment-repair 166/166; decoder/composition c8 77/77 (json-strings.ts, url-bytes.ts and representations.ts 100% statements/branches/functions/lines); Node 22 66/66 including the unchanged 32 MiB streaming bound (1075345 retained bytes, two reads); lifecycle focus 42/42; complete fragments 56/56; complete packs 38/38, including 13 compact + 32 unpack + 45 GC native SIGKILL cuts with two replays each. Complete packed erasure matrix covers all 5546 native boundaries and 474 distinct crash images, two successful replays each. Eighteen behavioral revert groups fail and restore successfully. Static/build/test compilation/docstrings and actual package privacy pass: 93 production files, 582 declarations, zero duplication, 332 package files and zero privacy findings. The mistaken combined 900-second command timed out without assertion failure; its duplicate link is removed, history retained, and both final standalone suites pass under their existing budgets. Earlier interrupted/timeout diagnostics are not passes. No installer retries. Native URI normalization is bounded at 65536 bytes for streamed complete locators; overflow refuses before deletion, with large-locator/large-JSON must-allow controls. Main is current. All default lifecycle cuts and the 512-seed model remain enabled in CI. Next: release this claim, run changelog and archive writers, commit all source/docs/tracker/archive changes, verify accept:self-host at the committed HEAD, verify identities in a fresh exact-branch clone, push, and report exact-head CI URLs without waiting for the full npm/Bun matrix. No item or issue is closed."
-files[92]:
+  "2026-10-31T23:11:53.027Z",codex-agent,"Decision from the orchestrator instruction following the third independent review of ccc4942: replace inferred byte-erasure certification with provenance completeness. The primary guarantee is removal or rewriting of every pm-vcs-derived representation identified by object identity and native structural references, including reverse manifest/fragment dependencies and derived log/receipt/control records. User-authored alternate encodings are outside that guarantee. Decoded scanning becomes a bounded, non-blocking audit with explicit receipt scope/limits, never a refusal on benign user data or later staging. Ownership classification, exact destruction artifacts, physical-copy plans and I/O/namespace safety refusals remain mandatory. Reproduce all five findings, add a generated-history provenance property and behavioral revert proofs, document the new contract, run focused gates, then finish all tracker writes before changelog/archive generation and exact-HEAD verification."
+  "2026-10-31T23:31:26.756Z",codex-agent,"Provenance implementation: canonical native manifest composition closes alternate chunk layouts and future arrival checks; legacy operation summaries are conservatively redacted under the log lease using durable replacement. CLI-written repository-local bundles have an explicit hash-fenced object inventory; erasure removes registered artifacts and denies their native content identity. Buffers handed to callers and external output destinations cross the ownership boundary. Raw and declared JSON diagnostics are bounded and nonblocking; arbitrary hex/base64/URL/zlib inference is removed. Ownership classification, native parsing, physical-copy plans and shared-FileId refusals remain mandatory. Initial five-finding/property cohort passes 12/12; compatibility diagnostics identify old encoding-scan expectations to revise under the orchestrator decision."
+  "2026-10-31T23:50:46.750Z",codex-agent,"Class closure additionally persists native FileId-to-object ownership before payload publication, selecting unpublished writes and preserving shared-owner refusals. The five finding/property cohort initially passed 13/13; added namespace negatives, orphan-only ownership, whole-source preflight state checks and bounded-audit observations are included in the final focused cohort. Private decoder modules representations.ts, url-bytes.ts and json-strings.ts are removed: source search proves no production importer or root API export after arbitrary inference is removed. Their speculative branches/resource knobs are not part of the new guarantee; native parser, ownership and physical accountability bounds are unchanged. Superseded implementation diagnostics and deliberately stopped matrices are excluded from passing gate counts."
+  "2026-11-01T00:07:41.169Z",codex-agent,"The native-shape audit now shares the actual purge and lease-audit parsers with control-stage classification; opaque lease records and nonempty invalid native stages still refuse ownership before deletion. Empty supported stages contain no payload bytes and remain recoverable. A first complete packed matrix passes 1/1 over 6007 native boundaries and 518 distinct crash images with two replays each; it precedes the final schema refinement, so a final-source matrix is running. The broad diagnostic is 181/184 with three refusal-discriminator expectation failures; the corrected native selection passes 15/15. The new five-finding/provenance cohort passes 29/29. Removed the redundant composition depth branch: every paged node decoder admits height 1..7 and every edge enforces child height = parent height - 1; legacy nodes are leaves. Therefore traversal cannot exceed seven page edges, so depth > 8 was unreachable for any decoded native input. Native kind, edge and length refusals remain."
+  "2026-11-01T00:17:52.492Z",codex-agent,"Eight behavioral reversion groups are complete in disposable source copies. Removing the user-encoding receipt exclusion fails the double-percent case 1/1 and the native-normalized file-URL case 1/1; restoring each passes 1/1. Removing native log redaction fails 1/1; disabling native composition identity fails 1/1; restoring the ccc4942 speculative arrival decoder fails benign later staging 1/1. Removing managed-export cleanup fails all six generated-history assertions (five seeded histories plus parent), restored 6/6. Disabling whole-source preflight fails its no-partial-publication assertion 1/1; removing durable unpublished ownership fails 1/1; each restored selection passes 1/1. One isolated harness restoration diagnostic failed because its temporary fragment-source mutation was not restored; the copy was removed, the harness corrected, and both affected final proofs passed. Workspace production sources were never mutated by these reversion runs. Focused c8 now measures all three new provenance modules at 100% statements/branches/functions/lines; the oplog cohort is being broadened separately. Coverage thresholds remain unchanged."
+  "2026-11-01T00:32:34.208Z",codex-agent,"The complete focused erasure/accountability/fragment-repair/provenance command now passes 214/214 with zero failures, skips or cancellations. The packed power-loss matrix passes 1/1: 6007 native boundaries, 518 distinct complete crash images, each replayed twice. Standalone pack and selected lifecycle gates are running with one worker each, maintaining the two-worker cap. The three new provenance modules each measure 100% statements/branches/functions/lines in the focused c8 report. Subsequent schema and typed-record/structural-edge additions receive the final standalone provenance/oplog and compatibility selections before archive generation. Full npm/Bun release matrices remain for pushed-head CI under the orchestrator instruction."
+  "2026-11-01T01:26:45.105Z",codex-agent,"Provenance class audit also found a native publication-order gap: working bytes can precede index publication, and record rendering changes canonical JSON into native TOON. Closing this class with source-ID and birth-bound output records flushed before bytes, wiring every native working writer, and retaining exact legacy record-renderer identities plus resolved-layer source IDs. Interrupted outputs are removed by source ownership; unrelated replacements retain the existing typed refusal. No speculative codec gate or universal byte-absence claim is restored."
+  "2026-11-01T01:34:34.840Z",codex-agent,"Final producer audit now covers both ordinary and signed repository-local CLI archives. Signed export supplies its real included-object inventory under the same store lease; managed native outputs persist source IDs and birth identity before bytes and complete-content fences afterwards. The five reviewer regressions and additional output/schema controls pass in focused diagnostics. Freezing production code for the final focused cohorts; all earlier matrices run while source was still changing are superseded, not exact-source certificates. Full release matrices remain delegated to CI by the latest orchestrator instruction."
+  "2026-11-01T01:39:00.782Z",codex-agent,"Focused c8 cohort passes 70/70 with 100% statements, branches, functions and lines in each of engine/erasure-provenance.ts, engine/managed-exports.ts, engine/native-outputs.ts, engine/oplog.ts and engine/payload-owners.ts, with unchanged thresholds and no ignores. Preserved ordinary FileId authorization for edits at an indexed native output: the new birth/content fence applies when ownership depends on the output record, while existing selected-index ownership continues through its pinned plan. A regression covers this distinction. Source is frozen after that correction; final broad/lifecycle/power evidence follows."
+  "2026-11-01T01:43:01.891Z",codex-agent,"Final behavioral revert proofs on isolated source copies: reviewer double-percent receipt scope 1 fail -> 1 pass restored; native log redaction 1 -> 1; normalized file-URL scope 1 -> 1; native composition identity 1 -> 1; benign-digit arrival decoder restoration 1 -> 1. Additional class proofs: native export deletion plan 6 fails -> 6 passes (five generated histories plus parent); whole-source fragment preflight 1 -> 1; unpublished FileId owner publication 1 -> 1; output-source publication 3 -> 3 (complete/partial copies plus parent); actual legacy TOON renderer identity 1 -> 1 with no newer output registry; signed native source capture 1 -> 1; indexed FileId ownership versus output-only replacement fences 1 -> 1. Twelve distinct mutants fail and all restored controls pass. The untracked harness restores every engine module in finally; no production workspace source is mutated. Complete table: docs/validation/pr150-erasure-review-repair.md."
+  "2026-11-01T01:47:45.032Z",codex-agent,"Retired four active c8 links that named the removed speculative decoder modules. Their original commands and proof receipts remain in append-only history and prior validation commits; they are superseded evidence for the old contract, not current acceptance commands. The active provenance c8 cohort checks all four replacement modules plus the native operation log at 100% in every dimension."
+  "2026-11-01T01:47:58.108Z",codex-agent,"Correction to the preceding link-retirement count: three active decoder-only c8 links were removed. Their append-only history is unchanged. Current c8 target remains five modules (four provenance modules and the operation log), all measured at 100/100/100/100."
+  "2026-11-01T01:50:30.047Z",codex-agent,"Native-output attribution now also enforces the existing permanent FileId denial rule before creating a leaf, even when its source object itself survives. This closes the low-level producer context boundary without changing ObjectStore write semantics. The regression uses a surviving native source plus a denied FileId and proves no new working file is created. No further production changes are planned; remaining work is final focused validation and the required archive sequence."
+  "2026-11-01T01:52:00.854Z",codex-agent,"Packed native power-loss matrix passes 1/1: 6007 boundaries, 518 distinct complete crash images, two convergent engine replays per image, with retained payload and foreign tripwire preserved. Repeating once against the final native-output FileId guard and indexed-owner predicate so the reported final cohort uses frozen production source. All matrices retain their default cut sets; local lifecycle sampling will be explicitly distinguished from the full CI model."
+  "2026-11-01T01:56:33.414Z",codex-agent,"Closing the native log producer class also requires the shared writer lease, not only the log lease: Repository now binds its OperationLog to the ObjectStore, and appends acquire store then log. This prevents a competing repository handle from inserting an encoded summary after redaction but before completion. Standalone OperationLog compatibility is retained. Added an actual peer-process append at the storage-verified boundary; its summary must never survive, and the peer must receive store_locked. The final c8 and runtime cohorts include this producer repair. The packed matrix operation already holds this same outer lease throughout; its nested append uses existing reentrancy."
+  "2026-11-01T02:13:01.091Z",codex-agent,"Out-of-scope measurement follow-up created after tracker deduplication: pm-vcs-provenance-catalog-scale remains open and unclaimed. The new source records establish correctness and durable ownership; their edge-file inode cost and per-write output registry cost are not a checkout-scale benchmark. Existing public pack figures concern the object root and make no total-clone file-count or throughput claim. The follow-up must preserve all current provenance and crash guards before any catalog compaction."
+  "2026-11-01T02:24:36.666Z",codex-agent,"Expanded final erasure/accountability/fragment-repair/provenance cohort passes 228/228, zero failures, skips or cancellations. Exact command: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern=SIGKILL test/erasure-provenance.test.ts test/erasure-accountability.test.ts test/erasure-fragment-repairs.test.ts test/erasure-storage.test.ts. An overlapping three-file command also passed 162/162; counts are not added because those cases overlap. Repeated packed power-loss gate passes 1/1 with 6007 boundaries and 518 distinct complete crash images, two convergent replays each. Final targeted c8/runtime/pack/lifecycle/fragment checks are queued with at most two workers."
+  "2026-11-01T02:31:18.786Z",codex-agent,"Final targeted c8 passes 73/73 at 100% statements/branches/functions/lines per file for erasure-provenance, managed-exports, native-outputs, oplog and payload-owners. Node 22.23.1 provenance selection passes 18/18, zero failures/skips/cancellations. Native Bun 1.3.14 passes all five reviewer behavioral cases. Its first attempt passed the behaviors but failed cleanup because Bun does not provide node:test mock.restoreAll; the portable selection installs no Node fault mocks, so cleanup now feature-checks that API while Node retains full restoration. The corrected Bun run has zero test failures or cleanup errors. No production behavior or assertion was weakened, and no installer timeout was retried."
+  "2026-11-01T02:42:09.771Z",codex-agent,"Final focused results so far: signed export/undo CLI 2/2; fragments 56/56; lifecycle 43/43, all with zero failures/skips/cancellations. Lifecycle explicitly executes 18/800 retired-root cuts and 18/988 interrupted-unpack cuts plus two real-process interleavings; complete default cuts and the 512-seed model remain CI work. Both final producer mutations fail 1/1 and restore to 1/1: removing only the native-output FileId denial guard, and removing only the repository operation-log store lease. Fourteen unique behavioral mutants now fail with every restored control passing. No source workspace file was mutated by the disposable-copy harness. Pack gate remains running before final tracker release and archive generation."
+  "2026-11-01T02:45:07.522Z",codex-agent,"Final local focused gates pass: broad erasure/accountability/fragment repairs/provenance 228/228; c8 73/73 with all four dimensions at 100% per targeted module (erasure-provenance, managed-exports, native-outputs, oplog, payload-owners); pack suite 38/38; fragments 56/56; lifecycle selection 43/43; signed-export/undo CLI 2/2; Node 22 selection 18/18; native Bun reviewer cases 5/5. Packed power loss passes 1/1, 6007 native boundaries, 518 distinct crash images and two convergent replays each. Lifecycle local scope is 18/800 and 18/988 cuts plus two process interleavings; complete cuts and 512 seeds remain unchanged in CI. Fourteen isolated behavioral mutants fail and every restored control passes. Static type/lint/duplication checks, source/test builds, docstrings (94 files, 574 declarations) and package privacy (336 files, zero findings) pass. No installer timeout was retried. A Bun-only cleanup API incompatibility was fixed in the test harness; production behavior and assertions remain intact. Frozen production hashes match. Both orchestrator main/archive commits are retained, current fetched main is included, and PM history extends main byte for byte. Full npm/Bun release matrices and fresh independent review remain pending in CI; local focused checks are not a full release claim. Releasing this claim while leaving the item in_progress, then completing changelog, self-host writer, commit and committed-head acceptance. CI URLs and exact head are reported on PR 150 after push, without later tracker writes invalidating the archive. Catalog-scale follow-up pm-vcs-provenance-catalog-scale remains open and unclaimed."
+files[101]:
   - path: .github/workflows/ci.yml
+    scope: project
+  - path: change-bundle-commands.ts
     scope: project
   - path: composition-commands.ts
     scope: project
   - path: docs/destructive-operations.md
     scope: project
   - path: engine/bisect.ts
+    scope: project
+  - path: engine/change-bundles.ts
     scope: project
   - path: engine/checkpoints.ts
     scope: project
@@ -208,16 +232,24 @@ files[92]:
     note: "Publication recovery ordering, retention authority, native power loss and runtime consumers"
   - path: engine/erasure-accountability.ts
     scope: project
+  - path: engine/erasure-provenance.ts
+    scope: project
   - path: engine/erasure-scan.ts
     scope: project
   - path: engine/erasure.ts
+    scope: project
+  - path: engine/fragments.ts
     scope: project
   - path: engine/gc.ts
     scope: project
     note: "Publication recovery ordering, retention authority, native power loss and runtime consumers"
   - path: engine/instances.ts
     scope: project
-  - path: engine/json-strings.ts
+  - path: engine/lifecycle.ts
+    scope: project
+  - path: engine/managed-exports.ts
+    scope: project
+  - path: engine/native-outputs.ts
     scope: project
   - path: engine/object-error.ts
     scope: project
@@ -233,6 +265,8 @@ files[92]:
     scope: project
     note: "Publication recovery ordering, retention authority, native power loss and runtime consumers"
   - path: engine/packs.ts
+    scope: project
+  - path: engine/payload-owners.ts
     scope: project
   - path: engine/publication-gate.ts
     scope: project
@@ -253,15 +287,13 @@ files[92]:
   - path: engine/repo.ts
     scope: project
     note: "Publication recovery ordering, retention authority, native power loss and runtime consumers"
-  - path: engine/representations.ts
-    scope: project
   - path: engine/serve.ts
     scope: project
   - path: engine/transport.ts
     scope: project
-  - path: engine/url-bytes.ts
-    scope: project
   - path: engine/worktree-mutation.ts
+    scope: project
+  - path: engine/worktree.ts
     scope: project
   - path: index.ts
     scope: project
@@ -275,6 +307,8 @@ files[92]:
   - path: test/atomic-publication-cleanup.test.ts
     scope: project
   - path: test/bisect.test.ts
+    scope: project
+  - path: test/change-bundles.test.ts
     scope: project
   - path: test/checkpoints.test.ts
     scope: project
@@ -301,6 +335,8 @@ files[92]:
   - path: test/erasure-fragment-repairs.test.ts
     scope: project
   - path: test/erasure-lifecycle.test.ts
+    scope: project
+  - path: test/erasure-provenance.test.ts
     scope: project
   - path: test/erasure-storage.test.ts
     scope: project
@@ -358,6 +394,8 @@ files[92]:
     scope: project
   - path: test/objects.test.ts
     scope: project
+  - path: test/oplog.test.ts
+    scope: project
   - path: test/packs.test.ts
     scope: project
     note: "Publication recovery ordering, retention authority, native power loss and runtime consumers"
@@ -393,7 +431,7 @@ files[92]:
   - path: vcs-commands.ts
     scope: project
     note: GC help describes pending native publication retention
-tests[69]:
+tests[73]:
   - command: node --test test/packs.test.ts test/objects.test.ts test/gc.test.ts
     scope: project
     timeout_seconds: 600
@@ -884,22 +922,6 @@ tests[69]:
       created_at: "2026-10-31T18:50:51.881Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
-  - command: "node_modules/.bin/c8 --include=engine/json-strings.ts --include=engine/representations.ts --include=engine/erasure-scan.ts --reporter=json --reporter=text --temp-directory=coverage/pr150-json-final-tmp --report-dir=coverage/pr150-json-final node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"decoded persisted|native loose and packed JSON|incremental JSON|streamed decoded|decoded journal|reviewer quoted|hex-encoded native|final descriptor accounting|native bundle bodies|recursive scanner|streaming scanner|native literal reference|erasure retains native destruction|scanner covers every|streamed representation proofs\" test/erasure-storage.test.ts test/erasure-accountability.test.ts"
-    scope: project
-    timeout_seconds: 300
-    provenance:
-      author: codex-agent
-      created_at: "2026-10-31T19:38:58.811Z"
-      source_kind: local_mutation
-      source_ref: feat/indexed-pack-storage
-  - command: "node_modules/.bin/c8 --include=engine/json-strings.ts --include=engine/representations.ts --include=engine/erasure-scan.ts --reporter=json --reporter=text --temp-directory=coverage/pr150-json-end-tmp --report-dir=coverage/pr150-json-end node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"decoded persisted|native loose and packed JSON|incremental JSON|streamed decoded|decoded journal|reviewer quoted|hex-encoded native|final descriptor accounting|native bundle bodies|native journal identities do not|recursive scanner|streaming scanner|native literal reference|erasure retains native destruction|scanner covers every|streamed representation proofs|supported representation inspection|review decoded expansion|review ordinary large|erasing an empty file|proposed audit metadata|affected layers and untracked|recoverable loose-frame wrappers|denial refuses stale fetch\" test/erasure-storage.test.ts test/erasure-accountability.test.ts test/composition.test.ts"
-    scope: project
-    timeout_seconds: 600
-    provenance:
-      author: codex-agent
-      created_at: "2026-10-31T20:17:54.499Z"
-      source_kind: local_mutation
-      source_ref: feat/indexed-pack-storage
   - command: "node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"decoded persisted|native loose and packed JSON|incremental JSON|streamed decoded|decoded journal|reviewer quoted|hex-encoded native|final descriptor accounting|native bundle bodies|native journal identities do not|native literal reference|erasure retains native destruction|bounded 32 MiB\" test/erasure-storage.test.ts test/stream-erasure-legacy-fetch-repair.test.ts"
     scope: project
     timeout_seconds: 180
@@ -924,20 +946,67 @@ tests[69]:
       created_at: "2026-10-31T20:38:30.762Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
-  - command: "node_modules/.bin/c8 --include=engine/url-bytes.ts --include=engine/json-strings.ts --include=engine/representations.ts --include=engine/erasure-scan.ts --reporter=json --reporter=text --temp-directory=coverage/pr150-uri-end-tmp --report-dir=coverage/pr150-uri-end node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"native percent-escaped|percent URL bytes|decoded persisted|native loose and packed JSON|incremental JSON|streamed decoded|decoded journal|reviewer quoted|hex-encoded native|final descriptor accounting|native bundle bodies|native journal identities do not|recursive scanner|streaming scanner|native literal reference|erasure retains native destruction|scanner covers every|streamed representation proofs|supported representation inspection|review decoded expansion|review ordinary large|erasing an empty file|proposed audit metadata|affected layers and untracked|recoverable loose-frame wrappers|denial refuses stale fetch\" test/erasure-storage.test.ts test/erasure-accountability.test.ts test/composition.test.ts"
-    scope: project
-    timeout_seconds: 600
-    provenance:
-      author: codex-agent
-      created_at: "2026-10-31T20:43:14.442Z"
-      source_kind: local_mutation
-      source_ref: feat/indexed-pack-storage
   - command: "node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"native percent-escaped|percent URL bytes|decoded persisted|native loose and packed JSON|incremental JSON|streamed decoded|decoded journal|reviewer quoted|hex-encoded native|final descriptor accounting|native bundle bodies|native journal identities do not|native literal reference|erasure retains native destruction|bounded 32 MiB\" test/erasure-storage.test.ts test/stream-erasure-legacy-fetch-repair.test.ts"
     scope: project
     timeout_seconds: 240
     provenance:
       author: codex-agent
       created_at: "2026-10-31T20:47:09.037Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/erasure-provenance.test.ts
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T23:26:53.430Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern=SIGKILL test/erasure-provenance.test.ts test/erasure-accountability.test.ts test/erasure-fragment-repairs.test.ts test/erasure-storage.test.ts
+    scope: project
+    timeout_seconds: 1800
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-31T23:41:22.609Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node_modules/.bin/c8 --include=engine/erasure-provenance.ts --include=engine/managed-exports.ts --include=engine/payload-owners.ts --include=engine/oplog.ts --100 --per-file --reports-dir=coverage/provenance-final --reporter=text --reporter=json node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/erasure-provenance.test.ts test/oplog.test.ts
+    scope: project
+    timeout_seconds: 360
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-01T00:35:42.870Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node_modules/.bin/c8 --include=engine/erasure-provenance.ts --include=engine/managed-exports.ts --include=engine/payload-owners.ts --include=engine/native-outputs.ts --include=engine/oplog.ts --100 --per-file --reports-dir=coverage/provenance-final2 --reporter=text --reporter=json node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/erasure-provenance.test.ts test/oplog.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-01T01:29:18.535Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"CLI handlers use explicit|undo fences HEAD\" test/change-bundles.test.ts test/oplog.test.ts"
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-01T01:39:03.253Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern=\"user-authored|native operation summaries|native split manifests|benign repeated digits|property: generated native history|native working outputs|legacy native record renderings|native signed and empty|current selected FileId ownership|resolved layer sources\" test/erasure-provenance.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-01T01:44:11.329Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "bun test --parallel=1 --max-concurrency=1 --timeout=120000 --test-name-pattern=\"user-authored|native operation summaries|native split manifests|benign repeated digits\" test/erasure-provenance.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-01T01:44:13.006Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
 docs[8]{path,scope}:

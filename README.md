@@ -262,20 +262,41 @@ Fresh bundles/clones reproduce intentional absence. Remote tombstones cannot era
 held local bytes without local authorization. Stale bundles and novel payloads under
 a denied FileId fail preflight before storing bytes or moving refs.
 
-The guarantee covers application-visible loose storage and known shared worktrees;
-it excludes external backups, independently owned clones, filesystem snapshots and
-physical-media recovery. The filesystem operator must exclude concurrent direct edits
-outside pm-vcs. Loose objects and indexed packs must be fully accountable; unknown
-storage refuses unless explicitly purged with a receipt and re-verification. Payload-only resumable upload batches refuse after erasure
-because that protocol carries no FileId provenance. Direct `ObjectStore.write` calls
-must then supply a non-denied FileId for new blob/record/manifest payloads.
+The receipt certifies **native provenance erasure**: every pm-vcs-derived content
+representation of the selected object identities has been removed from owned
+loose objects, pack members, native fragment compositions, managed local exports
+and known shared working copies. Native operation summaries are conservatively
+redacted. Identifier-only history, terminal denials, paths and audit facts remain;
+reads of erased content return `obliterated`, and undo cannot reconstruct it.
 
-Physical erasure verifies every regular object-store file as a complete native
-representation and rechecks descriptor/pathname identity before completion.
-Fingerprint scans provide extra diagnostics. Windows uses file fsync plus
-synchronous namespace acknowledgment with a weaker power-loss guarantee than POSIX
-directory fsync. See the shipped
-[composition and erasure design](docs/links-layers-obliteration.md) for exact bounds.
+User-authored files and metadata, including alternate encodings, are independent
+data. Their coincidental resemblance to selected content does not establish
+provenance. Caller-owned export buffers, external export destinations, legacy
+unregistered exports, other clones, backups, snapshots and physical-media recovery
+are outside the certificate. Repository-local ordinary and signed CLI exports are registered with
+native object inventories and byte hashes; changed artifacts refuse deletion.
+Existing files cannot be adopted as managed exports by overwriting them.
+Native working-file writes also persist source IDs and a birth identity before
+bytes, so an interrupted index publication cannot lose ownership. Replaced outputs
+refuse before deletion.
+
+`audit.suspected_residue` reports a bounded defense-in-depth observation;
+`audit.limited` reports exhausted or missing diagnostic evidence. The audit checks
+raw native members and physical bytes plus declared native JSON strings, with a
+16 MiB shared work budget and eight JSON levels. It does not guess recursive URL,
+hex, base64 or compression encodings in user content, prove absence, or refuse
+erasure or staging because a benign value resembles an encoding.
+
+Complete native storage parsing, ownership checks, shared-FileId conflicts,
+physical-copy plans and descriptor/pathname verification remain mandatory.
+Unknown storage refuses unless explicitly purged with a receipt and re-verification.
+Payload-only resumable upload batches still refuse after erasure because they
+carry no FileId provenance. Direct payload writes require a non-denied FileId;
+known object/content identities and native compositions cannot be resurrected.
+The operator must exclude concurrent filesystem edits outside pm-vcs. Windows
+uses file fsync and synchronous namespace acknowledgment with weaker power-loss
+assurance than POSIX directory fsync. See the
+[composition and erasure design](docs/links-layers-obliteration.md).
 
 Engine APIs live in `engine/repo.ts`: `identity`, `setAuthority`, `stageLink`, `links`,
 `resolveLink`, `addLayer`, `layers`, `removeLayer`, `obliterate`, `obliteratedPaths`,

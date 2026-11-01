@@ -36,6 +36,8 @@ export interface LayerFile {
   readonly content: string;
   /** Executable state of the private file. */
   readonly executable: boolean;
+  /** Native object that produced a resolved snapshot, independent of working-file serialization. */
+  readonly source?: string;
 }
 
 /** Named overlay snapshot; edited working bytes remain private too. */
@@ -124,11 +126,16 @@ export function syncDirectory(...args: Parameters<typeof durability.directory>):
 
 /** Atomically replace JSON using a umask-filtered creation mode, file fsync and supported directory fsync. */
 export function writeAtomicJson(path: string, value: unknown, mode: number): void {
+  writeAtomicBytes(path, Buffer.from(JSON.stringify(value)), mode);
+}
+
+/** Atomically replace native bytes through the same journaled namespace publication as JSON metadata. */
+export function writeAtomicBytes(path: string, bytes: Buffer, mode: number): void {
   mkdirSync(dirname(path), { recursive: true });
   if (!lstatSync(dirname(path)).isDirectory()) throw new ObjectStoreError("unsafe_composition_path", "Private metadata cannot follow a control-directory symlink.");
   const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    writeFileSync(temporary, JSON.stringify(value), { flag: "wx", mode });
+    writeFileSync(temporary, bytes, { flag: "wx", mode });
     const fd = openSync(temporary, "r+");
     try { durability.file(fd); } finally { closeSync(fd); }
     durability.rename(temporary, path);
@@ -156,7 +163,8 @@ export function readLayers(control: string, rules?: IgnoreRules): LocalLayer[] {
     names.add(layer.name);
     for (const file of layer.files) {
       if (file === null || typeof file !== "object" || typeof file.path !== "string" || typeof file.content !== "string"
-        || typeof file.executable !== "boolean" || Buffer.from(file.content, "base64").toString("base64") !== file.content) {
+        || typeof file.executable !== "boolean" || Buffer.from(file.content, "base64").toString("base64") !== file.content
+        || file.source !== undefined && (typeof file.source !== "string" || !/^[0-9a-f]{64}$/.test(file.source))) {
         throw new ObjectStoreError("bad_layers", "Layer files need canonical paths, base64 content and executable state.");
       }
       assertCompositionPath(file.path, rules);

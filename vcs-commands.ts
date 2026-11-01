@@ -1,3 +1,4 @@
+import { writeBundleFile } from "./engine/managed-exports.ts";
 import { registerChangeBundleCommands } from "./change-bundle-commands.ts";
 import { registerCheckpointCommands } from "./checkpoint-commands.ts";
 import { registerSigningCommands } from "./signing-commands.ts";
@@ -23,7 +24,7 @@ import type { LeaseRequest } from "./engine/publication-leases.ts";
 //   - A handler can only exit non-zero by throwing. A returned payload exits 0
 //     whatever it says, so any command that is meant to gate something throws.
 
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { registerBisectCommands } from "./bisect-commands.ts";
@@ -913,14 +914,13 @@ export function registerVcsCommands(api: ExtensionApi): void {
     run(context: CommandHandlerContext): VcsEnvelope & { bundle: { file: string; bytes: number } } {
       const repository = openRepository(context);
       const file = resolve(requiredArgument(context, 0, "file", "Pass the path to write the bundle to."));
-      const bytes = exportBundle(
+      const bytes = writeBundleFile(repository, file, () => exportBundle(
         repository.objects,
         repository.refs,
         commaSeparated(context.options, "ref"),
         commaSeparated(context.options, "since").map((revision) => repository.resolve(revision)),
-      );
-      writeFileSync(file, bytes);
-      return { ok: true, bundle: { file, bytes: bytes.length } };
+      ));
+      return { ok: true, bundle: { file, bytes } };
     },
   });
 

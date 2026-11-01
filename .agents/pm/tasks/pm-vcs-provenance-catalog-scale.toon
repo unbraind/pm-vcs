@@ -1,0 +1,19 @@
+id: pm-vcs-provenance-catalog-scale
+title: Measure and compact native provenance catalogs without weakening recovery
+description: "Follow-up to PR 150 native erasure provenance. The correctness repair records one identity-only payload ownership file per object/FileId edge and rewrites the current native-output registry when publishing a working file. Measure complete data-plus-control byte, inode and write costs across growing histories and materialized working sets. Evaluate a compact catalog or batch publication only with equivalent durable source attribution before bytes, strict native ownership classification, backward-readable schemas and every crash/recovery guard retained. Existing object-root pack measurements do not establish total clone metadata or checkout scaling."
+type: Task
+status: open
+priority: 3
+tags[3]: follow-up,performance,provenance
+created_at: "2026-11-01T02:12:37.718Z"
+updated_at: "2026-11-01T02:12:57.169Z"
+author: codex-agent
+acceptance_criteria: "Publish data-plus-control byte and inode counts and write/read costs for increasing FileId histories; preserve native source closure, refusal schemas, publication ordering and crash convergence; keep existing coverage thresholds and backward reads; make no performance claim before measurement."
+parent: pm-vcs-phase6packs
+files[3]{path,scope}:
+  engine/managed-exports.ts,project
+  engine/native-outputs.ts,project
+  engine/payload-owners.ts,project
+docs[1]{path,scope}:
+  docs/validation/pr150-erasure-review-repair.md,project
+body: ""

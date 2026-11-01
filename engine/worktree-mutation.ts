@@ -5,7 +5,8 @@ import fs, { type BigIntStats } from "node:fs";
 import { join, relative, sep, resolve } from "node:path";
 
 import { isControlPath, isPrunableDirectory } from "./ignore.ts";
-import { ObjectStoreError } from "./objects.ts";
+import { recordNativeOutput, type NativeOutputSource } from "./native-outputs.ts";
+import { type ObjectStore, ObjectStoreError } from "./objects.ts";
 
 /** Captured directory identity and address, with a retained descriptor on the pinned backend. */
 interface Directory {
@@ -34,9 +35,11 @@ export class WorktreeMutation {
   private readonly root: string;
   private readonly controlDirectory: string;
   private pinned: boolean;
+  private readonly store?: ObjectStore;
 
   /** Snapshot ordinary directories without following links; release all descriptors on failure. */
-  constructor(root: string, controlDirectory: string) {
+  constructor(root: string, controlDirectory: string, store?: ObjectStore) {
+    this.store = store;
     this.root = resolve(root);
     this.controlDirectory = controlDirectory;
     this.pinned = worktreeMutationCapabilities.descriptorPaths();
@@ -172,7 +175,8 @@ export class WorktreeMutation {
   }
 
   /** Replace a leaf without ever truncating a link or hardlink; write and chmod only its new fd. */
-  write(path: string, content: Buffer, mode: number): void {
+  write(path: string, content: Buffer, mode: number, source?: NativeOutputSource): void {
+    if (this.store !== undefined && source !== undefined) recordNativeOutput(join(this.root, this.controlDirectory), this.store, path, content, source);
     const parent = this.parent(path, true)!;
     const before = fs.lstatSync(parent.address, { bigint: true, throwIfNoEntry: false });
     if (before !== undefined) {
@@ -190,10 +194,18 @@ export class WorktreeMutation {
     try {
       const stat = fs.fstatSync(fd, { bigint: true });
       this.verifyLeaf(parent, stat);
+      if (this.store !== undefined && source !== undefined) {
+        recordNativeOutput(join(this.root, this.controlDirectory), this.store, path, content, source, stat);
+        this.verifyLeaf(parent, stat);
+      }
       fs.writeFileSync(fd, content);
       this.verifyLeaf(parent, stat);
       fs.fchmodSync(fd, mode);
       this.verifyLeaf(parent, stat);
+      if (this.store !== undefined && source !== undefined) {
+        recordNativeOutput(join(this.root, this.controlDirectory), this.store, path, content, source, stat, true);
+        this.verifyLeaf(parent, stat);
+      }
     } finally {
       fs.closeSync(fd);
     }

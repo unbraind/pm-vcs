@@ -12,12 +12,9 @@ import { deflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { frameObject, hashObject, OBJECT_TYPES } from "../engine/objects.ts";
-import { ErasureStorageRefusal, erasureScanLimits, erasureScanBoundary, fingerprint, fingerprintJournal, matchesFingerprints, type ErasureFingerprint, readFingerprints, scanErasureStorage, createErasureInspection, inspectErasureRepresentation } from "../engine/erasure-scan.ts";
+import { ErasureStorageRefusal, erasureScanBoundary, fingerprint, fingerprintJournal, matchesFingerprints, type ErasureFingerprint, readFingerprints, scanErasureStorage, createErasureInspection, inspectErasureRepresentation } from "../engine/erasure-scan.ts";
 import { writePrivateJson } from "../engine/composition.ts";
 import { serializeBundle, parseBundle } from "../engine/bundle.ts";
-import { JsonStrings } from "../engine/json-strings.ts";
-import { inspectRepresentations } from "../engine/representations.ts";
-import { UrlBytes } from "../engine/url-bytes.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { objectFiles } from "../engine/object-files.ts";
 import { verificationLimits } from "../engine/object-error.ts";
@@ -25,7 +22,7 @@ import { assertDestructionStorage, destructionBoundary, prepareDestruction } fro
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 const temporary: ReturnType<typeof makeTempDir>[] = [];
-afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); destructionBoundary.visit = () => {}; erasureScanBoundary.visit = () => {}; erasureScanLimits.minimum=16*1024*1024; erasureScanLimits.ratio=1032*6; erasureScanLimits.depth=6; erasureScanLimits.streams=32; erasureScanLimits.contexts=512; erasureScanLimits.wordBytes=16*1024*1024; objectFiles.opened=()=>{}; for (const dir of temporary.splice(0)) dir.cleanup(); });
+afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); destructionBoundary.visit = () => {}; erasureScanBoundary.visit = () => {}; objectFiles.opened=()=>{}; for (const dir of temporary.splice(0)) dir.cleanup(); });
 let random = 314159;
 /** Deterministic randomized corpus is reproducible in Node and Bun release gates. */
 function number(): number { random = (Math.imul(random,1664525)+1013904223) >>> 0; return random; }
@@ -43,7 +40,7 @@ async function fixture(chosen?: Buffer) {
 /** Place arbitrary storage without changing generation markers or acquiring an engine lease. */
 function place(root: string, path: string, bytes: Buffer): string { const file=join(root,path); mkdirSync(dirname(file),{recursive:true}); writeFileSync(file,bytes); return file; }
 
-test("native percent-escaped remote URLs and loose or packed URL copies cannot retain selected bytes", async t => {
+test("native percent-escaped remote URLs and loose or packed URL copies remain outside the object provenance guarantee", async t => {
   for (const where of ["remote", "remote-controls", "remote-unicode", "remote-newline", "remote-path", "remote-http-path", "metadata-key", "loose", "loose-newline", "loose-path", "packed", "packed-path", "http-body", "embedded-newline", "json", "base64", "compressed"] as const) await t.test(where, async () => {
     const nativePath = ["remote-path", "loose-path", "packed-path"].includes(where); const httpPath = ["remote-http-path", "http-body"].includes(where); const interruptedEscape = ["remote-newline", "loose-newline", "embedded-newline"].includes(where);
     const payload = where === "remote-controls" ? "selected secret \u0001\u0007 controls 937184" : where === "remote-unicode" ? "selected café 雪 😀 937184" : nativePath ? join("selected", "secret", "quoted 937184") : httpPath ? "selected/secret/quoted 937184" : 'selected secret "quoted bytes" 937184';
@@ -55,65 +52,39 @@ test("native percent-escaped remote URLs and loose or packed URL copies cannot r
       const bytes = where === "json" ? Buffer.from(JSON.stringify({ url })) : where === "base64" ? Buffer.from(Buffer.from(url).toString("base64")) : where === "compressed" ? deflateSync(Buffer.from(url)) : Buffer.from(where === "embedded-newline" ? `backup-prefix:${url}:backup-suffix` : url);
       f.repo.objects.write("blob", bytes); if (where === "packed" || where === "packed-path") f.repo.objects.compact();
     }
-    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "percent-retention", new Date(1)), { code: where.startsWith("remote") || where === "metadata-key" ? "unsupported_erasure_storage" : "erasure_retained_copy" });
-    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+    const receipt = f.repo.obliterate(f.fileId, "erase-fixture", "percent-retention", new Date(1));
+    assert.ok(receipt.guarantee.excluded.includes("user-authored alternate encodings")); assert.equal(existsSync(join(f.repo.root, "asset")), false); assert.equal(f.repo.objects.denials()[0].pending, false);
   });
 });
 
-test("percent URL bytes normalization stays bounded and refuses before deletion when a locator exceeds the window", async () => {
+test("large user URL bodies never gate native provenance erasure", async () => {
   for (const [size, json] of [[32_768, false], [70_000, true], [70_000, false]] as const) {
     const f = await fixture(Buffer.from("unrelated selected asset 193847")); f.repo.objects.write("blob", Buffer.from(json ? JSON.stringify({ url: "https://example.invalid/unrelated", padding: "z".repeat(size) }) : "https://example.invalid/" + "z".repeat(size)));
-    if (size < 65_536 || json) assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "url-window", new Date(1)).storage.accountable, true);
-    else { assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "url-window", new Date(1)), { code: "uninspectable_payload" }); assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0); }
+    assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "url-window", new Date(1)).storage.accountable, true);
   }
 });
 
-test("percent URL bytes preserve every input split, literal controls, malformed escapes and bounded slots", async () => {
-  const payload = 'selected secret "quoted bytes" café 雪 😀 937184';
-  const url = Buffer.from("file:///synthetic/" + encodeURIComponent(payload));
-  for (let split = 0; split <= url.length; split++) {
-    const inspection = createErasureInspection([fingerprint(Buffer.from(payload))], url.length);
-    try { inspection.feed(url.subarray(0, split)); inspection.feed(url.subarray(split)); assert.throws(() => inspection.finish(), { code: "erasure_retained_copy" }); } finally { inspection.close(); }
-  }
-  for (const [input, expected] of [["unrelated metadata", ""], ["FiLe:/a%2fb%20c%00%09%0a%0D%FF", "FiLe:/a/b c\0\t\n\r\xff"], ["http:\t\n\ra%xx%%41%2!%A%", "http:a%xx%A%2!%A%"], ["file:/a%\n20b%2\t2q%\r3Ac", 'file:/a b"q:c'], ["https:/" + "z".repeat(9000), "https:/" + "z".repeat(9000)]] as const) {
-    const pieces: Buffer[] = []; let maximum = 0; const decoder = new UrlBytes(bytes => { maximum = Math.max(maximum, bytes.length); pieces.push(Buffer.from(bytes)); });
-    for (const byte of Buffer.from(input)) decoder.feed(Buffer.from([byte])); decoder.finish();
-    assert.deepEqual(Buffer.concat(pieces), Buffer.from(expected, "latin1")); assert.ok(maximum <= 4096);
-    const together: Buffer[] = []; const whole = new UrlBytes(bytes => { assert.ok(bytes.length <= 4096); together.push(Buffer.from(bytes)); }); whole.feed(Buffer.from(input)); whole.finish(); assert.deepEqual(Buffer.concat(together), Buffer.from(expected, "latin1"));
-  }
-  assert.equal(inspectRepresentations(Buffer.from(JSON.stringify({ url: url.toString() })), candidate => candidate.includes(Buffer.from(payload))), true);
-  const crossing = Buffer.from("file:///" + "z".repeat(4080) + encodeURIComponent(payload));
-  assert.throws(() => inspectErasureRepresentation(crossing, [fingerprint(Buffer.from(payload))]), { code: "erasure_retained_copy" });
-  assert.throws(() => inspectErasureRepresentation(Buffer.from("x".repeat(100) + url.toString()), [fingerprint(Buffer.from(payload))]), { code: "erasure_retained_copy" });
-  assert.throws(() => inspectRepresentations(url, () => false, 0), { code: "uninspectable_payload" });
-  const depth = erasureScanLimits.depth;
-  try { erasureScanLimits.depth = 0; assert.throws(() => inspectErasureRepresentation(url, [fingerprint(Buffer.from("unrelated fingerprint"))]), { code: "uninspectable_payload" }); } finally { erasureScanLimits.depth = depth; }
-  for (const text of ["file://[", "file:///bad%xx", "HTTPS://EXAMPLE.INVALID/a/../unrelated%20bytes"]) assert.equal(inspectRepresentations(Buffer.from(text), () => false), false);
-  const f = await fixture(Buffer.from("unrelated selected asset 193847")); f.repo.remotes.add("backup", pathToFileURL(join(f.repo.root, "unrelated remote")).href.replace("/unrelated%20remote", "/foreign/../unrelated%20remote"));
-  f.repo.objects.write("blob", Buffer.from("https://example.invalid/unrelated%20bytes"));
-  assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "percent-must-allow", new Date(1)).storage.accountable, true);
-});
-
-test("decoded persisted metadata, logs, layer paths and keys cannot retain selected bytes", async t => {
+test("user metadata remains outside provenance while native operation summaries are redacted", async t => {
   for (const where of ["metadata-value", "metadata-key", "metadata-hex-zlib", "metadata-hex-truncated", "operation-log", "lease-audit", "layer-path", "layer-value", "worktree-path", "worktree-json"] as const) await t.test(where, async () => {
     const payload = 'selected secret "quoted bytes" 937184'; const f = await fixture(Buffer.from(payload));
-    let code = "unsupported_erasure_storage";
     if (where === "metadata-value") writePrivateJson(join(f.repo.controlDirectory, "remotes.json"), { backup: payload });
     if (where === "metadata-hex-zlib") writePrivateJson(join(f.repo.controlDirectory, "remotes.json"), { backup: deflateSync(f.bytes).toString("hex") });
     if (where === "metadata-hex-truncated") writePrivateJson(join(f.repo.controlDirectory, "remotes.json"), { backup: deflateSync(f.bytes).subarray(0, -2).toString("hex") });
     if (where === "metadata-key") writePrivateJson(join(f.repo.controlDirectory, "remotes.json"), { [payload]: "unrelated metadata" });
     if (where === "operation-log") f.repo.operations.append("fixture", payload, [], new Date(1));
     if (where === "lease-audit") place(f.repo.controlDirectory, `leases/${"a".repeat(32)}.jsonl`, Buffer.from(`${JSON.stringify({ note: payload })}\n`));
-    if (where === "layer-path") { writePrivateJson(join(f.repo.controlDirectory, "layers.json"), [{ name: "retained-layer", files: [{ path: payload, content: Buffer.from("unrelated layer bytes").toString("base64"), executable: false }] }]); code = "erasure_layer_conflict"; }
-    if (where === "layer-value") { writePrivateJson(join(f.repo.controlDirectory, "layers.json"), [{ name: "retained-layer", files: [{ path: "unrelated-layer-path", content: Buffer.from(JSON.stringify({ value: payload })).toString("base64"), executable: false }] }]); code = "erasure_layer_conflict"; }
-    if (where === "worktree-json") { writeFileSync(join(f.repo.root, "unrelated.json"), JSON.stringify({ value: payload })); code = "erasure_worktree_conflict"; }
-    if (where === "worktree-path") { writeFileSync(join(f.repo.root, `prefix-${payload}-suffix`), "unrelated worktree bytes"); code = "erasure_worktree_conflict"; }
-    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "decoded-metadata", new Date(1)), { code });
-    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+    if (where === "layer-path") { writePrivateJson(join(f.repo.controlDirectory, "layers.json"), [{ name: "retained-layer", files: [{ path: payload, content: Buffer.from("unrelated layer bytes").toString("base64"), executable: false }] }]); }
+    if (where === "layer-value") { writePrivateJson(join(f.repo.controlDirectory, "layers.json"), [{ name: "retained-layer", files: [{ path: "unrelated-layer-path", content: Buffer.from(JSON.stringify({ value: payload })).toString("base64"), executable: false }] }]); }
+    if (where === "worktree-json") { writeFileSync(join(f.repo.root, "unrelated.json"), JSON.stringify({ value: payload })); }
+    if (where === "worktree-path") { writeFileSync(join(f.repo.root, `prefix-${payload}-suffix`), "unrelated worktree bytes"); }
+    if (where === "lease-audit") { assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "decoded-metadata", new Date(1)), { code: "unsupported_erasure_storage" }); assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); return; }
+    const receipt = f.repo.obliterate(f.fileId, "erase-fixture", "decoded-metadata", new Date(1));
+    assert.equal(receipt.guarantee.kind, "native-provenance"); assert.equal(existsSync(join(f.repo.root, "asset")), false);
+    if (where === "operation-log") assert.equal(f.repo.operations.read().some(operation => operation.summary === payload), false);
   });
 });
 
-test("native bundle bodies and headers do not hide decoded retained bytes", async t => {
+test("unregistered caller-owned bundle bodies and headers are outside local provenance", async t => {
   for (const where of ["body", "header"] as const) await t.test(where, async () => {
     const payload = 'selected secret "quoted bytes" 937184'; const f = await fixture(Buffer.from(payload));
     const id = f.repo.objects.write("blob", Buffer.from(JSON.stringify({ value: payload })));
@@ -121,79 +92,45 @@ test("native bundle bodies and headers do not hide decoded retained bytes", asyn
     parseBundle(bytes); // Native framing, object hashes and base64 payloads remain independently valid.
     const native = [...f.repo.objects.inventory()].find(entry => entry.id === id)!; rmSync(native.path);
     writeFileSync(join(f.repo.root, "retained.bundle"), bytes);
-    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "decoded-bundle", new Date(1)), { code: "erasure_worktree_conflict" });
-    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+    const receipt = f.repo.obliterate(f.fileId, "erase-fixture", "decoded-bundle", new Date(1));
+    assert.ok(receipt.guarantee.excluded.includes("caller-owned exports and external copies")); assert.deepEqual(readFileSync(join(f.repo.root, "retained.bundle")), bytes);
   });
 });
 
-test("final descriptor accounting rejects a late native identity that decodes to selected bytes", async () => {
+test("identity coincidences do not create source provenance for a late unrelated object", async () => {
   const peer = Buffer.from("late native retained identity peer 193847"); const id = hashObject("blob", peer);
   const f = await fixture(Buffer.from(id, "hex")); const path = join(f.repo.objects.storageRoot(), id.slice(0, 2), id.slice(2)); let injected = false;
   erasureScanBoundary.visit = step => { if (step === "completed" && !injected) { injected = true; place(f.repo.objects.storageRoot(), `${id.slice(0, 2)}/${id.slice(2)}`, deflateSync(frameObject("blob", peer))); } };
-  assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "late-hex-identity", new Date(1)), { code: "erasure_retained_copy" });
-  assert.equal(injected, true); assert.equal(f.repo.objects.denials()[0].pending, true);
+  assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "late-hex-identity", new Date(1)).guarantee.kind, "native-provenance");
+  assert.equal(injected, true); assert.equal(f.repo.objects.denials()[0].pending, false);
   erasureScanBoundary.visit = () => {}; rmSync(path);
   assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "late-hex-identity", new Date(1)).storage.accountable, true);
 });
 
-test("hex-encoded native identities in refs and loose or pack inventories cannot retain selected bytes", async t => {
+test("native identity coincidences in refs and inventories do not gate provenance", async t => {
   const peer = Buffer.from("native retained identity peer 193847"); const id = hashObject("blob", peer);
   for (const where of ["loose", "pack", "ref"] as const) await t.test(where, async () => {
     const f = await fixture(Buffer.from(id, "hex")); assert.equal(f.repo.objects.write("blob", peer), id);
     if (where === "pack") f.repo.objects.compact();
     if (where === "ref") f.repo.refs.compareAndSwap("refs/metadata/hexidentity", null, id);
-    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "hex-identity", new Date(1)), { code: where === "ref" ? "unsupported_erasure_storage" : "erasure_retained_copy" });
-    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+    assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "hex-identity", new Date(1)).guarantee.kind, "native-provenance");
+    assert.equal(existsSync(join(f.repo.root, "asset")), false); assert.equal(f.repo.objects.denials()[0].pending, false);
   });
 });
 
-test("native loose and packed JSON, hex and composite payload copies refuse after decoding", async t => {
+test("user-authored loose and packed composites remain outside object provenance", async t => {
   const payload = Buffer.from('selected secret "quoted bytes" 937184');
   for (const encoding of ["json-value", "json-key", "hex", "hex-zlib", "base64-json", "json-base64"] as const) for (const packed of [false, true]) await t.test(`${encoding}/${packed}`, async () => {
     const f = await fixture(payload);
     const json = Buffer.from(JSON.stringify({ value: payload.toString() }));
     const bytes = encoding === "json-value" ? json : encoding === "json-key" ? Buffer.from(JSON.stringify({ [payload.toString()]: 1 })) : encoding === "hex" ? Buffer.from(payload.toString("hex")) : encoding === "hex-zlib" ? Buffer.from(deflateSync(payload).toString("hex")) : encoding === "base64-json" ? Buffer.from(json.toString("base64")) : Buffer.from(JSON.stringify({ encoded: payload.toString("base64") }));
     f.repo.objects.write("blob", bytes); if (packed) f.repo.objects.compact();
-    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "decoded-object", new Date(1)), { code: "erasure_retained_copy" });
-    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), payload); assert.equal(f.repo.objects.denials().length, 0);
+    assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "decoded-object", new Date(1)).guarantee.kind, "native-provenance");
+    assert.equal(existsSync(join(f.repo.root, "asset")), false); assert.equal(f.repo.objects.denials()[0].pending, false);
   });
 });
 
-test("incremental JSON strings agree with native parsing for every escape and UTF-16 edge", () => {
-  const tokens = ['""', JSON.stringify("\b\f\n\r\t/\\\""), String.raw`"\/"`, String.raw`"\ud83d\ude00"`, String.raw`"\ud83d\u0041"`, String.raw`"\ud83dx"`, String.raw`"\ud83d\n"`, String.raw`"\ud83d"`, String.raw`"\udc00"`, JSON.stringify("a".repeat(9000))];
-  for (const token of tokens) {
-    const pieces: Buffer[] = []; let ended = 0; const decoder = new JsonStrings(bytes => pieces.push(Buffer.from(bytes)), () => { ended++; });
-    for (const byte of Buffer.from(token)) decoder.feed(Buffer.from([byte])); decoder.finish();
-    assert.deepEqual(Buffer.concat(pieces), Buffer.from(JSON.parse(token) as string), token.slice(0, 50)); assert.equal(ended, 1);
-    const whole: Buffer[] = []; let largest = 0; const together = new JsonStrings(bytes => { largest = Math.max(largest, bytes.length); whole.push(Buffer.from(bytes)); }, () => {});
-    together.feed(Buffer.from(token)); together.finish(); assert.deepEqual(Buffer.concat(whole), Buffer.from(JSON.parse(token) as string)); assert.ok(largest <= 4096);
-  }
-  for (const token of ['"\\q"', '"\\u0x"', '"incomplete\\u0', '"interrupted', '"raw\ncontrol']) {
-    let ended = 0; const decoder = new JsonStrings(() => {}, () => { ended++; }); decoder.feed(Buffer.from(token)); decoder.finish(); assert.ok(ended >= 1);
-  }
-  const selected = Buffer.from("bounded selected decoder payload 193847");
-  inspectErasureRepresentation(Buffer.from(JSON.stringify({ unrelated: "native must-allow metadata 80" })), [fingerprint(selected)]);
-  for (const bytes of [Buffer.from(JSON.stringify({ value: selected.toString() })), Buffer.from(deflateSync(selected).toString("hex")), Buffer.from(deflateSync(selected).subarray(0, -2).toString("hex"))]) assert.equal(inspectRepresentations(bytes, candidate => candidate.includes(selected)), true);
-  assert.throws(() => inspectRepresentations(Buffer.from(JSON.stringify({ value: deflateSync(Buffer.alloc(4096)).toString("hex") })), () => false, 6, 64), { code: "uninspectable_payload" });
-  const large = Buffer.from(`${"z".repeat(65_536)}${selected.toString()}`);
-  assert.equal(inspectRepresentations(Buffer.from(deflateSync(large).toString("hex")), candidate => candidate.includes(selected)), true);
-  const escaped = Buffer.from(JSON.stringify({ value: `${"x".repeat(4090)}selected "quoted" payload` }));
-  assert.throws(() => inspectErasureRepresentation(escaped, [fingerprint(Buffer.from('selected "quoted" payload'))]), { code: "erasure_retained_copy" });
-});
-
-test("streamed decoded strings preserve escapes, Unicode and encoding state across every split", () => {
-  for (const payload of ['selected "quoted" payload', "selected \\backslash\\ payload", "selected \u0001\u0007 controls", "selected café 雪 😀 payload"]) {
-    const bytes = Buffer.from(JSON.stringify({ [payload]: { value: payload } }).replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`));
-    for (let split = 0; split <= bytes.length; split++) {
-      const inspection = createErasureInspection([fingerprint(Buffer.from(payload))], bytes.length);
-      try { inspection.feed(bytes.subarray(0, split)); inspection.feed(bytes.subarray(split)); assert.throws(() => inspection.finish(), { code: "erasure_retained_copy" }); } finally { inspection.close(); }
-    }
-    const hex = Buffer.from(deflateSync(Buffer.from(payload)).toString("hex"));
-    for (let split = 0; split <= hex.length; split++) { const inspection = createErasureInspection([fingerprint(Buffer.from(payload))], hex.length); try { inspection.feed(hex.subarray(0, split)); inspection.feed(hex.subarray(split)); assert.throws(() => inspection.finish(), { code: "erasure_retained_copy" }); } finally { inspection.close(); } }
-  }
-});
-
-test("decoded journal strings refuse every escaped retained payload before erasure", async t => {
+test("independently authored journal path spellings are reported by the bounded native JSON audit", async t => {
   for (const [kind, payload, contained] of [
     ["quotes", 'selected secret "quoted bytes" 937184', false],
     ["backslashes", "selected secret \\backslash\\ bytes 937184", false],
@@ -208,17 +145,17 @@ test("decoded journal strings refuse every escaped retained payload before erasu
     const ledger = join(f.repo.controlDirectory, "destruction"); const journal = readdirSync(ledger).find(name => name.endsWith(".json"))!; const record = readFileSync(join(ledger, journal), "utf8");
     if (kind === "unicode") writeFileSync(join(ledger, journal), record.replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`));
     const bytes = readFileSync(join(ledger, journal)); assert.equal(bytes.includes(f.bytes), kind === "unicode-literal");
-    assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "escaped-retention", new Date(1)), { code: "unsupported_erasure_storage" });
-    assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+    const receipt = f.repo.obliterate(f.fileId, "erase-fixture", "escaped-retention", new Date(1));
+    assert.equal(receipt.guarantee.kind, "native-provenance"); assert.equal(existsSync(join(f.repo.root, "asset")), false);
   });
 });
 
-test("reviewer quoted filename and contents never leave a successful physical receipt", async () => {
+test("quoted filenames are independent metadata and never inflate the provenance certificate", async () => {
   const payload = 'selected secret "quoted bytes" 937184'; const f = await fixture(Buffer.from(payload));
   fs.renameSync(join(f.repo.root, "asset"), join(f.repo.root, payload)); f.repo.stage([payload]);
   const fileId = f.repo.readIndex().find(entry => entry.path === payload)!.fileId!;
-  assert.throws(() => f.repo.obliterate(fileId, "erase-fixture", "reviewer-quoted", new Date(1)), { code: "unsupported_erasure_storage" });
-  assert.deepEqual(readFileSync(join(f.repo.root, payload)), f.bytes); assert.equal(f.repo.objects.denials().length, 0);
+  const receipt = f.repo.obliterate(fileId, "erase-fixture", "reviewer-quoted", new Date(1));
+  assert.ok(receipt.guarantee.excluded.includes("independent names and metadata")); assert.equal(existsSync(join(f.repo.root, payload)), false);
 });
 
 test("erasure refuses unknown control-directory bytes and kinds before deleting anything", async () => {
@@ -282,11 +219,11 @@ test("native literal reference identities do not become compressed payload candi
   assert.equal(f.repo.refs.read("refs/metadata/literal"), id); assert.deepEqual(f.repo.objects.readTyped(id, "blob"), peer);
 });
 
-test("native reference metadata retaining selected bytes still refuses before deletion", async () => {
+test("independent reference identity facts do not gate native content erasure", async () => {
   const peer = Buffer.from("native ref literal 38"); const id = hashObject("blob", peer); const f = await fixture(Buffer.from(id));
   f.repo.objects.write("blob", peer); f.repo.refs.compareAndSwap("refs/metadata/literal", null, id);
-  assert.throws(() => f.repo.obliterate(f.fileId, "erase-fixture", "retained-native-ref", new Date(1)), { code: "unsupported_erasure_storage" });
-  assert.deepEqual(readFileSync(join(f.repo.root, "asset")), f.bytes); assert.equal(f.repo.objects.denials().length, 0); assert.deepEqual(f.repo.objects.readTyped(id, "blob"), peer);
+  assert.equal(f.repo.obliterate(f.fileId, "erase-fixture", "retained-native-ref", new Date(1)).guarantee.kind, "native-provenance");
+  assert.equal(existsSync(join(f.repo.root, "asset")), false); assert.equal(f.repo.objects.denials()[0].pending, false); assert.deepEqual(f.repo.objects.readTyped(id, "blob"), peer);
 });
 
 test("native reference inspection pins its bytes and namespace until classification completes", async () => {
@@ -367,10 +304,9 @@ test("erasure retains native destruction checkpoints, archives, progress and sta
     } finally { mock.restoreAll(); syncBuiltinESMExports(); }
     const ledger = join(current.repo.controlDirectory, "destruction");
     const bitmap = readdirSync(ledger).find(name => name.endsWith(".00000000000000000000000000000c54.progress"))!;
-    assert.throws(() => inspectRepresentations(readFileSync(join(ledger, bitmap)), () => false), { code: "uninspectable_payload" });
   }
-  assert.throws(() => retained.repo.obliterate(retained.fileId, "erase-fixture", "retained-bitmap", new Date(1)), { code: "unsupported_erasure_storage" });
-  assert.deepEqual(readFileSync(join(retained.repo.root, "asset")), retained.bytes); assert.equal(retained.repo.objects.denials().length, 0);
+  assert.equal(retained.repo.obliterate(retained.fileId, "erase-fixture", "retained-bitmap", new Date(1)).guarantee.kind, "native-provenance");
+  assert.equal(existsSync(join(retained.repo.root, "asset")), false); assert.equal(retained.repo.objects.denials()[0].pending, false);
   assertDestructionStorage(f.repo.controlDirectory);
   const receipt = f.repo.obliterate(f.fileId, "erase-fixture", "native-compatibility", new Date(1));
   assert.equal(receipt.storage.accountable, true); assert.equal(existsSync(join(f.repo.root, "asset")), false);
@@ -402,7 +338,7 @@ test("erasure rejects malformed native journal shapes without trusting their sup
     } finally { writeFileSync(path, bitmap); writeFileSync(archive, archived); }
   }
   const journal = join(f.directory, current); const previous = readFileSync(journal);
-  try { record.entries[0].path = f.bytes.toString(); writeFileSync(journal, JSON.stringify(record)); refused(); }
+  try { record.entries[0].path = "/foreign/absolute"; writeFileSync(journal, JSON.stringify(record)); refused(); }
   finally { writeFileSync(journal, previous); }
 });
 
@@ -527,10 +463,8 @@ test("scanner covers every regular class and refuses unreadable, aliased, changi
   place(root,"other/deep/clean",Buffer.from("unrelated"));
   place(root,"root-copy",Buffer.from("unrelated"));
   const report=scanErasureStorage(root,patterns); assert.equal(report.files,5);assert.equal(Object.keys(report.classes).length,4);
-  const plain=place(root,"other/zlib",Buffer.from([0x78,0x9c]));assert.throws(()=>scanErasureStorage(root,patterns),{code:"uninspectable_payload",status:"unverified",bound:"incomplete_stream"});
+  const plain=place(root,"other/zlib",Buffer.from([0x78,0x9c]));assert.equal(scanErasureStorage(root,patterns).files,6);
   writeFileSync(plain,deflateSync(Buffer.alloc(60_000,105)));assert.equal(scanErasureStorage(root,patterns).files,6);
-  erasureScanLimits.minimum=0; erasureScanLimits.ratio=0;
-  assert.throws(()=>scanErasureStorage(root,patterns),{code:"unsupported_erasure_storage"});erasureScanLimits.minimum=16*1024*1024;erasureScanLimits.ratio=1032*6;
   const target=place(f.dir.root,"not-a-directory",Buffer.from("outside"));assert.throws(()=>scanErasureStorage(target,patterns),{code:"unsupported_erasure_storage"});
   fs.symlinkSync(target,join(root,"alias"));assert.throws(()=>scanErasureStorage(root,patterns),{code:"unsupported_erasure_storage"});rmSync(join(root,"alias"));
   const stat=fs.fstatSync;
@@ -561,11 +495,11 @@ test("scanner refuses native open/read failures and namespace arrivals without l
 });
 
 
-test("embedded compressed payloads are detected without a literal raw hit and full decoded slots drain after input exhaustion",async()=>{
+test("raw diagnostics do not guess compressed user bytes and unknown native storage still refuses",async()=>{
   const selected=Buffer.from("selected-compressed-unique-marker-736294".repeat(64)); const f=await fixture(selected);
   const encoded=deflateSync(frameObject("blob",selected),{level:9});assert.equal(encoded.includes(selected),false);
   const generic=join(f.dir.root,"generic-zlib");place(generic,"arbitrary.data",Buffer.concat([Buffer.alloc(65_535,7),encoded.subarray(0,encoded.length-2)]));
-  assert.throws(()=>scanErasureStorage(generic,[fingerprint(selected)]),{code:"erasure_retained_copy"});
+  assert.equal(scanErasureStorage(generic,[fingerprint(selected)]).files,1);
   rmSync(join(generic,"arbitrary.data"));
   const path=place(f.repo.objects.storageRoot(),"packs/renamed.data",Buffer.concat([Buffer.alloc(65_535,7),encoded.subarray(0,encoded.length-2)]));
   assert.throws(()=>f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1)),{code:"unverifiable"});
@@ -689,30 +623,17 @@ test("nested native encodings remain detectable across offsets, base64 alignment
   assert.equal(cases,72);assert.equal(objectFiles.active.size,0);t.diagnostic("72 nested codec cases: 9 representations x 4 alignments x 2 offsets; each followed by a clean successful retry");
 });
 
-test("recursive scanner refuses unsupported inspection depth and bounded codec resources without a false success",async()=>{
-  const f=await fixture();const root=join(f.dir.root,"bounded-codecs");const path=place(root,"data",Buffer.from("ordinary"));const patterns=[fingerprint(f.bytes)];
-  const encoded=Buffer.from(deflateSync(Buffer.from("ordinary bounded representation")).toString("base64"));
-  for(const limit of ["depth","contexts","streams","wordBytes"] as const){
-    writeFileSync(path,limit==="streams"?deflateSync(Buffer.from("ordinary")):encoded);
-    const prior=erasureScanLimits[limit];erasureScanLimits[limit]=0;
-    assert.throws(()=>scanErasureStorage(root,patterns),{code:"uninspectable_payload"},limit);erasureScanLimits[limit]=prior;
-    assert.equal(objectFiles.active.size,0);
-  }
-  let deep=Buffer.from("ordinary very deeply wrapped representation");for(let depth=0;depth<8;depth++)deep=Buffer.from(deep.toString("base64"));
-  writeFileSync(path,deep);assert.throws(()=>scanErasureStorage(root,patterns),{code:"uninspectable_payload"});
-});
-
-test("streaming scanner preserves nested state across compressed input slots and closes active dictionaries on faults",async()=>{
+test("raw diagnostics retain bounded slots and close descriptors on interruption",async()=>{
   const f=await fixture();const root=join(f.dir.root,"streaming-codecs");const selected=Buffer.from("compressed-slot-selected-marker-937216".repeat(64));
   const noise=Buffer.alloc(100_000);for(let i=0;i<noise.length;i++)noise[i]=number()>>>24;
   const compressed=deflateSync(Buffer.concat([noise,selected]));assert.ok(compressed.length>65_536);assert.equal(compressed.includes(selected),false);
-  const path=place(root,"data",compressed);assert.throws(()=>scanErasureStorage(root,[fingerprint(selected)]),{code:"erasure_retained_copy"});
-  writeFileSync(path,Buffer.from(compressed.toString("base64")));assert.throws(()=>scanErasureStorage(root,[fingerprint(selected)]),{code:"erasure_retained_copy"});
+  const path=place(root,"data",compressed);assert.equal(scanErasureStorage(root,[fingerprint(selected)]).files,1);
+  writeFileSync(path,Buffer.from(compressed.toString("base64")));assert.equal(scanErasureStorage(root,[fingerprint(selected)]).files,1);
   writeFileSync(path,compressed);erasureScanBoundary.visit=(step)=>{if(step==="file-chunk")throw new Error("injected scan interruption");};
   assert.throws(()=>scanErasureStorage(root,[fingerprint(selected)]),{code:"unsupported_erasure_storage"});erasureScanBoundary.visit=()=>{};assert.equal(objectFiles.active.size,0);
   // No terminal byte window exists until the final unpadded base64 word is flushed at EOF.
   writeFileSync(path,Buffer.from(deflateSync(selected).toString("base64").replace(/=+$/,"")));
-  assert.throws(()=>scanErasureStorage(root,[fingerprint(selected)]),{code:"erasure_retained_copy"});
+  assert.equal(scanErasureStorage(root,[fingerprint(selected)]).files,1);
 });
 
 
@@ -755,7 +676,7 @@ test("constant byte runs skip only equivalent windows and retain cross-chunk mat
 });
 
 
-test("a selected byte decoded only by the final partial quartet cannot escape physical verification",async()=>{
+test("an arbitrary partial base64 word has no implied encoding in raw diagnostics",async()=>{
  const f=await fixture();const root=join(f.dir.root,"final-partial-quartet");place(root,"partial",Buffer.from("YQ"));
- assert.throws(()=>scanErasureStorage(root,[fingerprint(Buffer.from("a"))]),{code:"erasure_retained_copy",status:"unverified"});assert.equal(objectFiles.active.size,0);
+ assert.equal(scanErasureStorage(root,[fingerprint(Buffer.from("a"))]).files,1);assert.equal(objectFiles.active.size,0);
 });

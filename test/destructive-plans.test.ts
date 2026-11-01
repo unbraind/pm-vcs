@@ -115,8 +115,8 @@ test("late logical and working-tree preconditions refuse before purging or retir
     if (mode === "deduplicated") { writeFileSync(join(f.root, "other"), readFileSync(join(f.root, "asset"))); f.repo.stage(["other"]); }
     else writeFileSync(join(f.root, "untracked"), readFileSync(join(f.root, "asset")));
     f.repo.objects.compact(); const original = treeHash(f.repo.objects.storageRoot());
-    assert.throws(() => f.repo.obliterate("asset", "erase-fixture", "incident", new Date(1), { purgeUnaccounted: true }), { code: mode === "deduplicated" ? "erasure_dedup_conflict" : "erasure_worktree_conflict" });
-    assert.equal(treeHash(f.repo.objects.storageRoot()), original); assert.ok(existsSync(f.foreign));
+    if (mode === "deduplicated") { assert.throws(() => f.repo.obliterate("asset", "erase-fixture", "incident", new Date(1), { purgeUnaccounted: true }), { code: "erasure_dedup_conflict" }); assert.equal(treeHash(f.repo.objects.storageRoot()), original); assert.ok(existsSync(f.foreign)); }
+    else { const bytes = readFileSync(join(f.root, "untracked")); assert.equal(f.repo.obliterate("asset", "erase-fixture", "incident", new Date(1), { purgeUnaccounted: true }).guarantee.kind, "native-provenance"); assert.deepEqual(readFileSync(join(f.root, "untracked")), bytes); }
   }
 });
 
@@ -228,8 +228,8 @@ test("malformed timestamps and conflicting proposed recovery metadata refuse bef
  const f=await fixture();const before=treeHash(f.repo.objects.storageRoot());
  for(const now of [null,{},"invalid",new Date(NaN)]){assert.throws(()=>f.repo.obliterate("asset","erase-fixture","incident",now as never,{purgeUnaccounted:true}),{code:"bad_tombstone"});assert.equal(treeHash(f.repo.objects.storageRoot()),before);}
  const fakePid=1357913579;writeFileSync(join(f.root,"asset"),String(fakePid));f.repo.stage(["asset"]);const selected=treeHash(f.repo.objects.storageRoot());const descriptor=Object.getOwnPropertyDescriptor(process,"pid")!;Object.defineProperty(process,"pid",{configurable:true,value:fakePid});
- try{assert.throws(()=>f.repo.obliterate("asset","erase-fixture","incident",new Date(1),{purgeUnaccounted:true,recoverLock:true}),{code:"erasure_audit_conflict"});}finally{Object.defineProperty(process,"pid",descriptor);}
- assert.equal(treeHash(f.repo.objects.storageRoot()),selected);assert.equal(readFileSync(join(f.root,"asset"),"utf8"),String(fakePid));assert.ok(existsSync(f.foreign));assert.equal(existsSync(join(f.repo.controlDirectory,"objects.lock")),false);
+ try{assert.equal(f.repo.obliterate("asset","erase-fixture","incident",new Date(1),{purgeUnaccounted:true,recoverLock:true}).guarantee.kind,"native-provenance");}finally{Object.defineProperty(process,"pid",descriptor);}
+ assert.notEqual(treeHash(f.repo.objects.storageRoot()),selected);assert.equal(existsSync(join(f.root,"asset")),false);assert.equal(existsSync(f.foreign),false);assert.equal(existsSync(join(f.repo.controlDirectory,"objects.lock")),false);
 });
 
 

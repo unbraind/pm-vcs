@@ -1,5 +1,7 @@
+import { writeBundleFile } from "./engine/managed-exports.ts";
+import type { ObjectId } from "./engine/objects.ts";
 /** Thin native bundle commands; the pm host owns registration and compact TOON/JSON rendering. */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CommandHandlerContext, ExtensionApi } from "@unbrained/pm-cli/sdk/authoring";
 import { ChangeBundleRefusal, exportChangeBundle, importChangeBundle, inspectChangeBundle, parseChangeBundleAuthorization, parseChangeBundleScope } from "./engine/change-bundles.ts";
@@ -41,11 +43,14 @@ export function registerChangeBundleCommands(api: ExtensionApi): void {
       const scope = parseChangeBundleScope(request.scope);
       const selected = request.tips as Record<string, string>;
       const key = readSigningKey(fileOption(context, "keyFile"), repository.root);
-      const archive = exportChangeBundle(repository.objects, selected, scope, request.signer as string, key);
-      const output = resolve(requiredArgument(context, 0, "file", "Pass a new output file for the signed change bundle."));
-      try { writeFileSync(output, archive, { flag: "wx", mode: 0o600 }); }
-      catch { throw new ChangeBundleRefusal("invalid_change_bundle", "Choose a new writable output file; existing files are never overwritten."); }
-      return { ok: true, bytes: archive.length };
+      return repository.objects.withWriteLock(() => {
+        let objects: readonly ObjectId[] = [];
+        const archive = exportChangeBundle(repository.objects, selected, scope, request.signer as string, key, included => { objects = included; });
+        const output = resolve(requiredArgument(context, 0, "file", "Pass a new output file for the signed change bundle."));
+        try { writeBundleFile(repository, output, () => archive, () => objects, true); }
+        catch { throw new ChangeBundleRefusal("invalid_change_bundle", "Choose a new writable output file; existing files are never overwritten."); }
+        return { ok: true, bytes: archive.length };
+      });
     } });
   for (const action of ["inspect", "import"] as const) api.registerCommand({ name: `vcs bundle ${action}`,
     description: action === "inspect" ? "Verify bundle scope, trust, closure and omissions without importing" : "Import a signed native bundle within independent authority and exact destination leases",

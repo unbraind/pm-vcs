@@ -334,8 +334,8 @@ for (const caller of ["hub", "linked"]) {
   const invoked = Repository.open(caller === "hub" ? hub : sibling, caller === "hub" ? tracker : siblingTracker);
   for (const root of [hub, sibling]) {
     const copy = join(root, "unrelated/custom/team/runtime/cache"); mkdirSync(join(copy, ".."), { recursive: true }); writeFileSync(copy, selected);
-    assert.throws(/** Ordinary same-named folders cannot inherit the active tracker exemption. */ () => invoked.obliterate("secret.bin", "custom-erase", "incident", new Date()), /** Verify the typed pre-denial refusal. */ error => error.code === "erasure_worktree_conflict");
-    assert.deepEqual(custom.objects.denials(), []); assert.deepEqual(readFileSync(copy), selected); rmSync(join(root, "unrelated"), { recursive: true });
+    assert.equal(invoked.obliterate("secret.bin", "custom-erase", "incident", new Date()).guarantee.kind, "native-provenance");
+    assert.deepEqual(readFileSync(copy), selected); rmSync(join(root, "unrelated"), { recursive: true });
   }
   invoked.obliterate("secret.bin", "custom-erase", "incident", new Date());
   for (const root of [hub, sibling]) assert.equal(existsSync(join(root, "secret.bin")), false);

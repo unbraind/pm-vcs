@@ -3,7 +3,6 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 /** Recorded disagreements remain live data through ordinary work, transfer, bounded history and explicit resolution. */
 import assert from "node:assert/strict";
 import { deflateSync } from "node:zlib";
-import { inspectRepresentations } from "../engine/representations.ts";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -770,33 +769,29 @@ test("existing conflict units survive idempotent merges, independent descendants
 });
 
 
-test("owned writer PID bytes cannot masquerade as zlib, while raw matches and foreign wrappers still refuse erasure", async () => {
+test("native writer PID facts do not imply payload provenance and foreign lease bytes still refuse", async () => {
   for (const [pid, selection] of [[80007123, "ordinary"], [80007123, "raw"], [80007123, "base64"], [80007, "ordinary"]] as const) {
-    assert.throws(() => inspectRepresentations(Buffer.from(String(pid)), () => false), /zlib data/);
     const { repo } = await fixture();
     const secret = selection === "ordinary" ? Buffer.from("owned-pid-erasure-fixture-96273184") : Buffer.from(String(pid), selection === "raw" ? "utf8" : "base64");
     commit(repo, "secret", secret); repo.setAuthority("fixture", "read-fixture", "erase-fixture");
     const descriptor = Object.getOwnPropertyDescriptor(process, "pid")!;
     Object.defineProperty(process, "pid", { configurable: true, value: pid });
     try {
-      if (selection !== "ordinary") {
-        assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /Control metadata retains selected payload/);
-        assert.deepEqual(readFileSync(join(repo.root, "secret")), secret); assert.equal(repo.objects.denials().length, 0);
-      } else {
+      if (selection === "ordinary") {
         assert.throws(() => repo.objects.withWriteLock(() => {
           const lock = join(repo.controlDirectory, "objects.lock"); const owner = readFileSync(lock);
           writeFileSync(lock, deflateSync(secret));
-          try { assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /Control metadata retains selected payload/); }
+          try { assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), { code: "unsupported_erasure_storage" }); }
           finally { writeFileSync(lock, owner); }
         }), { code: "worktree_path_changed" });
-        assert.equal(readFileSync(join(repo.controlDirectory, "objects.lock"), "utf8"), String(pid));
         rmSync(join(repo.controlDirectory, "objects.lock"));
         writeFileSync(join(repo.controlDirectory, "dirty.json"), String(pid));
-        assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), /zlib data/);
+        assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), { code: "unsupported_erasure_storage" });
         rmSync(join(repo.controlDirectory, "dirty.json"));
-        repo.obliterate("secret", "erase-fixture", "incident", now);
-        assert.deepEqual(repo.verify().corrupt, []); assert.equal(repo.objects.denials().length, 1);
       }
+      const receipt = repo.obliterate("secret", "erase-fixture", "incident", now);
+      assert.equal(receipt.guarantee.kind, "native-provenance"); assert.equal(existsSync(join(repo.root, "secret")), false);
+      assert.deepEqual(repo.verify().corrupt, []); assert.equal(repo.objects.denials().length, 1);
     } finally { Object.defineProperty(process, "pid", descriptor); }
   }
 });
