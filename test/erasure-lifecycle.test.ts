@@ -43,6 +43,8 @@ async function retiredPending() {
 async function interruptedUnpack() {
   const f = await fixture(); const selected = f.repo.readIndex().find(entry => entry.fileId === f.id)!;
   f.repo.objects.compact();
+  // Both physical packs represent known local identities; the retained member has an independent native origin here.
+  f.repo.objects.write("blob", Buffer.from("independent retained pack member"));
   const extra = Repository.init(join(f.dir.root, "independent-pack")); extra.objects.write("blob", Buffer.from("selected first lifecycle payload 783629")); extra.objects.write("blob", Buffer.from("independent retained pack member")); extra.objects.compact();
   for (const name of fs.readdirSync(join(extra.objects.storageRoot(), "packs")).filter(name => name.endsWith(".pack"))) fs.copyFileSync(join(extra.objects.storageRoot(), "packs", name), join(f.repo.objects.storageRoot(), "packs", name));
   const killed = spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-purge-worker.ts"), f.repo.root, f.id, "unpacked"], { env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8", timeout: 120_000 });

@@ -7,7 +7,7 @@ import { assertManifestChild, assertManifestRoot } from "./manifest-pages.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 import { decodeLink } from "./composition.ts";
 import { decodeCommit, decodeManifest, decodeTree, decodeRecord } from "./model.ts";
-import { type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
+import { allowsDeniedRoot, type ErasureDenial, type ObjectArrival } from "./lifecycle.ts";
 import { ObjectStoreError, type ObjectId, type ObjectStore, type ObjectType } from "./objects.ts";
 import { assertVerificationBound, VerificationRefusal, verificationLimits, type VerificationResult } from "./object-error.ts";
 
@@ -99,7 +99,7 @@ export function inspectClosure(store: ObjectStore, targets: readonly ObjectId[],
     seen.add(key);
     const denial = denied.get(id);
     if (denial !== undefined) {
-      if (["payload", "conflict", "blob", "record"].includes(role) && fileId === denial.tombstone.fileId && root !== undefined && denial.tombstone.roots.includes(root)) result.obliterated.push(id);
+      if (["payload", "conflict", "blob", "record"].includes(role) && root !== undefined && allowsDeniedRoot(denial, root, fileId)) result.obliterated.push(id);
       else { result.corrupt.push(`${id}: invalid_erasure_role`); bound ??= "erasure_role"; }
       continue;
     }

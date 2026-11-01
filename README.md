@@ -268,6 +268,13 @@ loose objects, pack members, native fragment compositions, managed local exports
 and known shared working copies. Native operation summaries are conservatively
 redacted. Identifier-only history, terminal denials, paths and audit facts remain;
 reads of erased content return `obliterated`, and undo cannot reconstruct it.
+Native transformations publish source-identity certificates before payload bytes;
+the closure follows merge/replay, conflict, staging and rendering outputs across
+FileIds. Unknown legacy or imported payload provenance refuses erasure with
+`uncatalogued_provenance` and object identities before deletion, while reads and
+exports remain supported. Composition proofs memoize distinct objects and check
+the deadline and store lease per node/edge; logical content at 256 MiB, aggregate
+cache at 512 MiB or one million edges refuses before deletion.
 
 User-authored files and metadata, including alternate encodings, are independent
 data. Their coincidental resemblance to selected content does not establish

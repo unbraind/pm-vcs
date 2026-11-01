@@ -157,3 +157,141 @@ The complete npm/Bun release gate is CI evidence, not a local focused claim.
 All pm writes precede `npm run changelog:full`, `npm run self-host:write`, the
 commit, and `npm run accept:self-host` at HEAD. Archive verification never
 regenerates its input.
+
+## Fourth review: native derivation completeness
+
+The accepted guarantee remains **native provenance erasure**. Every pm-vcs-derived
+content representation of the selected object identities is removed from owned
+objects and materializations. Identifier-only structural history and terminal
+denials remain, with exact historical FileId roles for removed derived outputs.
+User-authored alternate encodings remain outside this guarantee. Diagnostic
+residue observations are bounded and never substitute for the primary proof.
+
+A native payload certificate is durably published before its first object bytes.
+It records source identities and distinguishes independently supplied FileId roles
+from native derived roles. Reverse edges are indexed once; a queue visits each
+identity once. Native manifest/conflict edges, rendered records and managed outputs
+join the same closure. Current indexes and birth-fenced output records select
+worktree materializations of derived identities as well as the original FileId.
+Independently shared payload ownership still refuses.
+
+Uncatalogued legacy payloads are **unknown**, including unreachable objects and
+ordinary imported archives that do not carry the clone-private catalog. Erasure
+refuses with `uncatalogued_provenance`, the complete machine-readable `objects`
+list, and a bounded diagnostic naming the first twenty identities, before any
+payload deletion or denial publication. Read, evaluation, export and identity-
+preserving storage maintenance remain supported. Rewriting an existing address
+cannot manufacture an origin certificate for it. No content scan upgrades unknown
+provenance to unrelated data.
+
+Composition traversal memoizes each native object and inspects each ordered edge
+once. Repeated edges reuse a cached result. Primary proof budgets refuse before
+deletion: a logical composition must be below 256 MiB, aggregate distinct-node
+cache below 512 MiB, and edge work below one million. Each node, edge and 64 KiB
+hashing slice checks the deadline and the caller's pinned publication or
+recovery-validation lease. These are primary proof limits, separate from the
+nonblocking residue audit. The eight-object 512 TiB fixture refuses after reading
+only its root. Oversized/over-budget composition grants no erasure certificate.
+
+| Derivation site in `engine/` | Native provenance / preservation | Regression coverage |
+| --- | --- | --- |
+| `rewrite.ts:mergePath` record merge, text merge, append-only PM log union | Input identities are scoped through every output and side envelope | Different-FileId merge; record/text/history producer cases |
+| `rewrite.ts` replay used by rebase, cherry-pick, revert, squash and virtual merge bases | All paths reuse the certified common producer; unchanged identities are reused | Common producer cases plus existing replay and first-class conflict suites |
+| `conflicts.ts:fieldSide`, text side slices and competing resolutions | Field/hunk envelopes carry native inputs; conflict objects also record alternatives | Record/text producer cases; resolution/range remapping; competing-resolution regression |
+| `conflicts.ts:carryConflicts` / `resolvePayload` | Shifted descriptors carry old unit and old/new projection; resolved payload carries projection and selected units | Resolution and shifted text conflict regression |
+| `repo.ts:stage` / `stageContent` | Prior identity follows replacement, rename/copy and CDC writes; complete birth/content-matching native outputs retain their real producer inputs | Replacement, rename, copy refusal, chunk rewrite, staged bundle/rendering/large-output, partial/replaced-output cases |
+| `repo.ts:stageLink` | A descriptor pin replacement carries its previous native identity | Link derivation regression |
+| `fragments.ts`, `manifest-pages.ts`, `model.ts:writeManifest` | Scoped native inputs reach each chunk; manifests record ordered native children | Generated derivation history; existing split-manifest/read and fragment suites |
+| `native-outputs.ts`, `worktree.ts`, `worktree-mutation.ts`, repository materializers | Source records precede bytes; derived paths require current birth/content evidence, independently owned projections remain intact | Different-FileId removal and pending/completed retry; generated history; edited/unregistered leaves; existing interrupted outputs |
+| `forge.ts:writeReview` | Review updates carry previous review/outcome records; initial caller fields and identifier-only series references are origins | Review-update provenance regression and existing served-forge suite |
+| `objects.ts:write` | Shared certificate barrier; monotonic source/role union; legacy identities cannot be relabelled | Generated history, legacy same-address rewrite, classification/refusal corpus |
+| `objects.ts:writeRaw`, `packs.ts`, `bundle.ts`, `sync.ts`, `transport.ts`, `bisect.ts` | Identity-preserving physical copies and imports never invent provenance; existing local certificates remain authoritative; unknown imported/legacy objects refuse erasure | Packed recovery matrix, legacy compatibility, existing pack/import tests |
+| `managed-exports.ts`, `bundle.ts`, `change-bundles.ts` | Registered output inventories and hashes cover actual carried object identities, including signed archives | Existing generated bundle and signed export properties |
+| `oplog.ts`, receipts, destruction journals | Summaries are conservatively redacted; retained identifiers/fingerprints are one-way audit facts | Existing operation-summary, destruction classification and accountability regressions |
+| `model.ts` tree/commit/series, refs, index, partial state, metadata | Structural identity references remain valid typed intentional absences; arbitrary caller metadata is not inferred content derivation | Derived historical-root role checks; verification/export after erasure; existing refusal corpus |
+
+The prior three-issue fixes, merge-from-main resolutions and uncovered-branch
+proofs remain recorded in `pr150-ci-repair.md` and the earlier sections above.
+This round changes neither coverage thresholds nor ownership/storage guards.
+
+
+### Fourth-review revert controls
+
+All mutations ran in disposable source copies, with isolated runtime state. The
+production copy was unchanged. Each mutant fails the named behavioral selection;
+the restored implementation passes it. The table accounts for **21 mutation
+groups, 27 failing mutant cases and 27 restored passes**.
+
+| Removed behavior | Regression selection in `derivation-provenance.test.ts` | Mutant failures / restored passes |
+| --- | --- | --- |
+| Replace the common merge input scope with a plain writer lease | `merge of different FileIds` | 1 / 1 |
+| Treat an erased conflict alternative as authority over its independent projection | `erasing a native conflict alternative` | 1 / 1 |
+| Remove catalog source edges from erasure selection | `merge of different FileIds` | 1 / 1 |
+| Remove the uncatalogued-object refusal | `ccc4942-era` | 1 / 1 |
+| Expand a previously visited composition again | `memoized composition` | 1 / 1 |
+| Remove the composition deadline barrier | `memoized composition` | 1 / 1 |
+| Remove the composition lease fence | `memoized composition` | 1 / 1 |
+| Remove the primary logical-byte bound | `eight native objects|composition faults` | 2 / 2 |
+| Remove exact historical roles for derived absences | `merge of different FileIds` | 1 / 1 |
+| Remove the staging input scope | `staging records replacement|staging records rename|staging records fragment-rewrite` | 3 / 3 |
+| Drop native inputs from conflict field envelopes | `competing field resolutions` | 1 / 1 |
+| Drop scoped inputs from streaming payload publication | `generated native derivation history` | 1 / 1 |
+| Drop the previous descriptor from pin replacements | `link pin replacements` | 1 / 1 |
+| Drop previous review/outcome inputs from review updates | `native review updates` | 1 / 1 |
+| Remove the complete derivation namespace fence | `derivation classification` | 1 / 1 |
+| Remove the pinned catalog-directory retirement authority | `catalog retirement` | 1 / 1 |
+| Grant a selected derived index ID deletion authority without current output evidence | `derived worktree ownership` | 2 / 2 |
+| Lose producer inputs when staging a registered native output | `staging a native` | 3 / 3 |
+| Ignore durable derived roles during cleanup retry | `merge of different FileIds` | 1 / 1 |
+| Treat an erased historical projection as an input to fresh independent staging | `merge of different FileIds` | 1 / 1 |
+| Remove the read-only recovery parent/lease fence | `recovery validation fences` | 1 / 1 |
+
+The legacy fixture writes the exact `ccc4942` field-side record frame, compressed
+with the prior writer's level, without a later catalog. Reading and exporting it
+still work. A same-address rewrite cannot turn its unknown past into a certified
+origin. Erasure refuses with the named identity before denial or payload deletion.
+
+Native fixture calibrations preserve the tested behavior without weakening
+production guards. The unpack interruption fixture first originates the retained
+member in its destination, then adds the independently produced second pack; its
+loose-plus-two-pack selected copies still traverse every sampled crash cut. The
+remote-authority fixture explicitly checks unknown-provenance refusal in the
+ordinary clone, then imports the known-origin source's erasure receipt into the
+still-held clone and retains the remote-deletion-authority refusal. Two older
+encoding assertions now distinguish independently authored containers from exact
+raw/native-frame identities: the latter remain denied, including when reoffered
+through batch arrival; arbitrary compressed/base64 containers remain readable and
+attributed writes remain allowed under the already accepted guarantee.
+
+Queue uniqueness is structural: initialization uses a Set, and the only enqueue
+function inserts into that same Set before enqueueing. An already processed queue
+entry is unreachable; its redundant branch was removed. Lease-checker presence
+inside an active synchronous action is also structural: writer/recovery scopes
+register it before invoking callers and retire it without an intervening callback.
+Outside an active scope still refuses, as do changed leases and parent lifetimes.
+
+### Fourth-review local validation
+
+All runtime commands use one test worker and isolated HOME/scratch state. Node 26
+is 26.13.0, Node 22 is 22.23.1, and Bun is 1.3.14. The full npm/Bun release matrix
+remains CI evidence, rather than a claim about these local focused selections.
+
+| Selection | Result |
+| --- | --- |
+| `derivation-provenance.test.ts` plus `erasure-provenance.test.ts`, linked test 74 | 97/97; both `engine/derivations.ts` and `engine/erasure-provenance.ts` at 100% statements, branches, functions and lines |
+| New provenance/ownership corpus under Bun | 31/31 |
+| Node 22 merge, legacy, memoization, budget, staged-output and recovery selection | 10/10 |
+| `packs.test.ts`, linked test 60 | 38/38 |
+| Selected composition and first-class conflict replay/import cases | 32/32 |
+| Publication-validation suite | 8/8 |
+| Packed power-loss matrix, linked test 61 | 6,225 native boundaries, 538 distinct full crash images, two convergent replays each; retained object and foreign tripwire preserved |
+| `erasure-lifecycle.test.ts`, linked test 59 | 43/43; 18 cuts in each interruption scenario |
+| Accountability, fragment repair, storage and fragment suites, linked test 76 | 218/218 |
+| Static checks and package privacy | Typecheck, source/test builds, lint and zero duplicates pass; 95 files / 585 declarations documented; 340 packaged files / zero privacy findings |
+
+The lifecycle selection samples 18 cuts from each interruption scenario; CI retains
+the complete matrices and the 512-seed model. No installer timeout was retried.
+All tracker writes precede changelog regeneration, archive generation, commit and
+committed-HEAD self-host acceptance. Unknown legacy/imported provenance is an
+intentional pre-deletion refusal; catalog portability/scale remains separate work
+tracked by `pm-vcs-provenance-catalog-scale`.

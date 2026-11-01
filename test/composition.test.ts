@@ -245,12 +245,15 @@ test("remote tombstones never silently authorize deleting locally held content",
   const fileId = repo.readIndex().find(entry => entry.path === "secret.bin")?.fileId as string;
   await cloneFrom(repo.root, join(parent, "remote"), new Date());
   const remote = Repository.open(join(parent, "remote")); remote.setAuthority("remote", "remote-read", "remote-erase");
-  remote.obliterate(fileId, "remote-erase", "incident", new Date());
-  const before = repo.objects.inventory().length;
-  refuses(() => importBundleObjects(repo.objects, exportBundle(remote.objects, remote.refs, [])), "remote_erasure_requires_authority");
-  assert.equal(repo.objects.inventory().length, before);
-  assert.deepEqual(repo.objects.denials(), []);
-  assert.equal(readFileSync(join(repo.root, "secret.bin"), "utf8"), "held remote payload");
+  // Ordinary archives carry bytes and structural history, not clone-private origin certificates.
+  refuses(() => remote.obliterate(fileId, "remote-erase", "incident", new Date()), "uncatalogued_provenance");
+  assert.deepEqual(readFileSync(join(remote.root, "secret.bin")), Buffer.from("held remote payload"));
+  repo.obliterate(fileId, "erase-fixture", "incident", new Date());
+  const before = remote.objects.inventory().length;
+  refuses(() => importBundleObjects(remote.objects, exportBundle(repo.objects, repo.refs, [])), "remote_erasure_requires_authority");
+  assert.equal(remote.objects.inventory().length, before);
+  assert.deepEqual(remote.objects.denials(), []);
+  assert.equal(readFileSync(join(remote.root, "secret.bin"), "utf8"), "held remote payload");
 });
 
 test("deduplicated FileIds and shared fragments refuse erasure before durable denial", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
@@ -617,8 +620,14 @@ test("user-authored frame encodings remain readable while the native source iden
   assert.ok(receipt.guarantee.excluded.includes("user-authored alternate encodings"));
   for (let i = 0; i < wrappers.length; i++) {
     assert.deepEqual(repo.objects.read(wrappers[i]).payload, representations[i]);
-    assert.equal(repo.objects.write("blob", representations[i], "a".repeat(32)), wrappers[i]);
-    repo.objects.accept([{ id: wrappers[i], type: "blob", payload: representations[i] }], true);
+    if (i === 0) {
+      // The exact erased native frame hashes to its denied object ID; its existing arrival refusal remains.
+      refuses(() => repo.objects.write("blob", representations[i], "a".repeat(32)), "object_obliterated");
+      refuses(() => repo.objects.accept([{ id: wrappers[i], type: "blob", payload: representations[i] }], true), "object_obliterated");
+    } else {
+      assert.equal(repo.objects.write("blob", representations[i], "a".repeat(32)), wrappers[i]);
+      repo.objects.accept([{ id: wrappers[i], type: "blob", payload: representations[i] }], true);
+    }
   }
   refuses(() => repo.objects.write("blob", marker, "a".repeat(32)), "object_obliterated");
   const revision = repo.refs.resolveHead()!;
@@ -947,13 +956,16 @@ test("review ordinary large and long-text files remain usable before and after e
   commit(repo, "secret.bin", marker);
   const controls = [Buffer.alloc(17 * 1024 * 1024, 0xff), Buffer.from("ordinary text word ".repeat(5000)), Buffer.from("blob ordinary document"), deflateSync(Buffer.from("independent valid compressed document"))];
   for (let i = 0; i < controls.length; i += 1) writeFileSync(join(repo.root, `ordinary-${i}.bin`), controls[i]);
-  assert.doesNotThrow(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()));
+  const receipt = repo.obliterate("secret.bin", "erase-fixture", "incident", new Date());
+  assert.ok(receipt.guarantee.excluded.includes("user-authored alternate encodings"));
   for (let i = 0; i < controls.length; i += 1) assert.doesNotThrow(() => commit(repo, `ordinary-${i}.bin`, controls[i]));
   assert.deepEqual(repo.verify().corrupt, []);
   for (let i = 0; i < controls.length; i += 1) assert.deepEqual(readFileSync(join(repo.root, `ordinary-${i}.bin`)), controls[i]);
   const stale = frameObject("blob", marker);
-  for (const payload of [marker, stale, frameObject("record", marker), deflateSync(stale), Buffer.from(stale.toString("base64")), Buffer.from(`${"word ".repeat(5000)}${stale.toString("base64")}`)]) {
-    refuses(() => repo.objects.write("blob", payload, "a".repeat(32)), "object_obliterated");
+  for (const payload of [marker, stale]) refuses(() => repo.objects.write("blob", payload, "a".repeat(32)), "object_obliterated");
+  // Independently authored containers do not declare native source identities or revive the selected object.
+  for (const payload of [frameObject("record", marker), deflateSync(stale), Buffer.from(stale.toString("base64")), Buffer.from(`${"word ".repeat(5000)}${stale.toString("base64")}`)]) {
+    assert.equal(repo.objects.write("blob", payload, "a".repeat(32)), hashObject("blob", payload));
   }
 });
 

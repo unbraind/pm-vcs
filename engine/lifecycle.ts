@@ -4,7 +4,7 @@ import { manifestIdentity } from "./erasure-provenance.ts";
 import { createHash } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
-import { decodeManifest, decodeTree } from "./model.ts";
+import { compareByteOrder, decodeManifest, decodeTree } from "./model.ts";
 import { hashObject, isObjectId, ObjectStoreError, readControlJson, type ObjectId, type StoredObject } from "./objects.ts";
 
 /** Canonical terminal erasure record containing identities and audit metadata only. */
@@ -17,6 +17,8 @@ export interface ErasureTombstone {
   readonly roots: readonly ObjectId[];
   /** Root objects and all their fragments permanently denied. */
   readonly objects: readonly ObjectId[];
+  /** Exact historical roles of erased outputs derived from the primary FileId. */
+  readonly derived?: readonly { readonly id: ObjectId; readonly fileId: string }[];
   /** Type-independent payload digests prevent renaming erased bytes as a different object kind. */
   readonly payloads: readonly string[];
   /** Locally authorized audit principal. */
@@ -47,12 +49,13 @@ export function encodeTombstone(value: ErasureTombstone): Buffer {
     || typeof value.principal !== "string" || !/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(value.principal)
     || typeof value.reason !== "string" || !/^[a-z][a-z0-9_.-]{0,63}$/.test(value.reason)
     || typeof value.timestamp !== "string" || !Number.isFinite(Date.parse(value.timestamp))
-    || Object.keys(value).sort().join(",") !== "fileId,objects,payloads,principal,reason,roots,timestamp,version") {
+    || value.derived !== undefined && (!Array.isArray(value.derived) || !value.derived.every(role => role !== null && typeof role === "object" && Object.keys(role).sort().join(",") === "fileId,id" && typeof role.id === "string" && value.objects.includes(role.id) && typeof role.fileId === "string" && /^[0-9a-f]{32}$/.test(role.fileId)))
+    || Object.keys(value).sort().join(",") !== (value.derived === undefined ? "fileId,objects,payloads,principal,reason,roots,timestamp,version" : "derived,fileId,objects,payloads,principal,reason,roots,timestamp,version")) {
     throw new ObjectStoreError("bad_tombstone", "Tombstone must contain only canonical identities and bounded audit metadata.");
   }
   return Buffer.from(JSON.stringify({ version: 1, fileId: value.fileId,
     roots: [...new Set(value.roots)].sort(), objects: [...new Set(value.objects)].sort(),
-    payloads: [...new Set(value.payloads)].sort(), principal: value.principal, timestamp: value.timestamp, reason: value.reason }), "utf8");
+    payloads: [...new Set(value.payloads)].sort(), ...(value.derived === undefined ? {} : { derived: [...new Map(value.derived.map(role => [`${role.id}:${role.fileId}`, { id: role.id, fileId: role.fileId }])).values()].sort((a, b) => compareByteOrder(a.id, b.id) || compareByteOrder(a.fileId, b.fileId)) }), principal: value.principal, timestamp: value.timestamp, reason: value.reason }), "utf8");
 }
 
 /** Read persisted denial, refusing corruption rather than reopening an erased identity. */
@@ -101,11 +104,11 @@ export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects
         const denial = files.get(entry.fileId ?? "");
         for (const id of entry.conflicts ?? []) {
           const denied = deniedObjects.get(id);
-          if (denied !== undefined && (entry.fileId !== denied.tombstone.fileId || !denied.tombstone.roots.includes(id))) throw new ObjectStoreError("invalid_erasure_role", "Conflict denial has the wrong FileId or root.");
+          if (denied !== undefined && (!allowsDeniedRoot(denied, id, entry.fileId))) throw new ObjectStoreError("invalid_erasure_role", "Conflict denial has the wrong FileId or root.");
           if (denial !== undefined && !denial.tombstone.roots.includes(id)) throw new ObjectStoreError("file_obliterated", "Arrival assigns novel conflict roots to a permanently denied FileId.");
         }
         const affected = deniedObjects.get(entry.id);
-        if (affected !== undefined && (entry.mode === "40000" || entry.fileId !== affected.tombstone.fileId || !affected.tombstone.roots.includes(entry.id))) {
+        if (affected !== undefined && (entry.mode === "40000" || !allowsDeniedRoot(affected, entry.id, entry.fileId))) {
           throw new ObjectStoreError("invalid_erasure_role", "Tree denial does not match its payload FileId and root.");
         }
         if (denial !== undefined && !denial.tombstone.roots.includes(entry.id)) {
@@ -133,4 +136,10 @@ export function assertArrivalsAllowed(denials: readonly ErasureDenial[], objects
 /** Compute a type-independent one-way digest for denial without retaining erased bytes. */
 export function payloadDigest(payload: Buffer): string {
   return createHash("sha256").update(payload).digest("hex");
+}
+
+/** Denied payload roles require an exact native historical root and owning FileId, including derived outputs. */
+export function allowsDeniedRoot(denial: ErasureDenial, id: ObjectId, fileId: string | undefined): boolean {
+  return fileId === denial.tombstone.fileId && denial.tombstone.roots.includes(id)
+    || denial.tombstone.derived?.some(role => role.id === id && role.fileId === fileId) === true;
 }

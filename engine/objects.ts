@@ -1,3 +1,4 @@
+import { recordDerivation } from "./derivations.ts";
 import { recordPayloadOwner } from "./payload-owners.ts";
 import "./publication.ts";
 import { destructionBoundary, measureDestructionRevision } from "./destruction.ts";
@@ -47,6 +48,10 @@ import { PackStorage, PackRefusal, type PackReport, packBoundary } from "./packs
 const activeLeases = new Set<string>();
 /** Read-only recovery views may inspect physical storage, but cannot publish a generation. */
 const validationLeases = new Set<string>();
+/** Constant-cost lease fences also cover read-only recovery validation. */
+const leaseChecks = new Map<string, () => boolean>();
+/** Synchronous native transformations propagate input identities through streaming writers. */
+const derivationInputs = new Map<string, readonly ObjectId[]>();
 /** An acquired recovery guard excludes ordinary writers until its validated action releases last. */
 const recoveryLeases = new Set<string>();
 /** A failed local cleanup may leave a closed, provably self-owned guard while its process remains alive. */
@@ -465,18 +470,42 @@ export class ObjectStore {
    *   Optional before erasure and for structural objects; blob, record and
    *   manifest writes require it once a denial exists. Attribution never skips
    *   native content-identity inspection or permits a denied identity.
+   * @param sources - Native input identities when this payload derives from existing objects.
    * @returns The id the content is stored under.
    */
-  write(type: ObjectType, payload: Buffer, fileId?: string): ObjectId {
+  write(type: ObjectType, payload: Buffer, fileId?: string, sources: readonly ObjectId[] = []): ObjectId {
     return this.withWriteLock(/** Check permanent denial while holding the publication lock. */ () => {
       const id = hashObject(type, payload);
       this.preflight([{ type, payload, id }], fileId !== undefined);
       if (fileId !== undefined && this.cachedDenials().files.has(fileId)) {
         throw new ObjectStoreError("file_obliterated", "This FileId is permanently denied.");
       }
-      if (fileId !== undefined && ["blob", "record", "manifest", "link", "conflict"].includes(type)) recordPayloadOwner(dirname(this.root), id, fileId);
+      if (["blob", "record", "manifest", "link", "conflict"].includes(type)) {
+        if (fileId !== undefined && !/^[0-9a-f]{32}$/.test(fileId)) throw new ObjectStoreError("invalid_file_id", "Payload ownership requires a canonical FileId.");
+        // Manifest and conflict formats already carry their native children. Erasure decodes
+        // those edges itself; this low-level store retains its pre-existing opaque-write contract.
+        const inputs = [...new Set([...sources, ...(derivationInputs.get(resolve(this.root)) ?? [])])];
+        if (inputs.some(source => this.denial(source) !== undefined)) throw new ObjectStoreError("object_obliterated", "Native derivation refers to permanently denied inputs.");
+        recordDerivation(dirname(this.root), id, inputs, fileId, this.has(id), type !== "conflict" && sources.length === 0 && (derivationInputs.get(resolve(this.root))?.length ?? 0) === 0);
+        if (fileId !== undefined) recordPayloadOwner(dirname(this.root), id, fileId);
+      }
       return this.writeRaw(type, payload);
     });
+  }
+
+  /** Carry known native inputs through all payload publications in one synchronous transformation. */
+  withDerivation<T>(sources: readonly ObjectId[], action: () => T): T {
+    return this.withWriteLock(() => {
+      const key = resolve(this.root); const before = derivationInputs.get(key);
+      derivationInputs.set(key, [...new Set([...(before ?? []), ...sources])]);
+      try { return action(); } finally { if (before === undefined) derivationInputs.delete(key); else derivationInputs.set(key, before); }
+    });
+  }
+
+  /** Refuse immediately if the current publication or recovery-validation lease changed. */
+  assertWriteLease(): void {
+    const key = resolve(this.root);
+    if (!activeLeases.has(key) || leaseChecks.get(key)!() !== true) throw new ObjectStoreError("store_locked", "Native provenance traversal lost its store lease.");
   }
 
   /** Publish preflighted bytes while a transaction already holds the store lock. */
@@ -708,6 +737,7 @@ export class ObjectStore {
     const files = new Map<string, ErasureDenial>();
     for (const entry of entries) {
       Object.freeze(entry.tombstone.roots); Object.freeze(entry.tombstone.objects); Object.freeze(entry.tombstone.payloads);
+      if (entry.tombstone.derived !== undefined) { for (const role of entry.tombstone.derived) Object.freeze(role); Object.freeze(entry.tombstone.derived); }
       Object.freeze(entry.tombstone); Object.freeze(entry);
       files.set(entry.tombstone.fileId, entry);
       for (const id of entry.tombstone.objects) if (!objects.has(id)) objects.set(id, entry);
@@ -987,9 +1017,11 @@ export class ObjectStore {
       activeLeases.add(lease); activeRevisions.set(lease, 0);
       publicationOwner = () => { const actual = lstatSync(path, { bigint: true, throwIfNoEntry: false }); const parent = lstatSync(control, { bigint: true, throwIfNoEntry: false }); const held = fstatSync(fd, { bigint: true }); return actual !== undefined && parent !== undefined && parent.dev === controlOwner.dev && parent.ino === controlOwner.ino && parent.birthtimeNs === controlOwner.birthtimeNs && actual.dev === published.dev && actual.ino === published.ino && actual.size === published.size && actual.mtimeNs === published.mtimeNs && actual.ctimeNs === published.ctimeNs && held.dev === published.dev && held.ino === published.ino && held.size === published.size && held.mtimeNs === published.mtimeNs && held.ctimeNs === published.ctimeNs; };
       objectFiles.storageOwners.set(control, publicationOwner);
+      leaseChecks.set(lease, publicationOwner);
       result = action();
     } finally {
       if (objectFiles.storageOwners.get(control) === publicationOwner) objectFiles.storageOwners.delete(control);
+      leaseChecks.delete(lease);
       objectFiles.publicationClosures.delete(control);
       activeLeases.delete(lease); activeRevisions.delete(lease); dirtyLeases.delete(lease);
       try {
@@ -1030,9 +1062,14 @@ export class ObjectStore {
       for (let attempt = 0; attempt < OBJECT_READ_RETRIES; attempt++) {
         destructionBoundary.visit("recovery-view-start", control);
         const before = state(); if (before === undefined) continue; let failed = false; let failure: unknown;
+        const lockPath = join(control, "objects.lock");
+        const parent = lstatSync(control, { bigint: true }); const lock = lstatSync(lockPath, { bigint: true, throwIfNoEntry: false });
+        /** Compare only pinned lease identities per edge; the existing whole-store CAS still runs after validation. */
+        const leaseStamp = (stat: BigIntStats | undefined): string => stat === undefined ? "absent" : `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+        leaseChecks.set(lease, () => { const current = lstatSync(control, { bigint: true, throwIfNoEntry: false }); return current !== undefined && `${current.dev}:${current.ino}:${current.birthtimeNs}` === `${parent.dev}:${parent.ino}:${parent.birthtimeNs}` && leaseStamp(lstatSync(lockPath, { bigint: true, throwIfNoEntry: false })) === leaseStamp(lock); });
         activeLeases.add(lease); activeRevisions.set(lease, 0); validationLeases.add(lease);
         try { validate(); } catch (error) { failed = true; failure = error; }
-        finally { activeLeases.delete(lease); activeRevisions.delete(lease); validationLeases.delete(lease); }
+        finally { activeLeases.delete(lease); activeRevisions.delete(lease); validationLeases.delete(lease); leaseChecks.delete(lease); }
         if (state() !== before) continue;
         if (failed) throw failure;
         destructionBoundary.visit("recovery-view-validated", control);

@@ -421,7 +421,16 @@ only exact ID/FileId filenames containing empty regular files, with no symlinks.
 
 Native manifests establish composition by their actual ordered fragment/page
 edges and verified lengths. Their canonical whole-blob identity is computed with
-bounded fragment reads, independent of the chosen chunk layout. Equivalent
+a memoized composition proof, independent of the chosen chunk layout.
+Each distinct object is decoded once per proof; repeated edges reuse cached bytes.
+Logical content at 256 MiB, aggregate cache at 512 MiB, one million inspected
+edges, the verification deadline or a changed store lease refuses before deletion.
+Unknown legacy/imported payload provenance refuses with `uncatalogued_provenance`
+and complete machine-readable object identities; reads and exports stay supported.
+Native derivation certificates precede bytes and connect merge/replay, conflict
+side/resolution, staged replacement/copy/rename, fragment rewrite and rendering
+outputs transitively. Historical derived roots carry exact FileId roles, preserving
+intentional absence without legitimizing independently shared ownership. Equivalent
 compositions and their fragments, and reverse manifest/conflict wrappers, join
 the deletion plan. Pending denial durably records this closure before deletion.
 Future native compositions and whole-content fragment sources are checked against

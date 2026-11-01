@@ -1,0 +1,489 @@
+import "./helpers/isolate-session.ts";
+/** Native derivation edges are a primary erasure proof, including historical unknowns and bounded DAGs. */
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, readdirSync, symlinkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { constants as zlibConstants, deflateSync } from "node:zlib";
+import { afterEach, test } from "node:test";
+import { PmClient } from "@unbrained/pm-cli/sdk";
+import { clearDerivations, recordDerivation, derivations, derivationClosure, UncataloguedProvenance } from "../engine/derivations.ts";
+import { allowsDeniedRoot, assertArrivalsAllowed, encodeTombstone, type ErasureTombstone } from "../engine/lifecycle.ts";
+import { compositionLimits, manifestIdentities, manifestIdentity } from "../engine/erasure-provenance.ts";
+import { serveForge } from "../engine/forge.ts";
+import { Repository } from "../engine/repo.ts";
+import { encodeManifest, encodeRecord, encodeTree, readCommit, readTree, writeCommit, type RecordDocument, type Signature } from "../engine/model.ts";
+import { encodePagedManifest } from "../engine/manifest-pages.ts";
+import { competingResolutions, carryConflicts, encodeConflict, fieldSide, readConflict, resolvePayload } from "../engine/conflicts.ts";
+import { mergePath, mergeTrees } from "../engine/rewrite.ts";
+import { buildTree, flattenTree } from "../engine/worktree.ts";
+import { frameObject, hashObject, ObjectStore, type ObjectId, type StoredObject } from "../engine/objects.ts";
+import { writeFragmented, readFragmented } from "../engine/fragments.ts";
+import { erasureScanBoundary } from "../engine/erasure-scan.ts";
+import { WorktreeMutation } from "../engine/worktree-mutation.ts";
+import { nativeOutputs } from "../engine/native-outputs.ts";
+import { writePrivateJson } from "../engine/composition.ts";
+import { renderWorkingRecord } from "../engine/record-format.ts";
+import { writeBundleFile } from "../engine/managed-exports.ts";
+import { exportBundle, parseBundle } from "../engine/bundle.ts";
+import { makeTempDir } from "./helpers/tmp.ts";
+const temps: ReturnType<typeof makeTempDir>[] = [];
+const author: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
+afterEach(() => { for (const temp of temps.splice(0)) temp.cleanup(); });
+/** Real non-Git tracker and native history; selected identity remains discoverable even after a rename. */
+async function fixture() {
+  const temp = makeTempDir(); temps.push(temp); process.env.GIT_CEILING_DIRECTORIES = temp.root;
+  await new PmClient({ cwd: temp.root, pmRoot: join(temp.root, ".agents/pm"), noExtensions: true }).init("derivations", { defaults: true, author: "fixture" });
+  const repo = Repository.init(temp.root); repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+  const secret = "selected secret provenance 937184";
+  writeFileSync(join(repo.root, "asset"), secret);
+  const id = repo.objects.write("blob", Buffer.from(secret), "f".repeat(32));
+  repo.writeIndex([{ path: "asset", id, mode: "100644", fileId: "f".repeat(32) }]);
+  const entry = repo.readIndex()[0];
+  repo.commit({ message: "selected", author }, new Date(0));
+  return { repo, entry, secret };
+}
+/** Erasure must deny every supplied native identity and preserve a verified structural history. */
+function erase(repo: Repository, fileId: string, ids: readonly ObjectId[]) {
+  const receipt = repo.obliterate(fileId, "erase-fixture", "provenance", new Date(1));
+  for (const id of ids) { assert.ok(receipt.removed.includes(id), `omitted ${id}`); assert.throws(() => repo.objects.read(id), { code: "object_obliterated" }); }
+  assert.equal(repo.verify().verification.status, "verified"); return receipt;
+}
+
+test("merge of different FileIds erases derived record and its materialized worktree", async () => {
+  const { repo, entry, secret } = await fixture(); const other = "0".repeat(32);
+  const base = repo.objects.write("record", encodeRecord({ common: "base" }), other);
+  const ours = repo.objects.write("record", encodeRecord({ common: "base", public: "ours" }), other);
+  const theirs = repo.objects.write("record", encodeRecord({ common: "base", secret }), entry.fileId);
+  const tree = (id: ObjectId, fileId: string) => buildTree(repo.objects, new Map([["joined.json", { id, fileId, mode: "100644" as const }]]));
+  const merged = mergeTrees({ store: repo.objects, config: repo.config, committer: author }, tree(base, other), tree(ours, other), tree(theirs, entry.fileId!));
+  const result = flattenTree(repo.objects, merged.tree).get("joined.json")!;
+  assert.equal(result.fileId, other);
+  assert.ok(repo.objects.read(result.id).payload.includes(secret)); repo.materialize(merged.tree);
+  assert.ok(readFileSync(join(repo.root, "joined.json")).includes(secret));
+  repo.commit({ message: "native derived merge", author }, new Date(1));
+  const boundary = erasureScanBoundary.visit;
+  try {
+    erasureScanBoundary.visit = step => { if (step === "pending") throw new Error("pending derived interruption"); };
+    assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), /pending derived interruption/);
+  } finally { erasureScanBoundary.visit = boundary; }
+  assert.equal(repo.objects.denials()[0].pending, true);
+  const receipt = erase(repo, entry.fileId!, [entry.id, theirs, result.id]);
+  assert.ok(receipt.removed.includes(result.id)); assert.equal(existsSync(join(repo.root, "joined.json")), false);
+  assert.equal(repo.objects.read(ours).payload.includes("ours"), true);
+  assert.equal(repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(2)).tombstone, receipt.tombstone);
+  writeFileSync(join(repo.root, "joined.json"), JSON.stringify({ public: "fresh independent replacement" }));
+  repo.stage(["joined.json"]); const fresh = repo.readIndex().find(row => row.path === "joined.json")!;
+  assert.equal(fresh.fileId, result.fileId); assert.equal(repo.objects.read(fresh.id).payload.includes("fresh independent"), true);
+  assert.equal(repo.verify().verification.status, "verified");
+});
+
+for (const kind of ["record", "text", "history"] as const) test(`common replay merge producer certifies ${kind} outputs and conflict envelopes`, async () => {
+  const { repo, entry, secret } = await fixture(); const other = "b".repeat(32);
+  const type = kind === "record" ? "record" : "blob";
+  const content: (string | RecordDocument)[] = kind === "record" ? [{ x: "base", tail: "base" }, { x: "ours", tail: "base", public: "ours" }, { x: secret, tail: secret }] : kind === "history"
+    ? ['{"ts":0}\n', '{"ts":0}\n{"ts":1,"value":"ours"}\n', `{"ts":0}\n{"ts":2,"value":"${secret}"}\n`]
+    : ["start\nbase\nend\ntail\n", "start\nours\nend\ntail\n", `start\n${secret} disputed\nend\n${secret} tail\n`];
+  const ids = content.slice(0, 2).map(value => repo.objects.write(type, typeof value === "string" ? Buffer.from(value) : encodeRecord(value)));
+  // Only one native input belongs to the selected identity; the output belongs to a different one.
+  const selected = repo.objects.write(type, typeof content[2] === "string" ? Buffer.from(content[2]) : encodeRecord(content[2]), entry.fileId, [entry.id]);
+  const result = mergePath({ store: repo.objects, config: repo.config, committer: author, recordConflicts: true }, kind === "history" ? ".agents/pm/history/fixture.jsonl" : kind === "record" ? "item.json" : "text.txt", ids[0], ids[1], selected, undefined, other);
+  const catalog = derivations(repo.controlDirectory, () => {});
+  assert.ok(derivationClosure(catalog, new Set([selected]), () => {}).has(result.id));
+  const produced = [...catalog].filter(([_id, row]) => row.sources.includes(selected)).map(([id]) => id);
+  erase(repo, entry.fileId!, [selected, result.id, ...produced]);
+});
+
+test("resolution and shifted text conflict producers retain transitive input provenance", async () => {
+  const { repo, entry, secret } = await fixture(); const other = "c".repeat(32);
+  const side = repo.objects.write("blob", Buffer.from(secret), entry.fileId, [entry.id]);
+  const ours = repo.objects.write("blob", Buffer.from(`ours\nunchanged\n`), other);
+  const alternative = repo.objects.write("blob", Buffer.from("alternative"), other);
+  const unit = repo.objects.write("conflict", encodeConflict({ kind: "text", start: 0, end: 1, base: alternative, ours: side, theirs: alternative }), other);
+  const shifted = repo.objects.write("blob", Buffer.from("prefix\nours\nunchanged\n"), other);
+  const carried = carryConflicts(repo.objects, [unit], ours, shifted, other)![0];
+  assert.equal(readConflict(repo.objects, carried).kind, "text");
+  const resolved = resolvePayload(repo.objects, { id: shifted, fileId: other, conflicts: [carried] }, { take: "ours" });
+  assert.ok(repo.objects.read(resolved.id).payload.includes(secret));
+  erase(repo, entry.fileId!, [side, unit, carried, resolved.id]);
+});
+
+for (const kind of ["replacement", "rename", "copy", "fragment-rewrite"] as const) test(`staging records ${kind} native derivation`, async () => {
+  const { repo, entry, secret } = await fixture();
+  if (kind === "rename") renameSync(join(repo.root, "asset"), join(repo.root, "renamed"));
+  else writeFileSync(join(repo.root, kind === "copy" ? "copied" : "asset"), kind === "replacement" ? secret + " appended" : kind === "fragment-rewrite" ? (secret + "\n").repeat(32768) : secret);
+  const path = kind === "rename" ? "renamed" : kind === "copy" ? "copied" : "asset"; repo.stage([path]);
+  const output = repo.readIndex().find(row => row.path === path)!; const row = derivations(repo.controlDirectory, () => {}).get(output.id)!;
+  assert.ok(row.derived.includes(output.fileId!));
+  if (kind === "copy") {
+    assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), { code: "erasure_dedup_conflict" }); return;
+  }
+  erase(repo, entry.fileId!, [entry.id, output.id]); assert.equal(existsSync(join(repo.root, path)), false);
+});
+
+test("ccc4942-era conflict-side envelope remains readable/exportable but unknown provenance refuses before deletion", async () => {
+  const { repo, entry, secret } = await fixture();
+  // Exact ccc4942 fieldSide frame and compression, published without any later catalog format.
+  const other = "e".repeat(32); const payload = encodeRecord({ value: secret });
+  const legacy = hashObject("record", payload); const fanout = join(repo.objects.storageRoot(), legacy.slice(0, 2)); mkdirSync(fanout, { recursive: true });
+  writeFileSync(join(fanout, legacy.slice(2)), deflateSync(frameObject("record", payload), { level: zlibConstants.Z_BEST_SPEED }));
+  assert.equal(repo.objects.read(legacy).payload.toString(), encodeRecord({ value: secret }).toString());
+  // A later same-address write may not launder this legacy identity into a newly certified origin.
+  fieldSide(repo.objects, secret, other, [entry.id]);
+  assert.equal(derivations(repo.controlDirectory, () => {}).has(legacy), false);
+  repo.materialize(buildTree(repo.objects, new Map([["asset", { id: legacy, mode: "100644" as const, fileId: other }]])));
+  repo.commit({ message: "legacy envelope fixture", author }, new Date(1));
+  assert.ok(parseBundle(exportBundle(repo.objects, repo.refs, [])).lines.some(row => row.id === legacy));
+  const before = repo.objects.inventory().map(row => row.id).sort();
+  const working = readFileSync(join(repo.root, "asset"));
+  assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), error => error instanceof UncataloguedProvenance && error.objects.includes(legacy));
+  assert.deepEqual(repo.objects.inventory().map(row => row.id).sort(), before); assert.equal(repo.objects.denials().length, 0);
+  assert.deepEqual(readFileSync(join(repo.root, "asset")), working);
+  const transferred = new ObjectStore(join(repo.root, "scratch", "objects"));
+  assert.ok(exportBundle(repo.objects, repo.refs, []).length > 0);
+  assert.equal(transferred.denials().length, 0);
+});
+
+test("memoized composition reads each distinct node once and checks time and lease inside traversal", async () => {
+  const { repo } = await fixture(); const store = repo.objects;
+  const blob = store.write("blob", Buffer.from("abc"));
+  const leaf = store.write("manifest", encodeManifest({ totalLength: 384, fragments: Array.from({ length: 128 }, () => ({ id: blob, length: 3 })) }));
+  const root = store.write("manifest", encodePagedManifest({ totalLength: 768, fragments: [], height: 1, pages: [{ id: leaf, length: 384, count: 128 }, { id: leaf, length: 384, count: 128 }] }));
+  const reads = new Map<string, number>();
+  const read = (id: ObjectId) => { reads.set(id, (reads.get(id) ?? 0) + 1); return store.read(id); };
+  const results = store.withWriteLock(() => manifestIdentities([root, leaf], read, () => store.assertWriteLease()));
+  assert.equal(results.get(root)!.id, hashObject("blob", Buffer.from("abc".repeat(256))));
+  assert.deepEqual([...reads.values()], [1, 1, 1]);
+  const before = compositionLimits.timeMs; compositionLimits.timeMs = 0;
+  try { assert.throws(() => manifestIdentity(root, read), { bound: "time_ms" }); } finally { compositionLimits.timeMs = before; }
+  let checks = 0;
+  assert.throws(() => store.withWriteLock(() => manifestIdentity(root, read, () => { store.assertWriteLease(); if (++checks === 6) rmSync(join(repo.controlDirectory, "objects.lock")); })), { code: "store_locked" });
+});
+
+test("eight native objects describing 512 TiB refuse within the primary budget before deletion", async () => {
+  const { repo, entry, secret } = await fixture(); const store = repo.objects;
+  let id = store.write("blob", Buffer.from("q")); let length = 1; let count = 1;
+  id = store.write("manifest", encodeManifest({ totalLength: 128, fragments: Array.from({ length: 128 }, () => ({ id, length: 1 })) })); length = 128; count = 128;
+  for (let height = 1; height <= 6; height++) {
+    id = store.write("manifest", encodePagedManifest({ totalLength: length * 128, fragments: [], height, pages: Array.from({ length: 128 }, () => ({ id, length, count })) })); length *= 128; count *= 128;
+  }
+  assert.equal(length, 512 * 1024 ** 4);
+  // Most-expensive root first; refusal must occur without visiting even its first child.
+  let reads = 0; const started = performance.now();
+  assert.throws(() => manifestIdentity(id, object => { reads++; return store.read(object); }), { bound: "logical_bytes" });
+  assert.equal(reads, 1); assert.ok(performance.now() - started < 1000);
+  assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), { bound: "logical_bytes" });
+  assert.equal(store.denials().length, 0); assert.equal(readFileSync(join(repo.root, "asset"), "utf8"), secret);
+});
+
+
+test("generated native derivation history removes every recoverable dependent and retires catalog edges", async () => {
+  for (let seed = 0; seed < 3; seed++) {
+    const { repo, entry, secret } = await fixture(); const other = "d".repeat(32);
+    const envelope = fieldSide(repo.objects, secret + seed, other, [entry.id]);
+    const document = repo.objects.write("record", encodeRecord({ preserved: secret + seed, extra: seed }), other, [envelope]);
+    const bytes = Buffer.from(JSON.stringify({ preserved: secret + seed, extra: seed }));
+    const fragmented = repo.objects.withDerivation([document], () => writeFragmented(repo.objects, bytes, 5 + seed, other));
+    assert.deepEqual(readFragmented(repo.objects, fragmented.manifestId), bytes);
+    repo.materialize(buildTree(repo.objects, new Map([["derived", { id: fragmented.manifestId, mode: "100644" as const, fileId: other }]])));
+    repo.commit({ message: "derived history", author }, new Date(seed + 1));
+    const bundle = join(repo.root, "native.bundle"); writeBundleFile(repo, bundle, () => exportBundle(repo.objects, repo.refs, []));
+    if (seed !== 1) repo.objects.compact();
+    repo.operations.append("native-summary", bytes.toString("base64"), [], new Date(0));
+    const catalog = derivations(repo.controlDirectory, () => {});
+    const dependents = derivationClosure(catalog, new Set([entry.id]), () => {});
+    for (const id of [envelope, document, fragmented.manifestId]) assert.ok(dependents.has(id));
+    const receipt = erase(repo, entry.fileId!, [...dependents]);
+    const retained = derivations(repo.controlDirectory, () => {});
+    for (const [id, row] of retained) { assert.equal(dependents.has(id), false); assert.equal(row.sources.some(source => dependents.has(source)), false); }
+    assert.equal(existsSync(bundle), false); assert.equal(existsSync(join(repo.root, "derived")), false);
+    assert.throws(() => readFragmented(repo.objects, fragmented.manifestId), { code: "object_obliterated" });
+    assert.equal(repo.operations.read().some(row => row.summary === bytes.toString("base64")), false);
+    assert.ok(receipt.tombstone); assert.ok(parseBundle(exportBundle(repo.objects, repo.refs, [])).lines.every(row => !dependents.has(row.id)));
+  }
+});
+
+
+test("link pin replacements preserve their previous native descriptor identity", async () => {
+  const { repo, secret } = await fixture();
+  const descriptor = { version: 1 as const, repository: repo.objects.identity(), revision: repo.resolve("HEAD"), mappings: [{ source: "asset", destination: "vendor/asset" }] };
+  const first = repo.stageLink("dependency.link", descriptor);
+  repo.commit({ message: "initial pin", author }, new Date(1));
+  const second = repo.stageLink("dependency.link", { ...descriptor, revision: repo.resolve("HEAD") });
+  assert.ok(derivations(repo.controlDirectory, () => {}).get(second)!.sources.includes(first));
+  const entry = repo.readIndex().find(row => row.path === "dependency.link")!;
+  erase(repo, entry.fileId!, [first, second]);
+  assert.equal(readFileSync(join(repo.root, "asset"), "utf8"), secret);
+});
+
+test("native review updates certify previous record and outcome inputs", async () => {
+  const { repo, secret } = await fixture();
+  const document = repo.objects.write("record", encodeRecord({ series: "1".repeat(64), status: "pending", comments: [secret] }));
+  const outcome = repo.objects.write("record", encodeRecord({ action: "fixture" }));
+  const tree = buildTree(repo.objects, new Map([["review.json", { id: document, mode: "100644" as const }], ["outcome.json", { id: outcome, mode: "100644" as const }]]));
+  const prior = writeCommit(repo.objects, { tree, parents: [], author, committer: author, message: "native review fixture" });
+  repo.refs.compareAndSwap("refs/forge-review/fixture", null, prior);
+  const result = serveForge(repo, { action: "publish", kind: "review", name: "fixture", expected: prior, fields: { status: "approved" } }, { principal: "fixture", breakLeases: false });
+  const entries = readTree(repo.objects, readCommit(repo.objects, result.revision as string).tree);
+  const catalog = derivations(repo.controlDirectory, () => {});
+  for (const entry of entries) { assert.ok(catalog.get(entry.id)!.sources.includes(document)); assert.ok(catalog.get(entry.id)!.sources.includes(outcome)); }
+  assert.ok(repo.objects.read(entries.find(entry => entry.name === "review.json")!.id).payload.includes(secret));
+});
+
+test("competing field resolutions certify side envelopes and their final projection transitively", async () => {
+  const { repo, entry, secret } = await fixture(); const other = "9".repeat(32);
+  const baseRecord = repo.objects.write("record", encodeRecord({ x: "base", keep: "public" }));
+  const unit = repo.objects.write("conflict", encodeConflict({ kind: "field", field: "x", base: fieldSide(repo.objects, "base"), ours: fieldSide(repo.objects, "left"), theirs: fieldSide(repo.objects, "right") }));
+  const ours = repo.objects.write("record", encodeRecord({ x: "our resolution", keep: "public" }));
+  const theirs = repo.objects.write("record", encodeRecord({ x: secret, keep: "public" }), entry.fileId, [entry.id]);
+  const result = competingResolutions(repo.objects, { id: baseRecord, conflicts: [unit] }, { id: ours, fileId: other }, { id: theirs }, { id: ours });
+  assert.equal(result.conflicts?.length, 1);
+  const descriptor = readConflict(repo.objects, result.conflicts![0]);
+  const certificate = derivations(repo.controlDirectory, () => {}).get(descriptor.theirs)!;
+  erase(repo, entry.fileId!, [theirs, descriptor.theirs, result.conflicts![0], result.id]);
+  assert.ok(certificate.sources.includes(theirs));
+});
+
+
+test("derivation classification preserves foreign schemas, kinds, stages and namespace replacements", async () => {
+  const { repo, entry, secret } = await fixture();
+  const directory = join(repo.controlDirectory, "derivations"); const path = join(directory, `${entry.id}.json`);
+  const original = readFileSync(path); const native = JSON.parse(original.toString()) as unknown;
+  const invalid: unknown[] = [null, 7, [], {}, { format: "foreign", sources: [], independent: [], derived: [] },
+    { format: "pm-vcs-derivation-1", sources: null, independent: [], derived: [] },
+    { format: "pm-vcs-derivation-1", sources: [7], independent: [], derived: [] },
+    { format: "pm-vcs-derivation-1", sources: ["wrong"], independent: [], derived: [] },
+    { format: "pm-vcs-derivation-1", sources: [], independent: null, derived: [] },
+    { format: "pm-vcs-derivation-1", sources: [], independent: [7], derived: [] },
+    { format: "pm-vcs-derivation-1", sources: [], independent: [], derived: ["wrong"] }];
+  for (const value of invalid) {
+    writeFileSync(path, JSON.stringify(value));
+    assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), { code: "unsupported_erasure_storage" });
+    assert.equal(repo.objects.denials().length, 0);
+  }
+  writeFileSync(path, original);
+  const stage = `${path}.123456abcdef.tmp`; writeFileSync(stage, "");
+  assert.ok(derivations(repo.controlDirectory, () => {}).has(entry.id));
+  writeFileSync(stage, JSON.stringify(native)); assert.ok(derivations(repo.controlDirectory, () => {}).has(entry.id));
+  writeFileSync(stage, "foreign bytes"); assert.throws(() => derivations(repo.controlDirectory, () => {}), { code: "unsupported_erasure_storage" }); rmSync(stage);
+  const foreign = join(directory, "foreign-backup"); writeFileSync(foreign, "foreign bytes");
+  assert.throws(() => derivations(repo.controlDirectory, () => {}), { code: "unsupported_erasure_storage" }); rmSync(foreign);
+  renameSync(path, stage); symlinkSync(stage, path);
+  assert.throws(() => derivations(repo.controlDirectory, () => {}), { code: "unsupported_erasure_storage" }); rmSync(path); renameSync(stage, path);
+  let changed = false;
+  try { assert.throws(() => derivations(repo.controlDirectory, () => { if (!changed) { changed = true; writeFileSync(foreign, "foreign bytes"); } }), { code: "unsupported_erasure_storage" }); }
+  finally { rmSync(foreign, { force: true }); }
+  const extraStage = join(directory, `${"f".repeat(64)}.json.123456abcdef.tmp`); writeFileSync(extraStage, "");
+  const first = readdirSync(directory)[0]; const count = readdirSync(directory).length; const replacement = "0".repeat(64) + ".json"; let visited = 0;
+  try { assert.throws(() => derivations(repo.controlDirectory, () => { if (++visited === count) renameSync(join(directory, first), join(directory, replacement)); }), { code: "unsupported_erasure_storage" }); }
+  finally { renameSync(join(directory, replacement), join(directory, first)); rmSync(extraStage); }
+  const contents = readdirSync(directory).map(name => ({ name, bytes: readFileSync(join(directory, name)) })); let swapped = false;
+  try { assert.throws(() => derivations(repo.controlDirectory, () => {
+    if (swapped) return; swapped = true; renameSync(directory, directory + "-replacement"); mkdirSync(directory);
+    for (const file of contents) writeFileSync(join(directory, file.name), file.bytes);
+  }), { code: "unsupported_erasure_storage" }); }
+  finally { rmSync(directory, { recursive: true }); renameSync(directory + "-replacement", directory); }
+  renameSync(directory, directory + "-saved"); symlinkSync(directory + "-saved", directory, "dir");
+  try {
+    assert.throws(() => derivations(repo.controlDirectory, () => {}), { code: "unsupported_erasure_storage" });
+    assert.throws(() => recordDerivation(repo.controlDirectory, "a".repeat(64), [], undefined, false), { code: "unsupported_erasure_storage" });
+  } finally { rmSync(directory); renameSync(directory + "-saved", directory); }
+  for (const [id, sources, fileId] of [["wrong", [], undefined], [entry.id, ["wrong"], undefined], [entry.id, [7], undefined], [entry.id, [], "wrong"]] as const) {
+    assert.throws(() => recordDerivation(repo.controlDirectory, id, sources as unknown as readonly string[], fileId, false), { code: "invalid_provenance" });
+  }
+  assert.equal(readFileSync(join(repo.root, "asset"), "utf8"), secret);
+  const empty = join(repo.root, "empty-control"); mkdirSync(empty);
+  assert.equal(derivations(empty, () => {}).size, 0); clearDerivations(empty, new Set(), derivations(empty, () => {}), () => {});
+  recordDerivation(empty, entry.id, [], undefined, false);
+  assert.equal(derivationClosure(derivations(empty, () => {}), new Set([entry.id]), () => {}).size, 1);
+  clearDerivations(empty, new Set([entry.id]), derivations(empty, () => {}), () => {}); assert.equal(derivations(empty, () => {}).size, 0);
+});
+
+test("composition faults and primary cache/edge bounds refuse before granting an identity", () => {
+  const a = "a".repeat(64); const b = "b".repeat(64); const c = "c".repeat(64);
+  const objects = new Map<ObjectId, StoredObject>();
+  const read = (id: ObjectId) => objects.get(id)!;
+  objects.set(a, { type: "blob", payload: Buffer.from("abc") });
+  assert.throws(() => manifestIdentity(a, read), { code: "invalid_manifest" });
+  objects.set(a, { type: "record", payload: encodeRecord({ x: 1 }) });
+  assert.throws(() => manifestIdentity(a, read), { code: "invalid_manifest" });
+  objects.set(b, { type: "blob", payload: Buffer.from("abc") });
+  objects.set(a, { type: "manifest", payload: encodeManifest({ totalLength: 1, fragments: [{ id: b, length: 1 }] }) });
+  assert.throws(() => manifestIdentity(a, read), { code: "invalid_manifest" });
+  objects.set(a, { type: "manifest", payload: encodePagedManifest({ totalLength: 3, height: 1, fragments: [], pages: [{ id: b, length: 3, count: 1 }] }) });
+  assert.throws(() => manifestIdentity(a, read), { code: "invalid_manifest" });
+  objects.set(c, { type: "blob", payload: Buffer.from("abc") });
+  objects.set(b, { type: "manifest", payload: encodeManifest({ totalLength: 3, fragments: [{ id: c, length: 3 }] }) });
+  objects.set(a, { type: "manifest", payload: encodeManifest({ totalLength: 3, fragments: [{ id: b, length: 3 }] }) });
+  assert.throws(() => manifestIdentity(a, read), { code: "invalid_manifest" });
+  objects.set(a, { type: "manifest", payload: encodeManifest({ totalLength: 3, fragments: [{ id: a, length: 3 }] }) });
+  assert.throws(() => manifestIdentity(a, read), { code: "invalid_manifest" });
+  objects.set(a, { type: "manifest", payload: encodeManifest({ totalLength: 3, fragments: [{ id: c, length: 3 }] }) });
+  const before = { ...compositionLimits };
+  try {
+    compositionLimits.bytes = 3; assert.throws(() => manifestIdentity(a, read), { bound: "logical_bytes" }); compositionLimits.bytes = before.bytes;
+    compositionLimits.edges = 1; assert.throws(() => manifestIdentity(a, read), { bound: "edges" }); compositionLimits.edges = before.edges;
+    compositionLimits.cacheBytes = 2; assert.throws(() => manifestIdentity(a, read), { bound: "cache_bytes" });
+    compositionLimits.cacheBytes = 5; assert.throws(() => manifestIdentity(a, read), { bound: "cache_bytes" });
+    compositionLimits.cacheBytes = 10; assert.throws(() => manifestIdentity(c, read), { code: "invalid_manifest" });
+    compositionLimits.cacheBytes = 2; assert.throws(() => manifestIdentity(c, read), { bound: "cache_bytes" });
+  } finally { Object.assign(compositionLimits, before); }
+  objects.set(a, { type: "manifest", payload: encodeManifest({ totalLength: 0, fragments: [] }) });
+  assert.equal(manifestIdentity(a, read).id, hashObject("blob", Buffer.alloc(0)));
+});
+
+
+test("catalog retirement refuses replaced parents and foreign selected entries", async () => {
+  const { repo, entry } = await fixture(); const directory = join(repo.controlDirectory, "derivations");
+  const snapshot = derivations(repo.controlDirectory, () => {}); const selected = new Set([entry.id]); const name = `${entry.id}.json`;
+  const original = readFileSync(join(directory, name));
+  renameSync(directory, directory + "-saved"); mkdirSync(directory); writeFileSync(join(directory, name), original);
+  try { assert.throws(() => clearDerivations(repo.controlDirectory, selected, snapshot, () => {}), { code: "unsupported_erasure_storage" }); assert.deepEqual(readFileSync(join(directory, name)), original); }
+  finally { rmSync(directory, { recursive: true }); renameSync(directory + "-saved", directory); }
+  const restored = derivations(repo.controlDirectory, () => {});
+  assert.throws(() => clearDerivations(repo.controlDirectory, selected, new Map(), () => {}), { code: "unsupported_erasure_storage" });
+  renameSync(directory, directory + "-saved");
+  try {
+    assert.throws(() => clearDerivations(repo.controlDirectory, selected, restored, () => {}), { code: "unsupported_erasure_storage" });
+    symlinkSync(directory + "-saved", directory, "dir");
+    assert.throws(() => clearDerivations(repo.controlDirectory, selected, restored, () => {}), { code: "unsupported_erasure_storage" });
+    rmSync(directory);
+  } finally { renameSync(directory + "-saved", directory); }
+  const absentRoot = join(repo.root, "absent-control"); mkdirSync(absentRoot);
+  const absent = derivations(absentRoot, () => {}); mkdirSync(join(absentRoot, "derivations"));
+  assert.throws(() => clearDerivations(absentRoot, selected, absent, () => {}), { code: "unsupported_erasure_storage" });
+  writeFileSync(join(directory, name), "foreign backup");
+  assert.throws(() => clearDerivations(repo.controlDirectory, selected, restored, () => {}), { code: "unsupported_erasure_storage" });
+  assert.equal(readFileSync(join(directory, name), "utf8"), "foreign backup"); writeFileSync(join(directory, name), original);
+  const extra = join(directory, `${entry.id}.foreign`); writeFileSync(extra, "foreign");
+  assert.throws(() => clearDerivations(repo.controlDirectory, selected, restored, () => {}), { code: "unsupported_erasure_storage" }); rmSync(extra);
+  // A retry after any completed removal uses a fresh catalog; missing canonical entries are legitimate.
+  const invalidKind = join(directory, `${entry.id}.json.abcdef123456.tmp`); mkdirSync(invalidKind);
+  assert.throws(() => clearDerivations(repo.controlDirectory, selected, restored, () => {}), { code: "unsupported_erasure_storage" }); rmSync(invalidKind, { recursive: true });
+  const filledStage = join(directory, `${entry.id}.json.abc123def456.tmp`); writeFileSync(filledStage, original);
+  const stages = join(directory, `${entry.id}.json.123456abcdef.tmp`); writeFileSync(stages, "");
+  clearDerivations(repo.controlDirectory, selected, derivations(repo.controlDirectory, () => {}), () => {});
+  assert.equal(existsSync(stages), false);
+});
+
+test("derived tombstone roles are canonical, exact, and cannot authorize wrong-file or structural aliases", async () => {
+  const { repo, entry } = await fixture(); const other = "a".repeat(32); const third = "b".repeat(32); const output = "1".repeat(64);
+  const base: ErasureTombstone = { version: 1, fileId: entry.fileId!, roots: [entry.id], objects: [entry.id, output], payloads: [], principal: "fixture", timestamp: new Date(0).toISOString(), reason: "provenance" };
+  const roles = [{ fileId: third, id: output }, { id: output, fileId: other }, { id: output, fileId: other }, { id: entry.id, fileId: other }];
+  const payload = encodeTombstone({ ...base, derived: roles }); const tombstone = JSON.parse(payload.toString()) as ErasureTombstone;
+  assert.equal(tombstone.derived!.length, 3); assert.deepEqual(encodeTombstone(tombstone), payload);
+  const denial = { id: hashObject("tombstone", payload), tombstone, pending: false };
+  assert.equal(allowsDeniedRoot(denial, output, other), true); assert.equal(allowsDeniedRoot(denial, output, "c".repeat(32)), false);
+  assert.equal(allowsDeniedRoot(denial, "2".repeat(64), other), false);
+  for (const [fileId, mode, allowed] of [[other, "100644", true], ["c".repeat(32), "100644", false], [other, "40000", false]] as const) {
+    const tree = encodeTree([{ name: "derived", mode, id: output, ...(mode === "40000" ? {} : { fileId }) }]); const arrival = { id: hashObject("tree", tree), type: "tree" as const, payload: tree };
+    if (allowed) assert.doesNotThrow(() => assertArrivalsAllowed([denial], [arrival], true));
+    else assert.throws(() => assertArrivalsAllowed([denial], [arrival], true), { code: "invalid_erasure_role" });
+  }
+  const invalid: unknown[] = [null, {}, [null], [7], [{ id: output, fileId: other, extra: true }], [{ id: 7, fileId: other }], [{ id: "2".repeat(64), fileId: other }], [{ id: output, fileId: 7 }], [{ id: output, fileId: "wrong" }]];
+  for (const derived of invalid) assert.throws(() => encodeTombstone({ ...base, derived } as ErasureTombstone), { code: "bad_tombstone" });
+});
+
+test("nested native derivation scopes restore inputs and cannot resurrect an erased source", async () => {
+  const { repo, entry } = await fixture(); const other = "a".repeat(32);
+  const parent = repo.objects.write("blob", Buffer.from("parent"));
+  const nested = repo.objects.withDerivation([entry.id], () => repo.objects.withDerivation([parent], () => repo.objects.write("blob", Buffer.from("nested native result"), other)));
+  const row = derivations(repo.controlDirectory, () => {}).get(nested)!;
+  assert.ok(row.sources.includes(entry.id)); assert.ok(row.sources.includes(parent));
+  assert.throws(() => repo.objects.withDerivation([entry.id], () => { throw new Error("native failure"); }), /native failure/);
+  const independent = repo.objects.write("blob", Buffer.from("independent after failed derivation"), other);
+  assert.deepEqual(derivations(repo.controlDirectory, () => {}).get(independent)!.sources, []);
+  erase(repo, entry.fileId!, [entry.id, nested]);
+  assert.throws(() => repo.objects.write("blob", Buffer.from("new body from forbidden source"), other, [entry.id]), { code: "object_obliterated" });
+  assert.equal(repo.objects.read(independent).payload.toString(), "independent after failed derivation");
+  assert.throws(() => repo.objects.assertWriteLease(), { code: "store_locked" });
+});
+
+
+test("erasing a native conflict alternative preserves an independently owned projection", async () => {
+  const { repo, entry, secret } = await fixture(); const other = "a".repeat(32);
+  const alternative = fieldSide(repo.objects, secret, other, [entry.id]);
+  const unit = repo.objects.write("conflict", encodeConflict({ kind: "field", field: "private", base: fieldSide(repo.objects, "base"), ours: fieldSide(repo.objects, "public"), theirs: alternative }), other);
+  const projection = repo.objects.write("record", encodeRecord({ private: "public", public: "independent" }), other);
+  repo.materialize(buildTree(repo.objects, new Map([["unrelated.json", { id: projection, mode: "100644" as const, fileId: other, conflicts: [unit] }]])));
+  repo.commit({ message: "independent projection with native alternatives", author }, new Date(1));
+  const before = readFileSync(join(repo.root, "unrelated.json"));
+  erase(repo, entry.fileId!, [entry.id, alternative, unit]);
+  assert.deepEqual(readFileSync(join(repo.root, "unrelated.json")), before);
+  assert.equal(repo.objects.read(projection).payload.includes("independent"), true);
+});
+
+
+for (const registered of [false, true]) test(`derived worktree ownership preserves ${registered ? "edited" : "unregistered"} foreign bytes before deletion`, async () => {
+  const { repo, entry, secret } = await fixture(); const other = "a".repeat(32);
+  const derived = repo.objects.write("record", encodeRecord({ secret, extra: "native output" }), other, [entry.id]);
+  const tree = buildTree(repo.objects, new Map([["derived.json", { id: derived, mode: "100644" as const, fileId: other }]]));
+  if (registered) repo.materialize(tree);
+  else repo.writeIndex([{ path: "derived.json", id: derived, mode: "100644", fileId: other }]);
+  writeFileSync(join(repo.root, "derived.json"), "independent replacement bytes");
+  assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), { code: "worktree_path_changed" });
+  assert.equal(repo.objects.denials().length, 0); assert.equal(readFileSync(join(repo.root, "derived.json"), "utf8"), "independent replacement bytes");
+  assert.equal(repo.objects.read(derived).payload.includes(secret), true); assert.equal(repo.objects.read(entry.id).payload.toString(), secret);
+});
+
+
+for (const kind of ["bundle", "record-rendering", "large-output"] as const) test(`staging a native ${kind} retains its producer provenance`, async () => {
+  const { repo, entry, secret } = await fixture(); const path = kind === "bundle" ? "native.bundle" : "rendered.txt";
+  let source = entry.id;
+  if (kind === "bundle") writeBundleFile(repo, join(repo.root, path), () => exportBundle(repo.objects, repo.refs, []));
+  else {
+    if (kind === "record-rendering") source = repo.objects.write("record", encodeRecord({ secret }), entry.fileId, [entry.id]);
+    const mutation = new WorktreeMutation(repo.root, ".pmvcs", repo.objects);
+    try { mutation.write(path, kind === "record-rendering" ? renderWorkingRecord("native.json", { secret }) : Buffer.from((secret + "\n").repeat(65536)), 0o644, { objects: [source] }); } finally { mutation.close(); }
+  }
+  repo.stage([path]); const staged = repo.readIndex().find(row => row.path === path)!;
+  const certificate = derivations(repo.controlDirectory, () => {}).get(staged.id)!;
+  erase(repo, entry.fileId!, [entry.id, source, staged.id]); assert.equal(existsSync(join(repo.root, path)), false);
+  assert.ok(certificate.derived.includes(staged.fileId!)); assert.equal(certificate.independent.includes(staged.fileId!), false);
+});
+
+
+test("unchanged large blob staging preserves its native identity without a manifest conversion", async () => {
+  const { repo, entry } = await fixture(); const bytes = Buffer.alloc(1024 * 1024 + 1, 51);
+  const legacy = repo.objects.write("blob", bytes, entry.fileId, [entry.id]); writeFileSync(join(repo.root, "asset"), bytes);
+  repo.writeIndex([{ path: "asset", id: legacy, mode: "100644", fileId: entry.fileId }]);
+  repo.stage(["asset"]); assert.equal(repo.readIndex()[0].id, legacy); assert.equal(repo.objects.read(legacy).type, "blob");
+});
+
+
+test("recovery validation fences missing/replaced parents and changed leases inside native traversal", async () => {
+  const { repo } = await fixture(); const store = repo.objects;
+  for (const kind of ["missing-parent", "replaced-parent", "changed-lock"] as const) {
+    let tested = false; let refused = false; let acted = false; const interrupted = new Error("stop read-only recovery proof");
+    assert.throws(() => store.withRecoveryValidation(() => {
+      store.assertWriteLease();
+      if (!tested) {
+        tested = true;
+        if (kind === "changed-lock") {
+          const path = join(repo.controlDirectory, "objects.lock"); writeFileSync(path, "2147483647");
+          try { assert.throws(() => store.assertWriteLease(), { code: "store_locked" }); refused = true; } finally { rmSync(path); }
+        } else {
+          renameSync(repo.controlDirectory, repo.controlDirectory + "-saved");
+          if (kind === "replaced-parent") mkdirSync(repo.controlDirectory);
+          try { assert.throws(() => store.assertWriteLease(), { code: "store_locked" }); refused = true; }
+          finally { if (kind === "replaced-parent") rmSync(repo.controlDirectory, { recursive: true }); renameSync(repo.controlDirectory + "-saved", repo.controlDirectory); }
+        }
+      }
+      throw interrupted;
+    }, () => { acted = true; }), error => error === interrupted);
+    assert.equal(tested, true); assert.equal(refused, true); assert.equal(acted, false);
+  }
+});
+
+
+for (const kind of ["partial", "replaced"] as const) test(`staging preserves independent ownership for a ${kind} native output`, async () => {
+  const { repo, entry } = await fixture(); const path = "native-output";
+  const mutation = new WorktreeMutation(repo.root, ".pmvcs", repo.objects);
+  try { mutation.write(path, Buffer.from("native generated bytes"), 0o644, { objects: [entry.id] }); } finally { mutation.close(); }
+  if (kind === "partial") writePrivateJson(join(repo.controlDirectory, "outputs.json"), nativeOutputs(repo.controlDirectory).map(row => ({ ...row, complete: false })));
+  else { writeFileSync(join(repo.root, "replacement"), "independent replacement bytes"); renameSync(join(repo.root, "replacement"), join(repo.root, path)); }
+  repo.stage([path]); const staged = repo.readIndex().find(row => row.path === path)!;
+  assert.ok(derivations(repo.controlDirectory, () => {}).get(staged.id)!.independent.includes(staged.fileId!));
+  const bytes = readFileSync(join(repo.root, path));
+  assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), { code: kind === "partial" ? "erasure_dedup_conflict" : "worktree_path_changed" });
+  assert.equal(repo.objects.denials().length, 0); assert.deepEqual(readFileSync(join(repo.root, path)), bytes);
+});

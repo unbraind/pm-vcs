@@ -1,3 +1,4 @@
+import { derivations, clearDerivations, UncataloguedProvenance } from "./derivations.ts";
 import { nativeOutputs, outputBirth } from "./native-outputs.ts";
 import { parseFileLeaseAudit } from "./publication-leases.ts";
 import { payloadOwners } from "./payload-owners.ts";
@@ -5,7 +6,7 @@ import { accountErasureStorage, planErasureStorage, erasurePurge, parseErasurePu
 import { assertDestructionStorage, prepareDestruction, type DestructionReceipt } from "./destruction.ts";
 import { assertRefName } from "./refs.ts";
 import { createHash } from "node:crypto";
-import { manifestIdentity, recordRepresentations } from "./erasure-provenance.ts";
+import { manifestIdentities, recordRepresentations } from "./erasure-provenance.ts";
 import { erasureOperations } from "./oplog.ts";
 import { managedExports } from "./managed-exports.ts";
 import { fingerprint, fingerprintJournal, matchesFingerprints, readFingerprints, scanErasureStorage, erasureScanBoundary, ErasureStorageRefusal, type ErasureFingerprint } from "./erasure-scan.ts";
@@ -54,11 +55,11 @@ type InventoryObject =
   | { readonly type: Exclude<ObjectType, "manifest" | "conflict" | "tree">; readonly digest: string };
 
 /** Close one payload over all fragments and conflict alternatives, failing on incomplete inventory. */
-function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, InventoryObject>, store: ObjectStore): Set<ObjectId> {
+function payloadClosure(ids: readonly ObjectId[], inventory: ReadonlyMap<ObjectId, InventoryObject>, store: ObjectStore, check: () => void): Set<ObjectId> {
   const selected = new Set<ObjectId>();
-  const pending = [id];
+  const pending = [...ids];
   while (pending.length > 0) {
-    const current = pending.pop() as ObjectId;
+    check(); const current = pending.pop() as ObjectId;
     if (selected.has(current)) continue;
     selected.add(current);
     const object = inventory.get(current);
@@ -75,11 +76,12 @@ function payloadClosure(id: ObjectId, inventory: ReadonlyMap<ObjectId, Inventory
 }
 
 /** Refuse unsupported control storage and temporary metadata copies before reporting physical erasure. */
-function assertSupportedControl(control: string, observe?: (bytes: Buffer, binary: boolean) => void): void {
-  const supported = new Set(["objects", "refs", "leases", "destruction", "payload-owners", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "exports.json", "outputs.json", "remotes.json",
+function assertSupportedControl(control: string, observe?: (bytes: Buffer, binary: boolean) => void, check: () => void = () => {}): void {
+  const supported = new Set(["objects", "refs", "leases", "destruction", "payload-owners", "derivations", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "exports.json", "outputs.json", "remotes.json",
     "partial.json", "upload-roots.json", "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "objects.recovery.lock", "objects.generation", "erasure-verification.json", "erasure-purge.json", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
   for (const entry of readdirSync(control, { withFileTypes: true })) {
-    if (supported.has(entry.name) && (["objects", "refs", "leases", "destruction", "payload-owners"].includes(entry.name) ? !entry.isDirectory() : !entry.isFile())) {
+    check();
+    if (supported.has(entry.name) && (["objects", "refs", "leases", "destruction", "payload-owners", "derivations"].includes(entry.name) ? !entry.isDirectory() : !entry.isFile())) {
       throw new ObjectStoreError("unsupported_erasure_storage", "Control storage must retain its supported native kind.");
     }
     const nativeOwner = entry.isFile() && ["oplog.jsonl.lock", "instances.json.lock"].some(name => durability.processMarker(join(control, entry.name), join(control, name)));
@@ -178,6 +180,7 @@ function assertSupportedControl(control: string, observe?: (bytes: Buffer, binar
     }
   }
   nativeOutputs(control);
+  derivations(control, check);
   if (existsSync(join(control, "MERGE_STATE"))) {
     throw new ObjectStoreError("erasure_merge_in_progress", "Finish or abort the merge before permanent erasure.");
   }
@@ -205,7 +208,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
   const execute = (): ErasureReceipt => {
     const started = performance.now();
     /** Time exhaustion is a refusal before mutation and again before final certification. */
-    const check = (): void => assertVerificationBound("erasure", "time_ms", performance.now() - started, verificationLimits.erasureMs);
+    const check = (): void => { store.assertWriteLease(); assertVerificationBound("erasure", "time_ms", performance.now() - started, verificationLimits.erasureMs); };
     check();
     assertErasureOptions(options);
     if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new ObjectStoreError("bad_tombstone", "Erasure requires a valid audit timestamp.");
@@ -220,8 +223,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       const placeholder = hashObject("blob", Buffer.alloc(0));
       encodeTombstone({ version: 1, fileId, roots: [placeholder], objects: [placeholder], payloads: [], principal, timestamp: now.toISOString(), reason });
     }
-    for (const instance of instances) assertSupportedControl(instance.controlDirectory);
-    assertSupportedControl(control);
+    for (const instance of instances) assertSupportedControl(instance.controlDirectory, undefined, check);
+    assertSupportedControl(control, undefined, check);
     const objectRoots = [...new Set([store.storageRoot(), ...instances.map((instance) => join(instance.controlDirectory, "objects"))])];
     const purgeFiles = planErasureStorage(objectRoots);
     const excluded = new Set(purgeFiles.map(file => file.path));
@@ -229,6 +232,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     const inventory = new Map<ObjectId, InventoryObject>();
     const locations: { id: ObjectId; path: string }[] = [];
     for (const { id, path, object } of store.walkErasureInventory("all", excluded)) {
+      check();
       locations.push({ id, path });
       const digest = payloadDigest(object.payload);
       physical.set(path, id);
@@ -261,7 +265,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     if (roots.size === 0) for (const owner of ownership) if (owner.fileId === fileId && inventory.has(owner.id)) roots.add(owner.id);
     if (roots.size === 0) throw new ObjectStoreError("unknown_file", "No payload is attributable to this FileId.");
     const selected = new Set([...(existing?.tombstone.objects ?? []), ...ownership.filter(owner => owner.fileId === fileId).map(owner => owner.id)]);
-    for (const root of new Set([...roots, ...ownership.filter(owner => owner.fileId === fileId && inventory.has(owner.id)).map(owner => owner.id)])) for (const id of payloadClosure(root, inventory, store)) selected.add(id);
+    for (const id of payloadClosure([...new Set([...roots, ...ownership.filter(owner => owner.fileId === fileId && inventory.has(owner.id)).map(owner => owner.id)])], inventory, store, check)) selected.add(id);
     const physicalLocation = new Map(locations.map(location => [location.id, location.path]));
     /** Read verified native payloads even while resuming an authorized pending denial. */
     const readNative = (id: ObjectId) => {
@@ -269,45 +273,51 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       if (path === undefined) throw new ObjectStoreError("incomplete_erasure_inventory", "A native composition references an absent payload.");
       return store.readErasureObject(id, path);
     };
-    const logical = new Map<ObjectId, { id: ObjectId; digest: string }>();
-    if (existing === undefined) for (const [id, object] of inventory) {
-      if (object.type === "manifest") logical.set(id, manifestIdentity(id, readNative));
-    }
+    const catalog = derivations(control, check);
+    const unknown = [...inventory].filter(([id, object]) => ["blob", "record", "manifest", "link", "conflict"].includes(object.type) && !catalog.has(id)).map(([id]) => id).sort();
+    if (unknown.length > 0) throw new UncataloguedProvenance(unknown);
+    const logical = existing === undefined ? manifestIdentities([...inventory].filter(([_id, object]) => object.type === "manifest").map(([id]) => id), readNative, check) : new Map<ObjectId, { id: ObjectId; digest: string }>();
     const artifacts = instances.flatMap(instance => [...managedExports(instance.controlDirectory), ...nativeOutputs(instance.controlDirectory).map(output => ({ ...output, sha256: "" }))]);
-    const selectedDigests = new Set([...(existing?.tombstone.payloads ?? []), ...[...selected].flatMap(id => inventory.has(id) ? [inventory.get(id)!.digest] : [])]);
-    // Composition identity is native provenance: changing chunk layout does not create a new independent payload.
-    for (const id of [...selected]) {
-      const identity = logical.get(id);
-      if (identity !== undefined) { selected.add(identity.id); selectedDigests.add(identity.digest); }
+    const selectedDigests = new Set(existing?.tombstone.payloads ?? []);
+    const primary = new Set(selected);
+    const reverse = new Map<ObjectId, Set<ObjectId>>(); const aliases = new Map<string, Set<ObjectId>>();
+    /** Index each native source edge once, including catalogued transformations and structural wrappers. */
+    const edge = (source: ObjectId, result: ObjectId): void => { check(); const values = reverse.get(source) ?? new Set<ObjectId>(); values.add(result); reverse.set(source, values); };
+    /** Type-independent equivalence preserves the existing shared-byte ownership refusal. */
+    const alias = (digest: string, id: ObjectId): void => { const values = aliases.get(digest) ?? new Set<ObjectId>(); values.add(id); aliases.set(digest, values); };
+    for (const [id, record] of catalog) for (const source of record.sources) edge(source, id);
+    for (const [id, object] of inventory) {
+      check(); if (["blob", "record", "manifest", "link", "conflict"].includes(object.type)) alias(object.digest, id);
+      if (object.type === "manifest" || object.type === "conflict") for (const source of object.references) edge(source, id);
+      const identity = logical.get(id); if (identity !== undefined) { edge(identity.id, id); alias(identity.digest, id); }
     }
-    const rendered = new Set<ObjectId>();
-    let expanded = true;
-    while (expanded) {
-      expanded = false;
-      for (const id of [...selected]) if (inventory.get(id)?.type === "record" && !rendered.has(id)) {
-        rendered.add(id);
-        for (const bytes of recordRepresentations(readNative(id).payload)) {
-          const output = hashObject("blob", bytes);
-          if (!selected.has(output)) { selected.add(output); expanded = true; }
-          selectedDigests.add(payloadDigest(bytes));
-        }
-      }
-      for (const artifact of artifacts) if (!selected.has(artifact.id) && artifact.objects.some(id => selected.has(id))) { selected.add(artifact.id); if (artifact.sha256 !== "") selectedDigests.add(artifact.sha256); expanded = true; }
-      for (const [id, object] of inventory) {
-        if (selected.has(id)) continue;
-        const identity = logical.get(id);
-        const equivalent = ["blob", "record", "link", "manifest", "conflict"].includes(object.type) && selectedDigests.has(object.digest) || identity !== undefined && (selected.has(identity.id) || selectedDigests.has(identity.digest));
-        const wrapper = (object.type === "manifest" || object.type === "conflict") && object.references.some(reference => selected.has(reference));
-        if (!equivalent && !wrapper) continue;
-        selected.add(id); expanded = true;
-        if (equivalent && (object.type === "manifest" || object.type === "conflict")) for (const child of payloadClosure(id, inventory, store)) selected.add(child);
-        for (const child of selected) if (inventory.has(child)) selectedDigests.add(inventory.get(child)!.digest);
-      }
+    for (const artifact of artifacts) for (const source of artifact.objects) edge(source, artifact.id);
+    const queue = [...selected];
+    /** New derived roots are terminal absences under their precise historical FileId roles. */
+    const add = (id: ObjectId): void => { if (!selected.has(id)) { selected.add(id); queue.push(id); } };
+    for (const digest of selectedDigests) for (const id of aliases.get(digest) ?? []) add(id);
+    for (let offset = 0; offset < queue.length; offset++) {
+      check(); const id = queue[offset];
+      const object = inventory.get(id); const identity = logical.get(id);
+      if (object?.type === "manifest") for (const child of object.references) add(child);
+      const digests = [...(object === undefined ? [] : [object.digest]), ...(identity === undefined ? [] : [identity.digest])];
+      if (identity !== undefined) add(identity.id);
+      if (object?.type === "record") for (const bytes of recordRepresentations(readNative(id).payload)) { add(hashObject("blob", bytes)); digests.push(payloadDigest(bytes)); }
+      for (const digest of digests) { selectedDigests.add(digest); for (const equivalent of aliases.get(digest) ?? []) add(equivalent); aliases.delete(digest); }
+      for (const child of reverse.get(id) ?? []) add(child);
     }
+    const derived: { id: ObjectId; fileId: string }[] = [];
     for (const entry of entries) {
       if (entry.fileId === fileId) continue;
-      for (const id of payloadClosure(entry.id, inventory, store)) {
-        if (selected.has(id)) throw new ObjectStoreError("erasure_dedup_conflict", "Another FileId or legacy file owns bytes selected for erasure.");
+      // A native transformation can invalidate its new output under another FileId. Independently
+      // supplied shared objects still refuse; erasure never grants itself ownership by byte matching.
+      if (selected.has(entry.id)) {
+        check(); const record = catalog.get(entry.id);
+        const priorRole = existing?.tombstone.derived?.some(role => role.id === entry.id && role.fileId === entry.fileId) === true;
+        if (!priorRole && (primary.has(entry.id) || entry.fileId === undefined || record === undefined || !record.derived.includes(entry.fileId) || record.independent.includes(entry.fileId))) {
+          throw new ObjectStoreError("erasure_dedup_conflict", "Another FileId or legacy file owns bytes selected for erasure.");
+        }
+        derived.push({ id: entry.id, fileId: entry.fileId! });
       }
     }
     const authorization = erasurePurge(control, fileId, objectRoots, options.purgeUnaccounted === true, true);
@@ -377,7 +387,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     /** Native control records must not become a hidden selected-byte copy during cleanup either. */
     const diagnoseControl = (): void => {
       for (const instanceControl of new Set([control, ...instances.map(instance => instance.controlDirectory)])) {
-        assertSupportedControl(instanceControl, (bytes, binary) => observe(bytes, !binary));
+        assertSupportedControl(instanceControl, (bytes, binary) => observe(bytes, !binary), check);
       }
     };
     diagnoseControl();
@@ -413,6 +423,12 @@ export function eraseFile(repository: Repository, instances: readonly Repository
           if (outputBirth(leaf.stat) !== output.birth || output.complete && hashObject("blob", leaf.content) !== output.id) throw new ObjectStoreError("worktree_path_changed", "A native output was replaced; foreign bytes were preserved.");
           owned.add(output.path);
         }
+        for (const entry of index) {
+          if (entry.fileId === fileId || !selected.has(entry.id) || owned.has(entry.path)) continue;
+          // A derived identity does not authorize deleting an independently replaced or unregistered leaf.
+          if (mutation.inspectForErasure(entry.path) !== undefined) throw new ObjectStoreError("worktree_path_changed", "A derived materialization lacks current native ownership evidence; foreign bytes were preserved.");
+          owned.add(entry.path);
+        }
         for (const artifact of managedExports(instance.controlDirectory)) {
           if (!artifact.objects.some(id => selected.has(id))) continue;
           const leaf = mutation.inspectForErasure(artifact.path);
@@ -435,7 +451,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
           else { observe(Buffer.from(path)); observe(leaf.content); }
         }
       }
-      const tombstone = existing?.tombstone ?? { version: 1 as const, fileId, roots: [...roots], objects: [...selected], payloads: [...selectedDigests], principal, timestamp: now.toISOString(), reason };
+      const tombstone = existing?.tombstone ?? { version: 1 as const, fileId, roots: [...roots], objects: [...selected], ...(derived.length === 0 ? {} : { derived }), payloads: [...selectedDigests], principal, timestamp: now.toISOString(), reason };
       const payload = encodeTombstone(tombstone);
       const id = hashObject("tombstone", payload);
       const denial: ErasureDenial = { id, tombstone, pending: true };
@@ -489,6 +505,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
         deletion.remove(path); directories.add(dirname(path)); erasureScanBoundary.visit("object-deleted");
       }
       const objectReceipt = deletion.finish();
+      clearDerivations(control, selected, catalog, check);
       for (const instance of instances) {
         const outputs = nativeOutputs(instance.controlDirectory);
         const remaining = outputs.filter(output => !selected.has(output.id) && !output.objects.some(id => selected.has(id)));
@@ -502,8 +519,8 @@ export function eraseFile(repository: Repository, instances: readonly Repository
       erasureScanBoundary.visit("storage-verified");
       erasureScanBoundary.visit("completed");
       erasureScanBoundary.visit("receipt");
-      for (const instance of instances) assertSupportedControl(instance.controlDirectory);
-      assertSupportedControl(control);
+      for (const instance of instances) assertSupportedControl(instance.controlDirectory, undefined, check);
+      assertSupportedControl(control, undefined, check);
       diagnoseControl();
       check(); diagnose(new Set(), false);
       const certified = { purgeReceipt: purge.receipt(), storage: accountStorage(true) };

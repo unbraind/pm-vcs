@@ -85,9 +85,10 @@ export function readForgeReview(repository: Repository, revision: string): { doc
 /** Store the review and outcome as native records with reachable append-only commit history. */
 function writeReview(repository: Repository, document: RecordDocument, outcome: RecordDocument, parent: string | null, principal: ReceiverPrincipal): string {
   const store = repository.objects;
+  const sources = parent === null ? [] : readTree(store, readCommit(store, parent).tree).map(entry => entry.id);
   const tree = writeTree(store, [
-    { name: "review.json", mode: "100644", id: store.write("record", encodeRecord(document)) },
-    { name: "outcome.json", mode: "100644", id: store.write("record", encodeRecord(outcome)) },
+    { name: "review.json", mode: "100644", id: store.write("record", encodeRecord(document), undefined, sources) },
+    { name: "outcome.json", mode: "100644", id: store.write("record", encodeRecord(outcome), undefined, sources) },
   ]);
   const author = { name: principal.principal.replace(/[<>]/g, "_"), email: "review@example.invalid", timestamp: Date.now(), timezoneOffsetMinutes: 0 };
   return writeCommit(store, { tree, parents: parent === null ? [] : [parent], author, committer: author, message: "Forge review update\n" });

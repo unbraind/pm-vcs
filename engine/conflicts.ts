@@ -76,8 +76,8 @@ export function conflictReferences(unit: ConflictSides): ObjectId[] {
 }
 
 /** Store an absent-or-present field without confusing deletion with a JSON null. */
-export function fieldSide(store: ObjectStore, value: RecordValue | undefined, fileId?: string): ObjectId {
-  return store.write("record", encodeRecord(value === undefined ? {} : { value }), fileId);
+export function fieldSide(store: ObjectStore, value: RecordValue | undefined, fileId?: string, sources: readonly ObjectId[] = []): ObjectId {
+  return store.write("record", encodeRecord(value === undefined ? {} : { value }), fileId, sources);
 }
 
 /** Report one row per unresolved unit, omitting side payloads from routine output. */
@@ -130,7 +130,7 @@ export function carryConflicts(store: ObjectStore, ids: readonly ObjectId[] | un
       return line + shift;
     };
     const start = boundary(unit.start, false);
-    return store.write("conflict", encodeConflict({ ...unit, start, end: Math.max(start, boundary(unit.end, true)) }), fileId);
+    return store.write("conflict", encodeConflict({ ...unit, start, end: Math.max(start, boundary(unit.end, true)) }), fileId, [id, previous, next]);
   });
 }
 
@@ -193,7 +193,7 @@ export function resolvePayload(store: ObjectStore, entry: { readonly id: ObjectI
     payload = Buffer.from(lines.join("\n") + (lines.length > 0 && terminated ? "\n" : ""), "utf8");
   } else throw new ObjectStoreError("conflict_payload_mismatch", "Recorded conflicts require a record or text payload.");
   const remaining = entry.conflicts!.filter((id) => !selected.some((entry) => entry.id === id));
-  return { id: store.write(object.type, payload, entry.fileId), ...(remaining.length > 0 ? { conflicts: remaining } : {}) };
+  return { id: store.write(object.type, payload, entry.fileId, [entry.id, ...entry.conflicts!]), ...(remaining.length > 0 ? { conflicts: remaining } : {}) };
 }
 
 /** Identify an unresolved origin independently of the projection coordinates that ordinary edits can shift. */
@@ -234,10 +234,10 @@ export function competingResolutions(
         const record = decodeRecord(store.readTyped(id, "record"));
         return Object.hasOwn(record, unit.field) ? record[unit.field] : undefined;
       };
-      const ourSide = fieldSide(store, value(ours.id), ours.fileId);
-      const theirSide = fieldSide(store, value(theirs.id), ours.fileId);
+      const ourSide = fieldSide(store, value(ours.id), ours.fileId, [ours.id]);
+      const theirSide = fieldSide(store, value(theirs.id), ours.fileId, [theirs.id]);
       if (ourSide === theirSide) continue;
-      dispute = { kind: "field", field: unit.field, base: fieldSide(store, value(base.id), ours.fileId), ours: ourSide, theirs: theirSide };
+      dispute = { kind: "field", field: unit.field, base: fieldSide(store, value(base.id), ours.fileId, [base.id]), ours: ourSide, theirs: theirSide };
       fields.push(unit.field);
     } else {
       const mapped = (payload: ObjectId): Extract<ConflictUnit, { kind: "text" }> =>
@@ -251,7 +251,7 @@ export function competingResolutions(
         const text = store.readTyped(payload, "blob").toString("utf8");
         const range = mapped(payload);
         const lines = splitLines(text);
-        return { id: store.write("blob", Buffer.from(lines.slice(range.start, range.end).join("\n")), ours.fileId),
+        return { id: store.write("blob", Buffer.from(lines.slice(range.start, range.end).join("\n")), ours.fileId, [payload]),
           ending: range.end === lines.length ? text.endsWith("\n") : true };
       };
       const before = side(base.id); const left = side(ours.id); const right = side(theirs.id);
@@ -260,7 +260,7 @@ export function competingResolutions(
       dispute = { kind: "text", start: position.start, end: position.end, base: before.id, ours: left.id, theirs: right.id,
         ...(final ? { endings: { base: before.ending, ours: left.ending, theirs: right.ending } } : {}) };
     }
-    const conflict = store.write("conflict", encodeConflict(dispute), ours.fileId);
+    const conflict = store.write("conflict", encodeConflict(dispute), ours.fileId, [base.id, ours.id, theirs.id]);
     const projection = resolvePayload(store, { ...result, fileId: ours.fileId, conflicts: [conflict] }, { take: "ours" });
     const carried = carryConflicts(store, [...(result.conflicts ?? []), conflict], result.id, projection.id, ours.fileId);
     result = { id: projection.id, conflicts: carried };

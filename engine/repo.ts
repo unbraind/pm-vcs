@@ -1,3 +1,4 @@
+import { nativeOutputs, outputBirth } from "./native-outputs.ts";
 import type { BigIntStats } from "node:fs";
 import { durability } from "./durability.ts";
 import { withPublicationLock, publicationRootIds, validatePublicationIds } from "./publication.ts";
@@ -686,6 +687,7 @@ export class Repository {
       ? [...new Set([...listWorkingTree(this.root, CONTROL_DIRECTORY, rules), ...index.keys()])]
       : paths.map((path) => normalizeRepoPath(this.root, path));
     const layers = this.layerPaths();
+    const outputs = new Map(nativeOutputs(this.controlDirectory).map(output => [output.path, output]));
     const denied = this.objects.denials();
     const changed: string[] = [];
     for (const path of targets) {
@@ -779,13 +781,21 @@ export class Repository {
           fileId = randomBytes(16).toString("hex");
         }
       }
-      if (chunked || retainedId !== undefined) {
-        const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
-        if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
-          throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
-        }
-      } else if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
-      else this.stageContent(path, content, fileId);
+      // A denied historical projection supplies no bytes to a fresh independent working-file edit.
+      if (conflictSource !== undefined && this.objects.denial(conflictSource.id) !== undefined) conflictSource = undefined;
+      const sources = conflictSource === undefined ? [] : [conflictSource.id];
+      const output = outputs.get(path);
+      if (output?.complete === true && outputBirth(lstatSync(absolute, { bigint: true })) === output.birth
+        && (chunked ? blobFileContentId(absolute) : hashObject("blob", content)) === output.id) sources.push(...output.objects);
+      this.objects.withDerivation(sources, () => {
+        if (chunked || retainedId !== undefined) {
+          const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
+          if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
+            throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
+          }
+        } else if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
+        else this.stageContent(path, content, fileId);
+      });
       const conflicts = conflictSource === undefined ? undefined : carryConflicts(this.objects, conflictSource.conflicts, conflictSource.id, id, fileId);
       index.set(path, { path, id, mode, fileId, ...(conflicts === undefined ? {} : { conflicts }), ...(copiedFrom === undefined ? {} : { copiedFrom }),
         ...(stat === undefined ? {} : { stat }) });
@@ -1111,7 +1121,7 @@ export class Repository {
       if (existsSync(join(this.root, path)) && previous === undefined) throw new ObjectStoreError("link_collision", "Descriptor path already holds untracked content.");
       if (previous !== undefined && this.status(readWorkingFile, false).unstaged.some(/** Preserve edits to an existing descriptor. */ (entry) => entry.path === path)) throw new ObjectStoreError("link_collision", "Descriptor has unstaged edits.");
       const fileId = previous?.fileId ?? randomBytes(16).toString("hex");
-      const id = this.objects.write("link", payload, fileId);
+      const id = this.objects.write("link", payload, fileId, previous === undefined ? [] : [previous.id]);
       const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
         mutation.write(path, payload, 0o644, { objects: [id], fileId });
