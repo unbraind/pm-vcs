@@ -1,4 +1,4 @@
-import { prepareNamespaceDestruction, type DestructionPlan } from "./destruction.ts";
+import { prepareNamespaceDestruction, DestructionRefusal, type DestructionPlan } from "./destruction.ts";
 import { durability } from "./durability.ts";
 /** Pinned or verified working-tree mutations; portable pathname checks cannot serialize a rename. */
 import fs, { type BigIntStats } from "node:fs";
@@ -160,8 +160,8 @@ export class WorktreeMutation {
     this.verifyLeaf(parent, stat, erasure);
     try {
       durability.unlink(parent.address);
-    } catch {
-      this.changed();
+    } catch (error) {
+      this.destructiveFailure(error);
     }
     this.verify(parent.path);
     if (fs.lstatSync(parent.address, { throwIfNoEntry: false }) !== undefined) this.changed();
@@ -237,7 +237,7 @@ export class WorktreeMutation {
     else {
       let fd: number;
       try { fd = fs.openSync(parent.address, fs.constants.O_RDONLY | worktreeMutationCapabilities.noFollow()); }
-      catch { this.changed(); }
+      catch (error) { this.destructiveFailure(error); }
       try {
         if (!this.same(stat, fs.fstatSync(fd, { bigint: true }))) this.changed();
         content = fs.readFileSync(fd);
@@ -254,14 +254,20 @@ export class WorktreeMutation {
     this.unlink(parent, expected, true);
   }
 
+  /** Preserve typed recovery/ownership refusals while retaining the working-tree identity contract. */
+  private destructiveFailure(error: unknown): never {
+    if (error instanceof DestructionRefusal && error.code !== "destructive_target_changed") throw error;
+    this.changed();
+  }
+
   /** Freeze FileId-owned leaves; retries preserve original inode authority and never adopt a replacement. */
   planErasure(fileId: string, paths: ReadonlyMap<string, BigIntStats>, resume = false): DestructionPlan {
     const requests = [...paths].map(([path, expected]) => { const parent = this.parent(path, false); if (parent === undefined) this.changed(); this.verifyLeaf(parent, expected, true); return { path: join(this.root, ...path.split("/")), address: parent.address, expected }; });
     let plan: DestructionPlan;
-    try { plan = prepareNamespaceDestruction(join(this.root, ".erasure-anchor"), `obliterate-worktree:${fileId}`, requests, resume); } catch { this.changed(); }
+    try { plan = prepareNamespaceDestruction(join(this.root, ".erasure-anchor"), `obliterate-worktree:${fileId}`, requests, resume); } catch (error) { this.destructiveFailure(error); }
     return { ...plan, remove: (absolute) => {
-      try { plan.remove(absolute); } catch { this.changed(); }
-    }, finish: () => { try { return plan.finish(); } catch { this.changed(); } } };
+      try { plan.remove(absolute); } catch (error) { this.destructiveFailure(error); }
+    }, finish: () => { try { return plan.finish(); } catch (error) { this.destructiveFailure(error); } } };
   }
 
   /** Prune only captured empty ordinary directories with non-recursive, verified rmdir. */
@@ -276,7 +282,7 @@ export class WorktreeMutation {
     }
     const requests = [...selected].map(path => { const slash = path.lastIndexOf("/"); const parent = slash === -1 ? "" : path.slice(0, slash); return { path: join(this.root, ...path.split("/")), address: join(this.directories.get(parent)!.address, path.slice(slash + 1)), directory: true }; });
     let deletion: DestructionPlan;
-    try { deletion = prepareNamespaceDestruction(join(this.root, ".prune-anchor"), `prune:${directory}`, requests, false, "eligibility_changed"); } catch { this.changed(); }
+    try { deletion = prepareNamespaceDestruction(join(this.root, ".prune-anchor"), `prune:${directory}`, requests, false, "eligibility_changed"); } catch (error) { this.destructiveFailure(error); }
     for (const absolute of deletion.paths) {
       const path = relative(this.root, absolute).split(sep).join("/");
       if (!this.directories.has(path)) { deletion.remove(absolute); continue; }
@@ -287,8 +293,8 @@ export class WorktreeMutation {
       this.verify(path);
       try {
         deletion.remove(absolute);
-      } catch {
-        this.changed();
+      } catch (error) {
+        this.destructiveFailure(error);
       }
       this.verify(parent);
       if (fs.lstatSync(join(this.directories.get(parent)!.address, name), { throwIfNoEntry: false }) !== undefined) this.changed();
@@ -296,7 +302,7 @@ export class WorktreeMutation {
       if (fd !== undefined) fs.closeSync(fd);
       this.directories.delete(path);
     }
-    try { deletion.finish(); } catch { this.changed(); }
+    try { deletion.finish(); } catch (error) { this.destructiveFailure(error); }
     this.verify(directory);
     return fs.readdirSync(this.directories.get(directory)!.address).length === 0;
   }

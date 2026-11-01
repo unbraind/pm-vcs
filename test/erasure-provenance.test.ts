@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import { spawnSync } from "node:child_process";
 import { testEnvironment } from "./helpers/test-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
@@ -13,7 +14,6 @@ import { payloadOwners } from "../engine/payload-owners.ts";
 import { objectFiles } from "../engine/object-files.ts";
 import { encodePagedManifest } from "../engine/manifest-pages.ts";
 import { PublicationLeases } from "../engine/publication-leases.ts";
-import "./helpers/isolate-session.ts";
 /** Provenance receipts deliberately distinguish native derivation from user-authored transforms. */
 import assert from "node:assert/strict";
 import fs, { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";

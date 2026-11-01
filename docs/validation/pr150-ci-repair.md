@@ -100,3 +100,5 @@ streaming output buffer with a whole-file allocation fails the existing read tes
 at 524,292 bytes against the unchanged 131,072-byte bound; restoring the allocation
 passes. These three failing controls and restored passes are additional to the
 twenty-one mutation groups above.
+
+The streaming buffer measurement above is conditional on `--no-concurrent-array-buffer-sweeping`; it does not certify default-runtime allocation or total RSS. Native provenance metadata has its separately documented object/edge bounds.

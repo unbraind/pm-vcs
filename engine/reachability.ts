@@ -14,11 +14,11 @@ export function reachableObjects(store: ObjectStore, roots: Iterable<ObjectId>, 
     visited.add(id);
     if (partial?.promised.includes(id) === true && !store.has(id)) continue;
     const object = store.read(id);
-    if (object.type === "commit") { const commit = decodeCommit(object.payload); pending.push(commit.tree, ...commit.parents.filter(parent => partial?.shallow.includes(id) !== true || store.has(parent))); }
-    else if (object.type === "tree") pending.push(...decodeTree(object.payload).flatMap(entry => [entry.id, ...(entry.conflicts ?? [])]));
-    else if (object.type === "conflict") pending.push(...conflictReferences(decodeConflict(object.payload)));
-    else if (object.type === "manifest") { const manifest = decodeManifest(object.payload); pending.push(...(manifest.pages ?? manifest.fragments).map(entry => entry.id)); }
-    else if (object.type === "series") { const series = decodeSeries(object.payload); pending.push(series.base, ...series.patches.map(patch => patch.commit)); }
+    if (object.type === "commit") { const commit = decodeCommit(object.payload); pending.push(commit.tree); for (const parent of commit.parents) if (partial?.shallow.includes(id) !== true || store.has(parent)) pending.push(parent); }
+    else if (object.type === "tree") for (const entry of decodeTree(object.payload)) { check(); pending.push(entry.id); for (const conflict of entry.conflicts ?? []) pending.push(conflict); }
+    else if (object.type === "conflict") { for (const source of conflictReferences(decodeConflict(object.payload))) pending.push(source); }
+    else if (object.type === "manifest") { const manifest = decodeManifest(object.payload); for (const entry of manifest.pages ?? manifest.fragments) pending.push(entry.id); }
+    else if (object.type === "series") { const series = decodeSeries(object.payload); pending.push(series.base); for (const patch of series.patches) pending.push(patch.commit); }
   }
   check(); return visited;
 }

@@ -12,4 +12,4 @@ destructionBoundary.visit = (step, path) => {
   }
   if ((mode === "replayed" && step === "deleted" || mode === "acknowledged" && step === "progress-persisted") && readFileSync(join(repo.controlDirectory, name!), "utf8").trim() === next) process.kill(process.pid, "SIGKILL");
 };
-repo.refs.compareAndSwap(name!, expected === "null" ? null : expected!, next!);
+repo.refs.compareAndSwap(name!, expected === "null" ? null : expected!, next === "null" ? null : next!);

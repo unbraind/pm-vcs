@@ -155,8 +155,8 @@ the source identity before their first explicit identity creation. Self-host arc
 remain deterministic.
 
 The supported erasure backend accounts for complete loose zlib objects and indexed
-packs. Every regular object-store file must parse completely; foreign, renamed,
-partial and old temporary files return `unverifiable`. Explicit `--purge-unaccounted`
+packs. Every regular object-store file must parse completely; without explicit purge,
+foreign, renamed, partial and old temporary files return `unverifiable`. Explicit `--purge-unaccounted`
 authorizes identity-bound deletion with a receipt and complete re-verification;
 see [accountability and purge](indexed-packs.md#physical-erasure-verification).
 Denial
@@ -245,7 +245,9 @@ Direct hostile filesystem mutation and writers bypassing the store lease are out
 the authorized application protocol. Operators must remove ambiguous retained copies
 explicitly before retrying; the engine never silently deletes an unrelated FileId.
 
-Physical erasure uses the shared durability helper: files are fsynced before
+The denial-first ordering protects process interruption. Its power-loss guarantee
+requires POSIX directory fsync; Windows retains the weaker namespace durability
+limit below. Physical erasure uses the shared durability helper: files are fsynced before
 publication and directories after namespace changes where supported. Windows uses
 synchronous namespace acknowledgment after file fsync, with the documented weaker
 power-loss guarantee; see [platform durability](indexed-packs.md#concurrent-readers-and-platform-durability).
@@ -576,14 +578,19 @@ independent true-global CLI proof remain historical and are not renewed here.
 
 ### Provenance across garbage collection
 
-The clone-private `pm-vcs-derivation-2` certificate is self-contained: its sorted,
+The clone-private `pm-vcs-derivation-3` certificate is self-contained: its sorted,
 deduplicated `sources` contain every transitive native input identity, including
 intermediate objects, manifest pages and fragments. `unknown` retains any ancestry
 whose native origin could not be established. GC retains these metadata records
 even when it collects their objects. Erasure never needs an intermediate payload
-to follow a version-two certificate.
+to follow a version-three certificate. `whole` records a manifest's reconstructed
+whole-blob identity or the literal payload identity of a record, link or conflict, `members` retains its native composition dependencies, and a
+virtual whole-blob certificate keeps the reverse representation links. Both sides
+survive GC. Selected whole content therefore selects every equivalent container,
+fragment/page set and native descendant, including registered worktree outputs.
+`whole: false` is an incomplete primary proof and cannot certify erasure.
 
-Before a sweep, GC upgrades version-one direct-parent records while their native
+Before a sweep, GC upgrades version-one direct-parent and version-two records while their native
 structures are still available. Erasure also upgrades them before granting any
 deletion authority. A missing old object, an uncatalogued payload ancestor, or a
 missing input certificate makes its derived objects unknown; erasure refuses with
@@ -601,3 +608,22 @@ graphs, and 300 seconds; reaching a limit grants no complete certificate. These
 limits are separate from composition hashing and the diagnostic residue audit.
 Only authorized erasure retires selected certificates, after recoverable bytes
 and their output registrations have been removed. Normal GC never retires them.
+
+
+Whole-content equivalence is recorded by the shared native object writer and all
+fixed/CDC buffer and descriptor fragment producers. Fragment publication records
+the source whole identity before recoverable fragment bytes; completed manifests
+retain both that identity and every structural input. Direct native manifests
+compute their reconstructed identity within the primary composition bounds.
+Re-splitting content uses these same producers. Pack, repack and unpack retain
+object IDs and their certificates. Bundle import, clone/fetch and hydration use
+the common arrival path, which records native payload and manifest equivalence without
+inventing clone-private origin certificates for imported payloads. An unknown
+imported origin remains unknown and refuses erasure; equivalence alone grants
+no deletion authority over independently owned data.
+
+Equivalent content is not ownership authority. An independent FileId's fragment
+or manifest representation retains its independent role and the existing
+`erasure_dedup_conflict` refusal. Whole-content edges are recorded separately from
+explicit native transformation inputs; they cannot silently relabel an
+independently supplied file as a derived output.

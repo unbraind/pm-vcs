@@ -1,3 +1,4 @@
+import { ObjectStoreError } from "./object-error.ts";
 /** Deterministic ownership for every descriptor opened by object storage and durability. */
 import fs from "node:fs";
 
@@ -19,7 +20,9 @@ export const objectFiles = {
   open(path: string, flags: string | number, mode?: number): ObjectFile {
     const fd = fs.openSync(path, flags, mode);
     let closed = false;
-    const file: ObjectFile = { fd,
+    const file: ObjectFile = {
+      /** A retired descriptor number may already belong to another owner. */
+      get fd() { if (closed) throw new ObjectStoreError("object_handle_closed", "The object descriptor is already closed."); return fd; },
       /** Retire ownership before the native close, preventing double closure on error paths. */
       close() { if (closed) return; closed = true; objectFiles.active.delete(file); fs.closeSync(fd); },
     };

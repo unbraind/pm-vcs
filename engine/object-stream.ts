@@ -5,7 +5,9 @@ import { Inflate } from "pako";
 import { basename, dirname, resolve } from "node:path";
 import { ObjectStore, ObjectStoreError, type ObjectLocation, type ObjectId, type ObjectType } from "./objects.ts";
 
-/** Stream verified payload chunks without materializing compressed or inflated object bytes. */
+/** Stream verified payload chunks without materializing compressed or inflated object bytes.
+ * A supplied location stays caller-owned until first next(); close it if never started. Public store iterators acquire lazily.
+ */
 export function objectPayloadChunks(path: string | ObjectLocation, id: ObjectId, type: ObjectType, timeoutMs = 30_000): Generator<Buffer> {
   return verifiedPayloadChunks(typeof path === "string" ? resolve(path) : path, id, type, timeoutMs);
 }

@@ -78,5 +78,5 @@ export function benchmarkPhase6(tracker: string, byteLength: number) {
       reusedChunkRatio: reused.length / chunks.length, reusedByteRatio: reused.reduce((sum, part) => sum + part.fragment.length, 0) / byteLength,
       rangeBytes: 4096, rangeSamples: latencies.length, rangeMedianMs: latencies[10], rangeP95Ms: latencies[19],
       gcCandidateBytes: dry.candidateBytes, gcReclaimedBytes: applied.reclaimedBytes, retainedGenerations: 2 };
-  } finally { durability.remove(scratch, { recursive: true, force: true }); }
+  } finally { durability.discardTemporary(scratch); }
 }

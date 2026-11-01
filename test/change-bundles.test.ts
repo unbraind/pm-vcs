@@ -447,6 +447,12 @@ test("CLI handlers use explicit input, external signing keys and independent imp
   assert.equal((await run("export", [local], { input: request, keyFile })).errorMessage, undefined);
   assert.match((await run("export", [output], { input: request, keyFile })).errorMessage!, /new writable output/);
   assert.deepEqual(readFileSync(output), written);
+  const exportRegistry = readFileSync(join(f.repo.controlDirectory, "exports.json"));
+  writeFileSync(join(f.repo.controlDirectory, "exports.json"), "foreign invalid metadata");
+  const refusedOutput = join(f.root, "refused.bundle");
+  assert.match((await run("export", [refusedOutput], { input: request, keyFile })).errorMessage!, /managed exports/u);
+  assert.equal(existsSync(refusedOutput), false);
+  writeFileSync(join(f.repo.controlDirectory, "exports.json"), exportRegistry);
   const inspected = await run("inspect", [output], { authorization }, f.receiver.root);
   assert.equal(inspected.errorMessage, undefined); assert.equal((inspected.result as { changes: number }).changes, 2);
   assert.equal((await run("import", [output], { authorization, expected }, f.receiver.root)).errorMessage, undefined);

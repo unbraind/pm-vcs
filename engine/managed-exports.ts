@@ -1,7 +1,8 @@
+import { nativeOutputs, outputBirth } from "./native-outputs.ts";
 /** Explicit local ownership for CLI-written native archives; caller-owned transport buffers are outside this registry. */
 import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseBundle } from "./bundle.ts";
 import { writePrivateJson } from "./composition.ts";
 import { hashObject, isObjectId, ObjectStoreError, readControlJson, type ObjectId } from "./objects.ts";
@@ -32,7 +33,7 @@ export function writeBundleFile(repository: Repository, destination: string, pro
   return repository.objects.withWriteLock(() => {
     const bytes = produce();
     const path = relative(repository.root, resolve(destination)).split(sep).join("/");
-    if (path.startsWith("../") || path === "..") { writeFileSync(destination, bytes, exclusive ? { flag: "wx", mode: 0o600 } : undefined); return bytes.length; }
+    if (isAbsolute(path) || /^[a-zA-Z]:/.test(path) || path.startsWith("../") || path === "..") { writeFileSync(destination, bytes, exclusive ? { flag: "wx", mode: 0o600 } : undefined); return bytes.length; }
     const exports = managedExports(repository.controlDirectory);
     const mutation = new WorktreeMutation(repository.root, ".pmvcs", repository.objects);
     try {
@@ -44,7 +45,8 @@ export function writeBundleFile(repository: Repository, destination: string, pro
       const record = { path, id: hashObject("blob", bytes), sha256: createHash("sha256").update(bytes).digest("hex"), objects };
       // Validate the path with the same pinned writer that will publish it.
       const current = mutation.inspectForErasure(path);
-      if (old !== undefined && current !== undefined && createHash("sha256").update(current.content).digest("hex") !== old.sha256) throw new ObjectStoreError("worktree_path_changed", "A managed export was replaced; foreign bytes were preserved.");
+      const interrupted = old !== undefined && current !== undefined && nativeOutputs(repository.controlDirectory).some(output => output.path === path && output.id === old.id && !output.complete && output.birth === outputBirth(current.stat));
+      if (!interrupted && old !== undefined && current !== undefined && createHash("sha256").update(current.content).digest("hex") !== old.sha256) throw new ObjectStoreError("worktree_path_changed", "A managed export was replaced; foreign bytes were preserved.");
       if (path.split("/").some(part => ["", ".", "..", ".pmvcs", ".git"].includes(part)) || path.includes("\\") || path.includes(":")) throw new ObjectStoreError("export_path_owned", "Use an ordinary repository-local export path.");
       writePrivateJson(join(repository.controlDirectory, "exports.json"), [...exports.filter(entry => entry.path !== path), record]);
       mutation.write(path, bytes, 0o600, { objects: objects.length === 0 ? [record.id] : objects });

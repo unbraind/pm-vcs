@@ -71,7 +71,7 @@ test("native namespace power cuts at EVERY metadata publication boundary converg
 const sequences = ["ref-retirement","ref-replacement","compact","unpack","repack","gc-loose","gc-packed","lease-cleanup","prune","oplog","deep-intent","recovery","obliterate","obliterate-packed","directory-recovery","publication-recovery","legacy-publication-recovery","process-stage-recovery","ref-cas-recovery","ref-cas-cancel"] as const;
 type Sequence = typeof sequences[number];
 /** One prepared native store below the real tracker exercises a complete engine write-then-retire path. */
-function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep?:string):{steps:string[];cuts:number[]}{
+function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep?:string):{steps:string[];cuts:number[];interruptedAt:string|undefined}{
  if(template!==undefined)cpSync(template,root,{recursive:true,filter:path=>path!==join(template,".pmvcs/destruction")});
  const repo=template===undefined?Repository.init(root):Repository.open(root);const bytes=Buffer.from("retained native power object");const live=hashObject("blob",bytes);const garbage=hashObject("blob",Buffer.from("discardable native power object"));
  if(template===undefined){repo.objects.write("blob",bytes);repo.refs.compareAndSwap("refs/metadata/live",null,live);repo.objects.write("blob",Buffer.from("discardable native power object"));}const ref="refs/metadata/temporary";
@@ -86,7 +86,7 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
  let fileId="";if(template===undefined&&erasing){writeFileSync(join(root,"asset"),"selected power payload 917364852");repo.stage(["asset"]);fileId=repo.readIndex()[0].fileId!;repo.setAuthority("fixture","read-power","erase-power");if(kind==="obliterate-packed")repo.objects.compact();}
  if(template!==undefined&&erasing)fileId=repo.readIndex()[0].fileId!;
  const selected=erasing?repo.readIndex()[0].id:undefined;
- const owned=ledger(repo.controlDirectory);rmSync(owned,{recursive:true,force:true});if(cut<0)return{steps:[],cuts:[]};
+ const owned=ledger(repo.controlDirectory);rmSync(owned,{recursive:true,force:true});if(cut<0)return{steps:[],cuts:[],interruptedAt:undefined};
  const recoveringDirectory=join(repo.objects.storageRoot(),"packs",`job-${"d".repeat(24)}`);const recoveringPublication=join(repo.controlDirectory,"recover-publication.json");
  if(kind==="directory-recovery"){mkdirSync(recoveringDirectory,{recursive:true});destructionBoundary.visit=step=>{if(step==="intent-persisted")throw new Error("directory intent interruption");};try{assert.throws(()=>durability.removeDirectory(recoveringDirectory));}finally{destructionBoundary.visit=()=>{};}}
  if(kind==="publication-recovery"||kind==="legacy-publication-recovery"){let crash=true;destructionBoundary.visit=step=>{if(crash&&step==="deleted"&&existsSync(recoveringPublication)){crash=false;throw new Error("publication interruption");}};try{assert.throws(()=>writePrivateJson(recoveringPublication,{value:1}));}finally{destructionBoundary.visit=()=>{};}
@@ -132,7 +132,7 @@ function sequence(root:string,kind:Sequence,cut:number,template?:string,packStep
   if(kind==="publication-recovery"||kind==="legacy-publication-recovery")assert.deepEqual(JSON.parse(readFileSync(recoveringPublication,"utf8")),{value:2});
  }catch(error){throw new Error(`${kind} power boundary ${cut}/${trace.length||power.trace.length} (${power.trace[cut-1]??"probe"}) failed`,{cause:error});}
  finally{packBoundary.visit=()=>{};power.close();rmSync(owned,{recursive:true,force:true});}
- return {steps:trace,cuts};
+ return {steps:trace,cuts,interruptedAt:cut>0?trace[cut-1]:undefined};
 }
 
 test("power-model probes exercise EVERY engine publication and retirement sequence",async()=>{
@@ -192,7 +192,7 @@ test("released source-keyed publication receipts reconcile under their original 
 
 
 test("interrupted ref retirement resolves the historical lease even when the ref already disappeared",async()=>{
- const root=await fixture();const template=join(root,"template");sequence(template,"ref-retirement",-1);const probe=sequence(join(root,"probe"),"ref-retirement",0,template);const unlinks=probe.steps.flatMap((step,index)=>step==="file-unlinked"?[index]:[]);assert.ok(unlinks.length>1);sequence(join(root,"fixed-cut"),"ref-retirement",unlinks.at(-2)!,template);
+ const root=await fixture();const template=join(root,"template");sequence(template,"ref-retirement",-1);const probe=sequence(join(root,"probe"),"ref-retirement",0,template);const unlinks=probe.steps.flatMap((step,index)=>step==="file-unlinked"?[index]:[]);assert.ok(unlinks.length>1);const result=sequence(join(root,"fixed-cut"),"ref-retirement",unlinks.at(-2)!+1,template);assert.equal(result.interruptedAt,"file-unlinked");
 });
 
 

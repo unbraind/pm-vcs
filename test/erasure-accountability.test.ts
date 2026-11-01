@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { syncBuiltinESMExports } from "node:module";
 import { spawnSync } from "node:child_process";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
-import fs, { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import fs, { utimesSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import crypto, { createHash } from "node:crypto";
 import { deflateSync, inflateSync, inflateRawSync, constants as zlibConstants } from "node:zlib";
@@ -189,7 +189,7 @@ test("every truncated prefix and overwritten byte is classified by complete pars
 test("purge authorization resumes exactly its planned identity and preserves a repaired native peer",async()=>{
  const f=await fixture();const root=f.repo.objects.storageRoot();const path=place(root,"planned",Buffer.from("unaccounted planned bytes"));const stat=fs.lstatSync(path,{bigint:true});
  f.repo.objects.withWriteLock(()=>{
-  const candidate={path,fileClass:"object-root" as const,sha256:createHash("sha256").update(readFileSync(path)).digest("hex"),bytes:Number(stat.size),identity:`${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`};
+  const candidate={path,fileClass:"object-root" as const,sha256:createHash("sha256").update(readFileSync(path)).digest("hex"),bytes:Number(stat.size),identity:`${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`};
   const unauthorized=erasurePurge(f.repo.controlDirectory,f.entry.fileId!,[root],false);assert.equal(unauthorized.canPurge,false);assert.equal(unauthorized.purge(candidate,()=>{throw new Error("must not remove");}),false);
   const purge=erasurePurge(f.repo.controlDirectory,f.entry.fileId!,[root],true);
   assert.throws(()=>purge.purge(candidate,()=>{throw new Error("interrupted before unlink");}));
@@ -389,4 +389,69 @@ test("purge authorization revoked after complete preflight refuses before deleti
  mock.method(fs,"lstatSync",(...args:Parameters<typeof fs.lstatSync>)=>{if(args[0]===journal)checked=true;return Reflect.apply(stat,fs,args);});
  mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{if(args[0]===journal&&checked){checked=false;if(++reads===3)writeFileSync(journal,JSON.stringify({format:"pm-vcs-erasure-purge-2",operations:{},plans:{}}));}return Reflect.apply(read,fs,args);});syncBuiltinESMExports();
  assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),{code:"unverifiable"});mock.restoreAll();syncBuiltinESMExports();assert.equal(reads,3);assert.deepEqual(f.repo.objects.denials(),[]);assert.equal(readFileSync(foreign,"utf8"),"foreign bytes retained");assert.deepEqual(readFileSync(join(f.repo.root,"asset")),f.bytes);
+});
+
+
+for (const packed of [false, true]) for (const boundary of ["file-parsed", "pass-check"] as const) test(`accountability refuses an in-place rewrite with restored size and mtime (${packed ? "packed" : "loose"}, coarse clock, ${boundary})`, async () => {
+  const f = await fixture(); if (packed) f.repo.objects.compact(); const path = f.repo.objects.inventory().find(item => item.id === f.entry.id)!.path;
+  fs.utimesSync(path, new Date(1), new Date(1)); const original = readFileSync(path); const before = fs.statSync(path, { bigint: true }); let injected = false;
+  /** Real filesystems can retain ctime within one clock tick; make that native race deterministic. */
+  const coarse = (stat: fs.Stats | fs.BigIntStats | undefined) => stat !== undefined && stat.dev === before.dev && stat.ino === before.ino ? Object.assign(Object.create(stat) as fs.BigIntStats, { ctimeNs: before.ctimeNs }) : stat;
+  const fstat = fs.fstatSync; const lstat = fs.lstatSync;
+  mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => coarse(Reflect.apply(fstat, fs, args)));
+  mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => coarse(Reflect.apply(lstat, fs, args))); syncBuiltinESMExports();
+  accountabilityBoundary.visit = (step, current) => {
+    if (step !== boundary || boundary === "file-parsed" && current !== path || injected) return;
+    injected = true; const changed = Buffer.from(original); changed[changed.length - 1] ^= 1; writeFileSync(path, changed); fs.utimesSync(path, new Date(1), new Date(1));
+  };
+  assert.throws(() => accountErasureStorage(f.repo.objects.storageRoot(), empty), { code: "unverifiable" });
+  assert.equal(injected, true); const after = fs.statSync(path, { bigint: true }); assert.equal(after.size, before.size); assert.equal(after.mtimeNs, before.mtimeNs); assert.notDeepEqual(readFileSync(path), original);
+  assert.equal(f.repo.objects.denials().length, 0);
+});
+
+for (const mode of ["held", "named", "missing", "held-after-named"] as const) test(`final accountability content fence closes and refuses a ${mode} race`, async () => {
+ const f = await fixture(); const path = f.repo.objects.inventory().find(item => item.id === f.entry.id)!.path; fs.utimesSync(path, new Date(1), new Date(1));
+ const before = fs.statSync(path, { bigint: true }); const original = readFileSync(path); const corrupt = Buffer.from(original); corrupt[corrupt.length - 1] ^= 1;
+ let opens = 0; let injected = false; const retired = join(f.dir.root, "retired-original");
+ const fstat = fs.fstatSync; const lstat = fs.lstatSync;
+ /** Renaming may advance ctime even without a byte write; retain the same native clock tick for this fence. */
+ const coarse = (stat: fs.Stats | fs.BigIntStats | undefined) => stat !== undefined && stat.dev === before.dev && stat.ino === before.ino ? Object.assign(Object.create(stat) as fs.BigIntStats, { ctimeNs: before.ctimeNs }) : stat;
+ if (mode === "named" || mode === "missing") {
+  mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => coarse(Reflect.apply(fstat, fs, args)));
+  mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => coarse(Reflect.apply(lstat, fs, args))); syncBuiltinESMExports();
+ }
+ objectFiles.opened = (_file, current) => {
+  if (current !== path || ++opens !== 2 || mode === "held-after-named") return;
+  injected = true;
+  if (mode === "held") writeFileSync(path, corrupt);
+  else { renameSync(path, retired); if (mode === "named") writeFileSync(path, corrupt); }
+ };
+ if (mode === "held-after-named") {
+  mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => { const stat = Reflect.apply(lstat, fs, args); if (args[0] === path && opens === 2 && !injected) { injected = true; writeFileSync(path, corrupt); } return stat; }); syncBuiltinESMExports();
+ }
+ try {
+  if (mode === "missing") { const result = accountErasureStorage(f.repo.objects.storageRoot(), empty); assert.equal(result.accountable, true); assert.equal(result.objects, 0); assert.deepEqual(readFileSync(retired), original); }
+  else assert.throws(() => accountErasureStorage(f.repo.objects.storageRoot(), empty), { code: "unverifiable" });
+  assert.equal(injected, true); assert.equal(objectFiles.active.size, 0); assert.equal(f.repo.objects.denials().length, 0);
+ } finally { objectFiles.opened = () => {}; }
+});
+
+test("purge candidates are current even when bytes change immediately after the first content fence", async () => {
+ const f = await fixture(); const root = join(f.dir.root, "foreign-scope"); const path = place(root, "foreign", Buffer.from("first foreign bytes")); fs.utimesSync(path, new Date(1), new Date(1));
+ const hash = crypto.createHash; let hashes = 0; let injected = false; const observed: { claimed: string; actual: string }[] = [];
+ mock.method(crypto, "createHash", (...args: Parameters<typeof crypto.createHash>) => {
+  const value = Reflect.apply(hash, crypto, args); const ordinal = ++hashes; const digest = value.digest;
+  mock.method(value, "digest", (...digestArgs: unknown[]) => { const result = Reflect.apply(digest, value, digestArgs); if (ordinal === 2 && !injected) { injected = true; writeFileSync(path, "other foreign bytes"); fs.utimesSync(path, new Date(1), new Date(1)); } return result; }); return value;
+ }); syncBuiltinESMExports();
+ assert.throws(() => accountErasureStorage(root, { ...empty, purge: candidate => { observed.push({ claimed: candidate.sha256, actual: hash("sha256").update(readFileSync(path)).digest("hex") }); return false; } }), { code: "unverifiable" });
+ assert.equal(injected, true); assert.equal(observed.length, 1); assert.equal(observed[0].claimed, observed[0].actual); assert.equal(readFileSync(path, "utf8"), "other foreign bytes");
+});
+
+test("a root withdrawn during purge publication cannot acquire a new deletion batch", async () => {
+ const f = await fixture(); const root = join(f.dir.root, "withdrawing-scope"); const path = place(root, "foreign", Buffer.from("retired foreign bytes")); const retired = `${root}.retired`;
+ const purge = erasurePurge(f.repo.controlDirectory, f.entry.fileId!, [root], true); const stat = fs.lstatSync; let checks = 0; let injected = false;
+ mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => { if (args[0] === root && ++checks === 4) { injected = true; renameSync(root, retired); } return Reflect.apply(stat, fs, args); }); syncBuiltinESMExports();
+ let report: ReturnType<typeof accountErasureStorage> | undefined;
+ assert.doesNotThrow(() => { report = accountErasureStorage(root, { ...empty, purge: purge.purge }); }); assert.ok(report);
+ assert.equal(injected, true); assert.equal(report.accountable, true); assert.equal(report.files, 0); assert.equal(existsSync(path), false); assert.equal(readFileSync(join(retired, "foreign"), "utf8"), "retired foreign bytes"); assert.equal(existsSync(join(f.repo.controlDirectory, "erasure-purge.json")), false);
 });

@@ -27,9 +27,7 @@ for (const runtime of [process.execPath, "bun"]) {
     const password = "regression-password-secret";
     // A VCS token inherited from the developer's shell would outrank the
     // fixture's credential URL and make the server refuse the clone.
-    const inherited = Object.fromEntries(Object.entries(testEnvironment())
-      .filter(([key]) => key !== "PM_VCS_TOKEN" && !key.startsWith("PM_VCS_TOKEN_")));
-    const env = { ...inherited, ...discardChildCoverage(), HOME: join(fixture.root, "home"), PM_AUTHOR: "acceptance",
+    const env = { ...testEnvironment(), ...discardChildCoverage(), HOME: join(fixture.root, "home"), PM_AUTHOR: "acceptance",
       // pm otherwise spawns a detached telemetry flusher that keeps writing under HOME after each
       // command returns (racing the fixture cleanup) and labels these runs as agent usage.
       PM_TELEMETRY_SOURCE_CONTEXT: "test", PM_TELEMETRY_INLINE_FLUSH: "1" };

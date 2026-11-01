@@ -12,5 +12,5 @@ export const TEST_ENVIRONMENT_KEYS = [
 export function testEnvironment(overrides: NodeJS.ProcessEnv = {}, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const selected: NodeJS.ProcessEnv = {};
   for (const key of TEST_ENVIRONMENT_KEYS) if (source[key] !== undefined) selected[key] = source[key];
-  return { ...selected, NODE_ENV: "test", PM_SEARCH_REFRESH_INLINE: "1", PM_AGENT_PROBES: "0", GIT_TERMINAL_PROMPT: "0", NODE_V8_COVERAGE: selected.NODE_V8_COVERAGE ?? "", ...overrides };
+  return { ...selected, NODE_ENV: "test", PM_SEARCH_REFRESH_INLINE: "1", PM_AGENT_PROBES: "0", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", NODE_V8_COVERAGE: selected.NODE_V8_COVERAGE ?? "", ...overrides };
 }

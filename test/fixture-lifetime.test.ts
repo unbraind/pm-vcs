@@ -2,17 +2,18 @@ import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Native fixture cleanup waits for its owners and retries transient nonempty directories. */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs, { existsSync, mkdirSync, watch, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, mock, test } from "node:test";
 import { makeManagedTempDir } from "./helpers/managed-temp.ts";
 
 afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); });
 
-test("fixture cleanup retries a real transient native ENOTEMPTY without hiding persistent failures", async () => {
+test("fixture cleanup retries an injected transient ENOTEMPTY without hiding persistent failures", async () => {
   const fixture = makeManagedTempDir(); mkdirSync(join(fixture.root, ".pm-cli/locks"), { recursive: true }); writeFileSync(join(fixture.root, ".pm-cli/locks/owned"), "complete");
   const original = fs.rmdir; const fault = { remaining: 4, persistent: "" }; let injected = 0;
   mock.method(fs, "rmdir", (...args: Parameters<typeof fs.rmdir>) => {
@@ -42,4 +43,26 @@ test("fixture teardown surfaces task failures after closing all other owners and
   await new Promise<void>(resolve => { setImmediate(resolve); });
   let closed = false; fixture.watcher(watch(fixture.root)).once("close", () => { closed = true; });
   await assert.rejects(fixture.cleanup(), (failure: unknown) => failure instanceof AggregateError && failure.errors.includes(error)); assert.ok(closed); assert.equal(existsSync(fixture.root), false);
+});
+
+
+test("fixture cleanup actively stops a registered live child before removing its root", async () => {
+  const fixture = makeManagedTempDir(); const child = fixture.child(spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { env: testEnvironment(), stdio: "ignore" }));
+  const cleanup = fixture.cleanup(); let timer: ReturnType<typeof setTimeout> | undefined;
+  try { const completed = await Promise.race([cleanup.then(() => true), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 1500); })]); assert.equal(completed, true, "Cleanup must stop its live child"); assert.equal(existsSync(fixture.root), false); }
+  finally { clearTimeout(timer); if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await cleanup; }
+});
+
+
+test("path-identity fixture cleanup still runs when its handle invariant fails", async () => {
+ const fixture = makeManagedTempDir();
+ const preload = join(fixture.root, "leak-probe.mjs");
+ const source = `import fs from "node:fs"; import {syncBuiltinESMExports} from "node:module"; import {join} from "node:path"; import {objectFiles} from ${JSON.stringify(new URL("../engine/object-files.ts", import.meta.url).href)}; const create=fs.mkdtempSync; let leaked=false; fs.mkdtempSync=(...args)=>{const root=create(...args); if(!leaked&&String(args[0]).endsWith("pm-vcs-eng-")){leaked=true;process.stdout.write("FIXTURE_ROOT:"+root+"\\n");objectFiles.open(join(root,"held-probe"),"wx");}return root;};syncBuiltinESMExports();`;
+ writeFileSync(preload, source);
+ try {
+  const child = spawnSync(process.execPath, ["--import", preload, "--test", "--test-concurrency=1", "--test-name-pattern=^documented relative ObjectStore", fileURLToPath(new URL("./path-identity.test.ts", import.meta.url))], { env: testEnvironment({ TMPDIR: fixture.root, TMP: fixture.root, TEMP: fixture.root, NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: 30_000 });
+  assert.equal(child.status, 1, child.stdout + child.stderr); assert.match(child.stdout + child.stderr, /AssertionError|ERR_ASSERTION/u);
+  const roots = [...child.stdout.matchAll(/FIXTURE_ROOT:([^\r\n]+)/gu)].map(match => match[1]); assert.equal(roots.length, 1, child.stdout);
+  assert.equal(existsSync(roots[0]), false, "A failed descriptor invariant must not bypass fixture removal");
+ } finally { await fixture.cleanup(); }
 });

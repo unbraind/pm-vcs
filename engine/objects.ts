@@ -1,4 +1,4 @@
-import { recordDerivation, nativeDerivationInputs } from "./derivations.ts";
+import { recordDerivation, nativeDerivationInputs, nativeRepresentation } from "./derivations.ts";
 import { recordPayloadOwner } from "./payload-owners.ts";
 import "./publication.ts";
 import { destructionBoundary, measureDestructionRevision } from "./destruction.ts";
@@ -52,6 +52,8 @@ const validationLeases = new Set<string>();
 const leaseChecks = new Map<string, () => boolean>();
 /** Synchronous native transformations propagate input identities through streaming writers. */
 const derivationInputs = new Map<string, readonly ObjectId[]>();
+/** Active native whole-content producers retain their member identities before releasing the lease. */
+const wholeInputs = new Map<string, { id: ObjectId; members: Set<ObjectId> }[]>();
 /** An acquired recovery guard excludes ordinary writers until its validated action releases last. */
 const recoveryLeases = new Set<string>();
 /** A failed local cleanup may leave a closed, provably self-owned guard while its process remains alive. */
@@ -114,7 +116,7 @@ export interface InventoryEntry {
 const OBJECT_ID_PATTERN = /^[0-9a-f]{64}$/;
 
 export { ObjectStoreError } from "./object-error.ts";
-import { ObjectStoreError } from "./object-error.ts";
+import { ObjectStoreError, assertVerificationBound } from "./object-error.ts";
 
 /**
  * Reads one control-directory JSON file, returning the fallback only on ENOENT.
@@ -335,7 +337,7 @@ export class ObjectStore {
     }
     try {
       const stat = fstatSync(file.fd);
-      return { ...file, path, offset: 0, length: stat.size, regular: stat.isFile() };
+      return Object.assign(file, { path, offset: 0, length: stat.size, regular: stat.isFile() });
     } catch (error) { file.close(); throw error; }
   }
 
@@ -373,14 +375,14 @@ export class ObjectStore {
         const check = () => { objectReadBoundary.visit("pinned-check", id, attempt); if (!physical && !options.standalone) this.assertVisible(id); };
         objectReadBoundary.visit("pinned", id, attempt);
         check();
-        return { ...pinned, generation: after.key, check,
+        return Object.assign(pinned, { generation: after.key, check,
           /** Apply the same physical invariants to full, bounded and streamed decoding. */
-          validateFrame(type, framedBytes) {
+          validateFrame(type: string, framedBytes: number) {
             if ((pinned.type !== undefined && pinned.type !== type) || (pinned.maxFrameBytes !== undefined && framedBytes > pinned.maxFrameBytes)) {
               throw new PackRefusal("corrupt_pack", "Pack member kind or decoded size disagrees with its format.", "Restore a verified pack before retrying.");
             }
           },
-        };
+        });
       } catch (error) {
         if (location !== undefined) location.close();
         const after = options.standalone ? before : this.storageGeneration();
@@ -477,22 +479,64 @@ export class ObjectStore {
     return this.withWriteLock(/** Check permanent denial while holding the publication lock. */ () => {
       const id = hashObject(type, payload);
       this.preflight([{ type, payload, id }], fileId !== undefined);
-      if (fileId !== undefined && this.cachedDenials().files.has(fileId)) {
-        throw new ObjectStoreError("file_obliterated", "This FileId is permanently denied.");
-      }
-      if (["blob", "record", "manifest", "link", "conflict"].includes(type)) {
-        if (fileId !== undefined && !/^[0-9a-f]{32}$/.test(fileId)) throw new ObjectStoreError("invalid_file_id", "Payload ownership requires a canonical FileId.");
+      const payloadType = ["blob", "record", "manifest", "link", "conflict"].includes(type);
+      this.assertPayloadOwner(fileId, payloadType);
+      if (payloadType) {
         // Preserve native member edges before GC can retire their container. Malformed opaque
         // low-level writes remain readable, but cannot establish complete erasure provenance.
         const native = nativeDerivationInputs({ type, payload });
-        const inputs = [...new Set([...sources, ...(derivationInputs.get(resolve(this.root)) ?? []), ...(native ?? [])])];
+        const representation = this.representation(id, { type, payload });
+        const inputs = [...new Set([...sources, ...(derivationInputs.get(resolve(this.root)) ?? []), ...(wholeInputs.get(resolve(this.root)) ?? []).map(scope => scope.id), ...(native ?? []), ...(typeof representation.whole === "string" ? [representation.whole] : [])])];
         if (inputs.some(source => this.denial(source) !== undefined)) throw new ObjectStoreError("object_obliterated", "Native derivation refers to permanently denied inputs.");
-        recordDerivation(dirname(this.root), id, inputs, fileId, this.has(id), type !== "conflict" && sources.length === 0 && (derivationInputs.get(resolve(this.root))?.length ?? 0) === 0, source => this.has(source) ? this.read(source) : undefined, () => this.assertWriteLease(), native !== undefined);
+        recordDerivation(dirname(this.root), id, inputs, fileId, this.has(id), type !== "conflict" && sources.length === 0 && (derivationInputs.get(resolve(this.root))?.length ?? 0) === 0, source => this.has(source) ? this.read(source) : undefined, () => this.assertWriteLease(), native !== undefined, representation);
         if (fileId !== undefined) recordPayloadOwner(dirname(this.root), id, fileId);
       }
       else recordDerivation(dirname(this.root), id, [], undefined, this.has(id), true, source => this.has(source) ? this.read(source) : undefined, () => this.assertWriteLease());
+      for (const scope of wholeInputs.get(resolve(this.root)) ?? []) { scope.members.add(id); assertVerificationBound("provenance", "objects", scope.members.size, 1_000_000); }
       return this.writeRaw(type, payload);
     });
+  }
+
+  /** Capture native logical equivalence through the same path for direct writes and transport arrivals. */
+  private representation(id: ObjectId, object: StoredObject): { members: readonly ObjectId[]; whole: ObjectId | null | false } {
+    const proof = nativeRepresentation(id, object, source => this.has(source) ? this.read(source) : undefined, () => this.assertWriteLease());
+    if (typeof proof.whole === "string") recordDerivation(dirname(this.root), proof.whole, [], undefined, this.has(proof.whole), false, source => this.has(source) ? this.read(source) : undefined, () => this.assertWriteLease(), true, { members: [id, ...proof.members], whole: null });
+    return proof;
+  }
+
+  /** Validate native ownership before any certificate can change durable state. */
+  private assertPayloadOwner(fileId: string | undefined, payload: boolean): void {
+    const denied = this.cachedDenials();
+    if (fileId !== undefined && denied.files.has(fileId)) throw new ObjectStoreError("file_obliterated", "This FileId is permanently denied.");
+    if (payload && fileId !== undefined && !/^[0-9a-f]{32}$/.test(fileId)) throw new ObjectStoreError("invalid_file_id", "Payload ownership requires a canonical FileId.");
+    if (payload && fileId === undefined && denied.files.size > 0) throw new ObjectStoreError("unattributed_arrival", "Payload writes after erasure require complete FileId provenance.");
+  }
+
+  /** Bind all fragments to the producer's verified whole input before publishing even its first member. @internal */
+  withWholeContent<T>(whole: ObjectId, action: () => T, fileId?: string): T {
+    return this.withWriteLock(() => {
+      this.assertPayloadOwner(fileId, true);
+      const read = (id: ObjectId) => this.has(id) ? this.read(id) : undefined; const check = () => this.assertWriteLease();
+      recordDerivation(dirname(this.root), whole, derivationInputs.get(resolve(this.root)) ?? [], undefined, this.has(whole), true, read, check);
+      const key = resolve(this.root); const previous = wholeInputs.get(key); const scope = { id: whole, members: new Set<ObjectId>() };
+      wholeInputs.set(key, [...(previous ?? []), scope]);
+      try {
+        const result = action();
+        recordDerivation(dirname(this.root), whole, [], undefined, this.has(whole), false, read, check, true, { members: [...scope.members], whole: null });
+        return result;
+      } finally { if (previous === undefined) wholeInputs.delete(key); else wholeInputs.set(key, previous); }
+    });
+  }
+
+  /** Complete a native producer's streamed whole-content proof before releasing its publication lease. @internal */
+  recordWholeContent(id: ObjectId, whole: ObjectId, fileId?: string): void {
+    this.assertWriteLease();
+    if (!isObjectId(whole)) throw new ObjectStoreError("invalid_provenance", "Whole content requires a canonical identity.");
+    const object = this.read(id); if (object.type !== "manifest") throw new ObjectStoreError("invalid_manifest", "Whole content requires a native manifest.");
+    const members = nativeDerivationInputs(object); if (members === undefined) throw new ObjectStoreError("invalid_manifest", "Whole content requires a valid native manifest.");
+    const read = (source: ObjectId) => this.has(source) ? this.read(source) : undefined; const check = () => this.assertWriteLease();
+    recordDerivation(dirname(this.root), whole, [], undefined, this.has(whole), false, read, check, true, { members: [id, ...members], whole: null });
+    recordDerivation(dirname(this.root), id, [...members, whole], fileId, this.has(id), false, read, check, true, { members, whole });
   }
 
   /** Carry known native inputs through all payload publications in one synchronous transformation. */
@@ -773,6 +817,11 @@ export class ObjectStore {
     this.withWriteLock(/** Prevent erasure from interleaving with arrival preflight and publication. */ () => {
       this.preflight(objects, attributed);
       for (const object of objects) this.writeRaw(object.type, object.payload);
+      for (const object of objects) if (object.type === "manifest") {
+        const representation = this.representation(object.id, object);
+        const members = nativeDerivationInputs(object) ?? [];
+        recordDerivation(dirname(this.root), object.id, [...members, ...(typeof representation.whole === "string" ? [representation.whole] : [])], undefined, false, false, source => this.has(source) ? this.read(source) : undefined, () => this.assertWriteLease(), lstatSync(join(dirname(this.root), "derivations", `${object.id}.json`), { throwIfNoEntry: false }) !== undefined, representation);
+      }
     });
   }
 

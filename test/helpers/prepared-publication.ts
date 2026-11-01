@@ -9,8 +9,9 @@ import { destructionBoundary } from "../../engine/destruction.ts";
 /** Stop the actual journaled rename before its syscall; the original source and immutable capability remain. */
 export function prepareControlPublication(repo: Repository, destination: string, bytes: string, sourceOverride?: string): string {
  const tag = createHash("sha256").update(destination + bytes).digest("hex").slice(0,12); const name = relative(repo.controlDirectory,destination).split(sep).join("/"); const source = sourceOverride ?? (name.startsWith("refs/") ? join(dirname(destination),`ref-${process.pid}-${tag}.lock`) : `${destination}.${process.pid}.${tag}.tmp`); mkdirSync(dirname(source), { recursive: true }); writeFileSync(source, bytes, { flag: "wx" });
- const control = repo.instanceLink?.controlDirectory ?? repo.controlDirectory; let cut = false;
- destructionBoundary.visit = (step,path) => { if (step === "before-delete" && resolve(control,path) === source) { cut = true; throw new Error("prepared publication boundary"); } };
+ // Native publication may enter the shared writer scope; standalone control publication keeps the instance scope.
+ const controls = new Set([repo.controlDirectory, dirname(repo.objects.storageRoot())]); let cut = false;
+ destructionBoundary.visit = (step,path) => { if (step === "before-delete" && [...controls].some(control => resolve(control,path) === source)) { cut = true; throw new Error("prepared publication boundary"); } };
  try { assert.throws(() => durability.rename(source,destination)); } finally { destructionBoundary.visit = () => {}; }
  assert.ok(cut); assert.ok(existsSync(source)); return source;
 }

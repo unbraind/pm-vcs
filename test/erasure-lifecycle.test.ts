@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { lifecycleSequence } from "./helpers/lifecycle-sequences.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Durable purge authority follows owned file/root lifetimes on real non-git repositories. */
 import assert from "node:assert/strict";
@@ -154,12 +155,18 @@ test("a competing process at both retirement boundaries is excluded until the ow
   t.diagnostic("2 real-process lifecycle interleavings on one non-git tracker; peer success is the same durable receipt");
 });
 
+test("lifecycle generator explores every instance and payload pair across 512 reproducible histories", () => {
+ const pairs = new Set<number>();
+ for (let seed = 1; seed <= 512; seed++) for (const { op, index, noise } of lifecycleSequence(seed)) if (op === 6) pairs.add(index * 2 + noise! % 2);
+ assert.deepEqual([...pairs].sort(), [0, 1, 2, 3]);
+});
+
 test("512 seeded lifecycle sequences always match an independent accountability model and converge when clean", async t => {
   const f = await fixture(); let repo = f.repo; repo.obliterate(f.id, "erase-fixture", "model_cleanup", new Date(1));
   type Slot = { path: string; state: "active" | "retired" | "absent"; present: boolean; epoch: number };
   const slots: Slot[] = [0, 1].map(index => ({ path: join(f.dir.root, `instance-${index}`), state: "absent", present: false, epoch: 0 }));
   const files = new Map<string, { root: number; epoch: number; revision: number }>(); const plans = new Map<string, { root: number; epoch: number; revision: number }>();
-  let serial = 0; let cuts = 0; let verdicts = 0; let operations = 0; const cutSteps = new Set<string>();
+  let serial = 0; let cuts = 0; let verdicts = 0; let operations = 0; let blockedLinks = 0; const cutSteps = new Set<string>(); const injectedPairs = new Set<number>();
   const crashSteps = ["purge-planned", "purge-check", "purge-deleted", "purge-recorded", "pending", "storage-verified", "completed", "receipt"];
   /** The model knows instance lifecycle and file generations, without reading the production purge journal. */
   const scoped = (root: number): boolean => root < 0 || slots[root].state !== "absent";
@@ -173,7 +180,15 @@ test("512 seeded lifecycle sequences always match an independent accountability 
   /** Scope reduction is an explicit native administrative operation; historical receipt entries are not edited. */
   const prune = (index: number): void => { const slot = slots[index]; if (slot.state === "retired") { remove(index); repo.pruneRetiredInstance(relative(repo.root, slot.path), "erase-fixture", "model_prune", new Date(1)); slot.state = "absent"; slot.epoch++; } };
   /** Reusing the same instance name creates a new root generation. */
-  const add = (index: number): void => { remove(index); prune(index); const slot = slots[index]; repo.linkInstance(`slot-${index}`, slot.path, { branch: "main" }); slot.state = "active"; slot.present = true; slot.epoch++; };
+  const add = (index: number): void => {
+    remove(index); prune(index); const slot = slots[index];
+    try { repo.linkInstance(`slot-${index}`, slot.path, { branch: "main" }); }
+    catch (failure) {
+      assert.ok(failure instanceof Error && "code" in failure && failure.code === "erasure_incomplete");
+      assert.ok(repo.objects.denials().some(denial => denial.pending)); assert.equal(existsSync(slot.path), false); assert.equal(repo.listInstances().some(instance => instance.name === `slot-${index}`), false); blockedLinks++; return;
+    }
+    slot.state = "active"; slot.present = true; slot.epoch++;
+  };
   /** Inject arbitrary raw or truncated encoded foreign bytes, with and without the selected payload. */
   const inject = (index: number, seed: number): void => {
     const root = index < 0 ? repo.objects.storageRoot() : join(slots[index].path, ".pmvcs/objects"); const path = foreign(root, `foreign-${serial++}`);
@@ -198,24 +213,22 @@ test("512 seeded lifecycle sequences always match an independent accountability 
     if ((seed - 1) % 16 === 0) {
       const root = join(f.dir.root, `model-${(seed - 1) / 16}`); mkdirSync(root); cpSync(join(f.repo.root, ".pmvcs"), join(root, ".pmvcs"), { recursive: true }); cpSync(join(f.repo.root, "second"), join(root, "second")); repo = Repository.open(root);
     }
-    let state = seed; const next = (): number => state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
-    const choices = [0, 1, 2, 3, 4, 5, 6, 7, ...Array.from({ length: 4 }, () => next() % 8)];
-    for (let end = choices.length - 1; end > 0; end--) { const other = next() % (end + 1); [choices[end], choices[other]] = [choices[other], choices[end]]; }
-    for (const op of choices) {
-      operations++; const index = next() % 2;
+    for (const { op, index, noise } of lifecycleSequence(seed)) {
+      operations++;
       if (op === 0 || op === 3) add(index);
       if (op === 1) remove(index);
       if (op === 2) prune(index);
       if (op === 4) obliterate(true);
       if (op === 5) obliterate(false);
-      if (op === 6) inject(slots[index].present ? index : -1, next());
-      if (op === 7) { for (let slot = 0; slot < slots.length; slot++) if (!slots[slot].present) prune(slot); inject(-1, next()); obliterate(true, crashSteps[(seed - 1) % crashSteps.length]); }
+      if (op === 6) { const payloadSeed = noise!; injectedPairs.add(index * 2 + payloadSeed % 2); inject(slots[index].present ? index : -1, payloadSeed); }
+      if (op === 7) { for (let slot = 0; slot < slots.length; slot++) if (!slots[slot].present) prune(slot); inject(-1, noise!); obliterate(true, crashSteps[(seed - 1) % crashSteps.length]); }
     }
     for (let index = 0; index < slots.length; index++) { remove(index); prune(index); }
     for (const [path] of files) { rmSync(path, { force: true }); files.delete(path); }
     assert.equal(expected(false), true); obliterate(false);
     assert.equal(repo.objects.denials().find(entry => entry.tombstone.fileId === f.id)!.pending, false);
   }
+  assert.equal(injectedPairs.size, 4, "All instance/payload pairs must occur independently");
   assert.equal(cutSteps.size, crashSteps.length); assert.ok(cuts >= 512); assert.equal(repo.operations.read().filter(entry => entry.command === "obliterate").length, 1);
-  t.diagnostic(`512 seeds (1..512), ${operations} model operations, ${verdicts} checked verdicts, ${cuts} crashes across all ${cutSteps.size} publication boundaries; every sequence ends with a successful clean-store retry`);
+  t.diagnostic(`512 seeds (1..512), ${operations} model operations, ${verdicts} checked verdicts, ${cuts} crashes across all ${cutSteps.size} publication boundaries, ${blockedLinks} refused payload-materializing links while erasure was pending; every sequence ends with a successful clean-store retry`);
 });

@@ -33,8 +33,8 @@ export interface AccountabilityOptions {
 class Changed extends Error {}
 /** Only actual format failures can authorize purge; operational I/O errors never become foreign files. */
 class InvalidRepresentation extends Error {}
-/** Namespace identity deliberately excludes ctime/link count, while checking content size and mtime. */
-function identity(stat: BigIntStats): string { return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`; }
+/** Content identity includes ctime so restoring mtime cannot conceal an in-place rewrite. */
+function identity(stat: BigIntStats): string { return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`; }
 /** Read one bounded source slot from the pinned file; EOF before its recorded range is not accountable. */
 function slot(fd: number, start: number, length: number): Buffer {
   const bytes = Buffer.alloc(length); let offset = 0;
@@ -107,10 +107,11 @@ function rejectInspection(value: unknown): never {
 function requireSynchronousCallback(callback: unknown): void { if (Object.prototype.toString.call(callback) !== "[object Function]") rejectInspection(undefined); }
 /** A rejected promise is observed but never awaited or mistaken for a completed synchronous proof. */
 function requireSynchronousResult(value: unknown): void { if (value !== undefined) rejectInspection(value); }
-/** Hash unaccounted bytes for an exact, resumable purge plan without persisting their content. */
-function physicalDigest(fd: number, size: number): string {
+/** Hash a bounded pinned range for exact content fences and resumable purge authority. */
+function physicalDigest(fd: number, size: number, check: () => void): string {
   const hash = createHash("sha256");
-  for (let offset = 0; offset < size; offset += 65_536) hash.update(slot(fd, offset, Math.min(65_536, size - offset)));
+  for (let offset = 0; offset < size; offset += 65_536) { check(); hash.update(slot(fd, offset, Math.min(65_536, size - offset))); }
+  check();
   return hash.digest("hex");
 }
 /** Verify every regular file, retrying a replaced file and then the whole catalogue before certification. */
@@ -125,7 +126,7 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
   const root = roots[0] ?? ".";
   for (let pass = 0; pass < ACCOUNTABILITY_ATTEMPTS; pass++) {
     planning?.clear();
-    const snapshots = new Map<string, string>(); const directories = new Map<string, string>();
+    const snapshots = new Map<string, { stamp: string; sha256: string; bytes: number }>(); const directories = new Map<string, string>();
     const classes: Partial<Record<ErasureFileClass, number>> = {}; let files = 0; let objects = 0; let purged = false;
     const missing = new Set<string>();
     /** Capture a directory catalogue, rejecting links and special leaves rather than following foreign storage. */
@@ -141,7 +142,8 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
           const before = fstatSync(file.fd, { bigint: true });
           assertVerificationBound("accountability", "file_bytes", Number(before.size), verificationLimits.accountabilityFileBytes);
           if (!before.isFile() || before.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new ErasureStorageRefusal("unverifiable", kind);
-          const stamp = identity(before); let parsed = false; let forbidden = false; let count = 0; const failures: ObjectStoreError[] = [];
+          const stamp = identity(before); const proof = { stamp, sha256: physicalDigest(file.fd, Number(before.size), check), bytes: Number(before.size) };
+          let parsed = false; let forbidden = false; let count = 0; const failures: ObjectStoreError[] = [];
           accountabilityBoundary.visit("file-opened", path, attempt);
           /** Logical denial covers both stable addresses and type-independent, nonempty payloads. */
           const object = (id: string, offset: number, length: number, type?: ObjectType, maxFrameBytes?: number): void => {
@@ -161,26 +163,27 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
           /** A purge authorization write can itself race a replacement, so check again immediately before removal. */
           const same = (): boolean => {
             const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-            return current?.isFile() === true && identity(current) === stamp && identity(fstatSync(file.fd, { bigint: true })) === stamp;
+            return current?.isFile() === true && identity(current) === stamp && identity(fstatSync(file.fd, { bigint: true })) === stamp
+              && physicalDigest(file.fd, proof.bytes, check) === proof.sha256;
           };
           accountabilityBoundary.visit("file-check", path, attempt);
           if (!same()) continue;
           if (!parsed) {
             if (options.purge === undefined && planning === undefined) throw new ErasureStorageRefusal("unverifiable", kind);
-            const candidate: UnaccountedFile = { path, fileClass: kind, sha256: physicalDigest(file.fd, Number(before.size)), bytes: Number(before.size), identity: stamp };
+            const candidate: UnaccountedFile = { path, fileClass: kind, sha256: proof.sha256, bytes: proof.bytes, identity: stamp };
             if (!same()) continue;
-            if (planning !== undefined) { planning.set(path, candidate); snapshots.set(path, stamp); return; }
+            if (planning !== undefined) { planning.set(path, candidate); snapshots.set(path, proof); return; }
             const removed = options.purge!(candidate, () => {
               accountabilityBoundary.visit("purge-check", path, attempt);
               if (!same()) throw new Changed();
-              durability.unlink(path); accountabilityBoundary.visit("purge-deleted", path, attempt);
+              durability.unlink(path, before); accountabilityBoundary.visit("purge-deleted", path, attempt);
             });
             if (removed !== true) throw new ErasureStorageRefusal("unverifiable", kind);
             purged = true; return;
           }
           if (failures.length > 0) throw failures[0];
           if (forbidden) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
-          snapshots.set(path, stamp); classes[kind] = (classes[kind] ?? 0) + 1; files++; objects += count;
+          snapshots.set(path, proof); classes[kind] = (classes[kind] ?? 0) + 1; files++; objects += count;
           accountabilityBoundary.visit("file-verified", path, attempt);
         } catch (error) {
           if (error instanceof Changed) throw error;
@@ -220,7 +223,13 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
       }
       for (const [path, expected] of snapshots) {
         const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-        if (!stat?.isFile() || identity(stat) !== expected) throw new Changed();
+        if (!stat?.isFile() || identity(stat) !== expected.stamp) throw new Changed();
+        const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          if (identity(fstatSync(file.fd, { bigint: true })) !== expected.stamp || physicalDigest(file.fd, expected.bytes, check) !== expected.sha256) throw new Changed();
+          const named = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+          if (!named?.isFile() || identity(named) !== expected.stamp || identity(fstatSync(file.fd, { bigint: true })) !== expected.stamp) throw new Changed();
+        } finally { file.close(); }
       }
       check();
       return { files, objects, foreign: 0, accountable: true, classes };
@@ -269,7 +278,7 @@ export function parseErasurePurgeJournal(control: string, roots: readonly string
     if (!/^[0-9a-f]{32}$/.test(id) || !Array.isArray(entries) || entries.some((entry) => entry === null || typeof entry !== "object"
       || !["bytes,file,fileClass,identity,sha256,status", "bytes,file,fileClass,identity,reason,sha256,status", "bytes,file,fileClass,identity,root,rootIdentity,sha256,status", "bytes,file,fileClass,identity,reason,root,rootIdentity,sha256,status"].includes(Object.keys(entry).sort().join(","))
       || !canonical(entry.file) || typeof entry.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(entry.sha256)
-      || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || typeof entry.identity !== "string" || !/^\d+:\d+:\d+:-?\d+$/.test(entry.identity)
+      || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || typeof entry.identity !== "string" || !/^\d+:\d+:\d+:-?\d+(?::-?\d+)?$/.test(entry.identity)
       || !["object-root","loose-storage","pack-storage","temporary-storage","foreign-directory"].includes(entry.fileClass)
       || !["planned","deleted","absent","replaced","cancelled"].includes(entry.status)
       || (entry.root !== undefined && (!canonical(entry.root) || typeof entry.rootIdentity !== "string" || !/^\d+:\d+:\d+$/.test(entry.rootIdentity) || scoped(entry.file, [resolve(control, entry.root)]) === undefined))
@@ -380,7 +389,7 @@ export function erasurePurge(control: string, fileId: string, roots: readonly st
         else if (identity(stat) !== entry.identity) { entry.status = "replaced"; changed = true; }
         else throw new ErasureStorageRefusal("unverifiable", entry.fileClass);
       }
-      if (changed) writePrivateJson(path, journal);
+      if (changed && !readOnly) writePrivateJson(path, journal);
       return { intents: plans.slice(0, 20).map(plan => ({ ...plan, planned: journal.operations[plan.id].length, pending: journal.operations[plan.id].filter(entry => entry.status === "planned").length })), omittedIntents: Math.max(0, plans.length - 20), deleted: entries.filter((entry) => entry.status === "deleted").length, observedAbsent: entries.filter((entry) => entry.status === "absent").length,
         replaced: entries.filter((entry) => entry.status === "replaced").length, cancelled: entries.filter((entry) => entry.status === "cancelled").length,
         bytes: entries.filter((entry) => entry.status === "deleted").reduce((sum, entry) => sum + entry.bytes, 0), omitted: Math.max(0, entries.length - 20), files: entries.slice(0,20) };

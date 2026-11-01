@@ -280,7 +280,11 @@ Native derivation certificates retain the complete transitive input set, includi
 manifest pages and fragments, after GC removes intermediate objects. GC upgrades
 old direct-parent certificates before sweeping; missing old ancestry or missing
 input certificates remains unknown and refuses erasure before deletion. Normal
-GC retains the certificates. See [provenance across garbage collection](docs/links-layers-obliteration.md#provenance-across-garbage-collection).
+GC retains the certificates. Whole blobs, manifests and fragment sets with the same
+reconstructed bytes share a durable whole-content identity. Canonical record, link
+and conflict payloads also retain the blob identity of their literal bytes. Certificates retain
+that identity and the composition members, so collecting a container cannot hide
+an equivalent representation or anything derived from it. See [provenance across garbage collection](docs/links-layers-obliteration.md#provenance-across-garbage-collection).
 
 User-authored files and metadata, including alternate encodings, are independent
 data. Their coincidental resemblance to selected content does not establish
@@ -302,6 +306,8 @@ erasure or staging because a benign value resembles an encoding.
 
 Complete native storage parsing, ownership checks, shared-FileId conflicts,
 physical-copy plans and descriptor/pathname verification remain mandatory.
+Native storage verification binds each parsed file to a byte hash and rechecks it
+at the final catalogue barrier; timestamps alone do not establish content stability.
 Unknown storage refuses unless explicitly purged with a receipt and re-verification.
 Payload-only resumable upload batches still refuse after erasure because they
 carry no FileId provenance. Direct payload writes require a non-denied FileId;
@@ -847,7 +853,7 @@ Everything below is tracked as an epic in this repository's own tracker, under
 - Node.js ≥ 22.18 (`engines`), tested on 22 and 26
 - `@unbrained/pm-cli` ≥ 2026.10.10 (manifest and peer dependency floor for host-bound SDK and guarded tracker formats)
 - Works under `npm`/`npx` and `bun`/`bunx`
-- No runtime dependencies beyond the Node standard library and the host-provided pm SDK
+- Runtime dependency: `pako` for bounded native DEFLATE verification, alongside the Node standard library and host-provided pm SDK
 
 
 ## Development

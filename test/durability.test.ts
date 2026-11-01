@@ -28,21 +28,27 @@ async function fixture() {
 }
 
 test("all production fsync, rename, link and deletion operations use the single durability policy", () => {
-  const forbidden = new Set(["fsyncSync", "renameSync", "unlinkSync", "linkSync", "rmSync", "rmdirSync"]);
-  for (const file of globSync(["*.ts", "engine/**/*.ts", "scripts/**/*.ts"], { cwd: packageRoot })) {
-    if (file === "engine/durability.ts") continue;
-    const source = ts.createSourceFile(file, readFileSync(join(packageRoot, file), "utf8"), ts.ScriptTarget.Latest, true);
-    /** Inspect executable calls, excluding documentation and generated fixture text. */
+  const forbidden = /^(?:fsync|rename|unlink|link|rm|rmdir)(?:Sync)?$/;
+  /** Resolve actual fs receivers and named imports without confusing the journal backend with raw filesystem calls. */
+  const violations = (file: string, body: string): string[] => {
+    const source = ts.createSourceFile(file, body, ts.ScriptTarget.Latest, true); const names = new Set<string>(); const namespaces = new Set<string>(); const found: string[] = [];
+    for (const node of source.statements) if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && /^(?:node:)?fs(?:\/promises)?$/.test(node.moduleSpecifier.text)) {
+      const clause = node.importClause; if (clause?.name) namespaces.add(clause.name.text); const bindings = clause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+      if (bindings && ts.isNamedImports(bindings)) for (const element of bindings.elements) if (forbidden.test((element.propertyName ?? element.name).text)) names.add(element.name.text);
+    }
+    /** Calls through the configured backend remain governed by durability rather than a coincidentally named method. */
     const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node)) {
-        const expression = node.expression;
-        const name = ts.isIdentifier(expression) ? expression.text : ts.isPropertyAccessExpression(expression) ? expression.name.text : "";
-        assert.ok(!forbidden.has(name), `${file} must route ${name} through durability`);
-      }
+      if (ts.isCallExpression(node)) { const expression = node.expression; if (ts.isIdentifier(expression) && names.has(expression.text) || ts.isPropertyAccessExpression(expression) && namespaces.has(expression.expression.getText(source)) && forbidden.test(expression.name.text)) found.push(expression.getText(source)); }
       ts.forEachChild(node, visit);
     };
-    visit(source);
-  }
+    visit(source); return found;
+  };
+  for (const file of globSync(["*.ts", "engine/**/*.ts", "scripts/**/*.ts"], { cwd: packageRoot })) if (file !== "engine/durability.ts") assert.deepEqual(violations(file, readFileSync(join(packageRoot, file), "utf8")), [], file);
+  for (const method of ["rm", "unlink", "rename", "link", "rmdir", "fsync", "rmSync"]) assert.equal(violations("raw.ts", `import fs from "node:fs"; fs.${method}("fixture");`).length, 1);
+  assert.equal(violations("alias.ts", 'import { unlink as retire } from "node:fs/promises"; retire("fixture");').length, 1);
+  assert.equal(violations("bare-alias.ts", 'import { rm as retire } from "fs/promises"; retire("fixture");').length, 1);
+  assert.deepEqual(violations("backend.ts", 'backend.unlink("fixture");'), []);
 });
 
 test("capability can be forced both ways; file flushes remain enabled and loose GC never refuses after deletion", async () => {
@@ -98,14 +104,14 @@ test("Windows GC applies the shipped CLI to a real non-git tracker and retains l
 
 
 test("metadata durability opens writable file handles for Windows flushes", async () => {
-  const repo = await fixture(); const flags = new Map<number,string | number>(); const open = fs.openSync; const sync = fs.fsyncSync;
+  const repo = await fixture(); const flags = new Map<number,string | number>(); let writableFlushes = 0; const open = fs.openSync; const sync = fs.fsyncSync;
   mock.method(fs,"openSync",(...args: Parameters<typeof fs.openSync>) => { const fd = open(...args); flags.set(fd,args[1]); return fd; });
   mock.method(fs,"fsyncSync",(fd: number) => {
-    if (!fstatSync(fd).isDirectory() && flags.get(fd) === "r") throw Object.assign(new Error("Windows requires a writable flush handle"),{code:"EPERM"});
+    if (!fstatSync(fd).isDirectory()) { const mode = flags.get(fd) ?? "r"; assert.ok(typeof mode === "number" ? (mode & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) !== 0 : /[wa+]/.test(mode), "Native file flushes require a writable handle, including default-flag opens"); writableFlushes++; }
     return sync(fd);
   }); syncBuiltinESMExports();
-  const path = join(repo.controlDirectory,"writable-flush.json"); writePrivateJson(path,{verified:true});
-  assert.deepEqual(JSON.parse(readFileSync(path,"utf8")),{verified:true});
+  const path = join(repo.controlDirectory,"writable-flush.json"); writePrivateJson(path,{verified:true}); durability.persist(path);
+  assert.deepEqual(JSON.parse(readFileSync(path,"utf8")),{verified:true}); assert.ok(writableFlushes > 0);
 });
 
 

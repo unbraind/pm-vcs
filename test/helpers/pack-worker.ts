@@ -22,5 +22,6 @@ if (action === "contend") {
   if (action === "compact") { const report = store.compact(); if (relative) process.stdout.write(JSON.stringify({ status: report.destruction.status })); }
   else if (action === "unpack") { store.unpack(); if (relative) process.stdout.write(JSON.stringify({ status: "completed" })); }
   else if (action === "gc") { const report = collectGarbage(repo, true); if (relative) process.stdout.write(JSON.stringify({ status: report.destruction?.status })); }
-  else repo.obliterate("asset", "erase-fixture", "fixture-cleanup", new Date(1));
+  else if (action === "obliterate") repo.obliterate("asset", "erase-fixture", "fixture-cleanup", new Date(1));
+  else throw new Error("Unknown pack worker action");
 }

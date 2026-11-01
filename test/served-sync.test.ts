@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 import { grantRemoteLeases, leasedPushTo as pushTo, LeasedHttpTransport as HttpTransport, LeasedFileTransport as FileTransport } from "./helpers/publication-consumers.ts";
 // The HTTP client against the served repository, and the command surface above it.
@@ -589,7 +590,7 @@ test("vcs serve serves a repository a real process can clone from, until it is s
   writeFileSync(auth, JSON.stringify([{ token: "worker-token", repository: name, access: "write" }]));
   for (const listen of [undefined, "[::1]:0", "127.0.0.1:0"]) {
   const host = listen === "[::1]:0" ? "[::1]" : "127.0.0.1";
-  const worker = spawn(process.execPath, [join(packageRoot, "test", "helpers", "serve-worker.ts"), serveRoot, ...(listen === undefined ? [] : [listen, listen === "[::1]:0" ? auth : "-", "allow"])], { env: testEnvironment(),
+  const worker = spawn(process.execPath, [join(packageRoot, "test", "helpers", "serve-worker.ts"), serveRoot, ...(listen === undefined ? [] : [listen, listen === "[::1]:0" ? auth : "-", "allow"])], { env: { ...testEnvironment(), ...discardChildCoverage() },
     cwd: packageRoot,
     stdio: ["ignore", "pipe", "inherit"],
   });

@@ -247,7 +247,7 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
               assert.equal(statSync(join(destination, sentinel)).mode & 0o777, 0o600);
             }
             assert.ok(failure instanceof ObjectStoreError);
-            assert.equal(failure.code, "worktree_path_changed");
+            assert.equal(failure.code, operation === "rmdir" ? "ENOTEMPTY" : "worktree_path_changed");
             assert.deepEqual(repo.view(), recorded, "a refused view change keeps the previous view recorded");
             assert.deepEqual(repo.readIndex(), index, "a refused view change keeps the index untouched");
           });
@@ -261,7 +261,7 @@ for (const strategy of ["pinned", "portable", "portable-no-follow"] as const) {
           renameSync(join(repo.root, "branch"), join(repo.root, "parked"));
           symlinkSync(destination, join(repo.root, "branch"), "dir");
         });
-        assert.throws(() => repo.materialize(null), { code: "worktree_path_changed" });
+        assert.throws(() => repo.materialize(null), { code: "ENOTEMPTY" });
         assert.equal(swapped(), true);
         assert.equal(readFileSync(join(destination, "droppable/sentinel"), "utf8"), "sentinel\n");
       });
@@ -625,9 +625,9 @@ test("a prune receipt failure preserves completed deletions and the public workt
 });
 
 
-test("erasure removal errors retain a replayable plan and the public worktree refusal", () => {
+test("erasure removal errors retain a replayable plan and their typed destruction refusal", () => {
  const {repo}=setup();const mutation=new WorktreeMutation(repo.root,".pmvcs");
- try{const expected=fs.lstatSync(join(repo.root,"branch/leaf.txt"),{bigint:true});const plan=mutation.planErasure("b".repeat(32),new Map([["branch/leaf.txt",expected]]));destructionBoundary.visit=step=>{if(step==="before-delete")throw new Error("retirement interrupted");};assert.throws(()=>plan.remove(plan.paths[0]),{code:"worktree_path_changed"});destructionBoundary.visit=()=>{};plan.remove(plan.paths[0]);assert.equal(plan.finish().deleted,1);}finally{destructionBoundary.visit=()=>{};mutation.close();}
+ try{const expected=fs.lstatSync(join(repo.root,"branch/leaf.txt"),{bigint:true});const plan=mutation.planErasure("b".repeat(32),new Map([["branch/leaf.txt",expected]]));destructionBoundary.visit=step=>{if(step==="before-delete")throw new Error("retirement interrupted");};assert.throws(()=>plan.remove(plan.paths[0]),{code:"destructive_operation_pending"});destructionBoundary.visit=()=>{};plan.remove(plan.paths[0]);assert.equal(plan.finish().deleted,1);}finally{destructionBoundary.visit=()=>{};mutation.close();}
 });
 
 
@@ -644,6 +644,6 @@ test("a leaf arriving after completed retirement is preserved by the final workt
 
 test("a pending prune resumes its retired directories without capturing new arrivals", () => {
   const {repo}=setup(); const first=new WorktreeMutation(repo.root,".pmvcs"); let interrupted=false;
-  try { first.write("fresh/deep/temporary",Buffer.from("owned"),0o600);first.remove("fresh/deep/temporary");destructionBoundary.visit=(step,path)=>{if(step==="progress-persisted"&&path.endsWith("/fresh")){interrupted=true;throw new Error("prune acknowledgment interrupted");}};assert.throws(()=>first.prune(),{code:"worktree_path_changed"});assert.ok(interrupted); } finally { destructionBoundary.visit=()=>{};first.close(); }
+  try { first.write("fresh/deep/temporary",Buffer.from("owned"),0o600);first.remove("fresh/deep/temporary");destructionBoundary.visit=(step,path)=>{if(step==="progress-persisted"&&path.endsWith("/fresh")){interrupted=true;throw new Error("prune acknowledgment interrupted");}};assert.throws(()=>first.prune(),{code:"destructive_operation_pending"});assert.ok(interrupted); } finally { destructionBoundary.visit=()=>{};first.close(); }
   const next=new WorktreeMutation(repo.root,".pmvcs");try { assert.equal(next.prune(),false);assert.equal(existsSync(join(repo.root,"fresh")),false);assert.equal(readFileSync(join(repo.root,"branch/leaf.txt"),"utf8"),"sentinel\n"); } finally { next.close(); }
 });

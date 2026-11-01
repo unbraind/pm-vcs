@@ -18,14 +18,14 @@ import { competingResolutions, carryConflicts, encodeConflict, fieldSide, readCo
 import { mergePath, mergeTrees } from "../engine/rewrite.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { frameObject, hashObject, ObjectStore, type ObjectId, type StoredObject } from "../engine/objects.ts";
-import { writeFragmented, readFragmented } from "../engine/fragments.ts";
+import { writeFragmented, writeCdcFragmented, writeFragmentedFile, readFragmented } from "../engine/fragments.ts";
 import { erasureScanBoundary } from "../engine/erasure-scan.ts";
 import { WorktreeMutation } from "../engine/worktree-mutation.ts";
 import { nativeOutputs } from "../engine/native-outputs.ts";
-import { writePrivateJson } from "../engine/composition.ts";
+import { encodeLink, writePrivateJson } from "../engine/composition.ts";
 import { renderWorkingRecord } from "../engine/record-format.ts";
 import { writeBundleFile } from "../engine/managed-exports.ts";
-import { exportBundle, parseBundle } from "../engine/bundle.ts";
+import { exportBundle, importBundle, parseBundle } from "../engine/bundle.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 const temps: ReturnType<typeof makeTempDir>[] = [];
 const author: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
@@ -255,7 +255,11 @@ test("derivation classification preserves foreign schemas, kinds, stages and nam
     { format: "pm-vcs-derivation-1", sources: ["wrong"], independent: [], derived: [] },
     { format: "pm-vcs-derivation-1", sources: [], independent: null, derived: [] },
     { format: "pm-vcs-derivation-1", sources: [], independent: [7], derived: [] },
-    { format: "pm-vcs-derivation-1", sources: [], independent: [], derived: ["wrong"] }];
+    { format: "pm-vcs-derivation-1", sources: [], independent: [], derived: ["wrong"] },
+    ...[null, [7], ["wrong"]].map(members => ({ format: "pm-vcs-derivation-3", sources: [], independent: [], derived: [], unknown: [], whole: null, members })),
+    ...[0, "wrong"].map(whole => ({ format: "pm-vcs-derivation-3", sources: [], independent: [], derived: [], unknown: [], members: [], whole })),
+    { format: "pm-vcs-derivation-2", sources: [], independent: [], derived: [], unknown: null },
+    { format: "pm-vcs-derivation-2", sources: [], independent: [], derived: [], unknown: [7] }];
   for (const value of invalid) {
     writeFileSync(path, JSON.stringify(value));
     assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), { code: "unsupported_erasure_storage" });
@@ -583,7 +587,7 @@ test("direct-parent certificate upgrade retains complete known roots before GC",
   const preview = collectGarbage(repo); assert.deepEqual(readFileSync(join(repo.controlDirectory, "derivations", `${last}.json`)), before);
   const applied = collectGarbage(repo, true); assert.deepEqual(applied.candidates, preview.candidates);
   const certificate = derivations(repo.controlDirectory, () => {}).get(last)!;
-  assert.equal(certificate.format, "pm-vcs-derivation-2"); assert.deepEqual(certificate.unknown, []);
+  assert.equal(certificate.format, "pm-vcs-derivation-3"); assert.deepEqual(certificate.unknown, []);
   assert.ok(certificate.sources.includes(entry.id)); assert.ok(certificate.sources.includes(first));
   assert.equal(repo.objects.has(first), false); assert.equal(repo.objects.has(last), false);
   erase(repo, entry.fileId!, [entry.id, first, last]);
@@ -618,11 +622,11 @@ test("certificate migration preserves replaced catalog parents and certifies onl
   const legacyOutput = store.write("blob", Buffer.from("old structural fixture"));
   writePrivateJson(join(repo.controlDirectory, "derivations", `${legacyOutput}.json`), { format: "pm-vcs-derivation-1", sources: [id], independent: [], derived: [] });
   store.withWriteLock(() => upgradeDerivations(repo.controlDirectory, derivations(repo.controlDirectory, () => {}), source => store.has(source) ? store.read(source) : undefined, () => store.assertWriteLease()));
-  assert.equal(derivations(repo.controlDirectory, () => {}).get(id)!.format, "pm-vcs-derivation-2");
+  assert.equal(derivations(repo.controlDirectory, () => {}).get(id)!.format, "pm-vcs-derivation-3");
   rmSync(join(repo.controlDirectory, "derivations", `${id}.json`));
   const output = store.write("blob", Buffer.from("structural fixture"), undefined, [id]);
   assert.deepEqual(derivations(repo.controlDirectory, () => {}).get(output)!.unknown, []);
-  assert.equal(derivations(repo.controlDirectory, () => {}).get(id)!.format, "pm-vcs-derivation-2");
+  assert.equal(derivations(repo.controlDirectory, () => {}).get(id)!.format, "pm-vcs-derivation-3");
   for (const type of ["manifest", "conflict"] as const) {
     const opaque = store.write(type, Buffer.from("legacy opaque fixture"));
     assert.equal(store.read(opaque).type, type); assert.ok(derivations(repo.controlDirectory, () => {}).get(opaque)!.unknown!.includes(opaque));
@@ -647,7 +651,7 @@ test("certificate unknown sets remain explicit through self edges, defaults and 
   const upgraded = upgradeDerivations(repo.controlDirectory, derivations(repo.controlDirectory, () => {}), input => repo.objects.has(input) ? repo.objects.read(input) : undefined, () => {}, false);
   assert.deepEqual(upgraded.get(entry.id)!.unknown, [entry.id]); assert.deepEqual(readFileSync(join(repo.controlDirectory, "derivations", `${entry.id}.json`)), before);
   assert.deepEqual(unknownDerivations(new Map([[entry.id, original]]), [entry.id], () => {}), [entry.id]);
-  const complete = { format: "pm-vcs-derivation-2" as const, sources: [entry.id], unknown: [], independent: [], derived: [] };
+  const complete = { format: "pm-vcs-derivation-3" as const, members: [], whole: null, sources: [entry.id], unknown: [], independent: [], derived: [] };
   assert.deepEqual(unknownDerivations(new Map<ObjectId, DerivationRecord>([[id, complete], [entry.id, original]]), [id], () => {}), [id]);
 });
 
@@ -680,6 +684,151 @@ test("first erasure upgrades direct-parent evidence before its pending boundary 
   try { assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), /upgraded pending boundary/); }
   finally { erasureScanBoundary.visit = before; }
   const certificate = derivations(repo.controlDirectory, () => {}).get(last)!;
-  assert.equal(certificate.format, "pm-vcs-derivation-2"); assert.ok(certificate.sources.includes(entry.id)); assert.deepEqual(certificate.unknown, []);
+  assert.equal(certificate.format, "pm-vcs-derivation-3"); assert.ok(certificate.sources.includes(entry.id)); assert.deepEqual(certificate.unknown, []);
   erase(repo, entry.fileId!, [entry.id, first, last]);
+});
+
+
+for (const packed of [false, true]) test(`whole-content equivalence survives collected manifest inputs (${packed ? "packed" : "loose"})`, async () => {
+  const { repo, entry, secret } = await fixture(); const other = "0".repeat(32);
+  const bytes = Buffer.from(secret); const fragments = [];
+  for (let start = 0; start < bytes.length; start += 7) { const chunk = bytes.subarray(start, start + 7); fragments.push({ id: repo.objects.write("blob", chunk), length: chunk.length }); }
+  const source = { manifestId: repo.objects.write("manifest", encodeManifest({ totalLength: bytes.length, fragments })) };
+  const derived = repo.objects.write("record", encodeRecord({ secret, derived: true }), other, [source.manifestId]);
+  repo.materialize(buildTree(repo.objects, new Map([["derived.json", { id: derived, fileId: other, mode: "100644" as const }]])));
+  repo.commit({ message: "derived from equivalent content", author }, new Date(1));
+  if (packed) repo.objects.compact();
+  const gc = collectGarbage(repo, true); assert.ok(gc.candidates.includes(source.manifestId)); assert.equal(repo.objects.has(source.manifestId), false);
+  const wholeCertified = derivations(repo.controlDirectory, () => {}).get(derived)!.sources.includes(entry.id);
+  erase(repo, entry.fileId!, [entry.id, source.manifestId, derived]); assert.equal(existsSync(join(repo.root, "derived.json")), false); assert.equal(wholeCertified, true);
+});
+
+test("equivalence-through-GC closes fixed, CDC, descriptor, re-split and packed representations", async () => {
+  for (let seed = 0; seed < 4; seed++) {
+    const { repo, entry, secret } = await fixture(); const bytes = Buffer.from(secret);
+    const sourcePath = join(repo.root, "source-input"); writeFileSync(sourcePath, bytes);
+    const first = seed === 1 ? writeCdcFragmented(repo.objects, bytes, { minChunkSize: 3, maxChunkSize: 7, mask: 3 }) : seed === 2 ? writeFragmentedFile(repo.objects, sourcePath, 5) : writeFragmented(repo.objects, bytes, 3 + seed);
+    const second = writeFragmented(repo.objects, readFragmented(repo.objects, first.manifestId), 5 + seed);
+    const derived = repo.objects.write("blob", Buffer.from(secret + " descendant"), undefined, [second.manifestId]);
+    const mutation = new WorktreeMutation(repo.root, ".pmvcs", repo.objects);
+    try { mutation.write("descendant", repo.objects.read(derived).payload, 0o644, { objects: [derived] }); } finally { mutation.close(); }
+    if (seed & 1) repo.objects.compact(); collectGarbage(repo, true);
+    assert.equal(repo.objects.has(first.manifestId), false); assert.equal(repo.objects.has(second.manifestId), false);
+    erase(repo, entry.fileId!, [entry.id, first.manifestId, second.manifestId, derived]); assert.equal(existsSync(join(repo.root, "descendant")), false);
+  }
+});
+
+
+test("bundle import retains whole-content equivalence without inventing clone-private origins", async () => {
+  const source = await fixture(); const target = await fixture(); const other = "c".repeat(32);
+  const representation = writeFragmented(source.repo.objects, Buffer.from(source.secret), 5);
+  source.repo.materialize(buildTree(source.repo.objects, new Map([["represented", { id: representation.manifestId, fileId: other, mode: "100644" as const }]])));
+  const commit = source.repo.commit({ message: "bundle equivalent", author }, new Date(1));
+  source.repo.refs.compareAndSwap("refs/heads/equivalent", null, commit);
+  importBundle(target.repo.objects, target.repo.refs, exportBundle(source.repo.objects, source.repo.refs, ["refs/heads/equivalent"]));
+  const record = derivations(target.repo.controlDirectory, () => {}).get(representation.manifestId)!;
+  assert.equal(record.whole, target.entry.id); assert.ok(record.sources.includes(target.entry.id)); assert.ok(record.unknown!.includes(representation.manifestId));
+  target.repo.refs.compareAndSwap("refs/heads/equivalent", commit, null);
+  const derived = target.repo.objects.write("record", encodeRecord({ secret: source.secret, imported: true }), other, [representation.manifestId]);
+  target.repo.materialize(buildTree(target.repo.objects, new Map([["derived.json", { id: derived, fileId: other, mode: "100644" as const }]])));
+  collectGarbage(target.repo, true); assert.equal(target.repo.objects.has(representation.manifestId), false);
+  assert.throws(() => target.repo.obliterate(target.entry.fileId!, "erase-fixture", "provenance", new Date(1)), error => error instanceof UncataloguedProvenance && error.objects.includes(derived));
+  assert.equal(target.repo.objects.denials().length, 0); assert.ok(readFileSync(join(target.repo.root, "derived.json")).includes(source.secret));
+});
+
+
+test("native whole-content completion validates lease, identity and manifest shape before changing evidence", async () => {
+ const { repo, entry } = await fixture(); const store = repo.objects; const before = derivations(repo.controlDirectory, () => {});
+ assert.throws(() => store.recordWholeContent(entry.id, entry.id), { code: "store_locked" });
+ const malformed = store.write("manifest", Buffer.from("malformed native composition"));
+ store.withWriteLock(() => {
+  assert.throws(() => store.recordWholeContent(entry.id, "wrong"), { code: "invalid_provenance" });
+  assert.throws(() => store.recordWholeContent(entry.id, entry.id), { code: "invalid_manifest" });
+  assert.throws(() => store.recordWholeContent(malformed, entry.id), { code: "invalid_manifest" });
+ });
+ assert.deepEqual(derivations(repo.controlDirectory, () => {}).get(entry.id), before.get(entry.id));
+ const native = writeFragmented(store, Buffer.alloc(0), 4); assert.equal(derivations(repo.controlDirectory, () => {}).get(native.manifestId)!.whole, hashObject("blob", Buffer.alloc(0)));
+});
+
+for (const legacyWhole of [false, true]) test(`legacy equivalence upgrade preserves ${legacyWhole ? "unknown physical" : "known virtual"} whole-content origins through GC`, async () => {
+ const { repo, entry, secret } = await fixture(); const bytes = Buffer.from(secret + " upgraded native whole"); const fragments = [];
+ for (let offset = 0; offset < bytes.length; offset += 8) { const chunk = bytes.subarray(offset, offset + 8); fragments.push({ id: repo.objects.write("blob", chunk, undefined, [entry.id]), length: chunk.length }); }
+ const whole = hashObject("blob", bytes); if (legacyWhole) repo.objects.write("blob", bytes);
+ const manifest = repo.objects.write("manifest", encodeManifest({ totalLength: bytes.length, fragments }));
+ const other = "9".repeat(32); const derived = repo.objects.write("record", encodeRecord({ secret: bytes.toString() }), other, [manifest]);
+ repo.materialize(buildTree(repo.objects, new Map([["upgraded.json", { id: derived, fileId: other, mode: "100644" as const }]])));
+ repo.commit({ message: "old native equivalent manifest output", author }, new Date(1));
+ // A genuine pre-equivalence certificate has no whole identity, including its flattened sources.
+ for (const id of [manifest, derived]) writePrivateJson(join(repo.controlDirectory, "derivations", `${id}.json`), { format: "pm-vcs-derivation-2", sources: [...new Set([entry.id, ...fragments.map(fragment => fragment.id), ...(id === derived ? [manifest] : [])])].sort(), unknown: [], independent: [], derived: id === derived ? [other] : [] });
+ rmSync(join(repo.controlDirectory, "derivations", `${whole}.json`));
+ const result = collectGarbage(repo, true); assert.ok(result.candidates.includes(manifest)); assert.equal(repo.objects.has(manifest), false);
+ const certificate = derivations(repo.controlDirectory, () => {}).get(derived)!; assert.ok(certificate.sources.includes(whole));
+ if (legacyWhole) { assert.ok(certificate.unknown!.includes(whole)); assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "unknown-equivalence", new Date(1)), error => error instanceof UncataloguedProvenance && error.objects.includes(derived)); assert.equal(repo.objects.denials().length, 0); assert.ok(readFileSync(join(repo.root, "upgraded.json")).includes(bytes)); }
+ else { assert.deepEqual(certificate.unknown, []); erase(repo, entry.fileId!, [entry.id, manifest, whole, derived]); assert.equal(existsSync(join(repo.root, "upgraded.json")), false); }
+});
+
+test("ancestry-only updates preserve an existing whole-content identity and its retained members", async () => {
+ const { repo, entry } = await fixture(); const native = writeFragmented(repo.objects, Buffer.from("independent native whole content"), 5); const before = derivations(repo.controlDirectory, () => {}).get(native.manifestId)!;
+ repo.objects.withWriteLock(() => recordDerivation(repo.controlDirectory, native.manifestId, [entry.id], undefined, true, false, id => repo.objects.has(id) ? repo.objects.read(id) : undefined, () => repo.objects.assertWriteLease()));
+ const after = derivations(repo.controlDirectory, () => {}).get(native.manifestId)!; assert.equal(after.whole, before.whole); assert.deepEqual(after.members, before.members); assert.ok(after.sources.includes(entry.id));
+});
+
+test("incomplete native manifests remain readable but cannot certify whole-content equivalence or successful erasure", async () => {
+ const { repo, entry } = await fixture(); const missing = "e".repeat(64); const id = repo.objects.write("manifest", encodeManifest({ totalLength: 3, fragments: [{ id: missing, length: 3 }] }));
+ assert.equal(repo.objects.read(id).type, "manifest"); assert.equal(derivations(repo.controlDirectory, () => {}).get(id)!.whole, false);
+ assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "missing-composition", new Date(1)), { code: "incomplete_erasure_inventory" }); assert.equal(repo.objects.denials().length, 0); assert.ok(existsSync(join(repo.root, "asset")));
+});
+
+
+for (const packed of [false, true]) test(`independent whole-equivalent FileIds retain shared-ownership refusal (${packed ? "packed" : "loose"})`, async () => {
+ const { repo, entry, secret } = await fixture(); const other = "a".repeat(32); const result = writeFragmented(repo.objects, Buffer.from(secret), 5, other);
+ if (packed) repo.objects.compact();
+ const independent = derivations(repo.controlDirectory, () => {}).get(result.manifestId)!.independent.includes(other);
+ assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "independent-equivalent", new Date(1)), { code: "erasure_dedup_conflict" }); assert.equal(repo.objects.denials().length, 0); assert.deepEqual(readFragmented(repo.objects, result.manifestId), Buffer.from(secret)); assert.equal(independent, true);
+});
+
+test("explicit native derivation retains whole equivalence without adopting independent ownership", async () => {
+ const { repo, entry, secret } = await fixture(); const other = "b".repeat(32);
+ const result = repo.objects.withDerivation([entry.id], () => writeFragmented(repo.objects, Buffer.from(secret), 5, other));
+ const record = derivations(repo.controlDirectory, () => {}).get(result.manifestId)!; assert.ok(record.derived.includes(other)); assert.equal(record.independent.includes(other), false);
+ erase(repo, entry.fileId!, [entry.id, result.manifestId]);
+});
+
+test("a whole blob created after GC still finds every retained equivalent derivation", async () => {
+ const { repo } = await fixture(); const bytes = Buffer.from("late whole identity 572913"); const fragments = [];
+ for (let offset = 0; offset < bytes.length; offset += 4) { const chunk = bytes.subarray(offset, offset + 4); fragments.push({ id: repo.objects.write("blob", chunk), length: chunk.length }); }
+ const manifest = repo.objects.write("manifest", encodeManifest({ totalLength: bytes.length, fragments }));
+ const other = "d".repeat(32); const derived = repo.objects.write("record", encodeRecord({ content: bytes.toString(), native: true }), other, [manifest]);
+ repo.materialize(buildTree(repo.objects, new Map([["derived-late.json", { id: derived, fileId: other, mode: "100644" as const }]])));
+ repo.commit({ message: "retain native descendant", author }, new Date(1)); collectGarbage(repo, true); assert.equal(repo.objects.has(manifest), false);
+ writeFileSync(join(repo.root, "late-whole"), bytes); repo.stage(["late-whole"]); const selected = repo.readIndex().find(row => row.path === "late-whole")!;
+ assert.equal(selected.id, hashObject("blob", bytes)); erase(repo, selected.fileId!, [selected.id, manifest, derived]); assert.equal(existsSync(join(repo.root, "derived-late.json")), false);
+});
+
+for (const missing of [false, true]) test(`legacy whole-content producers upgrade ${missing ? "missing" : "known"} input evidence before equivalence publication`, async () => {
+ const { repo, entry, secret } = await fixture(); const lost = "f".repeat(64);
+ /** Preserve an actual pre-equivalence certificate's fields without inventing origins. */
+ const legacy = (id: string): void => {
+  const path = join(repo.controlDirectory, "derivations", `${id}.json`); const current = JSON.parse(readFileSync(path, "utf8")) as DerivationRecord;
+  writeFileSync(path, JSON.stringify({ format: "pm-vcs-derivation-2", sources: [...new Set([...current.sources, ...(missing ? [lost] : [])])], unknown: current.unknown, independent: current.independent, derived: current.derived }));
+ };
+ legacy(entry.id); const result = writeFragmented(repo.objects, Buffer.from(secret), 5, entry.fileId);
+ assert.equal(derivations(repo.controlDirectory, () => {}).get(entry.id)!.format, "pm-vcs-derivation-3");
+ legacy(result.manifestId); repo.objects.withWriteLock(() => repo.objects.recordWholeContent(result.manifestId, entry.id, entry.fileId));
+ const evidence = derivations(repo.controlDirectory, () => {}).get(result.manifestId)!; assert.equal(evidence.format, "pm-vcs-derivation-3"); assert.equal(evidence.whole, entry.id);
+ if (missing) { assert.ok(evidence.unknown!.includes(lost)); assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "legacy-producer", new Date(1)), { code: "uncatalogued_provenance" }); assert.equal(repo.objects.denials().length, 0); assert.deepEqual(readFragmented(repo.objects, result.manifestId), Buffer.from(secret)); }
+ else { assert.deepEqual(evidence.unknown, []); erase(repo, entry.fileId!, [entry.id, result.manifestId]); }
+});
+
+for (const type of ["record", "link", "conflict"] as const) for (const packed of [false, true]) test(`typed whole-payload equivalence survives collected ${type} inputs (${packed ? "packed" : "loose"})`, async () => {
+  const { repo, entry, secret } = await fixture(); const other = "0".repeat(32); const publicSide = repo.objects.write("blob", Buffer.from("public side"));
+  const bytes = type === "record" ? encodeRecord({ secret, native: true }) : type === "link" ? encodeLink({ version: 1, repository: repo.identity(), revision: repo.refs.resolveHead()!, mappings: [{ source: secret, destination: "asset" }] }) : encodeConflict({ kind: "field", field: secret, base: publicSide, ours: publicSide, theirs: publicSide });
+  const selected = repo.objects.write("blob", bytes, entry.fileId, [entry.id]);
+  const record = repo.objects.write(type, bytes);
+  const derived = repo.objects.write("blob", Buffer.concat([bytes, Buffer.from(" derived")]), other, [record]);
+  repo.materialize(buildTree(repo.objects, new Map([["derived.txt", { id: derived, fileId: other, mode: "100644" as const }]])));
+  repo.commit({ message: "derived from typed whole content", author }, new Date(1));
+  if (packed) repo.objects.compact();
+  assert.ok(collectGarbage(repo, true).candidates.includes(record)); assert.equal(repo.objects.has(record), false);
+  erase(repo, entry.fileId!, [entry.id, selected, record, derived]); assert.equal(existsSync(join(repo.root, "derived.txt")), false);
 });

@@ -283,7 +283,7 @@ test("worktree erasure recovery never adopts a foreign leaf across pending and c
     for (let retry = 0; retry < 3; retry++) {
       const next = new WorktreeMutation(repo.root, ".pmvcs");
       try {
-        assert.throws(() => { const plan = next.planErasure("a".repeat(32), new Map([["owned", lstatSync(leaf, { bigint: true })]]), true); plan.remove(leaf); plan.finish(); }, { code: "worktree_path_changed" });
+        assert.throws(() => { const plan = next.planErasure("a".repeat(32), new Map([["owned", lstatSync(leaf, { bigint: true })]]), true); plan.remove(leaf); plan.finish(); }, { code: checkpoint === "pending" && link ? "destructive_plan_conflict" : "worktree_path_changed" });
       } finally { next.close(); }
       assert.equal(readFileSync(leaf, "utf8"), "foreign sentinel"); assert.equal(readFileSync(target, "utf8"), "foreign sentinel");
       if (link) assert.equal(readlinkSync(leaf), target);

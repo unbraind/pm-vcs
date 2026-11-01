@@ -398,3 +398,137 @@ and archive generation; committed-HEAD self-host acceptance verifies without
 regeneration. The prior merge/archive commits remain ancestors, main is included,
 and tracker history extends main byte for byte. Catalog portability and retained
 metadata scale remain on `pm-vcs-provenance-catalog-scale`.
+
+
+## Sixth review: durable whole-content equivalence
+
+The former certificate retained container and fragment ancestry but omitted the
+whole-blob identity reconstructed by a manifest. After GC removed the container,
+a derived record could be unrelated to the selected whole blob in the retained
+graph. Version-three certificates retain the whole identity and native members,
+with a reverse member set on a virtual whole-blob certificate. The erasure queue
+follows both retained members and transitive sources. Metadata is retained by GC;
+unknown imported or old ancestry still refuses before any deletion.
+
+| Equivalent representation producer | Durable route and verdict |
+| --- | --- |
+| Canonical record, link or conflict payload equal to a blob | The shared native representation classifier records `hashObject("blob", payload)` before publication; retained whole/member edges survive collection of the typed input. Structural frames remain identifier-only metadata. |
+| Direct native manifest or page | `ObjectStore.write` -> `representation` -> `nativeRepresentation`; reconstructed whole identity and members precede native payload publication. |
+| Fixed and CDC buffer fragmentation | `bufferContent` -> `withWholeContent`; identify once, record root before fragment bytes, finish with `recordWholeContent`. Raw denial digest is conditional. |
+| Fixed and CDC descriptor/file fragmentation | `descriptorContent` shares the source identity pass; file wrappers receive that identity rather than hashing again. Fragment sources and final manifest record it. |
+| Fragment re-split | Same fixed/CDC producers; alternate boundaries retain the same whole identity. |
+| Pack member, repack and unpack | Existing object IDs are unchanged; packing does not drop derivation metadata or invent a separate logical content identity. |
+| Bundle/unbundle and filesystem or HTTP clone/fetch | `importBundleObjects` -> `ObjectStore.accept`; native manifest equivalence is recorded from arrived native frames. Uncatalogued imported origins remain unknown. |
+| Promisor hydration and resume upload | Shared `ObjectStore.accept` path; equal native content has the same ID. It cannot acquire a false independent origin. |
+| Old certificates and absent ancestors | Upgrade reconstructs while native inputs exist; missing proof remains unknown. GC cannot convert unknown into completed erasure. |
+
+Regressions cover the exact loose and packed collected-manifest reproduction,
+four generated fixed/CDC/descriptor/re-split histories with GC and registered
+outputs, and bundle import with retained equivalence but unknown origin. Existing
+GC-anywhere, merge, legacy and bounded traversal cases remain in the corpus.
+Cubic's complete 59-thread response ledger is in
+[pr150-cubic-triage.md](pr150-cubic-triage.md) and on `pm-vcs-phase6packs`.
+
+The P1 physical-accountability repair binds each native file to a bounded
+SHA-256 before parsing and rechecks the held descriptor before acceptance or
+purge and again at the final catalogue barrier. Size, mtime and ctime alone do
+not prove content stability: a same-tick rewrite can preserve them. Four native
+regressions freeze the ctime observation while rewriting equal-sized loose and
+packed bytes and restoring mtime, both after parsing and at the final barrier.
+Every case refuses; removing the byte fences falsely certifies all four. Purge
+journals still accept older four-component identities for reading; those older
+pending stamps cannot authorize a newly observed deletion lifetime.
+
+
+The final class audit also covers literal native payload equivalence: records,
+links and conflicts that carry the same payload as a whole blob retain that
+blob identity before publication. Six regressions collect the typed input and
+then erase its whole blob in loose and packed storage; every indexed descendant
+and registered worktree output is removed. Disabling only this classifier makes
+all six fail, and restoration passes all six. This is structural native identity,
+not speculative decoding of independently authored content.
+
+Two removed fallback alternatives are provably unreachable. A previous record
+returned by `certificateResolver` is version three with an array of `members`:
+new records supply it, classification validates it, and every legacy upgrade or
+cycle result constructs it. Thus `previous.members ?? []` had a dead fallback;
+the actual membership merge remains. All five calls of the private
+`assertSupportedControl` pass their real deadline/lease callback, so its no-op
+parameter default was unused. The callback is now required, and every existing
+control refusal and observation remains. Reachable branches instead have native
+fault/refusal regressions, including empty foreign lease-audit names.
+
+The exact original manifest reproduction, equivalence-through-GC property and
+late whole-blob arrival each fail under a behavioral revert. Ownership controls
+also fail if implicit whole-content association is incorrectly treated as an
+explicit native derivation. Legacy producer callbacks have separate failing
+reverts. The complete 86-group selector ledger is in
+[pr150-cubic-triage.md](pr150-cubic-triage.md), with mutant exit 1 and restored exit
+0 for every group. The P1 four-case same-tick regression is part of that ledger.
+
+
+## Sixth-review final local validation
+
+These cohorts overlap and are not summed. Every command uses at most one worker;
+no more than two test workers run concurrently. Production hashes remain unchanged
+from the final coverage/static checks.
+
+| Focused gate | Result |
+| --- | --- |
+| Node 26 erasure/provenance/plans/accountability/lifecycle/review | 239/239 |
+| Node 26 storage/fragment/legacy repair | 154/154 |
+| Node 26 provenance before the four extra typed cells | 62/62 |
+| Composition and authorization integration | 22/22 |
+| Complete pack and GC suites | 70/70 |
+| Fixed/CDC fragments and paged manifests | 97/97 |
+| Packed power loss plus recovery regressions | 3/3 |
+| Node 22 final compatibility selection | 15/15 |
+| Bun final provenance corpus | 66/66 |
+| PM-linked equivalence / typed equivalence / P1 / fixture commands | 3/3, 6/6, 4/4, 5/5 (overlapping selections) |
+| Current touched-module coverage | 17 modules; 100% statements, branches, functions and lines; c8 --all --100 --per-file passes |
+
+
+The packed matrix covers **6,247 native boundaries and 538 distinct full crash
+images**, with two convergent engine replays per image. Native held data and the
+foreign sentinel are preserved. The complete pack suite also covers real SIGKILL,
+competing processes and relative-root/cwd changes through compact, unpack and GC.
+The 62-case Node provenance run preceded four added link/conflict cells; all six
+typed cells subsequently pass through the PM runner and on Node 22, and the full
+66-case final file passes under Bun.
+
+Earlier unchanged-path evidence also includes 235/235 reader/lifetime checks,
+6,750 reader/writer cells and 406 pinned boundaries; the 512-seed lifecycle model
+passes 2/2 selections covering 6,144 operations, 2,038 verified verdicts, 759
+interrupted runs and 461 legitimate pending-link refusals. These figures describe
+that measured corpus, not exhaustive arbitrary histories.
+
+Static validation passes typecheck, source/test compilation, lint and the zero
+clone-pair gate (95 sources / 30,175 lines). Docstrings cover 95 files and 595
+declarations; package privacy scans 340 files with zero findings. The final
+changelog and committed-HEAD self-host commands follow the required tracker-first
+sequence. Full npm/Bun release matrices and fresh independent review remain CI /
+orchestrator work. No installer timeout was retried. An initial direct Bun run
+used its default five-second test limit and failed; it is excluded. Rerunning
+with `--timeout=600000` passed all 66 cases.
+
+Commands for the final isolated cohorts (credential-free scratch HOME/TMPDIR and
+Git configuration were supplied by the gate harness):
+
+```sh
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern="SIGKILL|EVERY native|512 seeded lifecycle|valid wide tree" test/erasure-provenance.test.ts test/derivation-provenance.test.ts test/destructive-plans.test.ts test/erasure-accountability.test.ts test/erasure-lifecycle.test.ts test/review-repair.test.ts
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-skip-pattern="SIGKILL|one tracker serializes|streaming erasure does not retain" test/erasure-storage.test.ts test/erasure-fragment-repairs.test.ts test/stream-erasure-legacy-fetch-repair.test.ts
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/packs.test.ts test/gc.test.ts
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/fragments.test.ts test/cdc-fragments.test.ts test/manifest-pages.test.ts
+node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-name-pattern="EVERY native obliterate-packed|interrupted ref retirement resolves|acknowledged packed transactions" test/journal-durability.test.ts
+bun test --max-concurrency=1 --timeout=600000 test/derivation-provenance.test.ts
+node --expose-gc --test --test-concurrency=1 --test-name-pattern="in-place rewrite|whole-content equivalence survives|typed whole-payload equivalence|legacy whole-content producers|unrecognized empty lease" test/erasure-accountability.test.ts test/derivation-provenance.test.ts test/review-repair.test.ts
+npm run check
+npm run build:test
+npm run docstring
+npm run pack:check
+```
+
+The last Node selection uses Node 22; other Node cohorts use Node 26. Coverage
+includes exactly the seventeen changed production modules, using current-source
+V8 profiles and excluding stale source epochs. No configuration threshold or
+ignore directive changed. The full 95-module release coverage matrix remains CI.

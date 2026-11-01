@@ -303,7 +303,9 @@ test("erasure retains native destruction checkpoints, archives, progress and sta
       });
     } finally { mock.restoreAll(); syncBuiltinESMExports(); }
     const ledger = join(current.repo.controlDirectory, "destruction");
-    const bitmap = readdirSync(ledger).find(name => name.endsWith(".00000000000000000000000000000c54.progress"))!;
+    const bitmap = readdirSync(ledger).find(name => name.endsWith(".00000000000000000000000000000c54.progress"));
+    assert.ok(bitmap); const progressPath = join(ledger, bitmap); const progress = readFileSync(progressPath); assert.ok(progress.length > 0);
+    current.repo.obliterate(current.fileId, "erase-fixture", "retained-bitmap", new Date(1)); assert.deepEqual(readFileSync(progressPath), progress);
   }
   assert.equal(retained.repo.obliterate(retained.fileId, "erase-fixture", "retained-bitmap", new Date(1)).guarantee.kind, "native-provenance");
   assert.equal(existsSync(join(retained.repo.root, "asset")), false); assert.equal(retained.repo.objects.denials()[0].pending, false);

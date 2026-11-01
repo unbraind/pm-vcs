@@ -42,7 +42,7 @@ export function recordPayloadOwner(control: string, id: ObjectId, fileId: string
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.size !== 0) throw new ObjectStoreError("unsupported_erasure_storage", "Foreign provenance bytes were preserved.");
-    return;
+    fd = openSync(path, constants.O_RDWR | constants.O_NOFOLLOW);
   }
   try {
     const held = fstatSync(fd); const current = lstatSync(path);

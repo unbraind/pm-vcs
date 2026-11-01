@@ -1,5 +1,6 @@
 import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
+import { discardChildCoverage } from "./helpers/sandbox.ts";
 // The served repository's own rules: one denial for everything a caller may
 // not learn from, bounds that leave the repository untouched, and a name rule
 // that keeps a request inside the served root.
@@ -1097,7 +1098,7 @@ for (const runtime of ["node", "bun"]) {
   test(`denial wire bytes stay identical across seconds under native ${runtime}`, { timeout: 30_000, skip }, async () => {
     const root = tempRoot();
     const worker = spawn(runtime, [join(packageRoot, "test/helpers/denial-worker.ts"), root],
-      { env: testEnvironment(), stdio: ["ignore", "pipe", "pipe"] });
+      { env: { ...testEnvironment(), ...discardChildCoverage() }, stdio: ["ignore", "pipe", "pipe"] });
     const closed = once(worker, "close");
     try {
       const port = await new Promise<number>((resolvePort, reject) => {

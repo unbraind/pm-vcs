@@ -24,6 +24,9 @@ test("child allowlist drops all ambient session namespaces and keeps only delibe
   for (const key of ["NODE_OPTIONS", "PM_PATH", "UNRELATED_SECRET"]) assert.equal(env[key], undefined, key);
   const fixture = testEnvironment({ CODEX_CI: "1", PM_AGENT_MODEL: "fixture-model", PM_AGENT_PROBES: "0" }, source);
   assert.equal(fixture.CODEX_CI, "1"); assert.equal(fixture.PM_AGENT_MODEL, "fixture-model"); assert.equal(fixture.CLAUDECODE, undefined); assert.equal(testEnvironment({ NODE_V8_COVERAGE: "" }, source).NODE_V8_COVERAGE, "");
+  assert.equal(env.GIT_CONFIG_GLOBAL, process.platform === "win32" ? "NUL" : "/dev/null");
+  assert.equal(env.GIT_CONFIG_NOSYSTEM, "1");
+  assert.equal(testEnvironment({ GIT_CONFIG_GLOBAL: "fixture-only-config" }, source).GIT_CONFIG_GLOBAL, "fixture-only-config");
   assert.ok(TEST_ENVIRONMENT_KEYS.every(key => !/^(?:CLAUDE|CODEX|AI_AGENT|PM_AGENT)/.test(key)));
 });
 
@@ -73,11 +76,34 @@ test("all test entrypoints isolate sessions first and every child launch has an 
     if (worker) assert.equal(ts.transpileModule(body, { reportDiagnostics: true, compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).diagnostics?.length ?? 0, 0, `${name} worker source must parse before auditing`);
     const source = ts.createSourceFile(name, body, ts.ScriptTarget.Latest, true); const aliases = new Map<string, string>(); const namespaces = new Set<string>();
     if (!worker && name.endsWith(".test.ts")) { const first = source.statements[0]; assert.ok(ts.isImportDeclaration(first) && ts.isStringLiteral(first.moduleSpecifier) && first.moduleSpecifier.text.endsWith("/isolate-session.ts"), `${name} must isolate before importing the SDK`); entries++; }
-    for (const statement of source.statements) if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === "node:child_process" && statement.importClause) {
+    for (const statement of source.statements) if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && ["node:child_process", "child_process"].includes(statement.moduleSpecifier.text) && statement.importClause) {
       const bindings = statement.importClause.namedBindings; if (statement.importClause.name) namespaces.add(statement.importClause.name.text);
       if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
       if (bindings && ts.isNamedImports(bindings)) for (const element of bindings.elements) aliases.set(element.name.text, (element.propertyName ?? element.name).text);
     }
+    const bindings = new Map<ts.Node, Map<string, ts.Expression | undefined>>();
+    /** Scope declarations lexically so a safe binding cannot hide an unsafe shadow with the same name. */
+    const bind = (node: ts.Node): void => {
+      if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name)) {
+        let scope: ts.Node = node.parent;
+        while (scope.parent && !(ts.isParameter(node) ? ts.isFunctionLike(scope) : ts.isBlock(scope) || ts.isSourceFile(scope))) scope = scope.parent;
+        const names = bindings.get(scope) ?? new Map<string, ts.Expression | undefined>(); names.set(node.name.text, node.initializer); bindings.set(scope, names);
+      }
+      ts.forEachChild(node, bind);
+    }; bind(source);
+    /** Resolve the nearest declaration, including an uninitialized shadow that blocks any outer fallback. */
+    const binding = (node: ts.Identifier): ts.Expression | undefined => {
+      for (let scope: ts.Node | undefined = node; scope; scope = scope.parent) { const names = bindings.get(scope); if (names?.has(node.text)) return names.get(node.text); }
+      return undefined;
+    };
+    /** Follow local bindings while rejecting cycles, undefined values and ambient aliases. */
+    const environment = (value: ts.Expression, seen = new Set<string>()): boolean => {
+      if (ts.isParenthesizedExpression(value) || ts.isAsExpression(value)) return environment(value.expression, seen);
+      if (ts.isConditionalExpression(value)) return environment(value.whenTrue, new Set(seen)) && environment(value.whenFalse, new Set(seen));
+      if (ts.isIdentifier(value)) { const resolved = binding(value); if (seen.has(value.text) || resolved === undefined) return false; seen.add(value.text); return environment(resolved, seen); }
+      if (ts.isCallExpression(value)) return ["testEnvironment", "discardChildCoverage"].includes(value.expression.getText(source)) && value.arguments[0]?.getText(source) !== "process.env" || value.expression.getText(source) === "withoutPmContext" && value.arguments.length === 1 && environment(value.arguments[0], seen);
+      return ts.isObjectLiteralExpression(value) && value.properties.every(property => !ts.isSpreadAssignment(property) || environment(property.expression, new Set(seen)));
+    };
     /** Reject host-object forwarding independently of the environment builder's runtime implementation. */
     const visit = (node: ts.Node): void => {
       if (ts.isSpreadAssignment(node)) assert.notEqual(node.expression.getText(source), "process.env", `${name} forwards ambient environment`);
@@ -85,14 +111,22 @@ test("all test entrypoints isolate sessions first and every child launch has an 
       if (ts.isCallExpression(node)) {
         const kind = ts.isIdentifier(node.expression) ? aliases.get(node.expression.text) : ts.isPropertyAccessExpression(node.expression) && namespaces.has(node.expression.expression.getText(source)) ? node.expression.name.text : undefined;
         if (kind && /^(?:fork|exec|spawn|execFile|execSync|spawnSync|execFileSync)$/.test(kind)) {
-          launches++; const index = /^exec(?:Sync)?$/.test(kind) ? 1 : node.arguments.length === 2 && ts.isObjectLiteralExpression(node.arguments[1]) ? 1 : 2; const options = node.arguments[index];
+          launches++; const second = node.arguments[1]; const secondValue = second && ts.isIdentifier(second) ? binding(second) : second;
+          const index = /^exec(?:Sync)?$/.test(kind) ? 1 : node.arguments.length === 2 && secondValue && ts.isObjectLiteralExpression(secondValue) ? 1 : 2; const options = node.arguments[index];
           assert.ok(options, `${name} has an implicit child environment`);
-          if (ts.isObjectLiteralExpression(options)) assert.ok(options.properties.some(property => property.name?.getText(source) === "env"), `${name} omits child env`);
+          const resolved = ts.isIdentifier(options) ? binding(options) : options;
+          assert.ok(resolved && ts.isObjectLiteralExpression(resolved), `${name} has unresolved child options`);
+          const env = resolved.properties.find(property => property.name?.getText(source) === "env");
+          assert.ok(env && (ts.isPropertyAssignment(env) && environment(env.initializer) || ts.isShorthandPropertyAssignment(env) && environment(env.name)), `${name} omits or cannot prove nonambient child env`);
+          if (["test/serve.test.ts", "test/served-sync.test.ts"].includes(name) && node.arguments.slice(0, index).some(argument => /(?:serve|denial)-worker\.ts/u.test(argument.getText(source)))) {
+            const expression = ts.isPropertyAssignment(env) ? env.initializer : ts.isShorthandPropertyAssignment(env) ? binding(env.name) : undefined;
+            assert.ok(expression?.getText(source).includes("discardChildCoverage"), `${name} long-running server worker must discard duplicate coverage`);
+          }
         }
       }
       if (!worker && (ts.isStringLiteralLike(node) || ts.isTemplateExpression(node))) {
         const program = ts.isTemplateExpression(node) ? node.head.text + node.templateSpans.map(span => '"fixture-interpolation"' + span.literal.text).join("") : node.text;
-        if (/from\s*["']node:child_process["']/.test(program)) { embedded++; audit(`${name}:worker`, program, true); }
+        if (/from\s*["'](?:node:)?child_process["']/.test(program)) { embedded++; audit(`${name}:worker`, program, true); }
       }
       ts.forEachChild(node, visit);
     };
@@ -102,5 +136,13 @@ test("all test entrypoints isolate sessions first and every child launch has an 
     const name = relative(packageRoot, path).replaceAll("\\", "/");
     if (!name.endsWith("helpers/test-environment.ts") && !name.endsWith("helpers/isolate-session.ts")) audit(name, readFileSync(path, "utf8"));
   }
-  assert.ok(entries >= 90); assert.ok(launches >= 145); assert.ok(embedded >= 3); t.diagnostic(`${entries} isolated test entrypoints and ${launches} explicit child launch sites across ${embedded} embedded workers audited`);
+  const actualLaunches = launches;
+  const imported = "import { spawnSync } from " + JSON.stringify(["node", "child_process"].join(":")) + ";";
+  for (const body of ['spawnSync("fixture",[],{env:undefined});', 'const options={}; spawnSync("fixture",[],options);', 'const missing=undefined; spawnSync("fixture",[],{env:missing});', 'function unsafe(){const env=undefined;spawnSync("fixture",[],{env});}const env=testEnvironment();', 'const env=testEnvironment();function unsafe(){let env;spawnSync("fixture",[],{env});}']) assert.throws(() => audit("negative-worker", imported + body, true));
+  audit("positive-worker", imported + 'const safe=testEnvironment();const options={env:safe};spawnSync("fixture",[],options);', true);
+  audit("positive-two-argument-options", imported + 'const options={env:testEnvironment()};spawnSync("fixture",options);', true);
+  const bare = "import {spawnSync} from " + JSON.stringify(["child", "process"].join("_")) + ";";
+  assert.throws(() => audit("negative-bare-core", bare + 'spawnSync("fixture",[],{env:undefined});', true));
+  audit("positive-bare-core", bare + 'spawnSync("fixture",[],{env:testEnvironment()});', true);
+  assert.ok(entries >= 90); assert.ok(launches >= 145); assert.ok(embedded >= 3); t.diagnostic(`${entries} isolated test entrypoints and ${actualLaunches} explicit child launch sites across ${embedded} embedded workers audited`);
 });

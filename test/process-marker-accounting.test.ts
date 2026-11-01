@@ -11,7 +11,7 @@ import { Repository } from "../engine/repo.ts";
 import { durability } from "../engine/durability.ts";
 import { destructionBoundary, inspectDestructions } from "../engine/destruction.ts";
 import { objectFiles } from "../engine/object-files.ts";
-import { verificationLimits } from "../engine/object-error.ts";
+import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -60,7 +60,7 @@ test("marker reads close their descriptor on short reads, native failures and ev
 
 test("orphan process-stage cleanup preserves live and foreign records, refuses exhausted budgets and resumes exact ownership", async () => {
  const root = await fixture(); const repo = Repository.init(join(root, "orphans")); const path = join(repo.controlDirectory, "oplog.jsonl.lock"); const staged = abandon(path); const foreign = join(dirname(path), prefix(path) + "1-ffffffffffff.lock"); writeFileSync(foreign, "foreign tripwire");
- for (const key of ["receiptRecords", "receiptMs"] as const) { const limit = verificationLimits[key]; verificationLimits[key] = 0; try { assert.throws(() => durability.claim(path, "fixture_locked")); assert.ok(existsSync(staged)); assert.equal(readFileSync(foreign, "utf8"), "foreign tripwire"); } finally { verificationLimits[key] = limit; } }
+ for (const key of ["receiptRecords", "receiptMs"] as const) { const limit = verificationLimits[key]; verificationLimits[key] = 0; try { assert.throws(() => durability.claim(path, "fixture_locked"), VerificationRefusal); assert.ok(existsSync(staged)); assert.equal(readFileSync(foreign, "utf8"), "foreign tripwire"); } finally { verificationLimits[key] = limit; } }
  const lease = durability.claim(path, "fixture_locked"); lease.release(); assert.equal(existsSync(staged), false); assert.equal(readFileSync(foreign, "utf8"), "foreign tripwire"); assert.equal(inspectDestructions(repo.controlDirectory).pending, 0);
 });
 

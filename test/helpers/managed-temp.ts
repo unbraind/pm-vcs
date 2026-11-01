@@ -17,7 +17,7 @@ export function makeManagedTempDir() {
     /** Child close follows exit and pipe closure; a synchronous-looking exit alone is insufficient. */
     child(child: ChildProcess): ChildProcess {
       const done = new Promise<void>((resolve, reject) => { let failure: Error | undefined; child.once("error", error => { failure = error; }); child.once("close", () => { if (failure === undefined) resolve(); else reject(failure); }); });
-      own(done); return child;
+      own(done, () => { const grace = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM"); }, 500); const force = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); }, 1000); grace.unref(); force.unref(); void done.finally(() => { clearTimeout(grace); clearTimeout(force); }).catch(() => {}); }); return child;
     },
     /** Stop every owned watcher, then wait for its close event before removing watched directories. */
     watcher(watcher: FSWatcher): FSWatcher {

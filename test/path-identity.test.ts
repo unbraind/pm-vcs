@@ -28,7 +28,7 @@ import ts from "typescript5";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
 const temporary: ReturnType<typeof makeTempDir>[] = [];
-afterEach(() => { accountabilityBoundary.visit = () => {}; erasureScanBoundary.visit = () => {}; packBoundary.visit = () => {}; destructionBoundary.visit = () => {}; assert.equal(objectFiles.active.size, 0); for (const dir of temporary.splice(0)) dir.cleanup(); });
+afterEach(() => { accountabilityBoundary.visit = () => {}; erasureScanBoundary.visit = () => {}; packBoundary.visit = () => {}; destructionBoundary.visit = () => {}; try { assert.equal(objectFiles.active.size, 0); } finally { for (const dir of temporary.splice(0)) dir.cleanup(); } });
 /** Initialize a real SDK tracker independently of Git discovery. */
 async function fixture() {
   const dir = makeTempDir(); temporary.push(dir); process.env.GIT_CEILING_DIRECTORIES = dirname(dir.root);

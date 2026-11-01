@@ -76,7 +76,7 @@ function payloadClosure(ids: readonly ObjectId[], inventory: ReadonlyMap<ObjectI
 }
 
 /** Refuse unsupported control storage and temporary metadata copies before reporting physical erasure. */
-function assertSupportedControl(control: string, observe?: (bytes: Buffer, binary: boolean) => void, check: () => void = () => {}): void {
+function assertSupportedControl(control: string, observe: ((bytes: Buffer, binary: boolean) => void) | undefined, check: () => void): void {
   const supported = new Set(["objects", "refs", "leases", "destruction", "payload-owners", "derivations", "lease-proofs.json", "format", "index", "config.json", "HEAD", "oplog.jsonl", "exports.json", "outputs.json", "remotes.json",
     "partial.json", "upload-roots.json", "identity", "credentials.json", "authority.json", "denials.json", "objects.lock", "objects.recovery.lock", "objects.generation", "erasure-verification.json", "erasure-purge.json", "layers.json", "view.json", "dirty.json", "instances.json", "link.json", "unlinked-instances.json", "MERGE_STATE"]);
   for (const entry of readdirSync(control, { withFileTypes: true })) {
@@ -276,9 +276,9 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     const outputs = instances.flatMap(instance => nativeOutputs(instance.controlDirectory));
     const virtual = new Set(outputs.map(output => output.id));
     const catalog = upgradeDerivations(control, derivations(control, check), id => physicalLocation.has(id) ? readNative(id) : undefined, check, !validateOnly, virtual);
+    const logical = existing === undefined ? manifestIdentities([...inventory].filter(([_id, object]) => object.type === "manifest").map(([id]) => id), readNative, check) : new Map<ObjectId, { id: ObjectId; digest: string }>();
     const unknown = unknownDerivations(catalog, [...virtual, ...[...inventory].filter(([_id, object]) => ["blob", "record", "manifest", "link", "conflict"].includes(object.type)).map(([id]) => id)], check);
     if (unknown.length > 0) throw new UncataloguedProvenance(unknown);
-    const logical = existing === undefined ? manifestIdentities([...inventory].filter(([_id, object]) => object.type === "manifest").map(([id]) => id), readNative, check) : new Map<ObjectId, { id: ObjectId; digest: string }>();
     const artifacts = instances.flatMap(instance => [...managedExports(instance.controlDirectory), ...nativeOutputs(instance.controlDirectory).map(output => ({ ...output, sha256: "" }))]);
     const selectedDigests = new Set(existing?.tombstone.payloads ?? []);
     const primary = new Set(selected);
@@ -287,7 +287,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     const edge = (source: ObjectId, result: ObjectId): void => { check(); const values = reverse.get(source) ?? new Set<ObjectId>(); values.add(result); reverse.set(source, values); };
     /** Type-independent equivalence preserves the existing shared-byte ownership refusal. */
     const alias = (digest: string, id: ObjectId): void => { const values = aliases.get(digest) ?? new Set<ObjectId>(); values.add(id); aliases.set(digest, values); };
-    for (const [id, record] of catalog) for (const source of record.sources) edge(source, id);
+    for (const [id, record] of catalog) { for (const source of record.sources) edge(source, id); for (const member of record.members!) edge(member, id); }
     for (const [id, object] of inventory) {
       check(); if (["blob", "record", "manifest", "link", "conflict"].includes(object.type)) alias(object.digest, id);
       if (object.type === "manifest" || object.type === "conflict") for (const source of object.references) edge(source, id);
@@ -300,6 +300,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     for (const digest of selectedDigests) for (const id of aliases.get(digest) ?? []) add(id);
     for (let offset = 0; offset < queue.length; offset++) {
       check(); const id = queue[offset];
+      for (const member of catalog.get(id)?.members ?? []) add(member);
       const object = inventory.get(id); const identity = logical.get(id);
       if (object?.type === "manifest") for (const child of object.references) add(child);
       const digests = [...(object === undefined ? [] : [object.digest]), ...(identity === undefined ? [] : [identity.digest])];

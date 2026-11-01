@@ -35,6 +35,7 @@ export function nativeOutputs(control: string, name = "outputs.json"): NativeOut
 
 /** Denial checks precede creation; provenance is flushed before the first recoverable output byte. */
 export function recordNativeOutput(control: string, store: ObjectStore, path: string, content: Buffer, source: NativeOutputSource, stat?: BigIntStats, complete = false): void {
+  assertCompositionPath(path);
   if (source.fileId !== undefined && (typeof source.fileId !== "string" || !/^[0-9a-f]{32}$/.test(source.fileId))) throw new ObjectStoreError("invalid_file_id", "Native output requires a canonical FileId.");
   if (!Array.isArray(source.objects) || source.objects.length === 0 || !source.objects.every(id => typeof id === "string" && isObjectId(id))) throw new ObjectStoreError("unsupported_erasure_storage", "Native outputs require canonical source identities.");
   for (const id of source.objects) if (store.denial(id) !== undefined) throw new ObjectStoreError("object_obliterated", "Native output source is permanently denied.");

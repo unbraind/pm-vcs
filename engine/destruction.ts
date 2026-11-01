@@ -143,8 +143,15 @@ function scope(path: string): Scope {
 function namespaceLedger(control: string): string {
   const absolute = resolve(control); const stat = lstatSync(absolute, { throwIfNoEntry: false });
   const root = stat?.isDirectory() ? realpathSync(absolute) : absolute;
-  return join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(root).digest("hex")}`);
+  const ledger = join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(root).digest("hex")}`);
+  privateNamespaceLedger(ledger); return ledger;
 }
+/** External native ledgers must be real private-owner directories, never shared writable namespaces. */
+function privateNamespaceLedger(path: string): void {
+  const stat = lstatSync(path, { throwIfNoEntry: false }); if (stat === undefined) return;
+  if (!stat.isDirectory() || typeof process.getuid === "function" && (stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0)) throw new DestructionRefusal("foreign_destructive_intent", "An unowned or shared-writable namespace ledger was preserved.");
+}
+
 /** Bind one operation key to its real root; copied journals cannot become authority in a new clone. */
 function intentName(root: string, key: string): string { return createHash("sha256").update(`${root}\0${key}`).digest("hex"); }
 
@@ -367,7 +374,8 @@ function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot
   const origins = new Map(requests.map((request, index) => [request, supplied[index]]));
   if (journalDirectory !== undefined) journalDirectory = resolve(base, journalDirectory);
   const requestedRoot = resolve(base, control); canonical(join(requestedRoot, ".intent-root")); mkdirSync(requestedRoot, { recursive: true, mode: 0o700 }); const root = realpathSync(requestedRoot); const rootStat = lstatSync(root, { bigint: true }); const rootIdentity = birth(rootStat);
-  const directory = journalDirectory ?? join(root, "destruction"); const metadata = lstatSync(directory, { throwIfNoEntry: false }); if (metadata !== undefined && !metadata.isDirectory()) throw new DestructionRefusal("foreign_destructive_intent", "A foreign receipt-directory entry was preserved."); mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const directory = journalDirectory ?? join(root, "destruction");
+  if (journalDirectory !== undefined && dirname(dirname(directory)) === resolve(tmpdir())) { mkdirSync(dirname(directory), { recursive: true, mode: 0o700 }); privateNamespaceLedger(dirname(directory)); } const metadata = lstatSync(directory, { throwIfNoEntry: false }); if (metadata !== undefined && !metadata.isDirectory()) throw new DestructionRefusal("foreign_destructive_intent", "A foreign receipt-directory entry was preserved."); mkdirSync(directory, { recursive: true, mode: 0o700 });
   backend.directory(root); backend.directory(directory);
   const name = intentName(root, key); const path = join(directory, `${name}.json`);
   let held = false; let captured: Intent | undefined = undefined;
@@ -389,7 +397,8 @@ function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot
           let record: { format?: string; pid?: number; identity?: string; root?: string; rootIdentity?: string; key?: string; cleanup?: string };
           try { record = JSON.parse(readFileSync(lockPath, "utf8")) as typeof record; } catch { throw new DestructionRefusal("destructive_intent_locked", "An unknown intent owner was preserved."); }
           if (record?.format !== "pm-vcs-destruction-lock-1" || record.cleanup !== "unlink-only-this-inode" || record.root !== root || record.rootIdentity !== rootIdentity || record.key !== name || record.identity !== birth(observed) || !Number.isSafeInteger(record.pid) || record.pid! <= 0 || record.pid! > 2_147_483_647) throw new DestructionRefusal("destructive_intent_locked", "A foreign intent owner was preserved.");
-          try { process.kill(record.pid!, 0); throw new DestructionRefusal("destructive_intent_locked", "Another writer owns this intent."); } catch (failure) { if ((failure as NodeJS.ErrnoException).code !== "ESRCH") throw failure; }
+          let live = true; try { process.kill(record.pid!, 0); } catch (failure) { if ((failure as NodeJS.ErrnoException).code === "ESRCH") live = false; }
+          if (live) throw new DestructionRefusal("destructive_intent_locked", "Another writer owns this intent.");
           destructionBoundary.visit("dead-lock-checked", lockPath);
           const current = lstatSync(lockPath, { bigint: true, throwIfNoEntry: false }); if (current === undefined) continue;
           if (identity(current) !== identity(observed)) throw new DestructionRefusal("destructive_intent_locked", "An intent owner changed during recovery.");

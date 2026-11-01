@@ -6,10 +6,13 @@ status: open
 priority: 3
 tags[3]: follow-up,performance,provenance
 created_at: "2026-11-01T02:12:37.718Z"
-updated_at: "2026-11-01T02:12:57.169Z"
+updated_at: "2026-11-01T08:58:25.501Z"
 author: codex-agent
 acceptance_criteria: "Publish data-plus-control byte and inode counts and write/read costs for increasing FileId histories; preserve native source closure, refusal schemas, publication ordering and crash convergence; keep existing coverage thresholds and backward reads; make no performance claim before measurement."
 parent: pm-vcs-phase6packs
+comments[2]{created_at,author,text}:
+  "2026-11-01T08:27:31.274Z",codex-agent,"Sixth-review triage adds PRRT_kwDOToJT7M6yWzbL (per-file outputs registry rewrites/fsync cost) and PRRT_kwDOToJT7M6yWzcn (per-node denial-stamp syscalls). These are valid scale optimization work within this already accepted separate follow-up, not weakened correctness barriers. Publishing one registry only after checkout bytes would lose interrupted-output provenance; caching denials requires a live lease/policy-generation proof. Measure and amortize these costs while preserving birth-before-bytes and revocation checks."
+  "2026-11-01T08:58:25.501Z",codex-agent,"Cubic threads PRRT_kwDOToJT7M6yWzbL and PRRT_kwDOToJT7M6yWzcn remain in this existing scale follow-up: native-output writes must remain intent-before-bytes, so batching cannot simply publish the registry after checkout. Denial caches must retain generation/lease fences. The new 150000-entry real-tree queue regression also measures a pre-existing quadratic duplicate-name decoder, which is separate from the repaired argument-spread overflow; preserve duplicate-name validation when optimizing it."
 files[3]{path,scope}:
   engine/managed-exports.ts,project
   engine/native-outputs.ts,project

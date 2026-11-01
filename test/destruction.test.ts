@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, mock, test } from "node:test";
 import { durability } from "../engine/durability.ts";
-import { destructionBoundary, prepareDestruction, prepareNamespaceDestruction, inspectDestructions, inspectDestructionCheckpoint, retireNamespace, measureDestructionRevision, DestructionRefusal } from "../engine/destruction.ts";
+import { destructionBoundary, prepareDestruction, prepareNamespaceDestruction, inspectDestructions, inspectDestructionCheckpoint, inspectNamespacePublications, resumeNamespaceDirectory, retireNamespace, measureDestructionRevision, DestructionRefusal, type DestructionRequest } from "../engine/destruction.ts";
 import { syncBuiltinESMExports } from "node:module";
 import { objectFiles } from "../engine/object-files.ts";
 import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
@@ -31,6 +31,104 @@ function drain(control: string, key: string, paths: readonly string[]) {
   for (const path of plan.paths) plan.remove(path);
   return plan.finish();
 }
+
+/** Write an actual legacy namespace capability using the public native planner and its original key. */
+function namespacePlan(control: string, key: string, requests: readonly DestructionRequest[]) {
+ const ledger = join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(control).digest("hex")}`, "destruction");
+ const plan = prepareDestruction(control, key, requests, false, ledger);
+ const journal = join(ledger, `${createHash("sha256").update(`${control}\0${key}`).digest("hex")}.json`);
+ return { plan, journal, ledger };
+}
+
+test("namespace recovery refuses a non-publication capability and preserves both native sources", () => {
+ const f = fixture(); const destination = join(f.data, "published"); const key = `publication:${destination}`;
+ namespacePlan(f.control, key, [{ path: f.paths[0] }]);
+ assert.throws(() => durability.scoped(f.control, () => durability.rename(f.paths[1], destination)), { code: "foreign_destructive_intent" });
+ assert.ok(existsSync(f.paths[0])); assert.ok(existsSync(f.paths[1])); assert.equal(existsSync(destination), false);
+});
+
+for (const mode of ["changed", "missing"] as const) test(`namespace recovery fences a checkpoint ${mode} after observation under its recovery lease`, () => {
+ const f = fixture(); const destination = join(f.data, "published"); const { journal } = namespacePlan(f.control, `publication:${destination}`, [{ path: f.paths[0], destination }]); let injected = false;
+ destructionBoundary.visit = (step, path) => {
+  if (step === "owner-published" && path === `${journal}.lock` && !injected) { injected = true; if (mode === "missing") rmSync(journal); else { const record = JSON.parse(readFileSync(journal, "utf8")) as { id: string }; record.id = "a".repeat(32); writeFileSync(journal, JSON.stringify(record)); } }
+ };
+ assert.throws(() => durability.scoped(f.control, () => durability.rename(f.paths[1], destination)), { code: "destructive_intent_changed" });
+ assert.equal(injected, true); assert.ok(existsSync(f.paths[0])); assert.ok(existsSync(f.paths[1])); assert.equal(existsSync(destination), false);
+});
+
+for (const mode of ["fresh", "recovering", "completed"] as const) test(`namespace publication refuses its ${mode} source disappearing before the owned snapshot`, () => {
+ const f = fixture(); const destination = join(f.data, "published"); const key = `publication:${destination}`;
+ const journal = mode === "fresh" ? join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(f.control).digest("hex")}`, "destruction", `${createHash("sha256").update(`${f.control}\0${key}`).digest("hex")}.json`) : namespacePlan(f.control, key, [{ path: f.paths[0], destination }]).journal;
+ if (mode === "completed") { const plan = namespacePlan(f.control, key, [{ path: f.paths[0], destination }]).plan; plan.remove(f.paths[0]); assert.equal(plan.finish().status, "completed"); }
+ let injected = false; let validations = 0;
+ destructionBoundary.visit = (step, path) => { if (step === "owner-published" && path === `${journal}.lock` && !injected) { injected = true; rmSync(f.paths[1]); } };
+ assert.throws(() => durability.scoped(f.control, () => durability.rename(f.paths[1], destination, mode === "fresh" ? () => { validations++; } : undefined)), { code: "destructive_target_changed" });
+ if (mode === "fresh") assert.equal(validations, 1);
+ assert.equal(injected, true); assert.equal(existsSync(f.paths[1]), false);
+ assert.equal(existsSync(destination), mode === "completed"); if (mode === "completed") assert.equal(readFileSync(destination, "utf8"), "owned-a"); else assert.ok(existsSync(f.paths[0]));
+});
+
+test("legacy source-keyed native namespace publication migrates and completes its exact set", () => {
+ const f = fixture(); const destination = join(f.data, "published");
+ const old = namespacePlan(f.control, `rename:${f.paths[0]}:${destination}`, [{ path: f.paths[0], destination }]);
+ const result = durability.scoped(f.control, () => durability.rename(f.paths[0], destination));
+ assert.equal(result.status, "completed"); assert.equal(result.moved, 1); assert.equal(readFileSync(destination, "utf8"), "owned-a"); assert.equal(existsSync(f.paths[0]), false); assert.ok(existsSync(old.journal));
+});
+
+test("legacy namespace reconciliation completes the prior source before accepting a fresh publication", () => {
+ const f = fixture(); const destination = join(f.data, "published");
+ const old = namespacePlan(f.control, `rename:${f.paths[0]}:${destination}`, [{ path: f.paths[0], destination }]);
+ assert.equal(durability.scoped(f.control, () => durability.rename(f.paths[1], destination)).status, "completed");
+ assert.equal(existsSync(f.paths[0]), false); assert.equal(existsSync(f.paths[1]), false); assert.equal(readFileSync(destination, "utf8"), "owned-b");
+ assert.equal((JSON.parse(readFileSync(old.journal, "utf8")) as { status: string }).status, "completed");
+});
+
+for (const mode of ["publication", "directory"] as const) test(`namespace ${mode} recovery preserves operational checkpoint read failures`, () => {
+ const f = fixture(); const leaf = join(f.data, "empty"); mkdirSync(leaf); const destination = join(f.data, "published");
+ const old = mode === "directory" ? namespacePlan(f.control, `rmdir:${leaf}:`, [{ path: leaf, directory: true }]) : namespacePlan(f.control, "foreign-key", [{ path: f.paths[0], destination }]); let injected = false;
+ objectFiles.opened = (_file, name) => { if (name === old.journal) { injected = true; throw Object.assign(new Error("checkpoint read unavailable"), { code: "EIO" }); } };
+ assert.throws(() => durability.scoped(f.control, () => mode === "directory" ? resumeNamespaceDirectory(leaf) : durability.rename(f.paths[1], destination)), { code: "EIO" });
+ assert.equal(injected, true); objectFiles.opened = () => {}; assert.ok(existsSync(leaf)); assert.ok(existsSync(f.paths[0])); assert.ok(existsSync(f.paths[1])); assert.equal(existsSync(destination), false); assert.ok(existsSync(old.journal));
+});
+
+test("namespace reconciliation ignores foreign records without borrowing their source or authority", () => {
+ const f = fixture(); const destination = join(f.data, "published"); const foreign = namespacePlan(f.control, "non-publication-key", [{ path: f.paths[0], destination }]);
+ const invalid = join(foreign.ledger, `${"e".repeat(64)}.json`); writeFileSync(invalid, "foreign invalid record"); const original = readFileSync(foreign.journal);
+ assert.equal(durability.scoped(f.control, () => durability.rename(f.paths[1], destination)).status, "completed");
+ assert.equal(readFileSync(destination, "utf8"), "owned-b"); assert.equal(readFileSync(f.paths[0], "utf8"), "owned-a"); assert.deepEqual(readFileSync(foreign.journal), original); assert.equal(readFileSync(invalid, "utf8"), "foreign invalid record");
+});
+
+test("namespace root inspection honors its destination filter without pinning unrelated prepared bytes", () => {
+ const f = fixture(); const destination = join(f.data, "published"); namespacePlan(f.control, `publication:${destination}`, [{ path: f.paths[0], destination }]); let inspected = false;
+ const result = inspectNamespacePublications(f.control, () => false, () => { inspected = true; });
+ assert.equal(result.pending, 0); assert.equal(inspected, false); assert.ok(existsSync(f.paths[0])); assert.equal(result.verification.status, "verified");
+});
+
+for (const mode of ["foreign-record", "file-action", "other-directory", "replaced-directory", "completed"] as const) test(`empty-directory recovery preserves ${mode} evidence and peer lifetimes`, () => {
+ const f = fixture(); const leaf = join(f.data, "empty"); const other = join(f.data, "other"); mkdirSync(other);
+ if (mode === "file-action") writeFileSync(leaf, "former file"); else mkdirSync(leaf);
+ const key = `rmdir:${leaf}:`; const { plan, journal } = namespacePlan(f.control, key, [{ path: mode === "other-directory" ? other : leaf, ...(mode === "file-action" ? {} : { directory: true }) }]);
+ if (mode === "foreign-record") writeFileSync(journal, "foreign bytes");
+ if (mode === "file-action" || mode === "replaced-directory") { renameSync(leaf, `${leaf}.retired`); mkdirSync(leaf); }
+ if (mode === "completed") { plan.remove(leaf); assert.equal(plan.finish().status, "completed"); assert.equal(durability.scoped(f.control, () => resumeNamespaceDirectory(leaf)), true); mkdirSync(leaf); }
+ assert.equal(durability.scoped(f.control, () => resumeNamespaceDirectory(leaf)), false); assert.equal(lstatSync(leaf).isDirectory(), true); assert.ok(existsSync(other));
+});
+
+for (const code of ["foreign-child", "EIO"] as const) test(`empty-directory recovery preserves a real late ${code} and requires current ownership`, () => {
+ const f = fixture(); const leaf = join(f.data, "empty"); mkdirSync(leaf); namespacePlan(f.control, `rmdir:${leaf}:`, [{ path: leaf, directory: true }]); let injected = false;
+ destructionBoundary.visit = step => { if (step === "before-delete" && !injected) { injected = true; if (code === "foreign-child") writeFileSync(join(leaf, "new-child"), "foreign child"); else throw Object.assign(new Error("native deletion unavailable"), { code }); } };
+ if (code === "foreign-child") assert.equal(durability.scoped(f.control, () => resumeNamespaceDirectory(leaf)), false);
+ else assert.throws(() => durability.scoped(f.control, () => resumeNamespaceDirectory(leaf)), { code });
+ assert.equal(injected, true); assert.ok(existsSync(leaf)); destructionBoundary.visit = () => {};
+ if (code === "foreign-child") { assert.equal(readFileSync(join(leaf, "new-child"), "utf8"), "foreign child"); rmSync(join(leaf, "new-child")); assert.equal(durability.scoped(f.control, () => resumeNamespaceDirectory(leaf)), false); assert.equal(durability.scoped(f.control, () => durability.removeDirectory(leaf)).deleted, 1); }
+ else assert.equal(durability.scoped(f.control, () => resumeNamespaceDirectory(leaf)), true);
+ assert.equal(existsSync(leaf), false);
+});
+
+test("retired rename receipts cancel absent sources instead of adopting unrelated destination bytes", () => {
+ const f = fixture(); const destination = join(f.data, "published"); prepareDestruction(f.control, "retired-rename", [{ path: f.paths[0], destination }]); rmSync(f.paths[0]); writeFileSync(destination, "foreign destination");
+ const result = inspectDestructions(f.control); assert.equal(result.pending, 0); assert.equal(result.completed, 1); assert.equal(result.receipts[0].cancellations?.[0], "preconditions_changed"); assert.equal(readFileSync(destination, "utf8"), "foreign destination");
+});
 
 test("whole-set validation refuses an invalid final member before deleting the first valid member", () => {
   const f = fixture(); mkdirSync(join(f.data, "not-empty")); writeFileSync(join(f.data, "not-empty/guard"), "foreign");
@@ -265,7 +363,7 @@ test("journal publication verifies both source and destination ownership and pre
     const f = fixture(); let injected = false;
     if (mode === "archive-directory") { const plan = prepareDestruction(f.control, "publication", [{ path: f.paths[0] }]); plan.remove(f.paths[0]); plan.finish(); const path = recordPath(f.control); const record = JSON.parse(readFileSync(path, "utf8")) as { id: string }; mkdirSync(join(f.control, "destruction", `${path.split(/[\\/]/).at(-1)!.slice(0, 64)}.${record.id}.receipt`)); writeFileSync(f.paths[0], "new lifetime"); }
     destructionBoundary.visit = (step, path) => { if (step !== "intent-temp-flushed" || injected || mode === "archive-directory") return; injected = true; if (mode === "source" || mode === "source-missing") { renameSync(path, `${path}.owned`); if (mode === "source") writeFileSync(path, "foreign temporary"); } else { const target = path.slice(0, path.lastIndexOf(".") - 12 - 1); writeFileSync(target, "foreign destination"); } };
-    assert.throws(() => prepareDestruction(f.control, "publication", [{ path: f.paths[0] }]), error => error instanceof Error && "code" in error); destructionBoundary.visit = () => {}; assert.ok(existsSync(f.paths[0]));
+    assert.throws(() => prepareDestruction(f.control, "publication", [{ path: f.paths[0] }]), { code: mode === "archive-directory" ? "foreign_destructive_intent" : "destructive_intent_changed" }); destructionBoundary.visit = () => {}; assert.ok(existsSync(f.paths[0]));
     if (mode === "source") assert.ok(readdirSync(join(f.control, "destruction")).some(name => name.endsWith(".tmp") && readFileSync(join(f.control, "destruction", name), "utf8") === "foreign temporary"));
   }
 });
@@ -277,7 +375,7 @@ test("native deletion and progress-storage faults preserve the durable plan and 
     if (mode === "unlink") { mock.method(fs, "unlinkSync", (target: fs.PathLike) => { if (target === f.paths[0]) { injected = true; throw Object.assign(new Error("blocked"), { code: "EACCES" }); } return unlink(target); }); syncBuiltinESMExports(); }
     else if (mode === "progress-directory") { mkdirSync(progress); injected = true; }
     else { plan.remove(f.paths[0]); if (mode === "progress-replaced-before-open") { mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => { if (args[0] === progress && args[1] === (fs.constants.O_RDWR | fs.constants.O_NOFOLLOW) && !injected) { injected = true; const bytes = readFileSync(progress); renameSync(progress, `${progress}.old`); writeFileSync(progress, bytes); } return Reflect.apply(open, fs, args) as number; }); syncBuiltinESMExports(); } else destructionBoundary.visit = (step, target) => { if (step === "progress-byte-written" && target === progress && !injected) { injected = true; const bytes = readFileSync(progress); renameSync(progress, `${progress}.old`); writeFileSync(progress, bytes); } }; }
-    assert.throws(() => plan.remove(f.paths[mode.startsWith("progress-replaced") ? 1 : 0]), error => error instanceof Error && "receipt" in error); mock.restoreAll(); syncBuiltinESMExports(); destructionBoundary.visit = () => {}; assert.equal(injected, true); assert.equal(objectFiles.active.size, 0);
+    assert.throws(() => plan.remove(f.paths[mode.startsWith("progress-replaced") ? 1 : 0]), error => error instanceof Error && "code" in error && error.code === (mode === "unlink" ? "EACCES" : mode === "progress-directory" ? "foreign_destructive_intent" : "destructive_operation_pending") && "receipt" in error && (error.receipt as { planned: number }).planned === 3); mock.restoreAll(); syncBuiltinESMExports(); destructionBoundary.visit = () => {}; assert.equal(injected, true); assert.equal(objectFiles.active.size, 0);
     if (mode === "progress-directory") rmSync(progress, { recursive: true }); const receipt = drain(f.control, "native-error", f.paths); assert.equal(receipt.status, "completed"); assert.equal(receipt.deleted + receipt.observedAbsent, 3);
   }
 });

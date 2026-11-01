@@ -59,7 +59,7 @@ test("property: all invalid selector credential reason and option combinations p
       const mode = i % 4; const selector = mode === 0 ? next().toString(16).padStart(32, "0") : mode === 1 ? `invalid/${next()}` : "asset";
       const credential = mode === 2 ? "foreign-owner" : "erase-fixture"; const reason = mode === 3 ? "invalid reason" : "incident";
       const options = { purgeUnaccounted: (i & 4) !== 0, recoverLock: (i & 8) !== 0 };
-      assert.throws(() => repo.obliterate(selector, credential, reason, new Date(1), options), error => error instanceof Error && "code" in error);
+      assert.throws(() => repo.obliterate(selector, credential, reason, new Date(1), options), { code: ["unknown_file", "unknown_file", "unauthorized", "bad_tombstone"][mode] });
       assert.equal(treeHash(repo.objects.storageRoot()), initial, `seed ${seed}`); assert.equal(treeHash(base.tripwire), guard); cases++;
     }
   }
@@ -81,7 +81,7 @@ test("recover-lock plus purge validates unknown, foreign-owned, malformed and co
     { selector: "asset", credential: "foreign-owner", reason: "incident" },
     { selector: "asset", credential: "erase-fixture", reason: "invalid reason" },
   ]) {
-    assert.throws(() => f.repo.obliterate(request.selector, request.credential, request.reason, new Date(1), { purgeUnaccounted, recoverLock: true }), error => error instanceof Error && "code" in error);
+    assert.throws(() => f.repo.obliterate(request.selector, request.credential, request.reason, new Date(1), { purgeUnaccounted, recoverLock: true }), { code: request.selector !== "asset" ? "unknown_file" : request.credential !== "erase-fixture" ? "unauthorized" : "bad_tombstone" });
     assert.equal(treeHash(f.repo.objects.storageRoot()), initial); assert.equal(readFileSync(lock, "utf8"), dead.stdout); assert.ok(existsSync(f.foreign));
   }
   assert.throws(() => f.repo.obliterate("asset", "erase-fixture", "incident", new Date(1), { recoverLock: true }), { code: "unverifiable" }); assert.equal(readFileSync(lock, "utf8"), dead.stdout);
@@ -100,7 +100,7 @@ test("property: valid identities across every purge/recovery flag combination de
     const boundary = ["pending", "object-deleted", "storage-verified", "receipt"][seed >>> 3];
     // Crash only after the request's complete immutable audit metadata exists.
     erasureScanBoundary.visit = step => { if (step === boundary && !injected) { injected = true; throw new Error("injected operation crash"); } };
-    try { assert.throws(() => repo.obliterate("asset", "erase-fixture", "incident", new Date(1), { purgeUnaccounted, recoverLock })); }
+    try { assert.throws(() => repo.obliterate("asset", "erase-fixture", "incident", new Date(1), { purgeUnaccounted, recoverLock }), /injected operation crash/); assert.equal(injected, true); }
     finally { erasureScanBoundary.visit = () => {}; }
     const id = repo.objects.denials()[0]?.tombstone.fileId ?? repo.readIndex().find(entry => entry.path === "asset")!.fileId;
     const receipt = repo.obliterate(id, "erase-fixture", "incident", new Date(1), { purgeUnaccounted, recoverLock });
