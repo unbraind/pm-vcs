@@ -309,7 +309,7 @@ physical-copy plans and descriptor/pathname verification remain mandatory.
 Native storage verification binds each parsed file to a byte hash and rechecks it
 at the final catalogue barrier; timestamps alone do not establish content stability. Accountability requires two
 matching scans, with namespace checks after the final file rehashes, while the
-store lease excludes native writers. See the [input and concurrency contract](docs/validation/pr150-seventh-review.md).
+store lease excludes native writers. See the [input and concurrency contract](docs/links-layers-obliteration.md).
 Unknown storage refuses unless explicitly purged with a receipt and re-verification.
 Payload-only resumable upload batches still refuse after erasure because they
 carry no FileId provenance. Direct payload writes require a non-denied FileId;

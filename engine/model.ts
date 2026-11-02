@@ -252,6 +252,7 @@ export function encodeTree(entries: readonly TreeEntry[]): Buffer {
  *   duplicated, or an entry's id is not an object id.
  */
 export function decodeTree(payload: Buffer): TreeEntry[] {
+  const names = new Set<string>();
   const versioned = payload.toString("utf8");
   if (versioned.startsWith("pm-vcs-tree ")) {
     const lines = versioned.split("\n");
@@ -276,9 +277,10 @@ export function decodeTree(payload: Buffer): TreeEntry[] {
       }
       if (!(FILE_MODES as readonly unknown[]).includes(mode) || typeof id !== "string" || !isObjectId(id)
         || typeof name !== "string" || name.length === 0 || name.includes("/") || name.includes("\0")
-        || name === "." || name === ".." || entries.some((entry) => entry.name === name)) {
+        || name === "." || name === ".." || names.has(name)) {
         throw new ObjectStoreError("malformed_object", "Tree entry has an invalid mode, object id, or name.");
       }
+      names.add(name);
       if (mode === "40000") {
         if (fileId !== null || copiedFrom !== null) {
           throw new ObjectStoreError("malformed_object", `Directory "${name}" carries file identity metadata.`);
@@ -330,9 +332,10 @@ export function decodeTree(payload: Buffer): TreeEntry[] {
     if (!isObjectId(id)) {
       throw new ObjectStoreError("malformed_object", `Tree entry "${name}" names "${id}", which is not an object id.`);
     }
-    if (entries.some((entry) => entry.name === name)) {
+    if (names.has(name)) {
       throw new ObjectStoreError("malformed_object", `Tree entry name "${name}" appears more than once.`);
     }
+    names.add(name);
     entries.push({ name, mode: mode as FileMode, id });
     cursor = idEnd;
   }

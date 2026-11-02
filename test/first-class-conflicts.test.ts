@@ -781,7 +781,10 @@ test("native writer PID facts do not imply payload provenance and foreign lease 
         assert.throws(() => repo.objects.withWriteLock(() => {
           const lock = join(repo.controlDirectory, "objects.lock"); const owner = readFileSync(lock);
           writeFileSync(lock, deflateSync(secret));
-          try { assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), { code: "unsupported_erasure_storage" }); }
+          try {
+            assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", now), { code: "store_locked" });
+            assert.equal(repo.objects.denials().length, 0); assert.deepEqual(readFileSync(join(repo.root, "secret")), secret);
+          }
           finally { writeFileSync(lock, owner); }
         }), { code: "worktree_path_changed" });
         rmSync(join(repo.controlDirectory, "objects.lock"));

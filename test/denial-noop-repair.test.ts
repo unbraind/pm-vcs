@@ -90,9 +90,10 @@ test("denial no-op repair fresh clone persists metadata before objects and recon
 });
 
 test("denial no-op repair extends durable local metadata only after complete closure validation", async () => {
-  const { repo, temp, denial } = fixture(); const before = durable(repo);
-  const peer = Repository.open((await cloneFrom(repo.root, join(temp.root, "extension"), new Date(3000))).root);
-  peer.setAuthority("fixture", "read-fixture", "erase-fixture");
+  // The native producer retains its source certificates; an imported clone cannot invent them.
+  const { repo: peer, temp, denial } = fixture();
+  const repo = Repository.open((await cloneFrom(peer.root, join(temp.root, "extension"), new Date(3000))).root);
+  const before = durable(repo);
   writeFileSync(join(peer.root, "second"), "second terminal fixture bytes"); peer.stage(["second"]);
   const tip = peer.commit({ message: "second history", author }, new Date(3000));
   peer.obliterate("second", "erase-fixture", "incident", new Date(4000));
@@ -130,4 +131,13 @@ test("denial no-op repair refuses duplicated, conflicting, denied and pending ar
   assert.equal(repo.objects.has(allowedId), false, "a valid earlier arrival cannot leak out of a refused batch");
   repo.objects.recordDenials([{ ...denial, pending: true }]); const pending = durable(repo);
   assert.throws(() => importBundleObjects(repo.objects, metadata(bundle, undefined)), { code: "erasure_incomplete" }); assert.deepEqual(durable(repo), pending);
+});
+
+
+test("a clone with uncertified imported origins refuses erasure before changing durable denials", async () => {
+  const { repo, temp } = fixture(); const peer = Repository.open((await cloneFrom(repo.root, join(temp.root, "unknown-origin"), new Date(3000))).root);
+  peer.setAuthority("fixture", "read-fixture", "erase-fixture"); writeFileSync(join(peer.root, "second"), "second terminal fixture bytes"); peer.stage(["second"]); peer.commit({ message: "second history", author }, new Date(3000));
+  const before = durable(peer); const selected = peer.readIndex().find(entry => entry.path === "second")!;
+  assert.throws(() => peer.obliterate("second", "erase-fixture", "incident", new Date(4000)), error => error instanceof Error && "code" in error && error.code === "uncatalogued_provenance" && "objects" in error && Array.isArray(error.objects) && error.objects.length > 0);
+  assert.deepEqual(durable(peer), before); assert.equal(peer.objects.has(selected.id), true); assert.equal(readFileSync(join(peer.root, "second"), "utf8"), "second terminal fixture bytes");
 });

@@ -12,7 +12,7 @@ import { deflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { Repository } from "../engine/repo.ts";
 import { frameObject, hashObject, OBJECT_TYPES } from "../engine/objects.ts";
-import { ErasureStorageRefusal, erasureScanBoundary, fingerprint, fingerprintJournal, matchesFingerprints, type ErasureFingerprint, readFingerprints, scanErasureStorage, createErasureInspection, inspectErasureRepresentation } from "../engine/erasure-scan.ts";
+import { ErasureStorageRefusal, erasureScanBoundary, fingerprint, fingerprintJournal, matchesFingerprints, type ErasureFingerprint, readFingerprints, scanErasureStorage, createErasureInspection, inspectErasureRepresentation, inspectErasureFile } from "../engine/erasure-scan.ts";
 import { writePrivateJson } from "../engine/composition.ts";
 import { serializeBundle, parseBundle } from "../engine/bundle.ts";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -681,4 +681,14 @@ test("constant byte runs skip only equivalent windows and retain cross-chunk mat
 test("an arbitrary partial base64 word has no implied encoding in raw diagnostics",async()=>{
  const f=await fixture();const root=join(f.dir.root,"final-partial-quartet");place(root,"partial",Buffer.from("YQ"));
  assert.equal(scanErasureStorage(root,[fingerprint(Buffer.from("a"))]).files,1);assert.equal(objectFiles.active.size,0);
+});
+
+
+test("a pinned physical inspection without a budget callback still checks every byte and refuses retained content", async () => {
+ const f = await fixture(); const path = place(join(f.dir.root, "budgetless"), "member", Buffer.from("prefix-selected-raw-marker-suffix")); const owner = objectFiles.open(path, "r");
+ try {
+  assert.doesNotThrow(() => inspectErasureFile(owner.fd, fs.fstatSync(owner.fd).size, [fingerprint(Buffer.from("absent marker"))], "loose-storage"));
+  assert.throws(() => inspectErasureFile(owner.fd, fs.fstatSync(owner.fd).size, [fingerprint(Buffer.from("selected-raw-marker"))], "loose-storage"), { code: "erasure_retained_copy" });
+ } finally { owner.close(); }
+ assert.equal(objectFiles.active.size, 0);
 });

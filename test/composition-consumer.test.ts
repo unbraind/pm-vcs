@@ -51,10 +51,10 @@ if (process.argv[2] === "node-project-cli") {
   assert.equal(version.status, 0, "Project-installed PM CLI unavailable before fixture setup: " + (version.error?.message ?? version.stderr + version.stdout));
   assert.equal(version.stdout.trim(), installedSdk.version, "Project-installed PM CLI version mismatch before fixture setup: expected " + installedSdk.version + ", got " + version.stdout.trim());
 }
-const root = join(process.cwd(), process.argv[2]); mkdirSync(root);
+let root = join(process.cwd(), process.argv[2]); mkdirSync(root);
 const client = new PmClient({ cwd: root, pmRoot: join(root, ".agents", "pm"), noExtensions: true });
 await client.init("consumer", { defaults: true, author: "fixture" });
-const repo = Repository.init(root); repo.identity(); repo.setAuthority("fixture", "consumer-read", "consumer-erase");
+let repo = Repository.init(root); repo.identity(); repo.setAuthority("fixture", "consumer-read", "consumer-erase");
 const author = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1000, timezoneOffsetMinutes: 0 };
 assert.equal(Boolean(process.versions.bun), process.argv[2].startsWith("bun-"));
 repo.stage([]); const publicationBase = repo.commit({ message: "tracker", author }, new Date());
@@ -146,27 +146,39 @@ try{
  }
 }finally{process.chdir(previousCwd);}
 
-// Identical built/packed Node/Bun consumers must fail closed on supported decode limits.
+// User-authored encodings are independent content; native receipts state that limit in every consumer.
+for(const packed of [false,true]){
+ const encodedRoot=join(process.cwd(),process.argv[2]+"-encoding-"+packed);mkdirSync(encodedRoot);
+ await new PmClient({cwd:encodedRoot,pmRoot:join(encodedRoot,".agents/pm"),noExtensions:true}).init("encoded",{defaults:true,author:"fixture"});
+ const encodedRepo=Repository.init(encodedRoot);encodedRepo.setAuthority("fixture","proof-read","proof-erase");
+ const selected=Buffer.from("native proof selected marker 938215");writeFileSync(join(encodedRoot,"asset"),selected);encodedRepo.stage(["asset"]);
+ let encoded=selected;for(let layer=0;layer<8;layer++)encoded=Buffer.from(encoded.toString("base64"));
+ const independent=encodedRepo.objects.write("blob",encoded);if(packed)encodedRepo.objects.compact();
+ const receipt=encodedRepo.obliterate("asset","proof-erase","incident",new Date());
+ assert.equal(receipt.guarantee.kind,"native-provenance");assert.ok(receipt.guarantee.excluded.includes("user-authored alternate encodings"));
+ assert.equal(receipt.storage.accountable,true);assert.equal(encodedRepo.objects.denials()[0].pending,false);assert.equal(existsSync(join(encodedRoot,"asset")),false);assert.deepEqual(encodedRepo.objects.read(independent).payload,encoded);
+}
+// Imported origins without certificates must still refuse before deleting anything, in every surface.
 const proofRoot=join(process.cwd(),process.argv[2]+"-verification");mkdirSync(proofRoot);
 await new PmClient({cwd:proofRoot,pmRoot:join(proofRoot,".agents/pm"),noExtensions:true}).init("proof",{defaults:true,author:"fixture"});
 const proofRepo=Repository.init(proofRoot);proofRepo.setAuthority("fixture","proof-read","proof-erase");
 const selectedProof=Buffer.from("native proof selected marker 938215");writeFileSync(join(proofRoot,"asset"),selectedProof);proofRepo.stage(["asset"]);
 let nestedProof=selectedProof;for(let layer=0;layer<8;layer++)nestedProof=Buffer.from(nestedProof.toString("base64"));
-proofRepo.objects.write("blob",nestedProof);const proofToken=join(process.cwd(),process.argv[2]+".proof-token");writeFileSync(proofToken,"proof-erase");
+proofRepo.objects.accept([{type:"blob",id:hashObject("blob",nestedProof),payload:nestedProof}],true);const proofToken=join(process.cwd(),process.argv[2]+".proof-token");writeFileSync(proofToken,"proof-erase");
 for(const packed of [false,true]){
  if(packed)proofRepo.objects.compact();
- assert.throws(()=>proofRepo.obliterate("asset","proof-erase","incident",new Date()),error=>error.status==="unverified"&&typeof error.bound==="string");
- const refused=await harness.runCommand({command:"vcs obliterate",args:["asset"],pmRoot:proofRoot,options:{eraseTokenFile:proofToken,reason:"incident"}});assert.match(String(refused.errorMessage),/unverified/);assert.equal(refused.handled,false);assert.equal(proofRepo.objects.denials().length,0);
+ assert.throws(()=>proofRepo.obliterate("asset","proof-erase","incident",new Date()),error=>error.status==="unverified"&&error.bound==="uncatalogued_provenance");
+ const refused=await harness.runCommand({command:"vcs obliterate",args:["asset"],pmRoot:proofRoot,options:{eraseTokenFile:proofToken,reason:"incident"}});assert.match(String(refused.errorMessage),/Native provenance is unknown/);assert.equal(refused.handled,false);assert.equal(proofRepo.objects.denials().length,0);
 }
 const liveProof=proofRepo.objects.write("blob",Buffer.from("newly protected proof object"));const deadProof=proofRepo.objects.write("blob",Buffer.from("collectible proof object"));
 let interrupted=false;destructionBoundary.visit=(step,path)=>{if(!interrupted&&step==="intent-persisted"&&path.startsWith(join(proofRepo.controlDirectory,"destruction"))&&JSON.parse(readFileSync(path,"utf8")).entries.some(entry=>entry.path.endsWith(liveProof.slice(2)))){interrupted=true;throw new Error("interrupt proof GC");}};
 assert.throws(()=>collectGarbage(proofRepo,true),/interrupt proof GC/);destructionBoundary.visit=()=>{};
 proofRepo.refs.compareAndSwap("refs/metadata/protected",null,liveProof);assert.equal(collectGarbage(proofRepo,true).applied,true);assert.equal(proofRepo.objects.has(liveProof),true);assert.equal(proofRepo.objects.has(deadProof),false);assert.ok(inspectDestructions(proofRepo.controlDirectory).superseded>0);
 if(process.argv[2]==="node-project-cli"){
- proofRepo.objects.write("blob",nestedProof);proofRepo.objects.compact();
+ proofRepo.objects.accept([{type:"blob",id:hashObject("blob",nestedProof),payload:nestedProof}],true);proofRepo.objects.compact();
  const install=spawnSync(process.execPath,[cliExecutable,"package","install",process.argv[3],"--project"],{env:testEnvironment(),cwd:proofRoot,encoding:"utf8"});assert.equal(install.status,0,install.stderr);
  for(const format of [[],["--json"]]){
-  const refused=spawnSync(process.execPath,[cliExecutable,...format,"vcs","obliterate","asset","--erase-token-file",proofToken,"--reason","incident"],{env:testEnvironment(),cwd:proofRoot,encoding:"utf8"});assert.notEqual(refused.status,0);assert.match(refused.stdout+refused.stderr,/unverified/);assert.doesNotMatch(refused.stdout,/accountable[\\" :]+true/);assert.equal(proofRepo.objects.denials().length,0);
+  const refused=spawnSync(process.execPath,[cliExecutable,...format,"vcs","obliterate","asset","--erase-token-file",proofToken,"--reason","incident"],{env:testEnvironment(),cwd:proofRoot,encoding:"utf8"});assert.notEqual(refused.status,0);assert.match(refused.stdout+refused.stderr,/Native provenance is unknown/);assert.doesNotMatch(refused.stdout,/accountable[\\" :]+true/);assert.equal(proofRepo.objects.denials().length,0);
  }
 }
 
@@ -213,6 +225,15 @@ repo.linkInstance("retired", retired); repo.unlinkInstance("retired"); rmSync(re
 const pruneToken = join(process.cwd(), process.argv[2] + ".prune-token"); writeFileSync(pruneToken, "consumer-erase");
 const pruned = await harness.runCommand({ command: "vcs instance prune-retired", args: ["../" + process.argv[2] + "-retired"], pmRoot: root, options: { eraseTokenFile: pruneToken, reason: "retired" } });
 assert.equal(pruned.errorMessage, undefined); assert.equal(repo.operations.read().at(-1).command, "prune-retired-instance");
+// The publication fixture intentionally retains foreign ref bytes and uncertified arrivals.
+// Its ownership guard must refuse; a complete native-erasure receipt uses an independent known-origin history.
+writeFileSync(join(root,"guarded-secret.bin"),"consumer guard refusal marker 876193");repo.stage(["guarded-secret.bin"]);
+assert.throws(()=>repo.obliterate("guarded-secret.bin","consumer-erase","incident",new Date()),{code:"unsupported_erasure_storage"});
+assert.equal(readFileSync(uncertainSource,"utf8"),"foreign replacement");assert.equal(repo.objects.denials().length,0);
+root=join(process.cwd(),process.argv[2]+"-erasure");mkdirSync(root);
+await new PmClient({cwd:root,pmRoot:join(root,".agents/pm"),noExtensions:true}).init("erasure",{defaults:true,author:"fixture"});
+repo=Repository.init(root);repo.identity();repo.setAuthority("fixture","consumer-read","consumer-erase");
+repo.stageLink("dependency.link",link);repo.commit({message:"known native origin",author},new Date());
 writeFileSync(join(root, "secret.bin"), "consumer unique permanent bytes 638529"); repo.stage(["secret.bin"]); const revision = repo.commit({ message: "secret", author }, new Date());
 const token = join(process.cwd(), process.argv[2] + ".erase-token"); writeFileSync(token, "consumer-erase");
 writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout); writeFileSync(token, "wrong-consumer-erase");

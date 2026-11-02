@@ -71,9 +71,8 @@ class Matcher {
   private lastByte = -1;
   private constantRun = 0;
   /** Compile bounded suffix groups; zero-length payloads use their nonempty typed frames. */
-  constructor(patterns: readonly ErasureFingerprint[], template?: Matcher) {
+  constructor(patterns: readonly ErasureFingerprint[]) {
     this.maximum = patterns.reduce((maximum, pattern) => Math.max(maximum, pattern.length), 1);
-    if (template !== undefined) { this.groups.push(...template.groups.map((group) => ({ ...group, rolling: 0 }))); return; }
     for (const pattern of patterns) {
       const width = Math.min(8, pattern.length);
       let group = this.groups.find((item) => item.width === width);
@@ -235,7 +234,6 @@ export function scanErasureStorage(root: string, patterns: readonly ErasureFinge
             offset += count; erasureScanBoundary.visit("file-chunk");
           }
           inspector?.finish();
-          if (state.hit) throw new ErasureStorageRefusal("erasure_retained_copy", kind);
         } finally { inspector?.close(); }
         const after = fstatSync(file.fd, { bigint: true });
         if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs) throw new ErasureStorageRefusal("unsupported_erasure_storage", kind);

@@ -633,5 +633,9 @@ Descriptor fragment ingestion takes an explicit start offset (default zero) and
 preserves the caller cursor. Checksum-bound source blocks and private buffer
 snapshots ensure the certified bytes are the published bytes. Accountability
 requires two matching passes and a namespace check after final rehashes under
-the native store lease. See the [seventh-review class audit and concurrency
-scope](validation/pr150-seventh-review.md).
+the native store lease. Cooperating native writers take that lease through
+receipt publication. Direct filesystem writers that bypass it are outside
+serialization: observed changes through the final namespace barrier refuse,
+but the receipt does not promise perpetual absence against a later external
+write. A changing scan refuses after eight attempts and leaves interrupted
+cleanup pending.

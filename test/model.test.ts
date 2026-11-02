@@ -363,3 +363,21 @@ test("readTree rejects an object stored as the wrong kind", () => {
     (error: unknown) => error instanceof ObjectStoreError && error.code === "object_type_mismatch",
   );
 });
+
+
+test("legacy and versioned tree duplicate checks use linear work and preserve stored order", () => {
+ const id = "a".repeat(64); const entries: TreeEntry[] = Array.from({ length: 250 }, (_, index) => ({ name: `entry-${String(index).padStart(4, "0")}`, mode: "100644", id }));
+ const legacy = (rows: readonly TreeEntry[]): Buffer => Buffer.concat(rows.map(entry => Buffer.from(`${entry.mode} ${entry.name}\0${entry.id}`)));
+ const payloads = [legacy(entries), encodeTree(entries.map(entry => ({ ...entry, fileId: "b".repeat(32) }))), encodeTree(entries.map(entry => ({ ...entry, fileId: "b".repeat(32), conflicts: ["c".repeat(64)] })))];
+ for (const payload of payloads) {
+  const some = Array.prototype.some; let comparisons = 0;
+  // Count actual predicate work rather than using a host-load-dependent time assertion.
+  Array.prototype.some = function (this: unknown[], callback: Parameters<typeof some>[0], thisArg?: unknown): boolean { return some.call(this, (value: unknown, index: number, array: unknown[]) => { comparisons++; return callback.call(thisArg, value, index, array); }); };
+  let decoded: TreeEntry[];
+  try { decoded = decodeTree(payload); } finally { Array.prototype.some = some; }
+  assert.ok(comparisons <= entries.length * 4, `duplicate checking used ${comparisons} predicate visits for ${entries.length} entries`);
+  assert.deepEqual(decoded.map(entry => entry.name), entries.map(entry => entry.name));
+  const duplicate = payload.toString().startsWith("pm-vcs-tree ") ? Buffer.concat([payload, Buffer.from("\n" + payload.toString().split("\n")[1])]) : Buffer.concat([payload, legacy([entries[0]!])]);
+  assert.throws(() => decodeTree(duplicate), { code: "malformed_object" });
+ }
+});
