@@ -344,6 +344,15 @@ test("pinned raw inspection keeps its borrowed descriptor and refuses missing by
  finally{mock.restoreAll();syncBuiltinESMExports();file.close();}
 });
 
+test("pinned raw inspection consults its budget before every chunk and stops reading when the budget refuses",async()=>{
+ const f=await fixture();let seed=0x2545f491;const bytes=Buffer.from(Array.from({length:65_536*2+7},()=>(seed=(Math.imul(seed,1664525)+1013904223)>>>0)>>>24));
+ const path=place(f.dir.root,"budgeted-inspection",bytes);const file=objectFiles.open(path,"r");const absent=[fingerprint(Buffer.from("absent marker"))];
+ try{let calls=0;inspectErasureFile(file.fd,bytes.length,absent,"object-root",()=>{calls++;});assert.equal(calls,3,"one budget check per 64 KiB chunk");
+ const real=fs.readSync;let reads=0;mock.method(fs,"readSync",(...args:Parameters<typeof fs.readSync>)=>{reads++;return real(...args);});syncBuiltinESMExports();
+ let checks=0;assert.throws(()=>inspectErasureFile(file.fd,bytes.length,absent,"object-root",()=>{if(++checks===2)throw new Error("budget exhausted");}),/budget exhausted/);assert.equal(reads,1,"no chunk is read after the budget refuses");}
+ finally{mock.restoreAll();syncBuiltinESMExports();file.close();}
+});
+
 test("a deadline reached during a pinned native member stops decoding without certifying or authorizing purge",async()=>{
  const f=await fixture();const large=f.repo.objects.write("blob",Buffer.alloc(1024*1024,255));const prior=verificationLimits.accountabilityMs;let chunks=0;
  try{assert.throws(()=>accountErasureStorage(f.repo.objects.storageRoot(),{...empty,inspection:(id,size,kind)=>{const real=createErasureInspection([fingerprint(Buffer.from("absent marker"))],size,kind);return{...real,feed:(bytes:Uint8Array)=>{real.feed(bytes);if(id===large){chunks++;verificationLimits.accountabilityMs=0;}}};},purge:()=>{assert.fail("a work bound authorized purge");}}),error=>error instanceof VerificationRefusal&&error.bound==="time_ms");assert.equal(chunks,1);assert.equal(objectFiles.active.size,0);}
