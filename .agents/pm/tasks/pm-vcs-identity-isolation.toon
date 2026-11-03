@@ -1,0 +1,17 @@
+id: pm-vcs-identity-isolation
+title: Review unreachable Git identity metadata without weakening the audit
+description: "Define a safe owner-reviewed workflow for unapproved physical Git metadata outside a candidate history. Keep the all-object identity audit fail-closed, preserve unreviewed objects, and do not broaden the identity allowlist. Exact-head disposable checkouts can isolate release evidence from unrelated physical objects."
+type: Task
+status: open
+priority: 3
+tags[2]: maintenance,privacy
+created_at: "2026-11-03T02:05:50.088Z"
+updated_at: "2026-11-03T02:05:57.067Z"
+author: codex-sol
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-crash-matrix-ci,related,"2026-11-03T02:05:50.088Z",codex-sol,"cli:create:dep",detected
+comments[1]{created_at,author,text}:
+  "2026-11-03T02:05:57.066Z",codex-sol,One rejected physical commit was confirmed unreachable from every ref and absent from the candidate ancestry. The candidate commit and all reachable candidate commits use approved metadata. No rejected address or object identifier is recorded here. Original objects and identity policy remain unchanged pending owner review.
+files[1]{path,scope}:
+  scripts/audit-git-identities.ts,project
+body: ""

@@ -10,7 +10,8 @@ import { dirname, join } from "node:path";
 import crypto, { createHash } from "node:crypto";
 import { deflateSync, inflateSync, inflateRawSync, constants as zlibConstants } from "node:zlib";
 import { afterEach, test, mock } from "node:test";
-import { PmClient } from "@unbrained/pm-cli/sdk";
+import { erasureFixtureBase } from "./helpers/erasure-fixture-base.ts";
+import { lifecycleMatrix } from "./helpers/crash-matrix.ts";
 import { Repository } from "../engine/repo.ts";
 import { ObjectStore, ObjectStoreError, frameObject, hashObject } from "../engine/objects.ts";
 import { accountErasureStorage, accountabilityBoundary, erasurePurge, planErasureStorage, ACCOUNTABILITY_ATTEMPTS } from "../engine/erasure-accountability.ts";
@@ -23,8 +24,7 @@ const temps: ReturnType<typeof makeTempDir>[]=[];
 afterEach(()=>{mock.restoreAll?.();syncBuiltinESMExports();accountabilityBoundary.visit=()=>{};erasureScanBoundary.visit=()=>{};for(const dir of temps.splice(0))dir.cleanup();assert.equal(objectFiles.active.size,0);});
 /** Initialize through the real host SDK outside any Git repository. */
 async function fixture(bytes=Buffer.from("ordinary retained live data")){
- const dir=makeTempDir();temps.push(dir);await new PmClient({cwd:dir.root,pmRoot:join(dir.root,".agents/pm"),noExtensions:true}).init("accountable",{defaults:true,author:"fixture"});
- const repo=Repository.init(dir.root);repo.setAuthority("fixture","read-fixture","erase-fixture");writeFileSync(join(dir.root,"asset"),bytes);repo.stage(["asset"]);return{dir,repo,entry:repo.readIndex()[0]!,bytes};
+ const dir=makeTempDir();temps.push(dir);const base=erasureFixtureBase(dir.root,"accountable");const repo=base instanceof Repository?base:await base;writeFileSync(join(dir.root,"asset"),bytes);repo.stage(["asset"]);return{dir,repo,entry:repo.readIndex()[0]!,bytes};
 }
 /** Only the explicitly chosen disposable leaf is created or replaced. */
 function place(root:string,name:string,bytes:Buffer):string{const path=join(root,name);mkdirSync(dirname(path),{recursive:true});writeFileSync(path,bytes);return path;}
@@ -148,15 +148,11 @@ test("immutable erasure audits exist before purge intent without activating an e
 });
 
 test("SIGKILL at EVERY purge journal and unlink boundary converges with one bounded receipt",async(t)=>{
- /** Every case uses an independently initialized SDK tracker and the actual SDK/engine command path. */
+ /** Every case copies completed SDK initialization, stages its own payload and uses the actual engine command. */
  const fresh=async()=>{const f=await fixture();place(f.repo.objects.storageRoot(),"unaccounted-purge",Buffer.from("foreign bytes to purge"));return f;};
  const run=(f:Awaited<ReturnType<typeof fixture>>,ordinal:number)=>spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-purge-worker.ts"),f.repo.root,f.entry.fileId!,String(ordinal)],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
  const probe=await fresh();const listed=run(probe,0);assert.equal(listed.status,0,listed.stderr);const steps=JSON.parse(listed.stdout) as string[];assert.ok(steps.length>=40);
- for(let index=1;index<=steps.length;index++){
-  const f=await fresh();const child=run(f,index);assert.equal(child.signal,"SIGKILL",`${index}/${steps[index-1]} ${child.stderr}`);f.repo.objects.recoverWriterLock();
-  const result=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true});assert.equal(result.storage.accountable,true);assert.equal(result.purge.deleted+result.purge.observedAbsent,1);assert.equal(result.purge.files.length,1);
-  const again=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1));assert.deepEqual(again.purge,result.purge);assert.equal(f.repo.operations.read().filter(x=>x.command==="obliterate").length,1);
- }
+ const timing=await lifecycleMatrix("purge-journal",(_name,run)=>run(),steps);t.diagnostic(JSON.stringify({scenario:"purge-journal",...timing}));
  t.diagnostic(`${steps.length} native before/after purge publication, directory barrier and unlink crash cuts`);
 });
 

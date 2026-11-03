@@ -1,3 +1,4 @@
+import { assertCompleteCuts, lifecycleMatrix } from "./helpers/crash-matrix.ts";
 import "./helpers/isolate-session.ts";
 import { lifecycleSequence } from "./helpers/lifecycle-sequences.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
@@ -9,53 +10,16 @@ import { createHash } from "node:crypto";
 import fs, { cpSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { afterEach, mock, test } from "node:test";
-import { PmClient } from "@unbrained/pm-cli/sdk";
+import { fixture, foreign, retiredPending, interruptedUnpack, cleanupFixtures } from "./helpers/lifecycle-fixtures.ts";
 import { Repository } from "../engine/repo.ts";
 import { accountabilityBoundary, accountErasureStorage, erasurePurge, type ErasurePurgeEntry } from "../engine/erasure-accountability.ts";
 import { erasureScanBoundary, ErasureStorageRefusal } from "../engine/erasure-scan.ts";
 import { objectFiles } from "../engine/object-files.ts";
-import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
+import { packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 
-const dirs: ReturnType<typeof makeTempDir>[] = [];
 const empty = { forbiddenIds: new Set<string>(), forbiddenPayloads: new Set<string>() };
-afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); accountabilityBoundary.visit = () => {}; erasureScanBoundary.visit = () => {}; for (const dir of dirs.splice(0)) dir.cleanup(); assert.equal(objectFiles.active.size, 0); });
-/** One SDK tracker and native hub outside Git, shared by an entire model run. */
-async function fixture() {
-  const dir = makeTempDir(); dirs.push(dir); const root = join(dir.root, "hub"); mkdirSync(root);
-  await new PmClient({ cwd: root, pmRoot: join(root, ".agents/pm"), noExtensions: true }).init("lifecycle", { defaults: true, author: "fixture" });
-  const repo = Repository.init(root); repo.setAuthority("fixture", "read-fixture", "erase-fixture");
-  for (const name of ["first", "second"]) writeFileSync(join(root, name), `selected ${name} lifecycle payload 783629`);
-  repo.stage(["first", "second"]); repo.commit({ message: "fixture", author: { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 } }, new Date(1));
-  return { dir, repo, id: repo.readIndex().find(entry => entry.path === "first")!.fileId! };
-}
-/** Foreign files always remain explicit reference-model state, independently of production classification. */
-function foreign(root: string, name = "foreign"): string { const path = join(root, name); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, "foreign lifecycle bytes"); return path; }
-/** Persist actual pending authority, then retire its root using the public lifecycle operations. */
-async function retiredPending() {
-  const f = await fixture(); const path = join(f.dir.root, "secondary"); f.repo.linkInstance("secondary", path); foreign(join(path, ".pmvcs/objects"));
-  const cut = new ErasureStorageRefusal("unverifiable", "temporary-storage"); accountabilityBoundary.visit = step => { if (step === "purge-set-persisted") throw cut; };
-  assert.throws(() => f.repo.obliterate(f.id, "erase-fixture", "incident", new Date(1), { purgeUnaccounted: true }), failure => failure === cut); accountabilityBoundary.visit = () => {};
-  f.repo.unlinkInstance("secondary"); rmSync(path, { recursive: true, force: true }); f.repo.pruneRetiredInstance(relative(f.repo.root, path), "erase-fixture", "removed", new Date(1));
-  return { ...f, second: f.repo.readIndex().find(entry => entry.path === "second")!.fileId! };
-}
-
-/** Reproduce a killed unpack with a loose copy and two independently produced native packs. */
-async function interruptedUnpack() {
-  const f = await fixture(); const selected = f.repo.readIndex().find(entry => entry.fileId === f.id)!;
-  f.repo.objects.compact();
-  // Both physical packs represent known local identities; the retained member has an independent native origin here.
-  f.repo.objects.write("blob", Buffer.from("independent retained pack member"));
-  const extra = Repository.init(join(f.dir.root, "independent-pack")); extra.objects.write("blob", Buffer.from("selected first lifecycle payload 783629")); extra.objects.write("blob", Buffer.from("independent retained pack member")); extra.objects.compact();
-  for (const name of fs.readdirSync(join(extra.objects.storageRoot(), "packs")).filter(name => name.endsWith(".pack"))) fs.copyFileSync(join(extra.objects.storageRoot(), "packs", name), join(f.repo.objects.storageRoot(), "packs", name));
-  const killed = spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-purge-worker.ts"), f.repo.root, f.id, "unpacked"], { env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8", timeout: 120_000 });
-  assert.equal(killed.signal, "SIGKILL", killed.stderr);
-  f.repo.objects.recoverWriterLock();
-  f.repo.objects.withWriteLock(() => assert.equal([...f.repo.objects.walkErasureInventory()].filter(entry => entry.id === selected.id).length, 3));
-  foreign(f.repo.objects.storageRoot(), "unaccounted-purge");
-  return { ...f, second: f.id, selected: selected.id };
-}
-
+afterEach(() => { mock.restoreAll(); syncBuiltinESMExports(); accountabilityBoundary.visit = () => {}; erasureScanBoundary.visit = () => {}; cleanupFixtures(); assert.equal(objectFiles.active.size, 0); });
 test("review: a purged dormant instance can be unlinked, removed and pruned before another obliteration", async () => {
   const f = await fixture(); const path = join(f.dir.root, "secondary"); f.repo.linkInstance("secondary", path);
   foreign(join(path, ".pmvcs/objects")); const first = f.repo.obliterate(f.id, "erase-fixture", "incident", new Date(1), { purgeUnaccounted: true }); assert.equal(first.purge.deleted, 1);
@@ -116,33 +80,18 @@ test("root-bound journals retain strict validation and do not read historical pa
   rmSync(root); mkdirSync(root); const repaired = f.repo.objects.withWriteLock(() => erasurePurge(f.repo.controlDirectory, f.id, [root], false).receipt()); assert.equal(repaired.cancelled, 1); assert.equal(repaired.files.at(-1)!.reason, "root_replaced");
 });
 
-for (const scenario of ["retired-instance", "interrupted-unpack"] as const) test(`SIGKILL at every native lifecycle-journal publication step resumes for ${scenario}`, async t => {
-  const prepare = scenario === "retired-instance" ? retiredPending : interruptedUnpack;
-  /** Kill at real before/after filesystem operations, not a simulated successful write. */
-  const run = (f: Awaited<ReturnType<typeof prepare>>, ordinal: number) => spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-purge-worker.ts"), f.repo.root, f.second, String(ordinal)], { env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8", timeout: scenario === "interrupted-unpack" ? 120_000 : 30_000 });
-  const probe = await prepare(); const listed = run(probe, 0); assert.equal(listed.status, 0, listed.stderr); const steps = JSON.parse(listed.stdout) as string[]; assert.ok(steps.length >= 20);
-  console.log(`native lifecycle ${scenario}: ${steps.length} native cut points`);
-  let executed = 0;
-  for (let ordinal = 1; ordinal <= steps.length; ordinal++) {
-    await t.test(`cut ${ordinal}: ${steps[ordinal - 1]}`, async () => {
-    const f = await prepare(); const child = run(f, ordinal); assert.equal(child.signal, "SIGKILL", `${ordinal}/${steps[ordinal - 1]} ${child.stderr}`);
-    let receipt: ReturnType<Repository["obliterate"]>;
-    try { f.repo.objects.recoverWriterLock(); receipt = f.repo.obliterate(f.second, "erase-fixture", "incident", new Date(1), { purgeUnaccounted: scenario === "interrupted-unpack" }); }
-    catch (error) { throw new Error(`native lifecycle cut ${ordinal}/${steps[ordinal - 1]}`, { cause: error }); }
-    assert.equal(receipt.storage.accountable, true);
-    const journal = JSON.parse(readFileSync(join(f.repo.controlDirectory, "erasure-purge.json"), "utf8")) as { operations: Record<string, ErasurePurgeEntry[]> };
-    if (scenario === "retired-instance") { assert.equal(journal.operations[f.id][0].status, "cancelled"); assert.equal(journal.operations[f.id][0].reason, "root_retired"); }
-    else {
-      f.repo.objects.withWriteLock(() => assert.equal([...f.repo.objects.walkErasureInventory()].some(entry => entry.id === (f as Awaited<ReturnType<typeof interruptedUnpack>>).selected), false));
-      assert.deepEqual(f.repo.objects.readTyped(f.repo.readIndex().find(entry => entry.path === "second")!.id, "blob"), Buffer.from("selected second lifecycle payload 783629"));
-      assert.equal(f.repo.obliterate(f.id, "erase-fixture", "incident", new Date(1)).tombstone, receipt.tombstone);
-    }
-    assert.equal(f.repo.operations.read().filter(entry => entry.command === "obliterate").length, 1);
-    executed++;
-    if (ordinal % 25 === 0) console.log(`native lifecycle ${scenario}: cut ${ordinal}/${steps.length} complete`);
-    });
-  }
-  t.diagnostic(`${executed}/${steps.length} actual native lifecycle-journal SIGKILL cuts executed, including durable temporary publication and directory barriers`);
+test("crash matrix completeness guard rejects a removed boundary", () => {
+  const steps = ["journal:openSync:before", "journal:openSync:after", "journal:fsyncSync:before"];
+  assertCompleteCuts(steps, [1, 2, 3]);
+  assert.throws(() => assertCompleteCuts(steps, [1, 3]), /enumerated cuts must equal every recorded syscall boundary exactly once/);
+});
+
+for (const scenario of ["retired-instance", "interrupted-unpack"] as const) test(`SIGKILL at every native lifecycle-journal publication step resumes for ${scenario}`, { concurrency: true }, async t => {
+  const reference = await (scenario === "retired-instance" ? retiredPending(true) : interruptedUnpack(true));
+  const listed = spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-purge-worker.ts"), reference.repo.root, reference.second, "0"], { env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8", timeout: scenario === "interrupted-unpack" ? 120_000 : 30_000 });
+  assert.equal(listed.status, 0, listed.stderr); const steps = JSON.parse(listed.stdout) as string[]; assert.ok(steps.length >= 20);
+  const result = await lifecycleMatrix(scenario, (name, run) => t.test(name, run), steps);
+  t.diagnostic(JSON.stringify({ scenario, ...result }));
 });
 
 test("a competing process at both retirement boundaries is excluded until the owning erasure releases last", async t => {

@@ -1,0 +1,100 @@
+id: pm-vcs-crash-matrix-ci
+title: Fit the complete crash-cut matrix within CI runtime
+description: Measure and reduce all native SIGKILL cuts without losing boundaries or assertions under Node and Bun; retain exact-count guards and owned temporary cleanup.
+type: Task
+status: in_progress
+priority: 2
+tags[3]: "gh:unbraind/pm-vcs#150",performance,testing
+created_at: "2026-11-02T20:52:00.247Z"
+updated_at: "2026-11-03T02:37:47.295Z"
+assignee: codex-sol
+claim_principal: codex-sol
+author: codex-sol
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-vcs-phase6packs,related,"2026-11-02T20:52:00.247Z",codex-sol,"cli:create:dep",detected
+comments[22]{created_at,author,text}:
+  "2026-11-02T20:53:34.802Z",codex-sol,"Baseline instrumentation separates fixture setup, child execution, recovery and assertions. First nine retired-instance cuts take about 4.3-8.7 seconds locally; fixture rebuild is the largest component (2.1-4.1 seconds). Evaluating prepared fixtures, warmed child compilation and bounded concurrent real-process cuts. No boundary or assertion may be removed."
+  "2026-11-02T21:04:21.942Z",codex-sol,"Rejected copying interrupted fixtures: a copied inode-bound recovery state can change the syscall trace. The accepted base-fixture cache recreates every pending operation natively. Added pre/post enumeration guards, deliberate one-cut-removal rejection, and exact syscall-prefix comparison for each fatal child. Fixture owners are bounded by available cores and remove an entire per-cut temporary namespace in finally."
+  "2026-11-02T21:10:10.973Z",codex-sol,"Prepared the publication child once with the CI-installed Bun bundler, targeting the selected Node runtime. A source-vs-prepared full trace comparison and a per-kill exact-prefix assertion prevent bundling from changing crash coverage. CI retains both complete release gates and now checks root free space before each gate; disposable gate storage prefers shared memory when at least 2 GiB are free, retaining native syscalls and separate explicit power-loss modeling. Source execution remains available when Bun is not installed locally."
+  "2026-11-02T21:14:11.312Z",codex-sol,"Verified that a persistent owner exits normally and flushes native recovery V8 coverage. Restricted shared-memory use to the crash matrix; other acceptance fixtures remain on runner disk. Compilation, lint, duplicate and docstring checks pass. The standalone omission guard passes and actual scenario enumeration also tests one-cut removal. Full local before/after runs are still in progress."
+  "2026-11-02T21:20:10.948Z",codex-sol,"Further reduced repeated preparation at a trace-checked checkpoint. Retired-instance copies assert all pending roots are missing and fixture-owned, then republish byte-identical journal content through native engine publication. Interrupted-unpack copies are taken before interruption and still execute a fresh real unpack SIGKILL plus all physical-copy assertions for every cut. The complete source trace must equal the optimized trace before scheduling any cut."
+  "2026-11-02T21:29:40.998Z",codex-sol,"Committed candidate 622300f as the requested maintainer identity and started the serial release gates under Node 26. The explicit negative control removed ordinal 409 from an actual 818-boundary trace: 817 enumerated cuts produced the expected assertion failure and exit code 1. Three spread retired-instance probes reduced mean fixture preparation from 5880 ms to 57 ms and mean child startup from 4265 ms to 1321 ms on a heavily contended host; full matrix timings are pending."
+  "2026-11-02T21:34:55.311Z",codex-sol,"Stopped the superseded overlapping local benchmark and npm-gate attempts because they competed for the same cores and distorted timing. Those incomplete runs are not acceptance evidence. Final before/after benchmarks and both full release gates will run serially, with independent owned temporary namespaces and the same cut enumeration and assertions."
+  "2026-11-02T22:05:00.759Z",codex-sol,"Restricted automatic temporary-scope creation to test entry points so ordinary workers retain their parent's recovery-ledger location. Added and ran the linked ordinary-worker regression: real native ledger and fixture artifacts are removed by the parent after both normal worker exit and SIGKILL (1 test passed). Also require fixture owners to exit normally rather than silently accepting an abnormal owner shutdown. Full serial benchmarks continue."
+  "2026-11-02T22:48:20.413Z",codex-sol,"Extended bounded execution and source-prefix/count guards to the remaining purge, proof/denial and logical-scan matrices. These cache only completed SDK/control initialization; every original payload is still generated and staged in ordinal order, preserving the seeded random corpus and all original recovery assertions. The logical-scan preflight passed all 9 cuts, with 8/9 rejected by the omission guard. The serial comparison now includes these three additional matrices."
+  "2026-11-03T00:36:21.437Z",codex-sol,"The first complete optimized run passed all five fresh source matrices (2,751 boundaries locally) in 32m11s versus 2h10m05s before. That yields an insufficient conservative CI projection of about 108 minutes, so it is not the final candidate. Testing one shared minified Node-targeted entry with preserved function names and JavaScript preloads next; exact source-trace equality and every fatal-child prefix remain mandatory. No boundary, assertion, runtime, threshold or timeout is removed."
+  "2026-11-03T00:49:30.037Z",codex-sol,"Per-phase measurements identified serialized parent recovery as the purge-pool bottleneck (roughly 567 ms recovery/verification plus 86 ms setup per cut). Purge now shares the covered persistent-owner pool and must match the original fixture source trace. The coverage launcher also partitions every test file exactly once: ordinary files use at most two processes, followed by the three matrix files serially, each with a core-bounded cut pool. A single unchanged c8 scope and 100-percent per-file thresholds cover both phases. This reduces baseline suite overhead without overlapping two matrix pools."
+  "2026-11-03T00:57:30.806Z",codex-sol,"The ordinary-file phase will use up to four available cores, matching the existing npm test default on a four-core runner. File isolation remains process-based; matrix-containing files run only in the subsequent serial phase. The former coverage serialization was introduced with all-source quality gates, with no documented shared-fixture requirement. Full release checks must validate this concurrency at the unchanged source scope and coverage thresholds."
+  "2026-11-03T01:09:50.636Z",codex-sol,"Final source candidate adds a full source-versus-prepared trace probe for every fixture owner before any cuts are assigned, alongside the per-scenario exact ordinal guard and per-child full-prefix guard. Both full release gates are pending; test metadata tracking is disabled, so final outcomes will be recorded in a sanitized item comment after both gates finish. Matrix measurements and all gate scratch namespaces are owned and cleaned independently."
+  "2026-11-03T01:36:20.658Z",codex-sol,"The mandatory 20-GiB preflight applies to local release-gate runs protecting the shared host and remains enforced before both commands. The CI workflow still prints root space and cleans owned namespaces, but does not add a 20-GiB minimum to standard runners: GitHub documents four CPUs, 16 GB RAM and 14 GB SSD for public Ubuntu jobs. Reference: https://docs.github.com/en/actions/reference/runners/github-hosted-runners . This supersedes the earlier provisional CI-space-guard note and avoids blocking the complete tests on an unrelated storage threshold."
+  "2026-11-03T01:38:08.719Z",codex-sol,"The plain npm test entry point now uses the same complete file scheduler as coverage. This prevents three independent matrix pools from overlapping outside the release gate too. Both entry points retain the original test flags; all discovered test files are asserted to run exactly once, ordinary files use up to four available cores, and matrix-containing files run serially with isolated core-bounded cut pools."
+  "2026-11-03T01:38:19.513Z",codex-sol,"Final guard and native cleanup regressions each passed one test with zero failures through the linked pm test commands. Final static checks passed: TypeScript, lint, zero duplication across 95 production sources, and 596 documented declarations. The complete faster purge-owner matrix passed all fresh source boundaries; every owner also passed its full source/prepared trace probe. Freezing this source and its self-host archive for the two serial release checks. No timing or gate success is inferred from incomplete earlier runs."
+  "2026-11-03T01:46:00.136Z",codex-sol,"Stopped the first source-candidate npm gate before completing it after identifying an integration gap in the existing exact coverage-contract fixture. That fixture executes the real repository coverage command in a minimal project, so it must carry the new standalone launcher too. The launcher now uses its working directory, supports an empty matrix phase, and still asserts every discovered test file runs exactly once. Every existing omitted-source and branch-threshold assertion is retained; the interrupted attempt is not passing gate evidence."
+  "2026-11-03T01:53:47.437Z",codex-sol,"The real coverage-command contract now passes with its unchanged omitted-source and uncovered-branch negative controls. The full exact-gates regression passed five of six tests; its production self-host subprocess hit the unchanged 60-second limit under shared disk contention. The quality-contract file now runs serially after the matrix files. Its full real audit import may use an owned memory-backed scratch namespace when configured, with immediate finally cleanup. No timeout, threshold, archive object or verification assertion is removed or relaxed."
+  "2026-11-03T02:05:59.594Z",codex-sol,"Classified the existing physical-object identity audit failure: one unreachable commit outside every ref and outside the candidate ancestry; the candidate history is approved. Preserve all original objects and the unchanged allowlist. Follow-up pm-vcs-identity-isolation tracks owner review. Final release evidence will use a non-hardlinked disposable clone of the exact committed candidate, retaining its complete reachable history and running the same all-object audit there."
+  "2026-11-03T02:12:47.707Z",codex-sol,"The portable launcher and unchanged quality-contract assertions pass compilation and lint. The full real self-host import now completes within its original subprocess timeout using owned memory-backed scratch. The remaining identity failure is confined to an unrelated unreachable physical object; no source or allowlist change is needed. Preparing an exact-head independent checkout, then rerunning all six quality checks before the two complete release gates."
+  "2026-11-03T02:32:33.420Z",codex-sol,"The archive audit printed its completed byte-identity verdict before the unchanged subprocess timeout, exposing expensive native retirement of its own disposable scratch. Its two generated temporary directories now use the existing durability.discardTemporary primitive, which removes owned scratch without creating another recovery ledger. All archive parsing, independent hashing/import, source comparison and no-regeneration checks remain unchanged. Lifecycle enumeration also now compares the ordinary-filesystem original trace with every prepared owner trace before scheduling cuts."
+  "2026-11-03T02:37:47.293Z",codex-sol,"Admission probes under Node 26 confirmed exact ordinary-filesystem versus prepared memory-backed traces: retired-instance 818/818 and interrupted-unpack 1018/1018, each with a real shortened-enumeration rejection. Compilation, lint, zero duplication across 95 production sources and all 596 docstrings pass. Rebuilding the committed snapshot before complete quality and release gates; no incomplete attempt is counted as acceptance."
+files[20]{path,scope}:
+  .github/workflows/ci.yml,project
+  package.json,project
+  scripts/self-host.ts,project
+  test/erasure-accountability.test.ts,project
+  test/erasure-lifecycle.test.ts,project
+  test/erasure-storage.test.ts,project
+  test/exact-gates.test.ts,project
+  test/fixture-lifetime.test.ts,project
+  test/helpers/crash-child.ts,project
+  test/helpers/crash-matrix.ts,project
+  test/helpers/erasure-fixture-base.ts,project
+  test/helpers/erasure-proof-crash.ts,project
+  test/helpers/erasure-purge-worker.ts,project
+  test/helpers/erasure-scan-worker.ts,project
+  test/helpers/fixture-crash-matrix.ts,project
+  test/helpers/lifecycle-cut-worker.ts,project
+  test/helpers/lifecycle-fixtures.ts,project
+  test/helpers/release-suite.ts,project
+  test/helpers/test-environment.ts,project
+  test/helpers/tmp.ts,project
+tests[5]:
+  - command: "node --test --test-name-pattern=\"completeness guard\" test/erasure-lifecycle.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-02T21:07:53.433Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "NPM_CONFIG_USERCONFIG=/dev/null npm run release:check"
+    scope: project
+    timeout_seconds: 21600
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-02T21:08:51.794Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "bun run release:check"
+    scope: project
+    timeout_seconds: 21600
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-02T21:08:58.408Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-name-pattern=\"ordinary workers share\" test/fixture-lifetime.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-02T22:03:24.808Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: node --test test/exact-gates.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-03T01:46:02.487Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+docs[1]{path,scope}:
+  docs/crash-cut-matrix.md,project
+body: ""

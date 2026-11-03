@@ -9,7 +9,8 @@ import { spawnSync } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { afterEach, mock, test } from "node:test";
 import { deflateSync } from "node:zlib";
-import { PmClient } from "@unbrained/pm-cli/sdk";
+import { erasureFixtureBase, withErasureFixtureBase } from "./helpers/erasure-fixture-base.ts";
+import { fixtureCrashMatrix } from "./helpers/fixture-crash-matrix.ts";
 import { Repository } from "../engine/repo.ts";
 import { frameObject, hashObject, OBJECT_TYPES } from "../engine/objects.ts";
 import { ErasureStorageRefusal, erasureScanBoundary, fingerprint, fingerprintJournal, matchesFingerprints, type ErasureFingerprint, readFingerprints, scanErasureStorage, createErasureInspection, inspectErasureRepresentation, inspectErasureFile } from "../engine/erasure-scan.ts";
@@ -29,8 +30,7 @@ function number(): number { random = (Math.imul(random,1664525)+1013904223) >>> 
 /** Make real SDK tracker state outside Git, without importing any user or fleet data. */
 async function fixture(chosen?: Buffer) {
   const dir = makeTempDir(); temporary.push(dir);
-  await new PmClient({cwd:dir.root,pmRoot:join(dir.root,".agents/pm"),noExtensions:true}).init("erasure-storage",{defaults:true,author:"fixture"});
-  const repo = Repository.init(dir.root); repo.setAuthority("fixture","read-fixture","erase-fixture");
+  const base=erasureFixtureBase(dir.root,"erasure-storage"); const repo=base instanceof Repository?base:await base;
   let bytes: Buffer = Buffer.alloc(48+number()%96); for (let i=0;i<bytes.length;i++) bytes[i] = number() >>> 24;
   if(number()%3===0) bytes=Buffer.from(`compressible-selected-${number()}-`.repeat(23));
   if(chosen!==undefined) bytes=chosen;
@@ -426,15 +426,12 @@ test("a post-deletion foreign copy leaves denial pending and native accountabili
 test("SIGKILL at EVERY erasure proof, scan and publication boundary converges without duplicate receipts", async(t)=>{
   const probe=await fixture(); const steps:string[]=[]; erasureScanBoundary.visit=(step)=>steps.push(step);
   probe.repo.obliterate(probe.fileId,"erase-fixture","incident",new Date(1)); erasureScanBoundary.visit=()=>{};
-  for(let ordinal=1;ordinal<=steps.length;ordinal++) {
-    const f=await fixture();
-    const child=spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-scan-worker.ts"),f.repo.root,f.fileId,String(ordinal)],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
-    assert.equal(child.signal,"SIGKILL",`${ordinal}/${steps[ordinal-1]}: ${child.stderr}`);
+  const timing=await withErasureFixtureBase("erasure-storage",()=>fixtureCrashMatrix({steps,source:"test/helpers/erasure-scan-worker.ts",prepare:fixture,args:f=>[f.repo.root,f.fileId],verify:f=>{
     f.repo.objects.recoverWriterLock(); const receipt=f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));
     assert.equal(f.repo.objects.denials()[0].pending,false); assert.equal(f.repo.operations.read().filter((entry)=>entry.command==="obliterate").length,1);
     assert.equal(Object.keys(JSON.parse(readFileSync(join(f.repo.controlDirectory,"erasure-verification.json"),"utf8")).records).length,1);
     assert.equal(receipt.fileId,f.fileId);
-  }
+  }}));t.diagnostic(JSON.stringify({scenario:"scan-publication",...timing}));
   t.diagnostic(`${steps.length} SIGKILL boundaries: ${[...new Set(steps)].join(", ")}`);
 });
 
@@ -516,12 +513,11 @@ test("SIGKILL at every native proof/denial write step resumes with retained fore
   /** Use a real child so a crash cannot run JavaScript cleanup or release its writer lease. */
   const run=(f:Awaited<ReturnType<typeof fixture>>,ordinal:number)=>spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-proof-crash.ts"),f.repo.root,f.fileId,String(ordinal)],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
   const listing=run(probe,0);assert.equal(listing.status,0,listing.stderr);const steps=JSON.parse(listing.stdout) as string[];assert.ok(steps.length>=30);
-  for(let ordinal=1;ordinal<=steps.length;ordinal++){
-    const f=await fixture();const child=run(f,ordinal);assert.equal(child.signal,"SIGKILL",`${ordinal}/${steps[ordinal-1]}: ${child.stderr}`);
+  const timing=await withErasureFixtureBase("erasure-storage",()=>fixtureCrashMatrix({steps,source:"test/helpers/erasure-proof-crash.ts",prepare:fixture,args:f=>[f.repo.root,f.fileId],verify:f=>{
     f.repo.objects.recoverWriterLock();const receipt=f.repo.obliterate(f.fileId,"erase-fixture","incident",new Date(1));
     assert.equal(receipt.fileId,f.fileId);assert.equal(f.repo.objects.denials()[0].pending,false);
     assert.equal(f.repo.operations.read().filter((entry)=>entry.command==="obliterate").length,1);
-  }
+  }}));t.diagnostic(JSON.stringify({scenario:"proof-denial",...timing}));
   t.diagnostic(`${steps.length} native before/after crash cuts across proof and both denial publications`);
 });
 

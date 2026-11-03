@@ -15,9 +15,13 @@ function tool(root: string, entry: string, args: readonly string[], environment:
   const env = { ...environment };
   // A nested real test runner must start independently of the parent runner.
   delete env.NODE_TEST_CONTEXT;
-  return spawnSync(process.execPath, [join(packageRoot, entry), ...args], {
-    cwd: root, encoding: "utf8", timeout: 60_000, env,
-  });
+  const scratch = entry === "scripts/self-host.ts" && process.env.PM_VCS_CRASH_TMPDIR !== undefined ? makeTempDir(process.env.PM_VCS_CRASH_TMPDIR) : undefined;
+  if (scratch !== undefined) { env.TMPDIR = scratch.root; env.TMP = scratch.root; env.TEMP = scratch.root; }
+  try {
+    return spawnSync(process.execPath, [join(packageRoot, entry), ...args], {
+      cwd: root, encoding: "utf8", timeout: 60_000, env,
+    });
+  } finally { scratch?.cleanup(); }
 }
 
 /** Write a fixture source, creating only its containing directory. */
@@ -45,6 +49,7 @@ test("the repository coverage command measures root, src, engine and scripts and
     assert.ok(command.startsWith("c8 "));
     const args = command.slice(3).replaceAll("'", "").split(" ");
     source(fixture.root, "package.json", JSON.stringify({ type: "module" }));
+    source(fixture.root, "test/helpers/release-suite.ts", readFileSync(join(packageRoot, "test/helpers/release-suite.ts"), "utf8"));
     source(fixture.root, ".c8rc.json", JSON.stringify({ all: false, exclude: ["**/*.ts"], lines: 0, branches: 0, functions: 0, statements: 0 }));
     const paths = ["index.ts", "src/value.ts", "engine/value.ts", "scripts/value.ts"];
     for (const path of paths) source(fixture.root, path, "export const answer: number = 42;\n");

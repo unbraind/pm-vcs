@@ -6,7 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs, { existsSync, mkdirSync, watch, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, mock, test } from "node:test";
 import { makeManagedTempDir } from "./helpers/managed-temp.ts";
@@ -65,4 +65,21 @@ test("path-identity fixture cleanup still runs when its handle invariant fails",
   const roots = [...child.stdout.matchAll(/FIXTURE_ROOT:([^\r\n]+)/gu)].map(match => match[1]); assert.equal(roots.length, 1, child.stdout);
   assert.equal(existsSync(roots[0]), false, "A failed descriptor invariant must not bypass fixture removal");
  } finally { await fixture.cleanup(); }
+});
+
+
+test("ordinary workers share recovery storage and parent cleanup removes normal and killed child artifacts", async () => {
+  const fixture = makeManagedTempDir(); const artifacts: string[] = [];
+  const source = `import {makeTempDir} from ${JSON.stringify(new URL("./helpers/tmp.ts", import.meta.url).href)}; import {ObjectStore} from ${JSON.stringify(new URL("../engine/objects.ts", import.meta.url).href)}; import {tmpdir} from "node:os"; import {join} from "node:path"; import {readdirSync,writeSync} from "node:fs"; const dir=makeTempDir(); new ObjectStore(join(dir.root,"objects")).write("blob",Buffer.from("owned worker cleanup fixture")); const ledgers=readdirSync(tmpdir()).filter(name=>/^pm-vcs-namespace-[0-9a-f]{64}$/.test(name)); writeSync(1,JSON.stringify({scope:tmpdir(),root:dir.root,ledgers})); if(process.argv[1]==="kill")process.kill(process.pid,"SIGKILL");`;
+  try {
+    for (const mode of ["exit", "kill"]) {
+      const child = spawnSync(process.execPath, ["--input-type=module", "-e", source, mode], { env: testEnvironment({ TMPDIR: fixture.root, TMP: fixture.root, TEMP: fixture.root, NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: 30_000 });
+      if (mode === "kill") assert.equal(child.signal, "SIGKILL", child.stderr); else assert.equal(child.status, 0, child.stderr);
+      const owned = JSON.parse(child.stdout) as { scope: string; root: string; ledgers: string[] };
+      assert.equal(owned.scope, fixture.root, "workers must use the same recovery namespace as their parent");
+      assert.ok(relative(fixture.root, owned.root).startsWith("pm-vcs-eng-")); assert.ok(existsSync(owned.root)); assert.ok(owned.ledgers.length > 0, "real native writes must create external recovery ledgers");
+      artifacts.push(owned.root, ...owned.ledgers.map(name => join(owned.scope, name)));
+    }
+  } finally { await fixture.cleanup(); }
+  for (const path of artifacts) assert.equal(existsSync(path), false, "parent cleanup removes both fixture data and sibling native ledgers");
 });

@@ -785,7 +785,7 @@ export function freshStore(): { store: ObjectStore; refs: RefStore; dir: string;
     refs: new RefStore(dir),
     dir,
     cleanup(): void {
-      durability.remove(dir, { recursive: true, force: true });
+      durability.discardTemporary(dir);
     },
   };
 }
@@ -891,7 +891,7 @@ export function main(root: string, args: readonly string[]): void {
     // is removing to still be there, and a stale registration left behind would
     // make the *next* run's `worktree add` fail on a path that no longer exists.
     removeWorktree?.();
-    durability.remove(extractDir, { recursive: true, force: true });
+    durability.discardTemporary(extractDir);
     cleanup();
   }
 }

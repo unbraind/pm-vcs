@@ -10,17 +10,27 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+// Own the entire temporary namespace, including ledgers created outside fixture roots.
+// Descendants inherit this scope; a fatal publication child cannot strand its ledgers.
+// Ordinary workers must retain the inherited location of recovery ledgers.
+if (process.argv[1]?.endsWith(".test.ts")) {
+  const scope = realpathSync(mkdtempSync(join(tmpdir(), "pm-vcs-suite-")));
+  process.env.TMPDIR = scope; process.env.TEMP = scope; process.env.TMP = scope;
+  const removeScope = rmSync;
+  process.once("exit", () => removeScope(scope, { recursive: true, force: true }));
+}
+
 /**
  * Creates a fresh empty directory and returns a cleanup handle.
  *
  * @returns The absolute path and a removal function.
  */
-export function makeTempDir(): { root: string; cleanup(): void } {
+export function makeTempDir(parent = tmpdir()): { root: string; cleanup(): void } {
   // Canonicalized, because the engine's containment checks use `resolve`/`relative`
   // rather than a filesystem canonicalization, and a temp root that is a symlink —
   // `/var/folders/...` for `/private/var/folders/...` on macOS — would make a path
   // inside the repository look like a path outside it.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "pm-vcs-eng-")));
+  const root = realpathSync(mkdtempSync(join(parent, "pm-vcs-eng-")));
   return {
     root,
     cleanup(): void {
