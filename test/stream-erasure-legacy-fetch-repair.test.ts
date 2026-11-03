@@ -1,5 +1,6 @@
 import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
+import { discardChildCoverage } from "./helpers/sandbox.ts";
 /** Real arrival, streaming loose-storage and legacy no-op fetch regressions. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -96,7 +97,8 @@ console.log(JSON.stringify({reads, retained:measured.arrayBuffers-baseline.array
   // Explicit GC can leave backing-store reclamation on a background sweeper.
   // Finish that sweep before sampling arrayBuffers, retaining the same boundary
   // and budget so genuinely reachable corpus buffers still fail the assertion.
-  const child = spawnSync(process.execPath, ["--expose-gc", "--no-concurrent-array-buffer-sweeping", "--input-type=module", "-e", program, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: 30_000 });
+  // Measure the runtime's retained buffers without duplicate coverage bookkeeping.
+  const child = spawnSync(process.execPath, ["--expose-gc", "--no-concurrent-array-buffer-sweeping", "--input-type=module", "-e", program, repo.root], { env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8", timeout: 30_000 });
   assert.equal(child.status, 0, child.stderr);
   const measured = JSON.parse(child.stdout) as { reads: number; retained: number; external: number; rss: number; maxRSS: number; removed: string[] };
   assert.ok(measured.reads >= 2); assert.deepEqual(measured.removed, [selected.id]);

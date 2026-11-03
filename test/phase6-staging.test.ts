@@ -310,13 +310,14 @@ test("manifest working comparisons support fixed layouts and refuse short reads 
   writeFileSync(file, bytes); repo.stage(["asset"]);
   const entry = repo.readIndex()[0];
   const native = readWorkingStat(repo.root, "asset");
-  repo.writeIndex([{ ...entry, stat: { ...native.stat, observedAtNs: native.stat.observedAtNs - 3_000_000_000n } }]);
-  assert.deepEqual(repo.status().unstaged, []);
-  // Prove that a stable streamed comparison can refresh this index before
-  // introducing drift; a recent, non-cacheable observation cannot test the guard.
-  await delay(Number(RACY_WINDOW_NS / 1_000_000n) + 100);
+  const changedAt = native.stat.ctimeNs > native.stat.mtimeNs ? native.stat.ctimeNs : native.stat.mtimeNs;
+  repo.writeIndex([{ ...entry, stat: { ...native.stat, observedAtNs: changedAt - RACY_WINDOW_NS - 1n } }]);
   const indexPath = join(repo.controlDirectory, "index");
   const uncached = readFileSync(indexPath);
+  assert.deepEqual(repo.status().unstaged, []);
+  // Snapshot the stale observation before either status call: staging may have
+  // already outlasted the racy window. Prove refresh before introducing drift.
+  await delay(Number(RACY_WINDOW_NS / 1_000_000n) + 100);
   assert.deepEqual(repo.status().unstaged, []);
   assert.notDeepEqual(readFileSync(indexPath), uncached, "control: a stable aged observation refreshes the stat cache");
   writeFileSync(indexPath, uncached);

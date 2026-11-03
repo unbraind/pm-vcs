@@ -79,13 +79,17 @@ jobs:
         run: |
           set -euo pipefail
           df -BG /
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          if (( available_kb < 20971520 )); then
+            printf 'Release gate stopped: fewer than 20 GiB free on root (%s KiB available).\n' "${available_kb}" >&2
+            exit 1
+          fi
           gate_tmp="$(mktemp -d "${RUNNER_TEMP}/pm-vcs-npm.XXXXXXXX")"
           gate_memory=""
           # Every crash cut still uses native syscalls. Bound memory-backed
           # storage to this matrix; other acceptance fixtures stay on disk.
           if [ -d /dev/shm ] && [ -w /dev/shm ]; then
-            memory_kb="$(df -Pk /dev/shm | awk 'NR == 2 { print $4 }')"
-            if (( memory_kb >= 2097152 )); then
+            if memory_kb="$(df -Pk /dev/shm 2>/dev/null | awk 'NR == 2 { print $4 }')" && [[ "${memory_kb}" =~ ^[0-9]+$ ]] && (( memory_kb >= 2097152 )); then
               gate_memory="$(mktemp -d /dev/shm/pm-vcs-crashes.XXXXXXXX)"
               export PM_VCS_CRASH_TMPDIR="${gate_memory}"
             fi
@@ -108,13 +112,17 @@ jobs:
         run: |
           set -euo pipefail
           df -BG /
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          if (( available_kb < 20971520 )); then
+            printf 'Release gate stopped: fewer than 20 GiB free on root (%s KiB available).\n' "${available_kb}" >&2
+            exit 1
+          fi
           gate_tmp="$(mktemp -d "${RUNNER_TEMP}/pm-vcs-bun.XXXXXXXX")"
           gate_memory=""
           # Every crash cut still uses native syscalls. Bound memory-backed
           # storage to this matrix; other acceptance fixtures stay on disk.
           if [ -d /dev/shm ] && [ -w /dev/shm ]; then
-            memory_kb="$(df -Pk /dev/shm | awk 'NR == 2 { print $4 }')"
-            if (( memory_kb >= 2097152 )); then
+            if memory_kb="$(df -Pk /dev/shm 2>/dev/null | awk 'NR == 2 { print $4 }')" && [[ "${memory_kb}" =~ ^[0-9]+$ ]] && (( memory_kb >= 2097152 )); then
               gate_memory="$(mktemp -d /dev/shm/pm-vcs-crashes.XXXXXXXX)"
               export PM_VCS_CRASH_TMPDIR="${gate_memory}"
             fi

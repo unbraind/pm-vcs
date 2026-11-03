@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags[3]: "gh:unbraind/pm-vcs#150",performance,testing
 created_at: "2026-11-02T20:52:00.247Z"
-updated_at: "2026-11-03T02:37:47.295Z"
+updated_at: "2026-11-03T07:19:09.765Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: codex-sol
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-phase6packs,related,"2026-11-02T20:52:00.247Z",codex-sol,"cli:create:dep",detected
-comments[22]{created_at,author,text}:
+comments[30]{created_at,author,text}:
   "2026-11-02T20:53:34.802Z",codex-sol,"Baseline instrumentation separates fixture setup, child execution, recovery and assertions. First nine retired-instance cuts take about 4.3-8.7 seconds locally; fixture rebuild is the largest component (2.1-4.1 seconds). Evaluating prepared fixtures, warmed child compilation and bounded concurrent real-process cuts. No boundary or assertion may be removed."
   "2026-11-02T21:04:21.942Z",codex-sol,"Rejected copying interrupted fixtures: a copied inode-bound recovery state can change the syscall trace. The accepted base-fixture cache recreates every pending operation natively. Added pre/post enumeration guards, deliberate one-cut-removal rejection, and exact syscall-prefix comparison for each fatal child. Fixture owners are bounded by available cores and remove an entire per-cut temporary namespace in finally."
   "2026-11-02T21:10:10.973Z",codex-sol,"Prepared the publication child once with the CI-installed Bun bundler, targeting the selected Node runtime. A source-vs-prepared full trace comparison and a per-kill exact-prefix assertion prevent bundling from changing crash coverage. CI retains both complete release gates and now checks root free space before each gate; disposable gate storage prefers shared memory when at least 2 GiB are free, retaining native syscalls and separate explicit power-loss modeling. Source execution remains available when Bun is not installed locally."
@@ -35,11 +35,21 @@ comments[22]{created_at,author,text}:
   "2026-11-03T02:12:47.707Z",codex-sol,"The portable launcher and unchanged quality-contract assertions pass compilation and lint. The full real self-host import now completes within its original subprocess timeout using owned memory-backed scratch. The remaining identity failure is confined to an unrelated unreachable physical object; no source or allowlist change is needed. Preparing an exact-head independent checkout, then rerunning all six quality checks before the two complete release gates."
   "2026-11-03T02:32:33.420Z",codex-sol,"The archive audit printed its completed byte-identity verdict before the unchanged subprocess timeout, exposing expensive native retirement of its own disposable scratch. Its two generated temporary directories now use the existing durability.discardTemporary primitive, which removes owned scratch without creating another recovery ledger. All archive parsing, independent hashing/import, source comparison and no-regeneration checks remain unchanged. Lifecycle enumeration also now compares the ordinary-filesystem original trace with every prepared owner trace before scheduling cuts."
   "2026-11-03T02:37:47.293Z",codex-sol,"Admission probes under Node 26 confirmed exact ordinary-filesystem versus prepared memory-backed traces: retired-instance 818/818 and interrupted-unpack 1018/1018, each with a real shortened-enumeration rejection. Compilation, lint, zero duplication across 95 production sources and all 596 docstrings pass. Rebuilding the committed snapshot before complete quality and release gates; no incomplete attempt is counted as acceptance."
-files[20]{path,scope}:
+  "2026-11-03T03:27:39.025Z",codex-sol,"Resumed after the provider interruption without restarting completed work. The frozen source snapshot 62d9dbed0d5da1767f0364285748502ee429b8f9 passed all six exact-quality contract tests, including the real archive audit and seeded identity rejection. The complete npm release check remains active in the independent exact-head checkout; the wrapper will run the complete Bun release check serially only after npm succeeds. Current gate scratch remains owned and root free space exceeds 100 GiB. No incomplete run is counted as acceptance."
+  "2026-11-03T03:46:19.680Z",codex-sol,"Preflight correction: the requested 20-GB free-space stop applies before every gate, including both CI release steps. The current local wrapper already enforces a stricter 20-GiB minimum. The final receipt commit will add the same fail-closed check after each CI df report, superseding the earlier local-only interpretation. Runtime source remains frozen while the current serial validation completes."
+  "2026-11-03T04:27:05.298Z",codex-sol,"The prepared CI preflight passed both shell syntax checks and four real shell boundary cases in a disposable workflow copy: each release step rejects 20 GiB minus 1 KiB with exit 1 and a clear free-space report, and accepts exactly 20 GiB with exit 0. The actual workflow remains unchanged during the frozen-source gates. The final applied workflow must match the checked copy byte-for-byte before rebuilding the self-host archive."
+  "2026-11-03T05:27:58.382Z",codex-sol,"An additional disposable SDK-init profile under Node 26 measured three alternating cold/hot launches with child coverage disabled: mean CPU 0.563 s without parsing reuse versus 0.450 s with a warm cache, about 20 percent lower. All launches completed and the private fixture/cache scope was removed. This was measurement only: no cache change was applied to the frozen source, and covered-process behavior remains unchanged while the full release checks continue."
+  "2026-11-03T06:51:29.779Z",codex-sol,"The first complete npm attempt at source 62d9dbed0d5da1767f0364285748502ee429b8f9 failed after its ordinary batch; the serial matrices and Bun gate did not run, so this is not acceptance. Failures identified missing first-import isolation, the new launcher lacking the canonical explicit child environment, optional disk-metric failures aborting workflow cleanup tests, two packed CLI command timeouts and the 32-MiB streaming probe timeout under contention, plus a stat-cache fixture whose fake observation age depended on staging speed. The existing timeouts, memory budget, assertions and 100-percent coverage thresholds will remain unchanged. Private model-hook measurements preserve all 46,672 native boundary labels and 5,315 crash-image ordinals across 20 scenarios; a complete 71-image publication recovery scenario also passes with about 25 percent lower CPU. Nested-hook cleanup fails with the original helper and passes with explicit restoring hooks. Incorporating these measured fixes before the next committed gates."
+  "2026-11-03T07:11:24.412Z",codex-sol,"The failed covered Node gate at source 62d9dbe exposed six test failures before the serial crash matrices ran. Corrections retain every existing deadline, threshold and assertion: deterministic stat-cache observation, canonical explicit launcher environment, isolated packed-CLI fixtures, optional storage-probe fallback, and a memory measurement without duplicate child coverage bookkeeping. Power-model profiling preserved all twenty complete traces and cut arrays while reducing CPU from 23.34 to 17.50 seconds; a complete publication-recovery scenario reduced CPU from 11.90 to 8.91 seconds with all observed recovery images retained. Twenty independent entrypoints now share the four-core ordinary pool; exact scenario-file enumeration and legacy-hook trace/cut oracles guard completeness. An AST multiset audit found all 464 original assertion expressions retained across the moved suites and helper. No production engine behavior, coverage rule, timeout or seeded storage order changes. Root-space boundary tests pass at exactly 20 GiB and reject one KiB less for both gates. The explicit-environment audit passes for 131 entrypoints and 190 launch sites."
+  "2026-11-03T07:18:22.994Z",codex-sol,"Focused regressions, entrypoint/environment audit and storage-threshold boundary checks pass. Compilation, lint, zero duplication across 95 production sources and all 596 docstrings pass. Committing the corrected complete-source snapshot before independent exact-head quality and serial release gates; incomplete or failed attempts are not acceptance."
+  "2026-11-03T07:19:09.764Z",codex-sol,"The focused covered regression command passed all 9 tests with zero failures or skips in 844.67 seconds. On the ordinary filesystem, publication-recovery retained all 432 observed boundaries and all 40 distinct crash images with two convergent replays per image. Separate storage-threshold and environment audits passed 2 tests. All owned focused scopes were removed."
+files[47]{path,scope}:
   .github/workflows/ci.yml,project
   package.json,project
   scripts/self-host.ts,project
+  test/dependency-refresh-workflow.test.ts,project
   test/erasure-accountability.test.ts,project
+  test/erasure-crash-matrix.test.ts,project
   test/erasure-lifecycle.test.ts,project
   test/erasure-storage.test.ts,project
   test/exact-gates.test.ts,project
@@ -51,12 +61,37 @@ files[20]{path,scope}:
   test/helpers/erasure-purge-worker.ts,project
   test/helpers/erasure-scan-worker.ts,project
   test/helpers/fixture-crash-matrix.ts,project
+  test/helpers/journal-sequences.ts,project
   test/helpers/lifecycle-cut-worker.ts,project
   test/helpers/lifecycle-fixtures.ts,project
+  test/helpers/namespace-power-loss.ts,project
   test/helpers/release-suite.ts,project
   test/helpers/test-environment.ts,project
   test/helpers/tmp.ts,project
-tests[5]:
+  test/journal-durability.test.ts,project
+  test/journal-power-compact.test.ts,project
+  test/journal-power-deep-intent.test.ts,project
+  test/journal-power-directory-recovery.test.ts,project
+  test/journal-power-gc-loose.test.ts,project
+  test/journal-power-gc-packed.test.ts,project
+  test/journal-power-lease-cleanup.test.ts,project
+  test/journal-power-legacy-publication-recovery.test.ts,project
+  test/journal-power-obliterate-packed.test.ts,project
+  test/journal-power-obliterate.test.ts,project
+  test/journal-power-oplog.test.ts,project
+  test/journal-power-process-stage-recovery.test.ts,project
+  test/journal-power-prune.test.ts,project
+  test/journal-power-publication-recovery.test.ts,project
+  test/journal-power-recovery.test.ts,project
+  test/journal-power-ref-cas-cancel.test.ts,project
+  test/journal-power-ref-cas-recovery.test.ts,project
+  test/journal-power-ref-replacement.test.ts,project
+  test/journal-power-ref-retirement.test.ts,project
+  test/journal-power-repack.test.ts,project
+  test/journal-power-unpack.test.ts,project
+  test/phase6-staging.test.ts,project
+  test/stream-erasure-legacy-fetch-repair.test.ts,project
+tests[8]:
   - command: "node --test --test-name-pattern=\"completeness guard\" test/erasure-lifecycle.test.ts"
     scope: project
     provenance:
@@ -93,6 +128,27 @@ tests[5]:
     provenance:
       author: codex-sol
       created_at: "2026-11-03T01:46:02.487Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: bun test --timeout 120000 ./test/tracker-lenses.test.ts ./test/change-bundles.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-03T03:27:44.591Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"all test entrypoints|release gates retire|manifest working comparisons|streaming erasure does not retain|packed CLI resolves literal|packed CLI prints one unit|power-model hooks restore|every native power scenario|EVERY native publication-recovery boundary\" test/test-environment.test.ts test/dependency-refresh-workflow.test.ts test/phase6-staging.test.ts test/stream-erasure-legacy-fetch-repair.test.ts test/first-class-conflicts.test.ts test/journal-durability.test.ts test/journal-power-publication-recovery.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-03T07:03:42.106Z"
+      source_kind: local_mutation
+      source_ref: feat/indexed-pack-storage
+  - command: "node --test --test-name-pattern=\"free-space guards reject|all test entrypoints\" test/dependency-refresh-workflow.test.ts test/test-environment.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-03T07:13:05.477Z"
       source_kind: local_mutation
       source_ref: feat/indexed-pack-storage
 docs[1]{path,scope}:

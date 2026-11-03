@@ -57,16 +57,15 @@ checks native ledger and fixture cleanup after both normal exit and SIGKILL.
 External namespace ledgers cannot accumulate across test files. CI also retains
 its gate-wide exit trap.
 
-Local gate runs check root free space before each gate and refuse to start below
-20 GiB. CI reports root space and retains gate-wide cleanup. The standard public
-runner is documented with four CPUs, 16 GB RAM and 14 GB storage, so the local
-safety minimum is not imposed as a new CI storage requirement. See the
-[GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-When at least 2 GiB are available in the shared-memory filesystem, the disposable
-matrix namespace and the quality-contract audit import use it to avoid unrelated
-disk writeback contention; otherwise
-it uses runner temporary storage. Other acceptance fixtures stay on disk. All
-native syscalls and assertions still run.
+Both CI and local gate runs print `df -BG /` and refuse to start below
+20 GiB free. Each gate owns disk and optional memory scopes and removes only
+those scopes on success or failure. When at least 2 GiB are available in the
+shared-memory filesystem, the disposable SIGKILL matrix namespace and the
+quality-contract audit import use it to avoid disk writeback contention;
+otherwise they use runner temporary storage. The packed conflict CLI acceptance
+fixtures also use this configured private scope. Native power-loss model fixtures
+stay on the ordinary filesystem: inode and directory behavior can change their
+recorded recovery images. All native syscalls and assertions still run.
 SIGKILL preserves the kernel; independent namespace power-loss tests model lost
 file data and directory barriers explicitly. No test or runtime is sampled and
 no threshold or timeout is relaxed.
@@ -77,8 +76,17 @@ launcher is also copied into the minimal coverage-contract project; all its
 omitted-source and uncovered-branch assertions remain active. A single c8
 invocation collects two
 complete test phases: ordinary files run on at most four available cores, then
-the three matrix files and the coverage-contract file run serially. Matrix
-files use their own bounded cut pools; audit imports retain every object and
+the native SIGKILL matrix, seeded erasure-storage suite and coverage-contract
+suite run serially. The remaining lifecycle and accountability assertions run in
+the ordinary phase. The seeded storage suite retains its original test order
+and random sequence. Twenty separate native power-model entrypoints allow those
+independent scenarios to share the ordinary worker pool. A file-enumeration guard
+requires exactly the declared twenty scenarios; each scenario compares the
+complete syscall trace and recovery-cut ordinals against the original recording
+hooks before executing every recovery image. The callbacks and image-equivalence
+rules are unchanged. Private restoring hooks avoid recording unused call stacks;
+a nested fault-injection regression checks restoration of the native functions.
+Matrix files use their own bounded cut pools; audit imports retain every object and
 all original timeout and byte-identity checks. The harness asserts that the partition contains every test file exactly
 once. Source include/exclude rules and every coverage threshold are unchanged.
 
@@ -97,3 +105,38 @@ The self-host audit uses the existing disposable-tree cleanup primitive for its
 own generated temporary directories. It still hashes and imports every carried
 object into an independent store and never regenerates during verification.
 Discarding its owned scratch creates no additional recovery journal.
+
+The retained-buffer probe excludes duplicate child coverage bookkeeping while
+keeping its original 32 MiB payload, 8 MiB retention budget and deadline. The
+parent suite still requires every source file to meet the existing coverage
+thresholds. The stat-cache fixture derives its observation time from the file's
+actual timestamp, so delayed fixture preparation cannot invalidate its racy-file
+premise.
+
+Local measurements on the retired-instance scenario used cuts 1, 409 and 818.
+Mean milliseconds per cut were:
+
+| Phase | Original | Prepared fixture/entrypoint |
+| --- | ---: | ---: |
+| Fixture build/copy | 1069.90 | 14.46 |
+| Child startup | 897.59 | 285.27 |
+| Native work before kill | 548.96 | 497.95 |
+| Kill and reap | 19.30 | 8.50 |
+| Recovery | 365.38 | 300.86 |
+| Verification | 0.19 | 0.59 |
+| Total | 2901.31 | 1107.62 |
+
+Fixture construction dominated the original cost; native pre-cut work dominates
+the prepared version. A complete uncovered original five-scenario matrix took
+7,805.19 seconds for 2,751 local cuts. The initial prepared five-scenario run took
+2,821.12 seconds; subsequent ownership and admission checks are included in the
+release-gate measurements. Counts are derived anew on each runtime and filesystem,
+not fixed to this local corpus. The CI evidence contains 3,001 cuts.
+
+With V8 coverage enabled, the power-model hook prototype preserved all twenty
+complete traces and cut arrays: 85.15 seconds and 23.34 CPU seconds became
+60.55 seconds and 17.50 CPU seconds. A complete publication-recovery scenario
+preserved all 597 observed boundaries and 71 recovery images: 24.83 seconds and
+11.90 CPU seconds became 15.28 seconds and 8.91 CPU seconds. These prototype
+counts describe that filesystem; the live oracle compares freshly recorded
+sequences rather than assuming those counts apply elsewhere.

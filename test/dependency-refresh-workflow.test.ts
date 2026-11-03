@@ -2,7 +2,7 @@ import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
@@ -119,15 +119,28 @@ test("runtime witness", () => { assert.ok(process.versions.bun); writeFileSync("
 test("release gates retire only their own scratch receipts after success and failure", () => {
   const root=mkdtempSync(join(tmpdir(),"pm-vcs-gate-scratch-"));const runner=join(root,"runner");const outside=join(root,"outside");mkdirSync(runner);mkdirSync(outside);writeFileSync(join(runner,"foreign"),"unrelated runner file");writeFileSync(join(outside,"foreign"),"unrelated audit file");
   const ci=readFileSync(new URL("../.github/workflows/ci.yml",import.meta.url),"utf8");
-  const probe=`import assert from 'node:assert/strict';import {mkdtempSync,readdirSync,writeFileSync} from 'node:fs';import {tmpdir} from 'node:os';import {join,sep} from 'node:path';import {ObjectStore} from ${JSON.stringify(new URL("../engine/objects.ts",import.meta.url).href)};assert.ok(tmpdir().startsWith(process.env.RUNNER_TEMP+sep));const root=mkdtempSync(join(tmpdir(),'native-store-'));new ObjectStore(join(root,'objects')).write('blob',Buffer.from('fixture'));assert.ok(readdirSync(tmpdir()).some(name=>name.startsWith('pm-vcs-namespace-')));writeFileSync(join(tmpdir(),'owned-receipt'),'fixture');process.exit(Number(process.env.GATE_FAILURE));`;
+  const allocations=join(root,"allocations.json");
+  const probe=`import assert from 'node:assert/strict';import {mkdtempSync,readdirSync,writeFileSync} from 'node:fs';import {tmpdir} from 'node:os';import {join,sep} from 'node:path';import {ObjectStore} from ${JSON.stringify(new URL("../engine/objects.ts",import.meta.url).href)};assert.ok(tmpdir().startsWith(process.env.RUNNER_TEMP+sep));const root=mkdtempSync(join(tmpdir(),'native-store-'));new ObjectStore(join(root,'objects')).write('blob',Buffer.from('fixture'));assert.ok(readdirSync(tmpdir()).some(name=>name.startsWith('pm-vcs-namespace-')));writeFileSync(join(tmpdir(),'owned-receipt'),'fixture');writeFileSync(process.env.GATE_ALLOCATIONS,JSON.stringify({disk:tmpdir(),memory:process.env.PM_VCS_CRASH_TMPDIR}));process.exit(Number(process.env.GATE_FAILURE));`;
   try {
     for(const gate of ["npm","Bun"])for(const status of [0,7])for(const metrics of [true,false]){
       const tail=ci.slice(ci.indexOf(`      - name: Full ${gate} release gate`));const step=tail.slice(0,tail.indexOf("\n\n"));const marker="        run: |\n";const script=step.includes(marker)?step.slice(step.indexOf(marker)+marker.length).split("\n").filter(line=>line.startsWith("          ")).map(line=>line.slice(10)).join("\n"):step.match(/run: ([^\n]+)/u)![1]!;
-      const command=(metrics?'':'df() { return 99; }; du() { return 98; };\n')+'npm() { "$GATE_NODE" --input-type=module -e "$GATE_PROBE"; }; bun() { npm; };\n'+script;
-      const result=spawnSync("bash",["-c",command],{env:testEnvironment({RUNNER_TEMP:runner,TMPDIR:outside,GATE_NODE:process.execPath,GATE_PROBE:probe,GATE_FAILURE:String(status)}),encoding:"utf8",timeout:60_000});
+      const command=(metrics?'':'df() { if [[ "$2" == "/" ]]; then command df "$@"; else return 99; fi; }; du() { return 98; };\n')+'npm() { "$GATE_NODE" --input-type=module -e "$GATE_PROBE"; }; bun() { npm; };\n'+script;
+      const result=spawnSync("bash",["-c",command],{env:testEnvironment({RUNNER_TEMP:runner,TMPDIR:outside,PM_VCS_CRASH_TMPDIR:outside,GATE_ALLOCATIONS:allocations,GATE_NODE:process.execPath,GATE_PROBE:probe,GATE_FAILURE:String(status)}),encoding:"utf8",timeout:60_000});
       assert.equal(result.status,status,result.stderr);assert.match(result.stdout,/gate storage before-gate/u);assert.match(result.stdout,/gate storage before-cleanup/u);if(metrics)assert.match(result.stdout,/Inodes/u);assert.deepEqual(readdirSync(runner),["foreign"]);assert.equal(readFileSync(join(runner,"foreign"),"utf8"),"unrelated runner file");assert.deepEqual(readdirSync(outside),["foreign"]);assert.equal(readFileSync(join(outside,"foreign"),"utf8"),"unrelated audit file");
+      const owned=JSON.parse(readFileSync(allocations,"utf8")) as {disk:string;memory:string};assert.equal(existsSync(owned.disk),false);if(owned.memory!==outside)assert.equal(existsSync(owned.memory),false,"the gate removes its own memory scope");
     }
   } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+test("release gate free-space guards reject a missing KiB and accept exactly twenty GiB", () => {
+  const root=mkdtempSync(join(tmpdir(),"pm-vcs-gate-space-"));const runner=join(root,"runner");mkdirSync(runner);const witness=join(root,"ran");
+  const ci=readFileSync(new URL("../.github/workflows/ci.yml",import.meta.url),"utf8");
+  try{for(const gate of["npm","Bun"])for(const free of[20_971_519,20_971_520]){
+    rmSync(witness,{force:true});const tail=ci.slice(ci.indexOf(`      - name: Full ${gate} release gate`));const step=tail.slice(0,tail.indexOf("\n\n"));const marker="        run: |\n";const script=step.slice(step.indexOf(marker)+marker.length).split("\n").filter(line=>line.startsWith("          ")).map(line=>line.slice(10)).join("\n");
+    const commands='df() { if [[ "$2" == "/" ]]; then if [[ "$1" == "-Pk" ]]; then printf "Filesystem 1024-blocks Used Available Capacity Mounted\\nfixture 99999999 1 %s 1%% /\\n" "$GATE_FREE_KIB"; else printf "root space fixture\\n"; fi; else return 99; fi; }; npm() { printf "ran\\n" >> "$GATE_WITNESS"; }; bun() { npm; };\n';
+    const result=spawnSync("bash",["-c",commands+script],{env:testEnvironment({RUNNER_TEMP:runner,GATE_FREE_KIB:String(free),GATE_WITNESS:witness}),encoding:"utf8",timeout:60_000});
+    assert.equal(result.status,free<20_971_520?1:0,result.stderr);assert.equal(existsSync(witness),free>=20_971_520);if(free<20_971_520)assert.match(result.stderr,/fewer than 20 GiB free/u);assert.deepEqual(readdirSync(runner),[]);
+  }}finally{rmSync(root,{recursive:true,force:true});}
 });
 
 test("Bun witness skips when either optional tool is unavailable", () => {

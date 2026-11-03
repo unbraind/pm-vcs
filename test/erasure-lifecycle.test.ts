@@ -1,5 +1,5 @@
-import { assertCompleteCuts, lifecycleMatrix } from "./helpers/crash-matrix.ts";
 import "./helpers/isolate-session.ts";
+import { assertCompleteCuts } from "./helpers/crash-matrix.ts";
 import { lifecycleSequence } from "./helpers/lifecycle-sequences.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Durable purge authority follows owned file/root lifetimes on real non-git repositories. */
@@ -84,14 +84,6 @@ test("crash matrix completeness guard rejects a removed boundary", () => {
   const steps = ["journal:openSync:before", "journal:openSync:after", "journal:fsyncSync:before"];
   assertCompleteCuts(steps, [1, 2, 3]);
   assert.throws(() => assertCompleteCuts(steps, [1, 3]), /enumerated cuts must equal every recorded syscall boundary exactly once/);
-});
-
-for (const scenario of ["retired-instance", "interrupted-unpack"] as const) test(`SIGKILL at every native lifecycle-journal publication step resumes for ${scenario}`, { concurrency: true }, async t => {
-  const reference = await (scenario === "retired-instance" ? retiredPending(true) : interruptedUnpack(true));
-  const listed = spawnSync(process.execPath, ["--import", new URL("./helpers/forbid-git.ts", import.meta.url).href, join(packageRoot, "test/helpers/erasure-purge-worker.ts"), reference.repo.root, reference.second, "0"], { env: { ...testEnvironment(), ...discardChildCoverage() }, encoding: "utf8", timeout: scenario === "interrupted-unpack" ? 120_000 : 30_000 });
-  assert.equal(listed.status, 0, listed.stderr); const steps = JSON.parse(listed.stdout) as string[]; assert.ok(steps.length >= 20);
-  const result = await lifecycleMatrix(scenario, (name, run) => t.test(name, run), steps);
-  t.diagnostic(JSON.stringify({ scenario, ...result }));
 });
 
 test("a competing process at both retirement boundaries is excluded until the owning erasure releases last", async t => {

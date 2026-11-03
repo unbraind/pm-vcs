@@ -50,6 +50,7 @@ test("the repository coverage command measures root, src, engine and scripts and
     const args = command.slice(3).replaceAll("'", "").split(" ");
     source(fixture.root, "package.json", JSON.stringify({ type: "module" }));
     source(fixture.root, "test/helpers/release-suite.ts", readFileSync(join(packageRoot, "test/helpers/release-suite.ts"), "utf8"));
+    source(fixture.root, "test/helpers/test-environment.ts", readFileSync(join(packageRoot, "test/helpers/test-environment.ts"), "utf8"));
     source(fixture.root, ".c8rc.json", JSON.stringify({ all: false, exclude: ["**/*.ts"], lines: 0, branches: 0, functions: 0, statements: 0 }));
     const paths = ["index.ts", "src/value.ts", "engine/value.ts", "scripts/value.ts"];
     for (const path of paths) source(fixture.root, path, "export const answer: number = 42;\n");

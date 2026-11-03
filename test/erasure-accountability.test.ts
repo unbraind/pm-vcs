@@ -11,7 +11,6 @@ import crypto, { createHash } from "node:crypto";
 import { deflateSync, inflateSync, inflateRawSync, constants as zlibConstants } from "node:zlib";
 import { afterEach, test, mock } from "node:test";
 import { erasureFixtureBase } from "./helpers/erasure-fixture-base.ts";
-import { lifecycleMatrix } from "./helpers/crash-matrix.ts";
 import { Repository } from "../engine/repo.ts";
 import { ObjectStore, ObjectStoreError, frameObject, hashObject } from "../engine/objects.ts";
 import { accountErasureStorage, accountabilityBoundary, erasurePurge, planErasureStorage, ACCOUNTABILITY_ATTEMPTS } from "../engine/erasure-accountability.ts";
@@ -145,15 +144,6 @@ test("immutable erasure audits exist before purge intent without activating an e
  accountabilityBoundary.visit=step=>{if(step!=="purge-set-persisted")return;observed=true;assert.equal([...f.repo.objects.walkErasureInventory("all",new Set([foreign]))].filter(entry=>entry.object.type==="tombstone").length,1);assert.deepEqual(f.repo.objects.denials(),[]);throw interruption;};
  assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true}),error=>error===interruption);accountabilityBoundary.visit=()=>{};assert.equal(observed,true);assert.ok(existsSync(foreign));assert.deepEqual(f.repo.objects.read(f.entry.id).payload,f.bytes);
  const result=f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1),{purgeUnaccounted:true});assert.equal(result.storage.accountable,true);assert.equal(result.purge.deleted,1);assert.equal(result.purge.files.length,1);
-});
-
-test("SIGKILL at EVERY purge journal and unlink boundary converges with one bounded receipt",async(t)=>{
- /** Every case copies completed SDK initialization, stages its own payload and uses the actual engine command. */
- const fresh=async()=>{const f=await fixture();place(f.repo.objects.storageRoot(),"unaccounted-purge",Buffer.from("foreign bytes to purge"));return f;};
- const run=(f:Awaited<ReturnType<typeof fixture>>,ordinal:number)=>spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-purge-worker.ts"),f.repo.root,f.entry.fileId!,String(ordinal)],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
- const probe=await fresh();const listed=run(probe,0);assert.equal(listed.status,0,listed.stderr);const steps=JSON.parse(listed.stdout) as string[];assert.ok(steps.length>=40);
- const timing=await lifecycleMatrix("purge-journal",(_name,run)=>run(),steps);t.diagnostic(JSON.stringify({scenario:"purge-journal",...timing}));
- t.diagnostic(`${steps.length} native before/after purge publication, directory barrier and unlink crash cuts`);
 });
 
 test("one tracker serializes a competing purger at EVERY accountability boundary and reports peer success",async(t)=>{
