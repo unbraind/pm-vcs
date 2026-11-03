@@ -408,15 +408,16 @@ export class FileTransport implements Transport {
           // tracking ref, so the same sentence would send a tag pusher after a ref
           // that will never exist.
           const recovery = update.ref.startsWith(BRANCH_PREFIX)
-            ? "Fetch first, then merge or rebase onto the tracking branch it writes — "
-              + `<remote>/${update.ref.slice(BRANCH_PREFIX.length)}, which "pm vcs branch --remotes" lists — `
-              + "or push with --force to discard them deliberately."
-            : "Fetch first to see what it points at now, then move the tag deliberately, "
-              + "or push with --force to discard them deliberately.";
+            ? `Fetch, then merge or rebase onto <remote>/${update.ref.slice(BRANCH_PREFIX.length)} `
+              + '(listed by "pm vcs branch --remotes"), or push with --force to discard them.'
+            : "Fetch to see what it points at now, then move the tag deliberately, "
+              + "or push with --force to discard them.";
+          // The host bounds a command's error message (300 characters), so the
+          // remediation comes before the remote's location, whose length varies.
           throw new ObjectStoreError(
             "non_fast_forward",
-            `Pushing ${update.next.slice(0, 12)} to ${update.ref} would discard commits ${this.url} already has, `
-            + `because its current ${current.slice(0, 12)} is not an ancestor of it. ${recovery}`,
+            `Pushing ${update.next.slice(0, 12)} to ${update.ref} would discard commits the remote already has: `
+            + `its current ${current.slice(0, 12)} is not an ancestor. ${recovery} Remote: ${this.url}`,
           );
         }
       }
@@ -530,8 +531,8 @@ export class FileTransport implements Transport {
         ) {
           throw new ObjectStoreError(
             "non_fast_forward",
-            `Publishing ${update.next.slice(0, 12)} to ${update.ref} would discard commits ${this.url} already has, `
-              + `because its current ${current.slice(0, 12)} is not an ancestor of it. Fetch first, or publish with force.`,
+            `Publishing ${update.next.slice(0, 12)} to ${update.ref} would discard commits the repository already has: `
+              + `its current ${current.slice(0, 12)} is not an ancestor. Fetch first, or publish with force. Repository: ${this.url}`,
           );
         }
       }

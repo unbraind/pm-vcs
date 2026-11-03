@@ -6,13 +6,13 @@ status: in_progress
 priority: 2
 tags[3]: "gh:unbraind/pm-vcs#150",performance,testing
 created_at: "2026-11-02T20:52:00.247Z"
-updated_at: "2026-11-03T13:37:49.988Z"
+updated_at: "2026-11-03T17:57:46.860Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: codex-sol
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-phase6packs,related,"2026-11-02T20:52:00.247Z",codex-sol,"cli:create:dep",detected
-comments[36]{created_at,author,text}:
+comments[37]{created_at,author,text}:
   "2026-11-02T20:53:34.802Z",codex-sol,"Baseline instrumentation separates fixture setup, child execution, recovery and assertions. First nine retired-instance cuts take about 4.3-8.7 seconds locally; fixture rebuild is the largest component (2.1-4.1 seconds). Evaluating prepared fixtures, warmed child compilation and bounded concurrent real-process cuts. No boundary or assertion may be removed."
   "2026-11-02T21:04:21.942Z",codex-sol,"Rejected copying interrupted fixtures: a copied inode-bound recovery state can change the syscall trace. The accepted base-fixture cache recreates every pending operation natively. Added pre/post enumeration guards, deliberate one-cut-removal rejection, and exact syscall-prefix comparison for each fatal child. Fixture owners are bounded by available cores and remove an entire per-cut temporary namespace in finally."
   "2026-11-02T21:10:10.973Z",codex-sol,"Prepared the publication child once with the CI-installed Bun bundler, targeting the selected Node runtime. A source-vs-prepared full trace comparison and a per-kill exact-prefix assertion prevent bundling from changing crash coverage. CI retains both complete release gates and now checks root free space before each gate; disposable gate storage prefers shared memory when at least 2 GiB are free, retaining native syscalls and separate explicit power-loss modeling. Source execution remains available when Bun is not installed locally."
@@ -49,54 +49,108 @@ comments[36]{created_at,author,text}:
   "2026-11-03T11:29:20.652Z",codex-sol,"The covered npm ordinary phase at source 01c6f47 completed successfully: 2537 tests passed, zero failed, cancelled, skipped or todo. It includes the complete 512-seed model and all 20 unchanged power-recovery scenarios. The serial three-file phase has now started, including every real native SIGKILL boundary, followed by exact quality contracts. Full release acceptance remains pending until that phase, coverage thresholds and all subsequent checks finish."
   "2026-11-03T12:55:26.503Z",codex-sol,"Complete npm release gate PASS at source 01c6f47: actual parent exit 0, 4476 tests passed (2537 ordinary plus 1939 serial), zero failed/cancelled/skipped/todo. All 2751 local real SIGKILL cuts ran: purge 788, retired-instance 818, interrupted-unpack 1018, proof/denial 118 and logical scan 9; every shortened enumeration was rejected and every full enumeration verified. All coverage dimensions are 100 percent across 95 source files, with unchanged thresholds; subsequent acceptance, identity, audit, package and changelog checks passed. Gate wall 19722.51 seconds; full covered matrix aggregate wall 3639.63 seconds versus the original uncovered 7805.19 seconds. The shared local validation processes run at niceness 15; preserve CPU and wall metrics separately when forecasting CI. Npm result was recovered from its real exit observer and complete captured output after the monitoring interruption, not inferred from a PM wrapper exit. Its exact owned disk and memory scopes were removed. The pinned Bun 1.3.14 full gate started serially after another successful 20-GiB admission check."
   "2026-11-03T13:37:49.986Z",claude-orchestrator,"Orchestrator 2026-11-03 14:00Z: the codex round hit its 6-hour limit while the local Bun gate was still running. The npm release gate had passed at 01c6f47 (4476 tests, 2751 SIGKILL cuts, 100 percent coverage). Pushing 62d9dbe and 01c6f47 so CI runs both runtimes on the exact head; Bun acceptance is CI's verdict."
-files[47]{path,scope}:
-  .github/workflows/ci.yml,project
-  package.json,project
-  scripts/self-host.ts,project
-  test/dependency-refresh-workflow.test.ts,project
-  test/erasure-accountability.test.ts,project
-  test/erasure-crash-matrix.test.ts,project
-  test/erasure-lifecycle.test.ts,project
-  test/erasure-storage.test.ts,project
-  test/exact-gates.test.ts,project
-  test/fixture-lifetime.test.ts,project
-  test/helpers/crash-child.ts,project
-  test/helpers/crash-matrix.ts,project
-  test/helpers/erasure-fixture-base.ts,project
-  test/helpers/erasure-proof-crash.ts,project
-  test/helpers/erasure-purge-worker.ts,project
-  test/helpers/erasure-scan-worker.ts,project
-  test/helpers/fixture-crash-matrix.ts,project
-  test/helpers/journal-sequences.ts,project
-  test/helpers/lifecycle-cut-worker.ts,project
-  test/helpers/lifecycle-fixtures.ts,project
-  test/helpers/namespace-power-loss.ts,project
-  test/helpers/release-suite.ts,project
-  test/helpers/test-environment.ts,project
-  test/helpers/tmp.ts,project
-  test/journal-durability.test.ts,project
-  test/journal-power-compact.test.ts,project
-  test/journal-power-deep-intent.test.ts,project
-  test/journal-power-directory-recovery.test.ts,project
-  test/journal-power-gc-loose.test.ts,project
-  test/journal-power-gc-packed.test.ts,project
-  test/journal-power-lease-cleanup.test.ts,project
-  test/journal-power-legacy-publication-recovery.test.ts,project
-  test/journal-power-obliterate-packed.test.ts,project
-  test/journal-power-obliterate.test.ts,project
-  test/journal-power-oplog.test.ts,project
-  test/journal-power-process-stage-recovery.test.ts,project
-  test/journal-power-prune.test.ts,project
-  test/journal-power-publication-recovery.test.ts,project
-  test/journal-power-recovery.test.ts,project
-  test/journal-power-ref-cas-cancel.test.ts,project
-  test/journal-power-ref-cas-recovery.test.ts,project
-  test/journal-power-ref-replacement.test.ts,project
-  test/journal-power-ref-retirement.test.ts,project
-  test/journal-power-repack.test.ts,project
-  test/journal-power-unpack.test.ts,project
-  test/phase6-staging.test.ts,project
-  test/stream-erasure-legacy-fetch-repair.test.ts,project
+  "2026-11-03T17:57:45.083Z",claude-orchestrator,"CI on ded5f39 (test 22) failed 1 of 2537: sync-commands 'branch --remotes lists what the fetch recorded' expected <remote>/main in the push refusal. The host bounds a command's errorMessage at 300 characters, and the refusal put the remote's location before the remediation; under this PR's RUNNER_TEMP TMPDIR the fixture path pushed <remote>/main past the bound (message cut at '<remote>/mai…'). Real users with long remote paths lost the remediation the same way. Both non_fast_forward refusals (push and served publish) now lead with the remediation in shorter wording and end with 'Remote: <url>' / 'Repository: <url>'; 254 characters before the location for main. sync.test.ts pins that the remediation (incl. --force) precedes the location and stays under 300 for a branch and a tag."
+files[49]:
+  - path: .github/workflows/ci.yml
+    scope: project
+  - path: engine/transport.ts
+    scope: project
+    note: non_fast_forward refusals lead with the remediation
+  - path: package.json
+    scope: project
+  - path: scripts/self-host.ts
+    scope: project
+  - path: test/dependency-refresh-workflow.test.ts
+    scope: project
+  - path: test/erasure-accountability.test.ts
+    scope: project
+  - path: test/erasure-crash-matrix.test.ts
+    scope: project
+  - path: test/erasure-lifecycle.test.ts
+    scope: project
+  - path: test/erasure-storage.test.ts
+    scope: project
+  - path: test/exact-gates.test.ts
+    scope: project
+  - path: test/fixture-lifetime.test.ts
+    scope: project
+  - path: test/helpers/crash-child.ts
+    scope: project
+  - path: test/helpers/crash-matrix.ts
+    scope: project
+  - path: test/helpers/erasure-fixture-base.ts
+    scope: project
+  - path: test/helpers/erasure-proof-crash.ts
+    scope: project
+  - path: test/helpers/erasure-purge-worker.ts
+    scope: project
+  - path: test/helpers/erasure-scan-worker.ts
+    scope: project
+  - path: test/helpers/fixture-crash-matrix.ts
+    scope: project
+  - path: test/helpers/journal-sequences.ts
+    scope: project
+  - path: test/helpers/lifecycle-cut-worker.ts
+    scope: project
+  - path: test/helpers/lifecycle-fixtures.ts
+    scope: project
+  - path: test/helpers/namespace-power-loss.ts
+    scope: project
+  - path: test/helpers/release-suite.ts
+    scope: project
+  - path: test/helpers/test-environment.ts
+    scope: project
+  - path: test/helpers/tmp.ts
+    scope: project
+  - path: test/journal-durability.test.ts
+    scope: project
+  - path: test/journal-power-compact.test.ts
+    scope: project
+  - path: test/journal-power-deep-intent.test.ts
+    scope: project
+  - path: test/journal-power-directory-recovery.test.ts
+    scope: project
+  - path: test/journal-power-gc-loose.test.ts
+    scope: project
+  - path: test/journal-power-gc-packed.test.ts
+    scope: project
+  - path: test/journal-power-lease-cleanup.test.ts
+    scope: project
+  - path: test/journal-power-legacy-publication-recovery.test.ts
+    scope: project
+  - path: test/journal-power-obliterate-packed.test.ts
+    scope: project
+  - path: test/journal-power-obliterate.test.ts
+    scope: project
+  - path: test/journal-power-oplog.test.ts
+    scope: project
+  - path: test/journal-power-process-stage-recovery.test.ts
+    scope: project
+  - path: test/journal-power-prune.test.ts
+    scope: project
+  - path: test/journal-power-publication-recovery.test.ts
+    scope: project
+  - path: test/journal-power-recovery.test.ts
+    scope: project
+  - path: test/journal-power-ref-cas-cancel.test.ts
+    scope: project
+  - path: test/journal-power-ref-cas-recovery.test.ts
+    scope: project
+  - path: test/journal-power-ref-replacement.test.ts
+    scope: project
+  - path: test/journal-power-ref-retirement.test.ts
+    scope: project
+  - path: test/journal-power-repack.test.ts
+    scope: project
+  - path: test/journal-power-unpack.test.ts
+    scope: project
+  - path: test/phase6-staging.test.ts
+    scope: project
+  - path: test/stream-erasure-legacy-fetch-repair.test.ts
+    scope: project
+  - path: test/sync.test.ts
+    scope: project
+    note: host message bound assertion
 tests[8]:
   - command: "node --test --test-name-pattern=\"completeness guard\" test/erasure-lifecycle.test.ts"
     scope: project
