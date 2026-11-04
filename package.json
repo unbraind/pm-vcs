@@ -40,6 +40,7 @@
     "audit:prod": "node --input-type=module -e \"import { spawnSync } from 'node:child_process'; import { devNull } from 'node:os'; const env = { ...process.env, npm_config_userconfig: devNull, NPM_CONFIG_USERCONFIG: devNull }; for (const key of Object.keys(env)) if (key.toLowerCase() === 'npm_config_allow_scripts') delete env[key]; const win = process.platform === 'win32'; const r = spawnSync(win ? 'npm.cmd' : 'npm', ['audit', '--omit=dev', '--ignore-scripts'], { stdio: 'inherit', env, shell: win }); process.exit(r.status ?? 1);\"",
     "audit:identities": "node scripts/audit-git-identities.ts",
     "docstring": "node scripts/docstring-gate.ts",
+    "preaccept:native-toon": "npm run build",
     "accept:native-toon": "node scripts/accept-native-toon.ts",
     "preaccept:stat-cache": "npm run build",
     "accept:stat-cache": "node scripts/accept-stat-cache.ts",

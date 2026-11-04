@@ -4,7 +4,7 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -24,6 +24,7 @@ import {
   invokeWhenMain,
   npmPackExecutable,
   npmPackArguments,
+  packageRoot,
   pmExecutable,
   processFailure,
   runPm,
@@ -90,7 +91,7 @@ test("Windows pack executes the npm JavaScript entrypoint without shell argument
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const cli = executableFixture(root, "console.log(JSON.stringify(process.argv.slice(2)));", "npm cli.js");
   const destination = join(root, "archive & literal %PATH%");
-  const expected = ["pack", "--silent", "--pack-destination", destination];
+  const expected = ["pack", "--ignore-scripts", "--loglevel=error", "--pack-destination", destination];
   const result = spawnSync(npmPackExecutable("win32"), npmPackArguments("win32", destination, { npm_execpath: cli }), { env: testEnvironment(), encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), expected);
@@ -100,13 +101,39 @@ test("Windows pack executes the npm JavaScript entrypoint without shell argument
   ]);
 });
 
+test("packing the extension reuses the shared build instead of rewriting it under concurrent test files", { skip: process.platform === "win32" }, () => {
+  // Parallel test files pack the same package root. A prepack rebuild rewrote dist/ while another
+  // process archived it, failing that pack with npm EOF; the archive must come from the build as it is.
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-quality-reuse-"));
+  try {
+    const build = join(packageRoot, "dist");
+    const stamps = () => readdirSync(build, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => { const path = join(entry.parentPath, entry.name); return `${path}:${statSync(path).mtimeMs}`; })
+      .sort();
+    const before = stamps();
+    assert.ok(before.some((stamp) => stamp.startsWith(`${join(build, "index.js")}:`)), "run npm run build first");
+    const installer = executableFixture(root, 'require("node:fs").writeFileSync("installed", process.argv.slice(2).join(" "));', "installer.cjs");
+    installPackedExtension(root, installer);
+    assert.match(readFileSync(join(root, "installed"), "utf8"), /^package install .*pm-vcs-[^/\\]+\.tgz --project$/);
+    assert.deepEqual(stamps(), before);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("packed extension installation refuses a failed pack and an invalid archive receipt", { skip: process.platform === "win32" }, () => {
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-quality-pack-"));
   try {
     assert.throws(
       () => installPackedExtension(root, pmExecutable, join(root, "missing-npm")),
-      /npm pack failed/,
+      /^Error: npm pack failed \(status null\): spawnSync .*missing-npm ENOENT$/,
     );
+    // npm's own error and the child's outcome reach the diagnostic; --silent once hid the error behind a notice.
+    const refused = executableFixture(root, 'console.error("npm error code EOF"); process.exit(1);', "refused-pack.ts");
+    assert.throws(() => installPackedExtension(root, pmExecutable, refused), /^Error: npm pack failed \(status 1\): npm error code EOF$/);
+    const killed = executableFixture(root, 'process.kill(process.pid, "SIGKILL");', "killed-pack.ts");
+    assert.throws(() => installPackedExtension(root, pmExecutable, killed), /^Error: npm pack failed \(signal SIGKILL\)\.$/);
     const malformed = executableFixture(root, 'console.log("not-an-archive");', "bad-pack.ts");
     assert.throws(
       () => installPackedExtension(root, pmExecutable, malformed),
