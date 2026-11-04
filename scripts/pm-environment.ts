@@ -70,6 +70,11 @@ export function npmPackExecutable(platform: NodeJS.Platform): string {
  * npm scripts expose their entrypoint through npm_execpath; direct Node calls
  * use the npm installation bundled beside node.exe by setup-node.
  *
+ * The pack reuses the existing build: `--ignore-scripts` skips `prepack`, whose
+ * `tsc` rewrite of the shared `dist/` truncated files that a concurrent test
+ * process was archiving (npm `EOF`). `--loglevel=error` keeps npm's own error in
+ * the failure diagnostic; `--silent` hid it behind the `prepare` script's notice.
+ *
  * @param platform - Platform selecting the native Node launcher on Windows.
  * @param archiveRoot - Destination kept as one argument even with shell characters.
  * @param environment - npm entrypoint supplied by the parent npm invocation.
@@ -80,7 +85,7 @@ export function npmPackArguments(
   archiveRoot: string,
   environment: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const arguments_ = ["pack", "--silent", "--pack-destination", archiveRoot];
+  const arguments_ = ["pack", "--ignore-scripts", "--loglevel=error", "--pack-destination", archiveRoot];
   if (platform === "win32") {
     const entrypoint = environment.npm_execpath ?? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
     arguments_.unshift(entrypoint);
@@ -88,7 +93,7 @@ export function npmPackArguments(
   return arguments_;
 }
 
-/** Packs the current built extension and installs its complete archive into a disposable tracker. */
+/** Packs the current build without rebuilding it and installs its complete archive into a disposable tracker. */
 export function installPackedExtension(
   project: string,
   executable = pmExecutable,
@@ -102,7 +107,10 @@ export function installPackedExtension(
       env: withoutPmContext(process.env),
       timeout: 120_000,
     });
-    if (packed.status !== 0) throw new Error(processFailure(packed, "npm pack failed", "."));
+    if (packed.status !== 0) {
+      const outcome = packed.signal === null ? `status ${String(packed.status)}` : `signal ${packed.signal}`;
+      throw new Error(processFailure(packed, `npm pack failed (${outcome})`, "."));
+    }
     const archive = packed.stdout.trim().split(/\r?\n/).at(-1);
     if (archive === undefined || !/^pm-vcs-[^/\\]+\.tgz$/.test(archive)) {
       throw new Error("npm pack did not return a pm-vcs archive filename");

@@ -2,12 +2,17 @@ id: pm-vcs-hgu2
 title: Refresh the self-host snapshot after Dependabot changelog updates
 description: "Repair PR 155 by regenerating the committed self-host snapshot after tracker and generated changelog updates, preserving direct operational audit tests and their thresholds."
 type: Chore
-status: in_progress
+status: closed
 priority: 2
 tags[3]: ci,dependabot,"gh:unbraind/pm-vcs#155"
 created_at: "2026-10-28T19:57:08.589Z"
-updated_at: "2026-10-28T20:46:36.981Z"
+updated_at: "2026-11-04T07:09:22.610Z"
+closed_at: "2026-11-04T07:09:22.583Z"
+completed_at: "2026-11-04T07:09:22.583Z"
 author: codex-agent
+resolution: Implemented and merged in #155 (1671ccb).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #155 as 1671ccb; checks successful at head 775d1d8: CodeQL, codeql, enable-auto-merge, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 comments[4]{created_at,author,text}:
   "2026-10-28T19:59:03.324Z",codex-agent,"Cause class: stale generated self-host snapshot after dependency-related changelog and tracker updates. The operational entry-point regression correctly rejects a bundle that differs from committed source. Current main merged with two parents. Keep the direct process audit and all coverage thresholds; stage only this repair, regenerate the tracked text bundle using self-host:write, then verify the committed artifact without repair."
   "2026-10-28T20:02:28.048Z",codex-agent,"The focused operational-entry-point test fails with the expected self-host tree mismatch on the merged Dependabot head. The repository AGENTS.md requires refreshing selfhost.bundle after tracker and generated documentation changes are staged. This tracked artifact is a text bundle. Regenerate only that snapshot, retain the independent committed-source verifier, and rerun the same direct CLI-process test after committing it. No production source or threshold change is needed."
@@ -20,4 +25,5 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   "node --test --test-concurrency=2 --test-name-pattern=\"operational entry points enforce real audits\" test/exact-gates.test.ts",project,codex-agent,"2026-10-28T19:59:28.021Z",local_mutation,dependabot/npm_and_yarn/pm-toolchain-015444b2ac
 docs[1]{path,scope}:
   "https://github.com/unbraind/pm-vcs/actions/runs/40499569404",project
+close_reason: "Delivered by #155 \"chore(deps-dev): bump the pm-toolchain group across 1 directory with 3 updates\" (merged as 1671ccb). Checks successful at the PR head 775d1d8: CodeQL, codeql, enable-auto-merge, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""

@@ -1,0 +1,27 @@
+id: pm-vcs-v5bg
+title: Stop concurrent test packs from rewriting the shared build
+description: "installPackedExtension ran npm pack --silent in the package root. npm pack runs prepack (npm run build = tsc), which truncates and rewrites dist/. The release suite runs up to 4 test files concurrently, so one file's tsc rewrote dist/ while another file's npm pack archived it, and node-tar failed with EOF 'encountered unexpected EOF' on a dist file. --silent suppressed that npm error, so the test diagnostic showed only the prepare script's benign 'npm pack: skipping merge-driver install during artifact creation' line. Seen on main 131dc3a (test (22): bisect.test.ts walk-killed test) and on #177 (test (26): checkpoints.test.ts installed-CLI test). Reproduced locally: 3/60 and 5/60 staggered concurrent packs failed with EOF on dist files."
+type: Issue
+status: in_progress
+priority: 1
+tags[4]: ci,concurrency,flaky-test,testing
+created_at: "2026-11-04T09:32:51.686Z"
+updated_at: "2026-11-04T09:55:41.311Z"
+assignee: claude-hub
+claim_principal: claude-hub
+author: claude-hub
+estimated_minutes: 60
+acceptance_criteria: installPackedExtension packs the existing build with --ignore-scripts (as composition-consumer.test.ts and verify-pack-privacy.ts already do) and --loglevel=error so npm's own error reaches the diagnostic; a regression test proves a real pack leaves every dist/ file mtime unchanged and fails when the old --silent arguments are restored; 60 staggered concurrent packs with the new arguments all succeed with empty stderr.
+severity: high
+expected_result: Concurrent test files pack the extension without corrupting each other's archive.
+component: scripts/pm-environment
+comments[2]{created_at,author,text}:
+  "2026-11-04T09:33:02.246Z",claude-hub,"Verified 2026-11-04: the new test passes with the fix and fails with the old --silent arguments restored (dist mtimes changed). Stress test of 60 staggered concurrent packs: old args 3/60 and 5/60 failed (npm error code EOF, syscall read, path dist/engine/lifecycle.js, dist/ledger.js, dist/engine/destruction.js.map); new args 0/60 failed, all stderr empty. typecheck, lint, docstring, duplicates pass; test/quality-scripts.test.ts 10/10. Every runner builds before packing: test, coverage, release:check, and the Windows job's npm run build step."
+  "2026-11-04T09:55:41.311Z",claude-hub,"Review round 1 (CodeRabbit + Sourcery on 9ba32d7): accept:native-toon now has preaccept:native-toon = npm run build, matching accept:stat-cache and accept:self-host, since the pack no longer rebuilds. Pack failures now name the child outcome: 'npm pack failed (status N): <npm error>' or '(signal S)'. New assertions cover status null (missing executable), status 1 with npm's error text, and SIGKILL. Not changed: bounding npm's stderr (npm error output is a few lines plus a log path), and a separate crash/resume control (bisect.test.ts:494 fails rather than skips when setup throws, and it runs in every release suite)."
+files[3]{path,scope,note}:
+  package.json,project,native TOON acceptance builds before packing
+  scripts/pm-environment.ts,project,pack arguments reuse the build and keep npm errors
+  test/quality-scripts.test.ts,project,shared-build regression and argv expectation
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref},note}:
+  npm run build && node --test --test-name-pattern=pack test/quality-scripts.test.ts,project,300,claude-hub,"2026-11-04T09:33:01.450Z",local_mutation,fix/serialize-packed-extension-installs,"pack argv, failure paths and shared-build regression"
+body: ""
