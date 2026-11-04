@@ -1,12 +1,15 @@
 import "./helpers/isolate-session.ts";
 /** Session noise cannot alter real SDK provenance or leak through future test subprocesses. */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript5";
+import { pmExecutable } from "../scripts/pm-environment.ts";
 import { testEnvironment, TEST_ENVIRONMENT_KEYS } from "./helpers/test-environment.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
@@ -28,6 +31,46 @@ test("child allowlist drops all ambient session namespaces and keeps only delibe
   assert.equal(env.GIT_CONFIG_NOSYSTEM, "1");
   assert.equal(testEnvironment({ GIT_CONFIG_GLOBAL: "fixture-only-config" }, source).GIT_CONFIG_GLOBAL, "fixture-only-config");
   assert.ok(TEST_ENVIRONMENT_KEYS.every(key => !/^(?:CLAUDE|CODEX|AI_AGENT|PM_AGENT)/.test(key)));
+});
+
+test("test children deliver no pm telemetry or Sentry report even when a fixture labels them as test runs", async () => {
+  // A PM_TELEMETRY_SOURCE_CONTEXT label permits intentional test delivery. served-defects set it, and its
+  // expected refusals reached the production Sentry project (#176); only the hard opt-out outranks the label.
+  const dir = makeTempDir();
+  const requests: string[] = [];
+  const collector = createServer((request, response) => {
+    requests.push(`${request.method} ${request.url}`);
+    request.resume(); request.on("end", () => response.end("{}"));
+  });
+  await new Promise<void>((listening) => { collector.listen(0, "127.0.0.1", listening); });
+  try {
+    const { port } = collector.address() as AddressInfo;
+    const endpoint = `http://127.0.0.1:${port}/v1/events`;
+    const [home, profile, project] = ["home", "global", "project"].map((name) => join(dir.root, name));
+    for (const path of [home, profile, project]) mkdirSync(path);
+    const optedOut = testEnvironment({ HOME: home, PM_GLOBAL_PATH: profile, DO_NOT_TRACK: "1" });
+    const labelled = testEnvironment({ HOME: home, PM_GLOBAL_PATH: profile, PM_TELEMETRY_SOURCE_CONTEXT: "test", PM_TELEMETRY_SEND_TEST_EVENTS: "1",
+      PM_TELEMETRY_INLINE_FLUSH: "1", SENTRY_DSN: `http://public@127.0.0.1:${port}/1` });
+    /** Run the installed CLI asynchronously so the local collector can answer while it runs. */
+    const pm = (args: string[], label: boolean) => new Promise<{ status: number | null; stdout: string }>((done, fail) => {
+      const child = spawn(process.execPath, [pmExecutable, ...args], { cwd: project, env: label ? labelled : optedOut, stdio: ["ignore", "pipe", "ignore"], timeout: 120_000 });
+      let stdout = ""; child.stdout.on("data", (bytes) => { stdout += String(bytes); });
+      child.on("error", fail); child.on("close", (status) => { done({ status, stdout }); });
+    });
+    assert.equal((await pm(["init", "--json"], false)).status, 0);
+    // Route the event queue to the local collector before any command could deliver, so a regression stays local.
+    const settings = JSON.parse(readFileSync(join(project, ".agents", "pm", "settings.json"), "utf8")) as { telemetry: { endpoint: string } };
+    settings.telemetry.endpoint = endpoint;
+    writeFileSync(join(profile, "settings.json"), JSON.stringify(settings));
+    assert.equal(JSON.parse((await pm(["ops", "telemetry", "status", "--json"], false)).stdout).status.endpoint, endpoint);
+    const status = JSON.parse((await pm(["ops", "telemetry", "status", "--json"], true)).stdout).status;
+    assert.equal(status.enabled, false); assert.equal(status.env_overrides.telemetry_disabled, true);
+    assert.notEqual((await pm(["get", "pm-vcs-missing", "--json"], true)).status, 0);
+    assert.deepEqual(requests, []);
+  } finally {
+    await new Promise<void>((closed) => { collector.close(() => { closed(); }); });
+    dir.cleanup();
+  }
 });
 
 test("parent isolation preserves owned V8 instrumentation while removing session state before module imports", () => {

@@ -8,9 +8,13 @@ export const TEST_ENVIRONMENT_KEYS = [
   "BUN_INSTALL", "BUN_BE_BUN", "PM_VCS_CRASH_TMPDIR",
 ] as const;
 
-/** Select only operational keys, then add deliberate fixture overrides; no host environment object is copied. */
+/**
+ * Select only operational keys, then add deliberate fixture overrides; no host environment object is copied.
+ * Every child hard-disables pm telemetry and Sentry: a fixture's `PM_TELEMETRY_SOURCE_CONTEXT` label
+ * otherwise permits test delivery, and served-defects' expected refusals reached the production project.
+ */
 export function testEnvironment(overrides: NodeJS.ProcessEnv = {}, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const selected: NodeJS.ProcessEnv = {};
   for (const key of TEST_ENVIRONMENT_KEYS) if (source[key] !== undefined) selected[key] = source[key];
-  return { ...selected, NODE_ENV: "test", PM_SEARCH_REFRESH_INLINE: "1", PM_AGENT_PROBES: "0", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", NODE_V8_COVERAGE: selected.NODE_V8_COVERAGE ?? "", ...overrides };
+  return { ...selected, NODE_ENV: "test", PM_SEARCH_REFRESH_INLINE: "1", PM_AGENT_PROBES: "0", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", PM_TELEMETRY_DISABLED: "1", NODE_V8_COVERAGE: selected.NODE_V8_COVERAGE ?? "", ...overrides };
 }
