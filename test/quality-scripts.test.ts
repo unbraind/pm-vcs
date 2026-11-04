@@ -127,8 +127,13 @@ test("packed extension installation refuses a failed pack and an invalid archive
   try {
     assert.throws(
       () => installPackedExtension(root, pmExecutable, join(root, "missing-npm")),
-      /npm pack failed/,
+      /^Error: npm pack failed \(status null\): spawnSync .*missing-npm ENOENT$/,
     );
+    // npm's own error and the child's outcome reach the diagnostic; --silent once hid the error behind a notice.
+    const refused = executableFixture(root, 'console.error("npm error code EOF"); process.exit(1);', "refused-pack.ts");
+    assert.throws(() => installPackedExtension(root, pmExecutable, refused), /^Error: npm pack failed \(status 1\): npm error code EOF$/);
+    const killed = executableFixture(root, 'process.kill(process.pid, "SIGKILL");', "killed-pack.ts");
+    assert.throws(() => installPackedExtension(root, pmExecutable, killed), /^Error: npm pack failed \(signal SIGKILL\)\.$/);
     const malformed = executableFixture(root, 'console.log("not-an-archive");', "bad-pack.ts");
     assert.throws(
       () => installPackedExtension(root, pmExecutable, malformed),

@@ -107,7 +107,10 @@ export function installPackedExtension(
       env: withoutPmContext(process.env),
       timeout: 120_000,
     });
-    if (packed.status !== 0) throw new Error(processFailure(packed, "npm pack failed", "."));
+    if (packed.status !== 0) {
+      const outcome = packed.signal === null ? `status ${String(packed.status)}` : `signal ${packed.signal}`;
+      throw new Error(processFailure(packed, `npm pack failed (${outcome})`, "."));
+    }
     const archive = packed.stdout.trim().split(/\r?\n/).at(-1);
     if (archive === undefined || !/^pm-vcs-[^/\\]+\.tgz$/.test(archive)) {
       throw new Error("npm pack did not return a pm-vcs archive filename");
