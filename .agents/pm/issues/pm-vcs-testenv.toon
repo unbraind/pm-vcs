@@ -2,13 +2,18 @@ id: pm-vcs-testenv
 title: Isolate test children and provenance from ambient agent sessions
 description: "Test environments select explicit operational keys and deliberate fixture overrides. Remove ambient Claude Code, Codex, AI_AGENT and PM_AGENT session state before SDK imports. Retain runner-owned coverage for native production workers and tools; disposable fixtures explicitly disable it. Audit module code and embedded worker programs and compare real provenance in clean and contaminated sessions."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-26T06:40:36.026Z"
-updated_at: "2026-10-26T07:44:51.902Z"
+updated_at: "2026-11-04T07:08:31.020Z"
+closed_at: "2026-11-04T07:08:30.999Z"
+completed_at: "2026-11-04T07:08:30.999Z"
 author: codex-agent
 acceptance_criteria: The three reported annotation/bisect cases produce the same results under clean and contaminated sessions; all child launch sites use explicit environments without host spreads; exact npm/Bun release gates pass.
+resolution: Implemented and merged in #150 (d240868).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #150 as d240868; checks successful at head 4100aa1: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 comments[5]{created_at,author,text}:
   "2026-10-26T06:40:40.032Z",codex-agent,"Reproduced all three reported failures before changes by injecting synthetic CLAUDECODE, CLAUDE_CODE_*, CODEX_*, AI_AGENT and PM_AGENT_* values: 0/3 pass, actual harness claude-code versus expected codex. Keep exact provenance assertions. Introduce a pure child-environment allowlist plus an entrypoint normalizer before SDK imports; permit deliberate fixture overrides and preserve parent V8 instrumentation separately. Audit direct, aliased and namespaced child-process launches, including previously implicit environments; do not copy host process.env. Run the same three real cases in clean and contaminated children and guard future launches structurally."
   "2026-10-26T07:08:44.975Z",codex-agent,"Round-5 hermeticity: 96 test entrypoints install an operational-key allowlist before SDK imports; 136 child launch sites now carry explicit environments, including 56 previously implicit launches. Fixture identity remains explicit. Parent V8 instrumentation and runner context survive; children disable coverage and omit runner context. Node 22 contaminated-session regression 4/4 and copied-checkout/PM-context cases 2/2 pass. Three actual provenance cases pass 3/3 in clean and contaminated runs. Isolated revert proof: restoring only host-copy behavior in testEnvironment fails 0/3 with claude-code instead of codex; restoring the allowlist passes 3/3. Disabling only isolateTestSession fails its contamination/coverage regression 0/1; restoring passes 1/1. Source/test typecheck, strict lint, 86-source docstrings and zero duplication pass. No dependency changes. Full npm/Bun evidence will come from exact-head CI."
@@ -28,4 +33,5 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/test-environment.test.ts,project,codex-agent,"2026-10-26T07:08:41.943Z",local_mutation,feat/indexed-pack-storage
 docs[1]{path,scope}:
   README.md,project
+close_reason: "Delivered by #150 \"Compact loose objects into indexed packs without changing their identities\" (merged as d240868). Checks successful at the PR head 4100aa1: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""
