@@ -63,6 +63,8 @@
 
 ### Fixed
 
+- Isolate test children and provenance from ambient agent sessions ([pm-vcs-testenv](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-testenv.toon))
+- Settle annotation fixture owners before retry-bounded teardown ([pm-vcs-annotationteardown](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-annotationteardown.toon))
 - Refresh the committed archive after the toolchain launcher update ([pm-vcs-toolchain137](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-toolchain137.toon))
 - Provision Bun before dependency refresh release checks ([pm-vcs-refresh-bun](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-refresh-bun.toon))
 - Guarantee a real byte mutation in the CDC staging regression ([pm-vcs-staging-byte-fixture](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-staging-byte-fixture.toon))
@@ -117,6 +119,7 @@
 
 ### Other
 
+- Refresh the self-host snapshot after Dependabot changelog updates ([pm-vcs-hgu2](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-hgu2.toon))
 - Fit the complete crash-cut matrix within CI runtime ([pm-vcs-crash-matrix-ci](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-crash-matrix-ci.toon))
 - Release readiness behind PM_RELEASE_APPROVED ([pm-vcs-release-gate](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-release-gate.toon))
 - Phase 5: the forge and the patch series ([pm-vcs-5h6j](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-5h6j.toon))
