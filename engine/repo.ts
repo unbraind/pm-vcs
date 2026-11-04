@@ -1718,9 +1718,10 @@ export class Repository {
    * Captured pairs bypass the working-file stat cache: a peer may already have changed
    * the live tracker. Validate the entire scope before creating objects or changing the index.
    */
-  commitCaptured(options: CommitOptions, files: readonly { readonly path: string; readonly content: Buffer }[], expectedTip: ObjectId | null, now: Date): ObjectId {
+  commitCaptured(options: CommitOptions, files: readonly { readonly path: string; readonly content: Buffer }[], expectedTip: ObjectId | null, now: Date, expectedHead?: string): ObjectId {
     return this.objects.withWriteLock(/** Read the parent and every modified index entry under the publication lease. */ () => {
-      if (this.refs.readHead().target !== expectedTip) throw new TrackerAdmissionRefusal("tracker_tip_changed", "Review the current native tip and start a new capture with that expectedTip; no revision was published.");
+      const head = this.refs.readHead();
+      if (head.target !== expectedTip || (expectedHead !== undefined && (head.kind === "branch" ? head.ref : "HEAD") !== expectedHead)) throw new TrackerAdmissionRefusal("tracker_tip_changed", "Review the current native branch and tip, then start a new capture with that expectedTip; no revision was published.");
       this.assertNoMergeInProgress();
       const index = new Map(this.committableIndex().map(entry => [entry.path, entry]));
       const rules = this.ignoreRules(); const layers = this.layerPaths();

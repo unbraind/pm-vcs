@@ -1189,7 +1189,8 @@ successful commit consumes the session; overlapping calls on one session refuse
 with `tracker_capture_busy` until the active attempt finishes. CLI invocations start fresh sessions;
 there is no persisted retry journal and no frozen mutation plan to replay.
 
-Native publication checks the expected tip and reads the latest index while
+Native publication binds the branch (or detached HEAD) at capture creation,
+checks that identity and the expected tip, and reads the latest index while
 holding the native writer lease. It stores the certified bytes directly, bypassing
 live-file stat caches. A writer advancing after capture cannot substitute new
 item bytes into the revision. Source files are the immutable staged versions.

@@ -94,10 +94,13 @@ export class TrackerCapture {
   private settingsRevision: string | undefined;
   private readonly repository: Repository;
   private readonly pmRoot: string;
+  private readonly expectedHead: string;
   /** Bind the capture to a native repository, explicit tracker, and expected target revision. */
   constructor(repository: Repository, pmRoot: string, raw: unknown) {
     this.repository = repository; this.pmRoot = pmRoot;
     this.request = parseTrackerAdmissionRequest(raw);
+    const head = repository.refs.readHead();
+    this.expectedHead = head.kind === "branch" ? head.ref : "HEAD";
   }
   /** Capture one SDK-resolved pair, returning a safe retry coordinate on unreadable or torn state. */
   private async pair(rawId: string, settings: Sdk.PmSettings): Promise<Pair | TrackerRetryWitness> {
@@ -171,7 +174,7 @@ export class TrackerCapture {
     if (retry.length > 0) return { ok: false, code: "tracker_capture_retry", checked: pending.length, reused, retry,
       remedy: retry.some(row => row.reason === "outside_workspace") ? "Start a new capture in a native workspace containing the selected tracker, then retry the same selection."
         : "Wait for tracker writers to settle or restore readable committed transaction receipts, then resume this capture; CLI callers retry the same input." };
-    const published = this.repository.commitCaptured(options, this.request.items.flatMap(id => this.verified.get(id)!.files), this.request.expectedTip, now);
+    const published = this.repository.commitCaptured(options, this.request.items.flatMap(id => this.verified.get(id)!.files), this.request.expectedTip, now, this.expectedHead);
     this.consumed = true;
     return { ok: true, revision: published, checked: pending.length, reused };
   }

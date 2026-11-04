@@ -395,3 +395,16 @@ test("captured pairs retain legacy FileId migration, executable modes and copied
   const after = f.repo.readIndex().find(row => row.path === target.path)!;
   assert.equal(after.mode, "100755"); assert.equal(after.copiedFrom, copiedFrom); assert.equal(after.fileId, native.fileId);
 });
+
+test("capture binds branch identity even when a peer switches HEAD to the same revision", async () => {
+  const f = await fixture();
+  const baseline = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(baseline.ok);
+  const main = new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline.revision });
+  f.repo.createBranch("peer", "HEAD", new Date(2)); f.repo.switchTo("peer", new Date(2));
+  await assert.rejects(main.commit(options, new Date(3)), { code: "tracker_tip_changed" });
+  const branch = new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline.revision });
+  f.repo.switchTo(baseline.revision, new Date(3));
+  await assert.rejects(branch.commit(options, new Date(4)), { code: "tracker_tip_changed" });
+  const detached = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline.revision }).commit(options, new Date(5)); assert.ok(detached.ok);
+  assert.equal(f.repo.refs.read("refs/heads/main"), baseline.revision); assert.equal(f.repo.refs.read("refs/heads/peer"), baseline.revision);
+});
