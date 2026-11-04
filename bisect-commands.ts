@@ -1,6 +1,7 @@
+import { durability } from "./engine/durability.ts";
 /** Native CLI operations for linked-test-driven bisect sessions. */
 import { spawn } from "node:child_process";
-import { lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -468,7 +469,7 @@ export async function runCandidateTest(item: string, author: string, pmRoot: str
       child.stdin.on("error", () => {});
       child.on("error", reject);
       child.on("close", (code) => {
-        if (ownsReceipt) rmSync(receipt, { force: true });
+        if (ownsReceipt) durability.remove(receipt, { force: true });
         if (code === 0) resolve(output);
         else reject(new Error(`Linked PM test runner exited ${code}: ${errors.trim()}`));
       });

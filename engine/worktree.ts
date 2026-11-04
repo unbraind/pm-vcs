@@ -578,7 +578,7 @@ export function materializeTree(
       [...flattenTree(store, treeIdentifier)].filter(([path]) => visible(path) && !isIgnored(path, rules)
         && !isProtectedWorktreePath(root, path)),
     );
-    const mutation = new WorktreeMutation(root, controlDirectory);
+    const mutation = new WorktreeMutation(root, controlDirectory, store);
     try {
       for (const existing of listWorkingTree(root, controlDirectory, rules)) {
         if (!target.has(existing) && removablePaths.has(existing) && !isProtectedWorktreePath(root, existing)) {
@@ -588,7 +588,7 @@ export function materializeTree(
       const entries: IndexEntry[] = [];
       for (const [path, value] of target) {
         const content = render(path, store.read(value.id));
-        mutation.write(path, content, value.mode === "100755" ? 0o755 : 0o644);
+        mutation.write(path, content, value.mode === "100755" ? 0o755 : 0o644, { objects: [value.id], fileId: value.fileId });
         const mode = value.mode === "100755" ? "100755" : "100644";
         // A concurrent writer can race the write and chmod above. Do not pair the
         // expected object id with metadata from bytes that were never verified.

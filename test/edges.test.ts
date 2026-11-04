@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 // Behaviour at the states the main suites do not naturally reach.
 //
 // Every test here corresponds to a branch that only an unusual — but real —
@@ -188,7 +190,7 @@ test("the working-tree walk skips an entry that is neither a file nor a symlink"
   const { root } = freshRepo();
   const fifo = join(root, "pipe");
   try {
-    execFileSync("mkfifo", [fifo]);
+    execFileSync("mkfifo", [fifo], { env: testEnvironment() });
   } catch {
     // No mkfifo on this platform. Reported as a skip rather than returning, because
     // an early return counts as a pass for a test whose assertion never ran.

@@ -1,7 +1,8 @@
+import { durability } from "./durability.ts";
 /** Receiver-owned stable FileId leases, fenced generations and durable audit. */
 import { randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { type ClosureMetadata } from "./closure.ts";
 import { syncDirectory } from "./composition.ts";
 import { readCommit, readTree, type FileId } from "./model.ts";
@@ -117,6 +118,24 @@ export function parseLeaseProofs(value: unknown): readonly LeaseProof[] {
   return result;
 }
 
+/** Validate complete native audit records without granting mutation authority or accepting opaque backup fields. */
+export function parseFileLeaseAudit(text: string, fileId: FileId): FileLease | null {
+    let last: FileLease | null = null;
+    try {
+      if (!text.endsWith("\n")) throw new Error("Truncated audit.");
+      for (const line of text.trimEnd().split("\n")) {
+        const record = JSON.parse(line) as { lease: FileLease; actor: string; action: string; at: number };
+        const lease = record.lease;
+        if (record === null || typeof record !== "object" || Object.keys(record).sort().join(",") !== "action,actor,at,lease" || parseFileLease(lease) === null || Object.keys(lease).sort().join(",") !== "active,expiry,fileId,generation,holder,refs,token" || lease.fileId !== fileId
+          || typeof record.actor !== "string" || !Number.isSafeInteger(record.at)
+          || !["acquire", "renew", "release", "break"].includes(record.action)
+          || (last !== null && (lease.generation < last.generation || lease.generation > last.generation + 1))) throw new Error("Invalid audit.");
+        last = lease;
+      }
+    } catch { throw new ObjectStoreError("corrupt_lease_audit", "Lease audit is invalid; no generation may be revived."); }
+    return last;
+}
+
 /** Receiver authority serializes lease changes with object writes and atomic ref publication. */
 export class PublicationLeases {
   private readonly store: ObjectStore;
@@ -127,7 +146,7 @@ export class PublicationLeases {
   constructor(store: ObjectStore, controlDirectory: string, principal: ReceiverPrincipal = filesystemPrincipal()) {
     this.store = store;
     this.principal = principal;
-    this.directory = join(controlDirectory, "leases");
+    this.directory = resolve(controlDirectory, "leases");
   }
 
   /** Read the authoritative append-only audit, refusing truncation or invalid generations. */
@@ -138,20 +157,7 @@ export class PublicationLeases {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
     }
-    let last: FileLease | null = null;
-    try {
-      if (!text.endsWith("\n")) throw new Error("Truncated audit.");
-      for (const line of text.trimEnd().split("\n")) {
-        const record = JSON.parse(line) as { lease: FileLease; actor: string; action: string; at: number };
-        const lease = record.lease;
-        if (parseFileLease(lease) === null || lease.fileId !== fileId
-          || typeof record.actor !== "string" || !Number.isSafeInteger(record.at)
-          || !["acquire", "renew", "release", "break"].includes(record.action)
-          || (last !== null && (lease.generation < last.generation || lease.generation > last.generation + 1))) throw new Error("Invalid audit.");
-        last = lease;
-      }
-    } catch { throw new ObjectStoreError("corrupt_lease_audit", "Lease audit is invalid; no generation may be revived."); }
-    return last;
+    return parseFileLeaseAudit(text, fileId);
   }
 
   /** Persist an event before reporting success; the audit itself is the sole generation authority. */
@@ -160,7 +166,7 @@ export class PublicationLeases {
     const fd = openSync(join(this.directory, `${lease.fileId}.jsonl`), "a", 0o600);
     try {
       writeFileSync(fd, JSON.stringify({ action, actor: this.principal.principal, at, lease }) + "\n");
-      fsyncSync(fd);
+      durability.file(fd);
     } finally { closeSync(fd); }
     syncDirectory(this.directory, false);
     return lease;

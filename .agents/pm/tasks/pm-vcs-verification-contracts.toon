@@ -1,0 +1,13 @@
+id: pm-vcs-verification-contracts
+title: Preserve verification accounting and checkpoint refusal contracts
+description: "Review threads PRRT_kwDOToJT7M6yWzcX and PRRT_kwDOToJT7M6yWzck identify valid general SDK reporting/compatibility gaps: checkpoint IO/budget failures now use VerificationRefusal rather than checkpoint-specific refusal guidance, and closure checked currently equals successfully verified nodes rather than attempted inspections. Both remain fail-closed and do not authorize unsafe pack/erasure behavior. Repair the result/refusal contracts separately without weakening verification or changing old read/export support."
+type: Task
+status: open
+priority: 3
+tags[2]: follow-up,"review:pr150"
+created_at: "2026-11-01T08:27:30.482Z"
+updated_at: "2026-11-01T08:27:30.482Z"
+author: codex-agent
+acceptance_criteria: Attempted work is distinguishable from successfully validated objects; Checkpoint failures retain checkpoint-specific instanceof and remedy compatibility alongside bounded verification results; Non-git behavioral tests cover corrupt missing valid and budget-exhausted cases without mutation
+parent: pm-vcs-phase6packs
+body: ""

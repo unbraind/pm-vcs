@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import { Writable } from "node:stream";
 import { guardCredentialOutput } from "../credential-output.ts";
 import assert from "node:assert/strict";

@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Untrusted envelope validation complements the real-socket transport tests. */
 import assert from "node:assert/strict";
 import { test } from "node:test";

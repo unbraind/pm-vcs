@@ -1,8 +1,9 @@
 /** Inspect the real npm tarball, including compiled code and source maps, before release. */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { durability } from "../engine/durability.ts";
 import { isMainInvocation } from "./main-invocation.ts";
 
 /** Patterns identify classes of private data; diagnostics never echo matched values. */
@@ -43,7 +44,7 @@ export function verifyPack(root: string): { count: number; failures: string[] } 
     ]);
     return { count: members.length, failures };
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    durability.remove(scratch, { recursive: true, force: true });
   }
 }
 

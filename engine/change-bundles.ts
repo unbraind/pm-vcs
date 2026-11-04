@@ -146,7 +146,7 @@ function closure(store: ObjectStore, archive: Buffer, manifest: ChangeBundleMani
   return metadata;
 }
 /** Export exact selected tips and full closure under a single source lease; never rewrite or project native identities. */
-export function exportChangeBundle(store: ObjectStore, selected: Readonly<Record<string, ObjectId>>, scope: ChangeBundleScope, signer: string, key: KeyObject): Buffer {
+export function exportChangeBundle(store: ObjectStore, selected: Readonly<Record<string, ObjectId>>, scope: ChangeBundleScope, signer: string, key: KeyObject, capture?: (objects: readonly ObjectId[]) => void): Buffer {
   scope = parseChangeBundleScope(scope); selected = tips(selected, scope);
   if (typeof signer !== "string" || !/^[a-zA-Z0-9_.@+-]{1,128}$/.test(signer) || key.type !== "private" || key.asymmetricKeyType !== "ed25519") throw new ChangeBundleRefusal("bundle_signature_refused", SIGNATURE);
   return store.withWriteLock(() => {
@@ -164,6 +164,7 @@ export function exportChangeBundle(store: ObjectStore, selected: Readonly<Record
     closure(store, archive, manifest);
     const bytes = Buffer.from(FORMAT + "\n" + canonical({ manifest, signature: sign(null, signingBytes(manifest), key).toString("base64"), archive: archive.toString("base64") }).toString("utf8") + "\n");
     if (bytes.length > 33554432) throw new ChangeBundleRefusal("invalid_change_bundle", INVALID);
+    capture?.(included);
     return bytes;
   });
 }

@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 import { sharedConfig } from "./config.ts";
 import { join } from "node:path";
 import { readCommit } from "./model.ts";
@@ -14,7 +15,7 @@ import type { LeaseProof } from "./publication-leases.ts";
 // the same thing as its source — are properties of the algorithm, and writing them
 // against a transport keeps them true for whatever transport arrives later.
 
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, } from "node:fs";
 
 import { exportBundle, importBundleObjects, serializeBundle } from "./bundle.ts";
 import { isAncestor } from "./merge.ts";
@@ -196,7 +197,7 @@ export async function fetchFrom(
       if (shallow.length === 0 && promised.length === 0) {
         // Complete history ends partial mode: a retained empty file would pin
         // every later unchanged fetch to whole-history transfer without haves.
-        rmSync(partialPath, { force: true });
+        durability.remove(partialPath, { force: true });
       } else {
         writePrivateJson(partialPath, { remote: outstanding.length > 0 ? previous!.remote : remoteName, shallow, promised });
       }
@@ -401,7 +402,7 @@ export async function cloneFrom(
     repository.remotes.add(remoteName, location);
     fetched = await fetchFrom(repository, remoteName, now, wire, options);
   } catch (error) {
-    rmSync(preexisting ? repository.controlDirectory : root, { recursive: true, force: true });
+    durability.remove(preexisting ? repository.controlDirectory : root, { recursive: true, force: true });
     throw error;
   }
 

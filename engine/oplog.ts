@@ -1,3 +1,5 @@
+import { writeAtomicBytes } from "./composition.ts";
+import { durability } from "./durability.ts";
 // Operation log and undo.
 //
 // Every command that moves a ref appends what it moved, before and after. That
@@ -9,11 +11,11 @@
 // payload bytes permanently; undo can restore a pointer but cannot restore its
 // intentionally absent content.
 
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, mkdirSync, readFileSync, } from "node:fs";
+import { dirname, resolve } from "node:path";
 
-import type { ObjectId } from "./objects.ts";
-import { ObjectStoreError } from "./objects.ts";
+import type { ObjectId, ObjectStore } from "./objects.ts";
+import { isObjectId, ObjectStoreError } from "./objects.ts";
 import type { RefStore } from "./refs.ts";
 
 /** One ref's value before and after an operation. */
@@ -58,6 +60,27 @@ export interface Operation {
   readonly head?: HeadTransition;
 }
 
+/** Strict erasure ownership check, while ordinary log reads retain their torn-line compatibility. */
+export function erasureOperations(path: string): Operation[] {
+  let text: string;
+  try { text = readFileSync(path, "utf8"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+  const operations: Operation[] = [];
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    let operation: Operation;
+    try { operation = JSON.parse(line) as Operation; } catch { throw new ObjectStoreError("unsupported_erasure_storage", "Unrecognized operation-log bytes were preserved."); }
+    if (operation === null || typeof operation !== "object" || !Number.isSafeInteger(operation.sequence) || operation.sequence < 1
+      || typeof operation.command !== "string" || typeof operation.at !== "string" || !Number.isFinite(Date.parse(operation.at)) || typeof operation.summary !== "string"
+      || Object.keys(operation).some(key => !["sequence", "command", "at", "summary", "refs", "head"].includes(key))
+      || !Array.isArray(operation.refs) || operation.refs.some(ref => ref === null || typeof ref !== "object" || Object.keys(ref).sort().join(",") !== "after,before,ref" || typeof ref.ref !== "string" || ![ref.before, ref.after].every(id => id === null || typeof id === "string" && isObjectId(id)))
+      || operation.head !== undefined && (operation.head === null || typeof operation.head !== "object" || Object.keys(operation.head).sort().join(",") !== "after,before" || typeof operation.head.before !== "string" || typeof operation.head.after !== "string")) {
+      throw new ObjectStoreError("unsupported_erasure_storage", "Unknown operation-log shape was preserved.");
+    }
+    operations.push(operation);
+  }
+  return operations;
+}
+
 /**
  * Append-only operation log backed by one JSON Lines file.
  *
@@ -74,12 +97,15 @@ export interface Operation {
 export class OperationLog {
   /** Absolute path to the log file. */
   private readonly path: string;
+  /** Repository-owned appends share the erasure transaction; standalone logs retain their own lease. */
+  private readonly store?: ObjectStore;
 
   /**
    * @param path - Log file path. Its directory is created on demand.
    */
-  constructor(path: string) {
-    this.path = path;
+  constructor(path: string, store?: ObjectStore) {
+    this.path = resolve(path);
+    this.store = store;
   }
 
   /**
@@ -138,30 +164,51 @@ export class OperationLog {
     head?: HeadTransition,
     validate?: (operation: Operation) => void,
   ): Operation {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const lockPath = `${this.path}.lock`;
-    let descriptor: number;
+    /** Serialize every native producer with the same store lease held through erasure completion. */
+    const write = (): Operation => {
+      mkdirSync(dirname(this.path), { recursive: true });
+      const lockPath = `${this.path}.lock`;
+      const lease = durability.claim(lockPath, "oplog_locked");
+      try {
+        const operation: Operation = {
+          sequence: this.read().length + 1,
+          command,
+          at: now.toISOString(),
+          summary,
+          refs,
+          ...(head === undefined ? {} : { head }),
+        };
+        validate?.(operation); lease.verify();
+        appendFileSync(this.path, `${JSON.stringify(operation)}\n`);
+        durability.persist(this.path);
+        return operation;
+      } finally {
+        lease.release();
+      }
+    };
+    return this.store === undefined ? write() : this.store.withWriteLock(write);
+  }
+
+  /** Remove unmanaged legacy summaries by record provenance, without trying to decode their content. */
+  redactForErasure(erased: ReadonlySet<ObjectId>): void {
+    const lease = durability.claim(`${this.path}.lock`, "oplog_locked");
     try {
-      descriptor = openSync(lockPath, "wx");
-    } catch {
-      throw new ObjectStoreError("oplog_locked", `The operation log is locked by another process (${lockPath}).`);
-    }
-    try {
-      const operation: Operation = {
-        sequence: this.read().length + 1,
-        command,
-        at: now.toISOString(),
-        summary,
-        refs,
-        ...(head === undefined ? {} : { head }),
-      };
-      validate?.(operation);
-      appendFileSync(this.path, `${JSON.stringify(operation)}\n`);
-      return operation;
-    } finally {
-      closeSync(descriptor);
-      unlinkSync(lockPath);
-    }
+      durability.recoverPublication(this.path);
+      const operations = erasureOperations(this.path);
+      const redacted = operations.map(operation => ({
+        sequence: operation.sequence, command: operation.command, at: operation.at,
+        summary: operation.command === "obliterate" && /^Obliterated FileId [0-9a-f]{32}; tombstone [0-9a-f]{64}\.$/.test(operation.summary) ? operation.summary : "Summary removed by authorized erasure.",
+        refs: operation.refs.map(transition => ({ ref: transition.ref,
+          before: transition.before !== null && erased.has(transition.before) ? null : transition.before,
+          after: transition.after !== null && erased.has(transition.after) ? null : transition.after })),
+        ...(operation.head === undefined ? {} : { head: {
+          before: erased.has(operation.head.before) ? "" : operation.head.before,
+          after: erased.has(operation.head.after) ? "" : operation.head.after } }),
+      }));
+      const bytes = Buffer.from(redacted.map(operation => `${JSON.stringify(operation)}\n`).join(""));
+      lease.verify();
+      if (operations.length > 0 && !readFileSync(this.path).equals(bytes)) writeAtomicBytes(this.path, bytes, 0o600);
+    } finally { lease.release(); }
   }
 
   /**
@@ -203,17 +250,11 @@ export class OperationLog {
         + "Something moved HEAD since then; re-read it and retry.",
       );
     }
-    validate?.(target);
     refs.transaction(target.refs.map((transition) => ({
       name: transition.ref,
       expected: transition.after,
       next: transition.before,
-    })));
-    if (target.head !== undefined) {
-      const restored = target.head.before;
-      if (restored.startsWith("ref: ")) refs.setHeadToRef(restored.slice(5).trim());
-      else refs.setHeadDetached(restored);
-    }
+    })), () => validate?.(target), target.head === undefined ? undefined : { expected: target.head.after, next: target.head.before });
     const reversed: RefTransition[] = target.refs.map((transition) => ({
       ref: transition.ref,
       before: transition.after,

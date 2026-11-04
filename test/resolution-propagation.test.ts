@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Conflict resolution replays real descendant histories without changing their identities. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -14,7 +16,6 @@ import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { encodeConflict, inheritedConflict, readConflict, summarizeConflicts } from "../engine/conflicts.ts";
 import { mergeTrees } from "../engine/rewrite.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
-import { withoutPmContext } from "../scripts/pm-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 
 const owned: ReturnType<typeof makeTempDir>[] = [];
@@ -131,7 +132,7 @@ test("real three-author tracker: two descendants per agent inherit a third autho
   repo.linkInstance("agent-a", join(root, "a")); repo.linkInstance("agent-b", join(root, "b"));
   const a = Repository.open(join(root, "a")); const b = Repository.open(join(root, "b"));
   const pm = (repository: Repository, identity: string, args: string[]) => JSON.parse(execFileSync(join(packageRoot, "node_modules/.bin/pm"), ["--no-extensions", "--json", ...args],
-    { cwd: repository.root, env: { ...withoutPmContext(process.env), ...discardChildCoverage(), PM_AUTHOR: identity }, encoding: "utf8" }));
+    { cwd: repository.root, env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: identity }, encoding: "utf8" }));
   pm(a, "agent-a", ["update", item, "--status", "in_progress"]); a.stage([]); a.commit({ message: "a diverges", author: { ...author, name: "agent-a" } }, now);
   pm(b, "agent-b", ["update", item, "--status", "blocked", "--blocked-reason", "review"]); b.stage([]); b.commit({ message: "b diverges", author: { ...author, name: "agent-b" } }, now);
   const merged = a.merge("agent-b", { message: "record status disagreement", author, recordConflicts: true }, now).head;

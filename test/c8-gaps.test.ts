@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Behavior checks for paths distinguished by the all-files c8 gate. */
 
 import assert from "node:assert/strict";

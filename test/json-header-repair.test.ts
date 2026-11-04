@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Real operator JSON and compressed-header discovery regressions. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";

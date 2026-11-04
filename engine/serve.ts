@@ -339,8 +339,8 @@ class ServedRepository {
    * @param path - Absolute path to the repository's working tree root.
    */
   constructor(url: string, path: string) {
-    this.main = new FileTransport(url, path);
-    this.path = path;
+    this.path = resolve(path);
+    this.main = new FileTransport(url, this.path);
   }
 
   /**

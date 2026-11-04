@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real native changes, adversarial signatures and atomic receiver policy enforcement. */
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
@@ -467,7 +469,7 @@ test("a separate revoker cannot cross a held publication lease and its next succ
   const { repository, dir, keys, id } = fixture();
   const receiver = Repository.init(join(dir.root, "receiver")); const fingerprint = trust(receiver, keys.publicKey);
   const receipt = join(dir.root, "revocation-receipt.json");
-  const worker = fork(join(packageRoot, "test/helpers/signature-policy-worker.ts"), [receiver.root, fingerprint, receipt], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+  const worker = fork(join(packageRoot, "test/helpers/signature-policy-worker.ts"), [receiver.root, fingerprint, receipt], { env: testEnvironment(), stdio: ["ignore", "ignore", "inherit", "ipc"] });
   /** Await a bounded IPC barrier so the race has a controlled, observable ordering. */
   const message = () => new Promise<{ status: string; code?: string }>((resolveMessage, reject) => {
     const timeout = setTimeout(() => reject(new Error("revocation worker timeout")), 10000);

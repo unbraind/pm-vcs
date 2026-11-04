@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import { readCommit, readTree, writeTree, writeCommit } from "../engine/model.ts";
 /** Real receiver authority, durable generations and multi-process publication races. */
 import assert from "node:assert/strict";
@@ -154,7 +156,7 @@ test("a non-holder inspect through the same transport keeps the holder's cached 
 test("independent processes contend for acquisition; exactly one generation wins", async () => {
   const { receiver, fileId } = fixture();
   const children = [0, 1].map(() => fork(join(packageRoot, "test/helpers/publication-lease-worker.ts"), [receiver.root, fileId, "acquire"],
-    { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe", "ipc"] }));
+    { env: { ...testEnvironment() }, stdio: ["ignore", "pipe", "pipe", "ipc"] }));
   try {
     await Promise.all(children.map(child => peerMessage(child)));
     const done = children.map(child => peerMessage(child));
@@ -168,7 +170,7 @@ test("independent processes contend for acquisition; exactly one generation wins
 /** Start a real peer process and pause it before the receiver transaction. */
 async function peer(root: string, fileId: string, action: string, extra: string[] = []) {
   const child = fork(join(packageRoot, "test/helpers/publication-lease-worker.ts"), [root, fileId, action, ...extra],
-    { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe", "ipc"] });
+    { env: { ...testEnvironment() }, stdio: ["ignore", "pipe", "pipe", "ipc"] });
   await peerMessage(child);
   return child;
 }

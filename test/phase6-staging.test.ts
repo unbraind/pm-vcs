@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Native large-file staging, working comparisons and physical collection receipts. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -21,7 +23,7 @@ import { RACY_WINDOW_NS, readWorkingStat } from "../engine/worktree.ts";
 import { readHints, writeHints } from "../engine/instances.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
-import { installPackedExtension, withoutPmContext } from "../scripts/pm-environment.ts";
+import { installPackedExtension } from "../scripts/pm-environment.ts";
 import { benchmarkPhase6 } from "../scripts/phase6-benchmark.ts";
 
 const directories: ReturnType<typeof makeTempDir>[] = [];
@@ -308,13 +310,14 @@ test("manifest working comparisons support fixed layouts and refuse short reads 
   writeFileSync(file, bytes); repo.stage(["asset"]);
   const entry = repo.readIndex()[0];
   const native = readWorkingStat(repo.root, "asset");
-  repo.writeIndex([{ ...entry, stat: { ...native.stat, observedAtNs: native.stat.observedAtNs - 3_000_000_000n } }]);
-  assert.deepEqual(repo.status().unstaged, []);
-  // Prove that a stable streamed comparison can refresh this index before
-  // introducing drift; a recent, non-cacheable observation cannot test the guard.
-  await delay(Number(RACY_WINDOW_NS / 1_000_000n) + 100);
+  const changedAt = native.stat.ctimeNs > native.stat.mtimeNs ? native.stat.ctimeNs : native.stat.mtimeNs;
+  repo.writeIndex([{ ...entry, stat: { ...native.stat, observedAtNs: changedAt - RACY_WINDOW_NS - 1n } }]);
   const indexPath = join(repo.controlDirectory, "index");
   const uncached = readFileSync(indexPath);
+  assert.deepEqual(repo.status().unstaged, []);
+  // Snapshot the stale observation before either status call: staging may have
+  // already outlasted the racy window. Prove refresh before introducing drift.
+  await delay(Number(RACY_WINDOW_NS / 1_000_000n) + 100);
   assert.deepEqual(repo.status().unstaged, []);
   assert.notDeepEqual(readFileSync(indexPath), uncached, "control: a stable aged observation refreshes the stat cache");
   writeFileSync(indexPath, uncached);
@@ -337,7 +340,7 @@ test("shipped CLI stages commits and collects in a real tracker with no Git exec
   const { repo } = await fresh(); installPackedExtension(repo.root);
   const nodeOnly = join(repo.root, "node-only"); mkdirSync(nodeOnly);
   symlinkSync(process.execPath, join(nodeOnly, "node"));
-  const environment = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: nodeOnly, GIT_CEILING_DIRECTORIES: dirname(repo.root),
+  const environment = { ...testEnvironment(), ...discardChildCoverage(), PATH: nodeOnly, GIT_CEILING_DIRECTORIES: dirname(repo.root),
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${new URL("./helpers/forbid-git.ts", import.meta.url).href}` };
   const cli = join(packageRoot, "node_modules/@unbrained/pm-cli/dist/cli.js");
   /** Run the actual installed PM command against the source extension without Git discovery. */

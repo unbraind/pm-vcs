@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -470,6 +471,16 @@ test("the refusal points a branch at its tracking ref and a tag somewhere a tag 
   const tag = await refuse(`${TAG_PREFIX}v1`, onSide, onMain);
   assert.doesNotMatch(tag.message, /<remote>\//);
   assert.match(tag.message, /move the tag deliberately/);
+
+  // The host bounds a command's error message at 300 characters, and a remote's
+  // location can be any length: the whole remediation precedes it, inside the bound.
+  for (const refusal of [branch, tag]) {
+    const [actionable, location] = refusal.message.split(" Remote: ");
+    assert.ok(actionable!.length < 300, `remediation exceeds the host bound: ${actionable}`);
+    assert.match(actionable!, /--force/);
+    assert.ok(location !== undefined && location.length > 0, "the remote's location follows the remediation");
+  }
+  assert.match(branch.message.split(" Remote: ")[0]!, /<remote>\/side .*branch --remotes/);
 });
 
 test("force overrides the refusal and the remote can still undo it", async () => {

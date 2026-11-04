@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Native change lenses on real SDK trackers, including malformed, conflicted and no-Git inputs. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -15,7 +17,7 @@ import { decodeRecord, encodeRecord, readCommit, writeCommit, type RecordDocumen
 import { VcsError } from "../git.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
-import { withoutPmContext, installPackedExtension } from "../scripts/pm-environment.ts";
+import { installPackedExtension } from "../scripts/pm-environment.ts";
 
 const owned: ReturnType<typeof makeTempDir>[] = [];
 const author: Signature = { name: "fixture", email: "fixture@example.invalid", timestamp: 1000, timezoneOffsetMinutes: 0 };
@@ -220,7 +222,7 @@ test("CLI explain treats blank revisions as HEAD and trims explicit revisions", 
 test("real CLI loads the built extension and emits bounded JSON and TOON with no Git executable", async () => {
   const { root, first } = await fixture(); const bins = temp();
   // Use the absolute Node executable and an empty PATH, prohibiting all Git subprocess discovery.
-  const env = { ...withoutPmContext(process.env), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(root), PM_AUTHOR: "fixture" };
+  const env = { ...testEnvironment(), ...discardChildCoverage(), PATH: bins, GIT_CEILING_DIRECTORIES: dirname(root), PM_AUTHOR: "fixture" };
   const cli = join(packageRoot, "node_modules/@unbrained/pm-cli/dist/cli.js");
   installPackedExtension(root);
   const before = hashes(root);

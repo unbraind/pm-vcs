@@ -1,0 +1,13 @@
+id: pm-vcs-disposable-cleanup-contracts
+title: Restore disposable cleanup force and primary-error contracts
+description: "Separate generic caller-owned scratch cleanup from persistent namespace retirement. Review threads PRRT_kwDOToJT7M6yWzbn, PRRT_kwDOToJT7M6yWzbs, PRRT_kwDOToJT7M6yWzcF, PRRT_kwDOToJT7M6yWzcW, PRRT_kwDOToJT7M6yWzce and PRRT_kwDOToJT7M6yWzci identify valid cleanup-ledger, primary-error masking and force semantics concerns in installer, privacy, fetch, bisect and self-host helpers and durability.remove. These general API/scratch-lifetime contracts extend beyond this PR native pack/erasure provenance fix; gate-owned scratch cleanup already bounds CI storage. The current repair supplies a direct disposable helper for the in-scope benchmark and partial fragment output, without changing persistent retirement authority."
+type: Task
+status: open
+priority: 2
+tags[2]: follow-up,"review:pr150"
+created_at: "2026-11-01T08:27:29.637Z"
+updated_at: "2026-11-01T08:27:29.637Z"
+author: codex-agent
+acceptance_criteria: Disposable caller-owned scratch creates no persistent retirement ledger; Cleanup failures retain the original operation error and exact ownership boundaries; force false preserves fresh ENOENT while force true and authorized recovery retain their documented behavior; Real non-git installer privacy fetch bisect and self-host failure fixtures verify the contracts
+parent: pm-vcs-phase6packs
+body: ""

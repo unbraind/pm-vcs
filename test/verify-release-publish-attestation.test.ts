@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /**
  * Convergence tests for the publish-attestation gate.
  *
@@ -164,8 +166,8 @@ function withTrackedFixture<T>(prefix: string, file: string, contents: string, u
   try {
     mkdirSync(resolve(fixture, dirname(file)), { recursive: true });
     writeFileSync(resolve(fixture, file), contents);
-    execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: fixture });
-    execFileSync("git", ["add", file], { cwd: fixture });
+    execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { env: testEnvironment(), cwd: fixture });
+    execFileSync("git", ["add", file], { env: testEnvironment(), cwd: fixture });
     return use(fixture);
   } finally {
     rmSync(fixture, { recursive: true, force: true });

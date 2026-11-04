@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import { exportBundle } from "../engine/bundle.ts";
 import { FileTransport } from "../engine/transport.ts";
 import { acquirePublicationLeases } from "./helpers/publication-consumers.ts";
@@ -5,13 +7,17 @@ import { acquirePublicationLeases } from "./helpers/publication-consumers.ts";
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { collectGarbage } from "../engine/gc.ts";
+import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
+import { PackStorage, packBoundary } from "../engine/packs.ts";
+import { createHash } from "node:crypto";
+import { destructionBoundary, inspectDestructions } from "../engine/destruction.ts";
 import { Repository } from "../engine/repo.ts";
 import { PublicationLeases } from "../engine/publication-leases.ts";
 import { readFragmentRange, writeFragmented } from "../engine/fragments.ts";
@@ -21,7 +27,7 @@ import { discardChildCoverage } from "./helpers/sandbox.ts";
 
 const directories: ReturnType<typeof makeTempDir>[] = [];
 const author: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 };
-afterEach(() => { for (const directory of directories.splice(0)) directory.cleanup(); });
+afterEach(() => { destructionBoundary.visit=()=>{};packBoundary.visit=()=>{};for (const directory of directories.splice(0)) directory.cleanup(); });
 
 /** Initialize an actual PM project and VCS repository for every retention owner. */
 async function fresh() {
@@ -31,6 +37,14 @@ async function fresh() {
   return Repository.init(directory.root);
 }
 
+test("interrupted GC supersedes its obsolete set when a candidate becomes reachable",async()=>{
+ const repo=await fresh();const live=repo.objects.write("blob",Buffer.from("newly referenced candidate"));const dead=repo.objects.write("blob",Buffer.from("still collectible"));let old="";
+ destructionBoundary.visit=(step,path)=>{if(step==="intent-persisted"&&path.startsWith(join(repo.controlDirectory,"destruction"))){old=(JSON.parse(readFileSync(path,"utf8")) as {id:string}).id;throw new Error("interrupt GC before deletion");}};
+ assert.throws(()=>collectGarbage(repo,true),/interrupt GC before deletion/u);destructionBoundary.visit=()=>{};assert.ok(old);
+ repo.refs.compareAndSwap("refs/metadata/retained",null,live);const result=collectGarbage(repo,true);assert.equal(repo.objects.has(live),true);assert.equal(repo.objects.has(dead),false);assert.equal(result.removed,1);assert.notEqual(result.destruction!.id,old);
+ const previous=inspectDestructions(repo.controlDirectory).receipts.find(receipt=>receipt.id===old);assert.ok(previous);assert.equal(previous.status,"superseded");assert.match(JSON.stringify(previous),/reachability_changed/u);assert.equal(collectGarbage(repo,true).removed,0);
+});
+
 /** Commit unique native file content so unrelated writes produce distinct immutable objects. */
 function commit(repo: Repository, text: string) {
   writeFileSync(join(repo.root, "asset"), text); repo.stage([]);
@@ -39,7 +53,7 @@ function commit(repo: Repository, text: string) {
 
 /** Start one preloaded worker with IPC and bounded lifetime, surfacing its real failures. */
 function worker(action: string, root: string, remote = "") {
-  const child = fork(join(packageRoot, "test/helpers/gc-worker.ts"), [action, root, remote], { env: { ...process.env, ...discardChildCoverage() }, stdio: ["ignore", "ignore", "pipe", "ipc"], timeout: 90_000, execArgv: [] });
+  const child = fork(join(packageRoot, "test/helpers/gc-worker.ts"), [action, root, remote], { env: { ...testEnvironment(), ...discardChildCoverage() }, stdio: ["ignore", "ignore", "pipe", "ipc"], timeout: 90_000, execArgv: [] });
   let errors = ""; child.stderr?.on("data", data => { errors += String(data); });
   const closed = once(child, "close").then(([code, signal]) => ({ code, signal, errors }));
   const message = () => Promise.race([once(child, "message").then(([value]) => value), closed.then(result => { throw new Error(JSON.stringify(result)); })]);
@@ -301,4 +315,18 @@ test("GC and a full push execute concurrently in different processes and preserv
   await wire.push(bundle, updates, false, new Date(), proofs);
   assert.equal((await sweep.closed).code, 0);
   assert.equal(remote.refs.resolveHead(), tip); assert.equal(remote.verify().missing.length, 0);
+});
+
+test("GC resumes its recorded survivor rewrite when a crash leaves only loose live objects",async()=>{
+ const repo=await fresh();const bytes=Buffer.from("retained phase guard 935162");const live=repo.objects.write("blob",bytes);const dead=repo.objects.write("blob",Buffer.from("collected phase guard 762815"));repo.refs.compareAndSwap("refs/metadata/live",null,live);repo.objects.compact();let collected=false;let cut=false;
+ packBoundary.visit=step=>{if(step==="collected")collected=true;if(collected&&step==="staged"&&!cut){cut=true;throw new Error("survivor rewrite interrupted before pack publication");}};assert.throws(()=>collectGarbage(repo,true),/survivor rewrite interrupted/);packBoundary.visit=()=>{};assert.equal(cut,true);assert.deepEqual(new PackStorage(repo.objects.storageRoot()).files(),[]);assert.equal(repo.objects.has(dead),false);assert.ok(inspectDestructions(repo.controlDirectory).pending>0);
+ const physical=()=>readdirSync(repo.objects.storageRoot(),{recursive:true}).filter(name=>typeof name==="string").sort().join("\n");const before=physical();const preview=collectGarbage(repo,false);assert.equal(preview.recovery?.pending,true);assert.equal(physical(),before);assert.equal(preview.candidates.length,0);
+ const result=collectGarbage(repo,true);assert.equal(result.recovery?.pending,false);assert.equal(result.recovery?.verification.status,"verified");assert.deepEqual(repo.objects.readTyped(live,"blob"),bytes);assert.equal(repo.objects.has(dead),false);assert.equal(inspectDestructions(repo.controlDirectory).pending,0);assert.equal(collectGarbage(repo,true).removed,0);
+});
+
+test("GC reports a foreign rewrite checkpoint without adopting it and refuses exhausted receipt bounds before deletion",async()=>{
+ const repo=await fresh();const live=repo.objects.write("blob",Buffer.from("foreign-checkpoint retained 31975"));const dead=repo.objects.write("blob",Buffer.from("foreign-checkpoint candidate 15793"));repo.refs.compareAndSwap("refs/metadata/live",null,live);
+ const directory=join(repo.controlDirectory,"destruction");mkdirSync(directory,{recursive:true});const checkpoint=join(directory,createHash("sha256").update(`${repo.controlDirectory}\0compact-loose`).digest("hex")+".json");writeFileSync(checkpoint,"foreign metadata");
+ for(const key of ["receiptRecords","receiptBytes","receiptMs"] as const){const limit=verificationLimits[key];verificationLimits[key]=0;try{for(const apply of [false,true]){assert.throws(()=>collectGarbage(repo,apply),error=>error instanceof VerificationRefusal&&error.verifier==="receipts");assert.equal(repo.objects.has(dead),true);assert.equal(readFileSync(checkpoint,"utf8"),"foreign metadata");}}finally{verificationLimits[key]=limit;}}
+ const preview=collectGarbage(repo,false);assert.equal(preview.recovery?.verification.status,"unverified");assert.match(preview.recovery?.skipped??"",/Foreign/);assert.equal(repo.objects.has(dead),true);const result=collectGarbage(repo,true);assert.deepEqual(result.candidates,preview.candidates);assert.equal(result.recovery?.verification.status,"unverified");assert.equal(readFileSync(checkpoint,"utf8"),"foreign metadata");assert.equal(repo.objects.has(dead),false);assert.equal(existsSync(join(repo.objects.storageRoot(),live.slice(0,2),live.slice(2))),true);
 });

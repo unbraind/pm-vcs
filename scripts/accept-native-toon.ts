@@ -1,3 +1,4 @@
+import { durability } from "../engine/durability.ts";
 /**
  * Runs the release-blocking native PM TOON acceptance in a disposable project.
  *
@@ -12,7 +13,7 @@
  * ```
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,7 +42,7 @@ export function main(arguments_: readonly string[], executable = pmExecutable): 
     console.error(errorMessage(error, "native TOON acceptance failed"));
     status = 1;
   }
-  rmSync(project, { recursive: true, force: true });
+  durability.remove(project, { recursive: true, force: true });
   return status;
 }
 

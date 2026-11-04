@@ -26,7 +26,7 @@ import {
   isObjectId,
 } from "./objects.ts";
 import { assertArrivalsAllowed, validateDenials, type ErasureDenial } from "./lifecycle.ts";
-import { requireClosure, type ClosureMetadata } from "./closure.ts";
+import { requireClosure, retainPublicationClosure, type ClosureMetadata } from "./closure.ts";
 import { reachable } from "./merge.ts";
 import { BRANCH_PREFIX, type RefStore, TAG_PREFIX } from "./refs.ts";
 
@@ -393,6 +393,7 @@ function importPreflighted(store: ObjectStore, header: BundleContents, lines: re
     added.push(line.id);
   }
   store.accept(lines, true);
+  retainPublicationClosure(store, metadata);
   return { header, added, skipped, metadata };
 }
 

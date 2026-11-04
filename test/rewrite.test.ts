@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // History rewriting: change identities, descendant replay, and the transactional
 // and per-field-merge properties the engine exists to provide.
 //

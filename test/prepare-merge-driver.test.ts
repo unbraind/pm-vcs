@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /**
  * Tests for the npm `prepare` hook `scripts/prepare-merge-driver.ts`.
  *
@@ -40,7 +42,7 @@ const declaredDrivers = [
 function checkout(name: string, pmOps: "absent" | "pinned" | "stale" | "missing-metadata"): string {
   const directory = join(scratch, name);
   mkdirSync(join(directory, ".agents", "pm"), { recursive: true });
-  assert.equal(spawnSync("git", ["init", "-q"], { cwd: directory }).status, 0);
+  assert.equal(spawnSync("git", ["init", "-q"], { env: testEnvironment(), cwd: directory }).status, 0);
   writeFileSync(join(directory, "package.json"), JSON.stringify({ name, type: "module" }));
   copyFileSync(join(root, ".gitattributes"), join(directory, ".gitattributes"));
   copyFileSync(join(root, ".agents", "pm", "settings.json"), join(directory, ".agents", "pm", "settings.json"));
@@ -70,12 +72,12 @@ function stubPm(name: string, status: number, body = ""): string {
 
 /** Run the launcher as npm's `prepare` hook would: as the entry point, from `cwd`, with `path` as PATH. */
 function prepare(cwd: string, path: string): SpawnSyncReturns<string> {
-  return spawnSync(process.execPath, [launcher], { cwd, encoding: "utf8", env: { ...process.env, PATH: path } });
+  return spawnSync(process.execPath, [launcher], { cwd, encoding: "utf8", env: { ...testEnvironment(), PATH: path } });
 }
 
 /** The merge drivers registered in a checkout's LOCAL Git config, by name. */
 function registeredDrivers(cwd: string): string[] {
-  const config = spawnSync("git", ["config", "--local", "--name-only", "--get-regexp", "^merge\\..*\\.driver$"], {
+  const config = spawnSync("git", ["config", "--local", "--name-only", "--get-regexp", "^merge\\..*\\.driver$"], { env: testEnvironment(),
     cwd,
     encoding: "utf8",
   });
@@ -98,7 +100,7 @@ for (const command of ["pack", "publish"]) {
       const result = spawnSync(process.execPath, [launcher], {
         cwd: directory,
         encoding: "utf8",
-        env: { ...process.env, PATH: hostPath, npm_command: command },
+        env: { ...testEnvironment(), PATH: hostPath, npm_command: command },
       });
       assert.equal(result.status, 0, result.stderr);
       assert.equal(readFileSync(configPath, "utf8"), before);

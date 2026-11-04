@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // The history-rewriting commands, driven through the host's real loader.
 //
 // `rewrite.test.ts` covers the engine. This covers the surface an agent actually

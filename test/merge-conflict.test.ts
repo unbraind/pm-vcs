@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // Regression tests for issue #26: a conflicted merge used to be committed into
 // history with conflict markers in its tree, `--fail-on-conflict` left that
 // commit behind, and `status` reported the repository clean afterwards.

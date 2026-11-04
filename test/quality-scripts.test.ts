@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Behavioral coverage for release-quality scripts that operate outside the extension host. */
 
 import assert from "node:assert/strict";
@@ -67,9 +69,9 @@ console.log("fixture passed");`);
     assert.doesNotThrow(() => runPm(root, ["ok"], fixture));
     assert.throws(() => runPm(root, ["fail"], fixture), /pm fail failed: fixture refused/);
 
-    const absent = spawnSync(join(root, "absent"), [], { encoding: "utf8" });
+    const absent = spawnSync(join(root, "absent"), [], { env: testEnvironment(), encoding: "utf8" });
     assert.match(processFailure(absent, "spawn failed", "."), /^spawn failed:/);
-    const silent = spawnSync(process.execPath, ["-e", "process.exit(2)"], { encoding: "utf8" });
+    const silent = spawnSync(process.execPath, ["-e", "process.exit(2)"], { env: testEnvironment(), encoding: "utf8" });
     assert.equal(processFailure(silent, "silent failed", "."), "silent failed.");
     assert.equal(errorMessage(new Error("specific"), "fallback"), "specific");
     assert.equal(errorMessage("not an error", "fallback"), "fallback");
@@ -89,7 +91,7 @@ test("Windows pack executes the npm JavaScript entrypoint without shell argument
   const cli = executableFixture(root, "console.log(JSON.stringify(process.argv.slice(2)));", "npm cli.js");
   const destination = join(root, "archive & literal %PATH%");
   const expected = ["pack", "--silent", "--pack-destination", destination];
-  const result = spawnSync(npmPackExecutable("win32"), npmPackArguments("win32", destination, { npm_execpath: cli }), { encoding: "utf8" });
+  const result = spawnSync(npmPackExecutable("win32"), npmPackArguments("win32", destination, { npm_execpath: cli }), { env: testEnvironment(), encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), expected);
   assert.deepEqual(npmPackArguments("linux", destination, {}), expected);
@@ -135,7 +137,7 @@ test("stat-cache acceptance validates trace semantics, platform skip and real Li
     /cached status still opened large.bin.*openat large.bin/s,
   );
   assert.equal(statMain("darwin"), 0);
-  const straceAvailable = spawnSync("strace", ["--version"], { encoding: "utf8" }).status === 0;
+  const straceAvailable = spawnSync("strace", ["--version"], { env: testEnvironment(), encoding: "utf8" }).status === 0;
   if (process.platform === "linux" && straceAvailable) assert.equal(statMain("linux"), 0);
   assert.equal(statMain("linux", join(tmpdir(), "missing-pm-vcs-cli")), 1);
 

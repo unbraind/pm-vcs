@@ -1,6 +1,7 @@
+import { durability } from "./durability.ts";
 /** Canonical repository links, local authorization and safe private overlay storage. */
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ALWAYS_IGNORED, isControlPath, isRuntimeIgnored, readIgnoreRules, type IgnoreRules } from "./ignore.ts";
 import { compareByteOrder } from "./model.ts";
@@ -35,6 +36,8 @@ export interface LayerFile {
   readonly content: string;
   /** Executable state of the private file. */
   readonly executable: boolean;
+  /** Native object that produced a resolved snapshot, independent of working-file serialization. */
+  readonly source?: string;
 }
 
 /** Named overlay snapshot; edited working bytes remain private too. */
@@ -118,28 +121,26 @@ export function pathsOverlap(left: string, right: string): boolean {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
-/** Flush directory changes where Node supports this guarantee; strict physical erasure refuses unsupported Windows durability. */
-export function syncDirectory(path: string, required = true, platform: NodeJS.Platform = process.platform): void {
-  if (platform === "win32") {
-    if (required) throw new ObjectStoreError("unsupported_durability", "Physical erasure requires directory fsync, unavailable through Node on Windows.");
-    return;
-  }
-  const directory = openSync(path, "r");
-  try { fsyncSync(directory); } finally { closeSync(directory); }
-}
+/** Shared platform-aware namespace barrier; the legacy required argument is retained for source compatibility. */
+export function syncDirectory(...args: Parameters<typeof durability.directory>): void { durability.directory(...args); }
 
 /** Atomically replace JSON using a umask-filtered creation mode, file fsync and supported directory fsync. */
 export function writeAtomicJson(path: string, value: unknown, mode: number): void {
+  writeAtomicBytes(path, Buffer.from(JSON.stringify(value)), mode);
+}
+
+/** Atomically replace native bytes through the same journaled namespace publication as JSON metadata. */
+export function writeAtomicBytes(path: string, bytes: Buffer, mode: number): void {
   mkdirSync(dirname(path), { recursive: true });
   if (!lstatSync(dirname(path)).isDirectory()) throw new ObjectStoreError("unsafe_composition_path", "Private metadata cannot follow a control-directory symlink.");
   const temporary = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    writeFileSync(temporary, JSON.stringify(value), { flag: "wx", mode });
-    const fd = openSync(temporary, "r");
-    try { fsyncSync(fd); } finally { closeSync(fd); }
-    renameSync(temporary, path);
+    writeFileSync(temporary, bytes, { flag: "wx", mode });
+    const fd = openSync(temporary, "r+");
+    try { durability.file(fd); } finally { closeSync(fd); }
+    durability.rename(temporary, path);
     syncDirectory(dirname(path), false);
-  } finally { rmSync(temporary, { force: true }); }
+  } finally { durability.remove(temporary, { force: true }); }
 }
 
 /** Atomically replace owner-only metadata; Windows has no directory-flush guarantee. */
@@ -162,7 +163,8 @@ export function readLayers(control: string, rules?: IgnoreRules): LocalLayer[] {
     names.add(layer.name);
     for (const file of layer.files) {
       if (file === null || typeof file !== "object" || typeof file.path !== "string" || typeof file.content !== "string"
-        || typeof file.executable !== "boolean" || Buffer.from(file.content, "base64").toString("base64") !== file.content) {
+        || typeof file.executable !== "boolean" || Buffer.from(file.content, "base64").toString("base64") !== file.content
+        || file.source !== undefined && (typeof file.source !== "string" || !/^[0-9a-f]{64}$/.test(file.source))) {
         throw new ObjectStoreError("bad_layers", "Layer files need canonical paths, base64 content and executable state.");
       }
       assertCompositionPath(file.path, rules);

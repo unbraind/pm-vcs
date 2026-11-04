@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** Built and npm-packed acceptance against real SDK trackers under Node and Bun. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -7,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
-import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { pmExecutable } from "../scripts/pm-environment.ts";
 
 /** The exact SDK version this repository pins. Dependency updates move the pin, so the consumers assert the pin rather than a literal that every bump would break. */
 const pinnedSdk: string = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).devDependencies["@unbrained/pm-cli"];
@@ -15,11 +17,12 @@ assert.match(pinnedSdk, /^\d+\.\d+\.\d+(?:-\d+)?$/, `the @unbrained/pm-cli devDe
 
 /** Identical consumer program exercises the built CLI harness and engine through package-owned imports. */
 const consumer = `
+import { testEnvironment } from ${JSON.stringify(new URL("./helpers/test-environment.ts", import.meta.url).href)};
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -32,25 +35,59 @@ import { buildTree, flattenTree } from "pm-vcs/dist/engine/worktree.js";
 import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom, fetchFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
-import { hashObject } from "pm-vcs/dist/engine/objects.js";
+import { ObjectStore, hashObject } from "pm-vcs/dist/engine/objects.js";
+import { PackStorage } from "pm-vcs/dist/engine/packs.js";
+import { SharedObjectStore } from "pm-vcs/dist/engine/instances.js";
+import { collectGarbage } from "pm-vcs/dist/engine/gc.js";
+import { destructionBoundary, inspectDestructions } from "pm-vcs/dist/engine/destruction.js";
+import { durability } from "pm-vcs/dist/engine/durability.js";
+import { writePrivateJson } from "pm-vcs/dist/engine/composition.js";
 import { exportBundle, importBundleObjects, serializeBundle } from "pm-vcs/dist/engine/bundle.js";
 const installedSdk = JSON.parse(readFileSync(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"), "utf8"));
 assert.equal(installedSdk.version, ${JSON.stringify(pinnedSdk)});
 const cliExecutable = process.argv[4];
 if (process.argv[2] === "node-project-cli") {
-  const version = spawnSync(process.execPath, [cliExecutable, "--version"], { encoding: "utf8" });
+  const version = spawnSync(process.execPath, [cliExecutable, "--version"], { env: testEnvironment(), encoding: "utf8" });
   assert.equal(version.status, 0, "Project-installed PM CLI unavailable before fixture setup: " + (version.error?.message ?? version.stderr + version.stdout));
   assert.equal(version.stdout.trim(), installedSdk.version, "Project-installed PM CLI version mismatch before fixture setup: expected " + installedSdk.version + ", got " + version.stdout.trim());
 }
-const root = join(process.cwd(), process.argv[2]); mkdirSync(root);
+let root = join(process.cwd(), process.argv[2]); mkdirSync(root);
 const client = new PmClient({ cwd: root, pmRoot: join(root, ".agents", "pm"), noExtensions: true });
 await client.init("consumer", { defaults: true, author: "fixture" });
-const repo = Repository.init(root); repo.identity(); repo.setAuthority("fixture", "consumer-read", "consumer-erase");
+let repo = Repository.init(root); repo.identity(); repo.setAuthority("fixture", "consumer-read", "consumer-erase");
 const author = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1000, timezoneOffsetMinutes: 0 };
 assert.equal(Boolean(process.versions.bun), process.argv[2].startsWith("bun-"));
 repo.stage([]); const publicationBase = repo.commit({ message: "tracker", author }, new Date());
 writeFileSync(join(root, "publication.bin"), Buffer.from([0, 255, 17])); repo.stage(["publication.bin"]);
 const publicationTip = repo.commit({ message: "publication", author }, new Date());
+// Native prepared roots survive GC in each built/npm artifact and runtime.
+const preparedName = "refs/metadata/consumer-prepared";
+const preparedA = repo.objects.write("blob", Buffer.from("consumer original root"));
+const preparedB = repo.objects.write("blob", Buffer.from("consumer recoverable root"));
+repo.refs.compareAndSwap(preparedName, null, preparedA);
+const preparedTarget = join(repo.controlDirectory, preparedName);
+const preparedSource = join(repo.controlDirectory, "refs/metadata/ref-" + process.pid + "-abcdef012345.lock");
+writeFileSync(preparedSource, preparedB + "\\n");
+const preparedCrash = Object.assign(new Error("prepared consumer interruption"), { code: "EINJECTED" });
+destructionBoundary.visit = (step,path) => { if (step === "before-delete" && resolve(repo.controlDirectory,path)===preparedSource) throw preparedCrash; };
+try { assert.throws(() => durability.rename(preparedSource, preparedTarget), error => error === preparedCrash); }
+finally { destructionBoundary.visit = () => {}; }
+assert.ok(!collectGarbage(repo).candidates.includes(preparedB));
+collectGarbage(repo, true);
+const preparedC = repo.objects.write("blob", Buffer.from("consumer replacement root"));
+assert.throws(() => repo.refs.compareAndSwap(preparedName, preparedA, preparedC), { code: "ref_changed" });
+assert.equal(repo.refs.read(preparedName), preparedB);
+assert.equal(repo.objects.readTyped(preparedB, "blob").toString(), "consumer recoverable root");
+repo.refs.compareAndSwap(preparedName, preparedB, preparedC);
+// Uncertain prepared bytes cannot become deletion authority in any artifact/runtime.
+const uncertainName="refs/metadata/consumer-uncertain";repo.refs.compareAndSwap(uncertainName,null,preparedA);
+const uncertainB=repo.objects.write("blob",Buffer.from("uncertain consumer target"));
+const uncertainTarget=join(repo.controlDirectory,uncertainName);const uncertainSource=join(repo.controlDirectory,"refs/metadata/ref-"+process.pid+"-abcdef654321.lock");writeFileSync(uncertainSource,uncertainB+"\\n");
+destructionBoundary.visit=(step,path)=>{if(step==="before-delete"&&resolve(repo.controlDirectory,path)===uncertainSource)throw preparedCrash;};try{assert.throws(()=>durability.rename(uncertainSource,uncertainTarget),error=>error===preparedCrash);}finally{destructionBoundary.visit=()=>{};}
+writeFileSync(uncertainSource,"foreign replacement");const uncertain=collectGarbage(repo,true);assert.equal(uncertain.publications.verification.status,"unverified");assert.deepEqual(uncertain.candidates,[]);assert.equal(uncertain.removed,0);assert.ok(repo.objects.has(uncertainB));
+const uncertainC=repo.objects.write("blob",Buffer.from("uncertain consumer replacement"));repo.refs.compareAndSwap(uncertainName,preparedA,uncertainC);assert.equal(repo.refs.read(uncertainName),uncertainC);assert.equal(readFileSync(uncertainSource,"utf8"),"foreign replacement");collectGarbage(repo,true);assert.equal(repo.objects.has(uncertainB),false);
+
+
 const publicationWire = new FileTransport(root, root);
 // Explicit receiver authority for ordinary packed publication consumers.
 for (const entry of repo.readIndex()) await publicationWire.lease({ action: "acquire", fileId: entry.fileId,
@@ -84,6 +121,67 @@ writeFileSync(join(target.root, "asset.bin"), Buffer.from([0, 255, 128, 19, 47])
 const pin = target.commit({ message: "pin", author }, new Date());
 const link = { version: 1, repository: target.identity(), revision: pin, mappings: [{ source: "asset.bin", destination: "vendor/asset.bin" }] };
 const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+// Random temporary names must recover the original pending publication in every shipped runtime.
+const retryTarget=join(repo.controlDirectory,"retry-publication.json");let retryCrash=true;
+destructionBoundary.visit=(step)=>{if(retryCrash&&step==="deleted"&&existsSync(retryTarget)){retryCrash=false;throw new Error("consumer publication interruption");}};
+assert.throws(()=>writePrivateJson(retryTarget,{value:1}));destructionBoundary.visit=()=>{};
+writePrivateJson(retryTarget,{value:2});assert.deepEqual(JSON.parse(readFileSync(retryTarget,"utf8")),{value:2});assert.equal(inspectDestructions(repo.controlDirectory).pending,0);
+assert.equal(durability.unlink(retryTarget).status,"completed");assert.equal(existsSync(retryTarget),false);
+
+// Physical path owners bind their namespace before any later cwd change.
+const pathRoot=join(process.cwd(),process.argv[2]+"-relative");mkdirSync(pathRoot);
+await new PmClient({cwd:pathRoot,pmRoot:join(pathRoot,".agents/pm"),noExtensions:true}).init("relative",{defaults:true,author:"fixture"});
+Repository.init(pathRoot);const previousCwd=process.cwd();
+try{
+ process.chdir(pathRoot);const captured=new Repository(".");const store=new ObjectStore(".pmvcs/objects");const packs=new PackStorage("./.pmvcs/objects");const shared=new SharedObjectStore(".pmvcs/objects");const bytes=Buffer.from("packed consumer relative identity");const id=store.write("blob",bytes);captured.refs.compareAndSwap("refs/metadata/live",null,id);
+ const shadow=join(pathRoot,"shadow");mkdirSync(shadow);writeFileSync(join(shadow,"guard"),"foreign namespace sentinel");process.chdir(shadow);
+ const packed=packs.compact(store);assert.equal(packed.objects,1);assert.equal(packed.packs,1);assert.equal(packed.destruction.status,"completed");assert.deepEqual(shared.read(id).payload,bytes);packs.unpack(store);assert.equal(store.compact().destruction.status,"completed");assert.equal(collectGarbage(captured,true).destruction.status,"completed");assert.deepEqual(store.read(id).payload,bytes);assert.equal(existsSync(join(shadow,".pmvcs")),false);
+ if(process.argv[2]==="node-project-cli"){
+  const install=spawnSync(process.execPath,[cliExecutable,"package","install",process.argv[3],"--project"],{env:testEnvironment(),cwd:pathRoot,encoding:"utf8"});assert.equal(install.status,0,install.stderr);
+  const recoveryName="refs/metadata/cli-recovery";const recoveryB=store.write("blob",Buffer.from("CLI retained pending root"));captured.refs.compareAndSwap(recoveryName,null,id);
+  const recoveryTarget=join(captured.controlDirectory,recoveryName);const recoverySource=join(captured.controlDirectory,"refs/metadata/ref-"+process.pid+"-654321fedcba.lock");writeFileSync(recoverySource,recoveryB+"\\n");const interruption=Object.assign(new Error("CLI prepared interruption"),{code:"EINJECTED"});destructionBoundary.visit=(step,path)=>{if(step==="before-delete"&&resolve(captured.controlDirectory,path)===recoverySource)throw interruption;};try{assert.throws(()=>durability.rename(recoverySource,recoveryTarget),error=>error===interruption);}finally{destructionBoundary.visit=()=>{};}
+  for(const format of [[],["--json"]]){const preview=spawnSync(process.execPath,[cliExecutable,...format,"vcs","gc"],{env:testEnvironment(),cwd:pathRoot,encoding:"utf8"});assert.equal(preview.status,0,preview.stderr+preview.stdout);if(format.length){assert.equal(JSON.parse(preview.stdout).gc.publications.pending,1);assert.ok(!JSON.parse(preview.stdout).gc.candidates.includes(recoveryB));}else assert.match(preview.stdout,/publications/);assert.equal(captured.refs.read(recoveryName),id);}
+  durability.recoverPublication(recoveryTarget);assert.equal(captured.refs.read(recoveryName),recoveryB);
+  for(const format of [[],["--json"]]){const next=store.write("blob",Buffer.from("relative CLI "+format.length));captured.refs.compareAndSwap("refs/metadata/cli-"+format.length,null,next);const result=spawnSync(process.execPath,[cliExecutable,...format,"vcs","compact"],{env:testEnvironment(),cwd:pathRoot,encoding:"utf8"});assert.equal(result.status,0,result.stderr);if(format.length)assert.equal(JSON.parse(result.stdout).compact.destruction.status,"completed");else assert.match(result.stdout,/completed/);assert.deepEqual(store.read(next).payload,Buffer.from("relative CLI "+format.length));}
+ }
+}finally{process.chdir(previousCwd);}
+
+// User-authored encodings are independent content; native receipts state that limit in every consumer.
+for(const packed of [false,true]){
+ const encodedRoot=join(process.cwd(),process.argv[2]+"-encoding-"+packed);mkdirSync(encodedRoot);
+ await new PmClient({cwd:encodedRoot,pmRoot:join(encodedRoot,".agents/pm"),noExtensions:true}).init("encoded",{defaults:true,author:"fixture"});
+ const encodedRepo=Repository.init(encodedRoot);encodedRepo.setAuthority("fixture","proof-read","proof-erase");
+ const selected=Buffer.from("native proof selected marker 938215");writeFileSync(join(encodedRoot,"asset"),selected);encodedRepo.stage(["asset"]);
+ let encoded=selected;for(let layer=0;layer<8;layer++)encoded=Buffer.from(encoded.toString("base64"));
+ const independent=encodedRepo.objects.write("blob",encoded);if(packed)encodedRepo.objects.compact();
+ const receipt=encodedRepo.obliterate("asset","proof-erase","incident",new Date());
+ assert.equal(receipt.guarantee.kind,"native-provenance");assert.ok(receipt.guarantee.excluded.includes("user-authored alternate encodings"));
+ assert.equal(receipt.storage.accountable,true);assert.equal(encodedRepo.objects.denials()[0].pending,false);assert.equal(existsSync(join(encodedRoot,"asset")),false);assert.deepEqual(encodedRepo.objects.read(independent).payload,encoded);
+}
+// Imported origins without certificates must still refuse before deleting anything, in every surface.
+const proofRoot=join(process.cwd(),process.argv[2]+"-verification");mkdirSync(proofRoot);
+await new PmClient({cwd:proofRoot,pmRoot:join(proofRoot,".agents/pm"),noExtensions:true}).init("proof",{defaults:true,author:"fixture"});
+const proofRepo=Repository.init(proofRoot);proofRepo.setAuthority("fixture","proof-read","proof-erase");
+const selectedProof=Buffer.from("native proof selected marker 938215");writeFileSync(join(proofRoot,"asset"),selectedProof);proofRepo.stage(["asset"]);
+let nestedProof=selectedProof;for(let layer=0;layer<8;layer++)nestedProof=Buffer.from(nestedProof.toString("base64"));
+proofRepo.objects.accept([{type:"blob",id:hashObject("blob",nestedProof),payload:nestedProof}],true);const proofToken=join(process.cwd(),process.argv[2]+".proof-token");writeFileSync(proofToken,"proof-erase");
+for(const packed of [false,true]){
+ if(packed)proofRepo.objects.compact();
+ assert.throws(()=>proofRepo.obliterate("asset","proof-erase","incident",new Date()),error=>error.status==="unverified"&&error.bound==="uncatalogued_provenance");
+ const refused=await harness.runCommand({command:"vcs obliterate",args:["asset"],pmRoot:proofRoot,options:{eraseTokenFile:proofToken,reason:"incident"}});assert.match(String(refused.errorMessage),/Native provenance is unknown/);assert.equal(refused.handled,false);assert.equal(proofRepo.objects.denials().length,0);
+}
+const liveProof=proofRepo.objects.write("blob",Buffer.from("newly protected proof object"));const deadProof=proofRepo.objects.write("blob",Buffer.from("collectible proof object"));
+let interrupted=false;destructionBoundary.visit=(step,path)=>{if(!interrupted&&step==="intent-persisted"&&path.startsWith(join(proofRepo.controlDirectory,"destruction"))&&JSON.parse(readFileSync(path,"utf8")).entries.some(entry=>entry.path.endsWith(liveProof.slice(2)))){interrupted=true;throw new Error("interrupt proof GC");}};
+assert.throws(()=>collectGarbage(proofRepo,true),/interrupt proof GC/);destructionBoundary.visit=()=>{};
+proofRepo.refs.compareAndSwap("refs/metadata/protected",null,liveProof);assert.equal(collectGarbage(proofRepo,true).applied,true);assert.equal(proofRepo.objects.has(liveProof),true);assert.equal(proofRepo.objects.has(deadProof),false);assert.ok(inspectDestructions(proofRepo.controlDirectory).superseded>0);
+if(process.argv[2]==="node-project-cli"){
+ proofRepo.objects.accept([{type:"blob",id:hashObject("blob",nestedProof),payload:nestedProof}],true);proofRepo.objects.compact();
+ const install=spawnSync(process.execPath,[cliExecutable,"package","install",process.argv[3],"--project"],{env:testEnvironment(),cwd:proofRoot,encoding:"utf8"});assert.equal(install.status,0,install.stderr);
+ for(const format of [[],["--json"]]){
+  const refused=spawnSync(process.execPath,[cliExecutable,...format,"vcs","obliterate","asset","--erase-token-file",proofToken,"--reason","incident"],{env:testEnvironment(),cwd:proofRoot,encoding:"utf8"});assert.notEqual(refused.status,0);assert.match(refused.stdout+refused.stderr,/Native provenance is unknown/);assert.doesNotMatch(refused.stdout,/accountable[\\" :]+true/);assert.equal(proofRepo.objects.denials().length,0);
+ }
+}
+
 assert.equal(JSON.parse(readFileSync(join(repo.controlDirectory, "authority.json"), "utf8")).version, 2);
 const newRead = join(process.cwd(), process.argv[2] + ".new-read"); const newErase = join(process.cwd(), process.argv[2] + ".new-erase"); const currentErase = join(process.cwd(), process.argv[2] + ".current-erase");
 writeFileSync(newRead, "consumer-read-next"); writeFileSync(newErase, "consumer-erase-next"); writeFileSync(currentErase, "consumer-erase");
@@ -98,7 +196,7 @@ assert.equal(rotation.errorMessage, undefined); assert.equal(authorize(repo.cont
 repo.setAuthority("fixture", "consumer-read", "consumer-erase", { currentEraseCredential: "consumer-erase-next" });
 repo.addLayer("ordinary-path", new Map([["src/search/a.txt", { content: Buffer.from("ordinary path overlay"), executable: false }]]));
 assert.equal(readFileSync(join(root, "src/search/a.txt"), "utf8"), "ordinary path overlay"); repo.removeLayer("ordinary-path");
-const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }); assert.equal(dead.status, 0);
+const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { env: testEnvironment(), encoding: "utf8" }); assert.equal(dead.status, 0);
 writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout);
 const recovered = await harness.runCommand({ command: "vcs recover-lock", pmRoot: root }); assert.equal(recovered.errorMessage, undefined); assert.equal(existsSync(join(repo.controlDirectory, "objects.lock")), false);
 const legacy = Repository.init(join(process.cwd(), process.argv[2] + "-legacy"));
@@ -127,6 +225,15 @@ repo.linkInstance("retired", retired); repo.unlinkInstance("retired"); rmSync(re
 const pruneToken = join(process.cwd(), process.argv[2] + ".prune-token"); writeFileSync(pruneToken, "consumer-erase");
 const pruned = await harness.runCommand({ command: "vcs instance prune-retired", args: ["../" + process.argv[2] + "-retired"], pmRoot: root, options: { eraseTokenFile: pruneToken, reason: "retired" } });
 assert.equal(pruned.errorMessage, undefined); assert.equal(repo.operations.read().at(-1).command, "prune-retired-instance");
+// The publication fixture intentionally retains foreign ref bytes and uncertified arrivals.
+// Its ownership guard must refuse; a complete native-erasure receipt uses an independent known-origin history.
+writeFileSync(join(root,"guarded-secret.bin"),"consumer guard refusal marker 876193");repo.stage(["guarded-secret.bin"]);
+assert.throws(()=>repo.obliterate("guarded-secret.bin","consumer-erase","incident",new Date()),{code:"unsupported_erasure_storage"});
+assert.equal(readFileSync(uncertainSource,"utf8"),"foreign replacement");assert.equal(repo.objects.denials().length,0);
+root=join(process.cwd(),process.argv[2]+"-erasure");mkdirSync(root);
+await new PmClient({cwd:root,pmRoot:join(root,".agents/pm"),noExtensions:true}).init("erasure",{defaults:true,author:"fixture"});
+repo=Repository.init(root);repo.identity();repo.setAuthority("fixture","consumer-read","consumer-erase");
+repo.stageLink("dependency.link",link);repo.commit({message:"known native origin",author},new Date());
 writeFileSync(join(root, "secret.bin"), "consumer unique permanent bytes 638529"); repo.stage(["secret.bin"]); const revision = repo.commit({ message: "secret", author }, new Date());
 const token = join(process.cwd(), process.argv[2] + ".erase-token"); writeFileSync(token, "consumer-erase");
 writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout); writeFileSync(token, "wrong-consumer-erase");
@@ -248,23 +355,23 @@ for (const caller of ["hub", "linked"]) {
   const invoked = Repository.open(caller === "hub" ? hub : sibling, caller === "hub" ? tracker : siblingTracker);
   for (const root of [hub, sibling]) {
     const copy = join(root, "unrelated/custom/team/runtime/cache"); mkdirSync(join(copy, ".."), { recursive: true }); writeFileSync(copy, selected);
-    assert.throws(/** Ordinary same-named folders cannot inherit the active tracker exemption. */ () => invoked.obliterate("secret.bin", "custom-erase", "incident", new Date()), /** Verify the typed pre-denial refusal. */ error => error.code === "erasure_worktree_conflict");
-    assert.deepEqual(custom.objects.denials(), []); assert.deepEqual(readFileSync(copy), selected); rmSync(join(root, "unrelated"), { recursive: true });
+    assert.equal(invoked.obliterate("secret.bin", "custom-erase", "incident", new Date()).guarantee.kind, "native-provenance");
+    assert.deepEqual(readFileSync(copy), selected); rmSync(join(root, "unrelated"), { recursive: true });
   }
   invoked.obliterate("secret.bin", "custom-erase", "incident", new Date());
   for (const root of [hub, sibling]) assert.equal(existsSync(join(root, "secret.bin")), false);
   for (const root of [tracker, siblingTracker]) for (const path of runtimePaths) assert.deepEqual(readFileSync(join(root, path)), selected);
 }
 if (process.argv[2] === "node-project-cli") {
-  const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { cwd: root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
+  const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { env: testEnvironment(), cwd: root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
   for (const input of [JSON.stringify(link, null, 2), encodeLink(link).toString() + "\\n"]) {
     writeFileSync(spec, input);
-    const linked = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "operator.link", "--spec", spec], { cwd: root, encoding: "utf8" });
+    const linked = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "operator.link", "--spec", spec], { env: testEnvironment(), cwd: root, encoding: "utf8" });
     assert.equal(linked.status, 0, linked.stderr + linked.stdout); assert.deepEqual(readFileSync(join(root, "operator.link")), encodeLink(link));
   }
   const cliIndex = readFileSync(join(repo.controlDirectory, "index")); const cliObjects = repo.objects.inventory();
   writeFileSync(spec, "null");
-  const invalidLink = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "invalid.link", "--spec", spec], { cwd: root, encoding: "utf8" });
+  const invalidLink = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "link", "invalid.link", "--spec", spec], { env: testEnvironment(), cwd: root, encoding: "utf8" });
   assert.notEqual(invalidLink.status, 0); assert.match(invalidLink.stderr + invalidLink.stdout, /bad_link/);
   assert.deepEqual(readFileSync(join(root, "operator.link")), encodeLink(link)); assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), cliIndex); assert.deepEqual(repo.objects.inventory(), cliObjects);
 }
@@ -289,8 +396,8 @@ for (const deniedSide of ["base", "ours", "theirs"]) {
   mergedRepo.switchTo("left", new Date()); const ours = mergedRepo.readIndex().find(entry => entry.path === "p");
   let result;
   if (process.argv[2] === "node-project-cli") {
-    const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { cwd: mergedRepo.root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
-    const merged = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "merge", "right", "--message", "denied merge"], { cwd: mergedRepo.root, encoding: "utf8" });
+    const installed = spawnSync(process.execPath, [cliExecutable, "package", "install", process.argv[3], "--project"], { env: testEnvironment(), cwd: mergedRepo.root, encoding: "utf8" }); assert.equal(installed.status, 0, installed.stderr + installed.stdout);
+    const merged = spawnSync(process.execPath, [cliExecutable, "--json", "vcs", "merge", "right", "--message", "denied merge"], { env: testEnvironment(), cwd: mergedRepo.root, encoding: "utf8" });
     assert.equal(merged.status, 0, merged.stderr + merged.stdout); result = JSON.parse(merged.stdout).merge;
   } else result = mergedRepo.merge("right", { message: "denied merge", author }, new Date());
   assert.equal(result.clean, false); assert.ok(result.conflicts.some(conflict => conflict.path === "p" && conflict.reason === "content"));
@@ -305,7 +412,7 @@ process.stdout.write(JSON.stringify({ runtime: process.argv[2], sdk: installedSd
 test("built and npm-packed SDK10 Node/native Bun consumers and project-installed CLI execute composition and denied merges", /** Use a packed artifact and real peer dependency instead of SDK doubles. */ async (t) => {
   const temporary = makeTempDir();
   try {
-    const npmEnvironment = { ...process.env, ...discardChildCoverage() };
+    const npmEnvironment = { ...testEnvironment(), ...discardChildCoverage() };
     for (const key of Object.keys(npmEnvironment)) if (key.toLowerCase() === "npm_config_allow_scripts") delete npmEnvironment[key];
     const packed = spawnSync("npm", ["pack", "--ignore-scripts", "--pack-destination", temporary.root], { cwd: packageRoot, env: npmEnvironment, encoding: "utf8", timeout: 120_000 });
     assert.equal(packed.status, 0, packed.stderr);
@@ -317,10 +424,12 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     // The consumer uses the actual pinned SDK and its installed dependency graph.
     symlinkSync(join(packageRoot, "node_modules", "@unbrained"), join(project, "node_modules", "@unbrained"), "junction");
     const design = readFileSync(join(project, "node_modules", "pm-vcs", "docs", "links-layers-obliteration.md"), "utf8"); assert.match(design, /Typed obliteration/);
+    assert.match(readFileSync(join(project,"node_modules","pm-vcs","docs","indexed-packs.md"),"utf8"), /store\.compact|objects\.compact/u);
+    assert.match(readFileSync(join(project,"node_modules","pm-vcs","docs","destructive-operations.md"),"utf8"), /superseded/u);
     assert.match(design, /--current-erase-token-file/); assert.doesNotMatch(design, /PR[0-9]+|Review ID|Verified disposition|Renewed finding|source-only/);
     const built = consumer.replace('from "pm-vcs"', `from ${JSON.stringify(pathToFileURL(join(packageRoot, "dist", "index.js")).href)}`).replaceAll(/"pm-vcs\/dist\/([^" ]+)"/g, /** Bind the same consumer to built files for direct built-package acceptance. */ (_match, path: string) => JSON.stringify(pathToFileURL(join(packageRoot, "dist", path)).href));
     writeFileSync(join(project, "built.mjs"), built); writeFileSync(join(project, "packed.mjs"), consumer);
-    const environment = { ...withoutPmContext(process.env), ...discardChildCoverage() };
+    const environment = { ...testEnvironment(), ...discardChildCoverage() };
     const unavailable = spawnSync(process.execPath, ["packed.mjs", "node-project-cli", archive, join(project, "missing-cli.js")], { cwd: project, env: environment, encoding: "utf8", timeout: 120_000 });
     assert.equal(unavailable.status, 1); assert.match(unavailable.stderr, /Project-installed PM CLI unavailable before fixture setup/);
     console.log("consumer prerequisite: unavailable CLI, actual exit 1 before fixture setup");
@@ -330,7 +439,7 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     assert.equal(wrongVersion.status, 1); assert.match(wrongVersion.stderr, /Project-installed PM CLI version mismatch before fixture setup/);
     console.log("consumer prerequisite: mismatched CLI version, actual exit 1 before fixture setup");
     assert.equal(existsSync(join(project, "node-project-cli")), false);
-    const bunAvailable = spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0;
+    const bunAvailable = spawnSync("bun", ["--version"], { env: testEnvironment(), stdio: "ignore" }).status === 0;
     for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-project-cli"]]) {
       const skip = runtime === "bun" && !bunAvailable ? "Bun is unavailable (bun --version failed)" : false;
       await t.test(scenario, { skip }, () => {

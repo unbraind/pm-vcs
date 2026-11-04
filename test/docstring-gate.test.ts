@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /**
  * Behavioral coverage for this package's docstring gate launcher.
  *

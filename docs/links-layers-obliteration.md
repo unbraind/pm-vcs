@@ -63,8 +63,7 @@ protected at every depth, including the leaf. A refused erasure removal leaves i
 durable denial pending and cannot publish a completed physical-erasure receipt.
 Erasure inspects leaf links as target text with no-follow identity checks, including
 dangling and ignored owned links. An owned link is unlinked without reading or
-deleting its target; unrelated links remain, unless their target text retains selected
-bytes, which refuses before denial. Ancestor links and protected control/runtime
+deleting its target; unrelated user-authored links remain outside the provenance certificate. Ancestor links and protected control/runtime
 paths remain forbidden. Ordinary restore, write and delete operations retain their
 leaf-link refusal. The erasure removal must match the leaf identity inspected
 before denial, as well as the captured ancestor identities.
@@ -119,11 +118,12 @@ Object publication and erasure serialize at the store boundary. The durable deni
 record precedes deletion, so interruption cannot enable resurrection. Incomplete
 erasure is a failed operation and must remain denied until cleanup completes.
 Successful erasure removes selected loose objects, compressed representations,
-manifest fragments and temporary object copies. This release refuses unsupported
-pack/cache storage before mutation; it has no indexed pack backend. Unsupported
-storage is never ignored in a successful receipt. The security guarantee
-covers application-visible repository storage, not external backups, independently
-owned clones, filesystem snapshots, or physical-media forensic recovery.
+manifest fragments, indexed pack members and owned temporary object copies.
+Unsupported storage refuses before mutation. The guarantee covers native
+provenance within owned application-visible repository storage, with a bounded
+nonblocking residue audit; it excludes independent user encodings, external
+backups, independently owned clones, filesystem snapshots and physical-media
+forensic recovery.
 
 ## Reads, verification and exchange
 
@@ -154,9 +154,12 @@ by importing another archive, even into an empty repository. Fresh clones adopt
 the source identity before their first explicit identity creation. Self-host archives without repository metadata
 remain deterministic.
 
-The supported erasure backend is the loose zlib store. Unknown storage entries,
-pack/cache directories and unverifiable temporary copies refuse before mutation.
-Recognized loose temporary objects participate in inventory and cleanup. Denial
+The supported erasure backend accounts for complete loose zlib objects and indexed
+packs. Every regular object-store file must parse completely; without explicit purge,
+foreign, renamed, partial and old temporary files return `unverifiable`. Explicit `--purge-unaccounted`
+authorizes identity-bound deletion with a receipt and complete re-verification;
+see [accountability and purge](indexed-packs.md#physical-erasure-verification).
+Denial
 is persisted and fsynced before removing bytes; interrupted cleanup blocks writes
 until authorized retry succeeds. FileId provenance is mandatory for new local
 payload writes once denial exists. Complete bundle imports preflight attribution;
@@ -165,9 +168,9 @@ has no trustworthy FileId envelope. This is an explicit fail-closed boundary.
 
 Layer removal refuses edited overlays by default and requires explicit discard.
 Checkout changes the underlying index while leaving overlay disk bytes untouched.
-Erasure refuses affected private layers and ambiguous/unregistered copies rather
-than claiming it deleted bytes whose ownership it cannot prove. Operators must
-remove those layers/copies before retrying the authorized erasure.
+Erasure refuses private layers at affected paths or holding selected native content
+identities. Unregistered user copies remain outside the provenance certificate;
+unknown object/control storage still refuses ownership classification.
 
 
 ## Shipped API and transport behavior
@@ -200,25 +203,13 @@ cache; returned records cannot mutate the cached authorization state.
 
 ## Physical inspection and durability bounds
 
-Every surviving loose-object payload participates in pre-mutation copy inspection,
-including unattributed or unreachable objects and recognized temporary copies.
-Raw loose frames, zlib-compressed frames and canonical base64 tokens are inspected
-recursively, including combinations of those representations. Retained ambiguous
-copies cause `erasure_retained_copy`; they are preserved and no denial is published.
-Arrival denial compares type-independent payload digests and full-frame object IDs,
-so changing an outer blob's identity cannot admit a known recoverable representation.
-
-Supported representation inspection allows six nested decodes and a cumulative
-decoded-byte budget of the greater of 16 MiB or six times the raw input length.
-Raw input length and the number of base64-shaped words do not consume that budget.
-Decodes are visited individually without building a queue for the entire document.
-Exact frame and nonempty raw-payload denial matches are checked before decoding.
-Recognizable framing
-or zlib that is malformed, or a supported encoding exceeding a bound, causes
-`uninspectable_payload`. These are refusal bounds, never an assertion that the
-uninspected content is clean. Small fragments shared incidentally with metadata
-also cause conservative refusal. Unsupported pack/cache artefacts are refused by
-physical inventory; this release does not implement a pack backend.
+Every surviving regular object-store file must parse completely as native loose
+storage or an indexed pack, including checksums, ranges, framing and content
+addresses. Unknown names, kinds, symlinks, incomplete representations and namespace
+replacement refuse ownership. An explicit unaccounted-storage purge is separately
+receipted and limited to its frozen authorized files. Every owned physical copy
+participates, including loose/pack duplicates left by interruption. The bounded
+raw/declared-JSON audit below is diagnostic and never replaces those checks.
 
 `ObjectStore.walkInventory()` yields one frame- and hash-verified loose object or
 recognized temporary copy at a time, using no-follow leaf opens and captured
@@ -254,11 +245,13 @@ Direct hostile filesystem mutation and writers bypassing the store lease are out
 the authorized application protocol. Operators must remove ambiguous retained copies
 explicitly before retrying; the engine never silently deletes an unrelated FileId.
 
-Physical erasure requires file and directory fsync. On Windows, Node cannot provide
-the required directory-flush guarantee, so erasure raises `unsupported_durability`
-before persisting denial or deleting bytes. Ordinary private metadata uses fsynced
-files and atomic replacement, plus directory fsync on supported systems; Windows
-metadata has the stated directory-durability limit. A pending denial survives cleanup
+The denial-first ordering protects process interruption. Its power-loss guarantee
+requires POSIX directory fsync; Windows retains the weaker namespace durability
+limit below. Physical erasure uses the shared durability helper: files are fsynced before
+publication and directories after namespace changes where supported. Windows uses
+synchronous namespace acknowledgment after file fsync, with the documented weaker
+power-loss guarantee; see [platform durability](indexed-packs.md#concurrent-readers-and-platform-durability).
+A pending denial survives cleanup
 failure and refuses reads/publication until explicit authorized recovery. A crashed
 writer lease can be recovered with `vcs recover-lock`, without erasure credentials
 or payload deletion. New leases publish fsynced PID metadata with an atomic hard
@@ -415,15 +408,83 @@ under a non-root process. Missing-file, directory, integrity and remaining
 functional assertions run on every platform; root and Windows permission
 enforcement is not established by those chmod fixtures.
 
-Recognizable base64-derived zlib candidates retain strict malformed-data and
-output-budget refusal. An encoded denied payload can exceed the inspection budget
-while remaining recoverable with a larger budget. Suppressing that refusal would
-admit uninspected content. Ordinary binary data that resembles a malformed encoded
-candidate can also receive a conservative refusal; availability is bounded by
-supported representation inspection. For example, fresh bytes `00 ff 11 00 80`
-can be staged after erasing an unrelated payload, while `78 9c ff` and its
-canonical base64 representation refuse as malformed recognized zlib data. Raw
-file provenance does not suppress inspection of encoded retained copies.
+Erasure certifies native provenance, not universal content inference. `guarantee.kind`
+is `native-provenance`; `guarantee.objects` lists the selected content identities,
+and `guarantee.excluded` identifies independent user encodings, names/metadata and
+caller-owned or external copies. Every native content derivation within the owned
+scope is removed or made a terminal, unreadable identity. Identifier-only tree,
+index, reference, journal and receipt facts remain; immutable commit ancestry is
+not rewritten. A retained identifier is not a retained payload representation.
+
+Native FileId payload writes durably publish an identity-only ownership edge before
+object bytes. This includes objects never published by an index or commit, and
+shared unpublished ownership retains its refusal. The provenance namespace admits
+only exact ID/FileId filenames containing empty regular files, with no symlinks.
+
+Native manifests establish composition by their actual ordered fragment/page
+edges and verified lengths. Their canonical whole-blob identity is computed with
+a memoized composition proof, independent of the chosen chunk layout.
+Each distinct object is decoded once per proof; repeated edges reuse cached bytes.
+Logical content at 256 MiB, aggregate cache at 512 MiB, one million inspected
+edges, the verification deadline or a changed store lease refuses before deletion.
+Unknown legacy/imported payload provenance refuses with `uncatalogued_provenance`
+and complete machine-readable object identities; reads and exports stay supported.
+Native derivation certificates precede bytes and connect merge/replay, conflict
+side/resolution, staged replacement/copy/rename, fragment rewrite and rendering
+outputs transitively. Historical derived roots carry exact FileId roles, preserving
+intentional absence without legitimizing independently shared ownership. Equivalent
+compositions and their fragments, and reverse manifest/conflict wrappers, join
+the deletion plan. Pending denial durably records this closure before deletion.
+Future native compositions and whole-content fragment sources are checked against
+terminal identities before publication. A different chunk layout cannot restore
+an erased logical payload. Shared ownership still refuses rather than deleting
+another FileId's content. Private layers at selected paths or holding the exact
+selected native content identity must be removed explicitly first.
+
+Repository-owned operation appends hold the store lease before the log lease,
+so no peer can append between redaction and erasure completion. Standalone logs
+retain their independent file lease.
+
+Operation summaries created before complete source attribution existed are
+conservatively redacted as a class, under the operation log's own lease. The
+replacement is durable and recoverable, preserves sequence, command, timestamp
+and safe transition facts, and removes selected payload endpoints. Unknown log
+shapes refuse ownership rather than being silently discarded. The final erasure
+operation records only bounded audit identities.
+
+Native working-file writes persist source IDs, output identity and a filesystem
+birth identity in `outputs.json` before the first content byte. Final publication
+records completion; interrupted output remains attributable before its index
+entry exists. Source closure removes these outputs through pinned destruction.
+A different birth identity, or changed completed output, refuses and preserves
+foreign bytes. Resolved private snapshots record their native source IDs; legacy
+record snapshots are covered by the actual JSON/TOON renderer identities. User
+copies or renames that cross the managed ownership boundary are independent
+files and cannot be revoked by this certificate.
+
+Repository-local ordinary and signed CLI bundle files have an `exports.json`
+provenance registry:
+canonical relative path, native input IDs, output blob identity and SHA-256 byte
+fence. The signed native producer supplies its actual included-object inventory under
+the same source lease. Registration precedes publication. Erasure retires affected registered
+files through the existing pinned worktree destruction plans and removes their
+registry entries. Replaced bytes refuse and remain untouched. Caller-returned
+buffers, external destinations and legacy unregistered exports cross the managed
+ownership boundary; they are independent copies requiring their owner's cleanup.
+No erasure command can revoke bytes already handed to another owner.
+
+The secondary audit checks raw native members and physical bytes and decoded
+strings/keys in declared native JSON documents, bounded to 16 MiB of shared work
+and eight JSON levels. Native readers already decode pack framing, zlib, manifest
+pages and registered archive inventories for the primary identity proof. The
+audit never guesses hex/base64/compression/URL transformations in arbitrary blobs
+or JSON values. Its receipt contains `suspected_residue`, `limited`, `scope` and
+`limits`. Missing or exhausted audit evidence cannot refuse benign erasure or
+staging. A false residue flag is not proof of absence. Ownership, corruption,
+namespace changes and unauthorized publication remain hard refusals.
+
+The complete format/class audit and reviewer reproductions are recorded in
+[the PR validation report](validation/pr150-erasure-review-repair.md).
 
 ## Recovery, export and closure memory
 
@@ -489,9 +550,9 @@ file-descriptor writers accept an optional final owning FileId. Every blob and
 manifest write forwards that identity to `ObjectStore.write`. Before erasure,
 existing calls without an identity remain supported. Once any denial exists,
 local payload writers must supply their actual owning identity. A denied identity,
-known denied bytes, supported recoverable encodings and malformed recognizable
-encodings still refuse through the same locked publication preflight. Supplying
-ownership never relaxes byte inspection. Anonymous transport and legacy
+known denied object/content identities and native compositions still refuse
+through the locked publication preflight. User-authored alternate encodings are
+independent data; supplying ownership does not bypass native identity checks. Anonymous transport and legacy
 unattributed arrivals retain their refusal.
 
 Two-sided merges already pass their reconciled FileId to the payload writer.
@@ -513,3 +574,68 @@ Node, native Bun, and the pinned project-installed CLI consumer. Selected docstr
 coverage remains a measured declaration subset (previous denominator 290), not
 whole internal documentation coverage. The declared minimum SDK runtime and
 independent true-global CLI proof remain historical and are not renewed here.
+
+
+### Provenance across garbage collection
+
+The clone-private `pm-vcs-derivation-3` certificate is self-contained: its sorted,
+deduplicated `sources` contain every transitive native input identity, including
+intermediate objects, manifest pages and fragments. `unknown` retains any ancestry
+whose native origin could not be established. GC retains these metadata records
+even when it collects their objects. Erasure never needs an intermediate payload
+to follow a version-three certificate. `whole` records a manifest's reconstructed
+whole-blob identity or the literal payload identity of a record, link or conflict, `members` retains its native composition dependencies, and a
+virtual whole-blob certificate keeps the reverse representation links. Both sides
+survive GC. Selected whole content therefore selects every equivalent container,
+fragment/page set and native descendant, including registered worktree outputs.
+`whole: false` is an incomplete primary proof and cannot certify erasure.
+
+Before a sweep, GC upgrades version-one direct-parent and version-two records while their native
+structures are still available. Erasure also upgrades them before granting any
+deletion authority. A missing old object, an uncatalogued payload ancestor, or a
+missing input certificate makes its derived objects unknown; erasure refuses with
+`uncatalogued_provenance` naming the affected derived identities. Registered native
+outputs establish their native blob kind without requiring a physical object-store
+copy. Structural frames contain identity references and caller metadata rather
+than derived payload snapshots; their certified origin facts are also retained.
+Old objects still read and export. A conservative unknown flag is retained rather
+than erased by an ordinary rewrite.
+
+Certificate construction and upgrade deduplicate inputs, memoize each inspected
+object and check the pinned lease and deadline throughout traversal. Primary
+limits are one million objects/edges, 256 traversal levels for old direct-parent
+graphs, and 300 seconds; reaching a limit grants no complete certificate. These
+limits are separate from composition hashing and the diagnostic residue audit.
+Only authorized erasure retires selected certificates, after recoverable bytes
+and their output registrations have been removed. Normal GC never retires them.
+
+
+Whole-content equivalence is recorded by the shared native object writer and all
+fixed/CDC buffer and descriptor fragment producers. Fragment publication records
+the source whole identity before recoverable fragment bytes; completed manifests
+retain both that identity and every structural input. Direct native manifests
+compute their reconstructed identity within the primary composition bounds.
+Re-splitting content uses these same producers. Pack, repack and unpack retain
+object IDs and their certificates. Bundle import, clone/fetch and hydration use
+the common arrival path, which records native payload and manifest equivalence without
+inventing clone-private origin certificates for imported payloads. An unknown
+imported origin remains unknown and refuses erasure; equivalence alone grants
+no deletion authority over independently owned data.
+
+Equivalent content is not ownership authority. An independent FileId's fragment
+or manifest representation retains its independent role and the existing
+`erasure_dedup_conflict` refusal. Whole-content edges are recorded separately from
+explicit native transformation inputs; they cannot silently relabel an
+independently supplied file as a derived output.
+
+
+Descriptor fragment ingestion takes an explicit start offset (default zero) and
+preserves the caller cursor. Checksum-bound source blocks and private buffer
+snapshots ensure the certified bytes are the published bytes. Accountability
+requires two matching passes and a namespace check after final rehashes under
+the native store lease. Cooperating native writers take that lease through
+receipt publication. Direct filesystem writers that bypass it are outside
+serialization: observed changes through the final namespace barrier refuse,
+but the receipt does not promise perpetual absence against a later external
+write. A changing scan refuses after eight attempts and leaves interrupted
+cleanup pending.

@@ -1,5 +1,6 @@
+import { durability } from "../engine/durability.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { isMainInvocation } from "./main-invocation.ts";
@@ -108,7 +109,7 @@ export function installPackedExtension(
     }
     runPm(project, ["package", "install", join(archiveRoot, archive), "--project"], executable);
   } finally {
-    rmSync(archiveRoot, { recursive: true, force: true });
+    durability.remove(archiveRoot, { recursive: true, force: true });
   }
 }
 

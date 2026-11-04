@@ -1,5 +1,7 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import { spawnSync } from "node:child_process";
-import { pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { pmExecutable } from "../scripts/pm-environment.ts";
 /** Real PM tracker, SDK extension loader and safe prototype-like remote names. */
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, copyFileSync, cpSync, mkdirSync, symlinkSync } from "node:fs";
@@ -52,7 +54,7 @@ test("real extension lease and push workflows persist __proto__, constructor and
       for (const action of ["acquire", "push", "release"]) {
         const arguments_ = action === "push" ? ["vcs", "push", remote]
           : ["vcs", "lease", action, fileId, remote, "--refs", "refs/heads/main", "--ttl-ms", "86400000"];
-        const result = spawnSync(process.execPath, [pmExecutable, ...arguments_, "--json"], { cwd: sender.root, env: withoutPmContext(process.env), encoding: "utf8", timeout: 120000 });
+        const result = spawnSync(process.execPath, [pmExecutable, ...arguments_, "--json"], { cwd: sender.root, env: testEnvironment(), encoding: "utf8", timeout: 120000 });
         assert.equal(result.status, 0, result.stderr + result.stdout);
         if (action === "acquire") {
           const state = JSON.parse(result.stdout) as { lease: { expiry: number } }; assert.ok(state.lease.expiry - Date.now() > 86280000); assert.ok(state.lease.expiry - Date.now() <= 86400000);

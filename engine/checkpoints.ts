@@ -7,6 +7,7 @@ import { writePrivateJson } from "./composition.ts";
 import { canonicalRecordValue, compareByteOrder, decodeRecord, effectiveChangeId, encodeTree, type Commit, type RecordValue } from "./model.ts";
 import { ObjectStoreError, isObjectId, type ObjectId, type ObjectStore } from "./objects.ts";
 import { flattenTree } from "./worktree.ts";
+import { assertVerificationBound, verificationLimits, VerificationRefusal } from "./object-error.ts";
 
 /** Exact native path, optionally projected to top-level record fields. No globs or implicit dependencies. */
 export interface CheckpointSelection { readonly path: string; readonly fields?: readonly string[] }
@@ -165,10 +166,11 @@ export function createSemanticCheckpoint(store: ObjectStore, id: ObjectId, commi
 export async function loadCheckpointReceipt(pmRoot: string, input: CheckpointRequest): Promise<AssuranceGateVerdict> {
   const request = parseCheckpointRequest(input);
   let receipts: AssuranceGateVerdict[];
-  try { receipts = await listAssuranceVerdicts(pmRoot, { gate_id: request.gateId, limit: 1000 }); }
-  catch { throw new CheckpointRefusal("checkpoint_evidence_unavailable", "Restore readable, verified core assurance history before attaching validation."); }
+  try { receipts = await listAssuranceVerdicts(pmRoot, { gate_id: request.gateId, limit: verificationLimits.checkpointRecords }); }
+  catch { throw new VerificationRefusal("checkpoints", "decode_error", "Restore readable, verified core assurance history before attaching validation.", "checkpoint_evidence_unavailable"); }
+  assertVerificationBound("checkpoints", "receipt_count", receipts.length, verificationLimits.checkpointRecords);
   const matching = receipts.filter(row => row.tree_id === request.receipt.treeId && row.evaluated_at === request.receipt.evaluatedAt);
-  if (matching.length !== 1) throw new CheckpointRefusal("checkpoint_evidence_unavailable", "Select one exact durable core receipt in the newest 1000 gate verdicts.");
+  if (matching.length !== 1) throw new CheckpointRefusal("checkpoint_evidence_unavailable", "Select one exact durable core receipt in complete gate history.");
   return matching[0];
 }
 /** Identical claims are idempotent; replacing an immutable claim requires a later receipt for the current native tree. */

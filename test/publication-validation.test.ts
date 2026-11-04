@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Bounded publication regressions over real SDK repositories and original physical reads. */
 import assert from "node:assert/strict";
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -140,7 +141,7 @@ for (const mode of ["push", "publish"] as const) {
   });
 }
 
-test("publication fresh binary staging after unrelated erasure retains malformed encoding refusal", async () => {
+test("publication treats arbitrary binary encodings as user data after unrelated erasure", async () => {
   const { repo } = await fixture(); repo.setAuthority("fixture", "read-fixture", "erase-fixture");
   const marker = Buffer.from("unrelated synthetic erasure marker for binary contract");
   writeFileSync(join(repo.root, "marker.bin"), marker); repo.stage(["marker.bin"]); repo.commit({ message: "marker", author: signature }, new Date());
@@ -149,14 +150,27 @@ test("publication fresh binary staging after unrelated erasure retains malformed
   const ordinary = Buffer.from([0, 255, 17, 0, 128]); writeFileSync(join(repo.root, "fresh.bin"), ordinary);
   assert.deepEqual(repo.stage(["fresh.bin"]), ["fresh.bin"]);
   assert.deepEqual(repo.objects.read(repo.readIndex().find(entry => entry.path === "fresh.bin")!.id).payload, ordinary);
-  for (const [name, bytes, code] of [
+  for (const [name, bytes] of [
     ["malformed.bin", Buffer.from([0x78, 0x9c, 0xff]), "uninspectable_payload"],
     ["encoded-malformed.bin", Buffer.from(Buffer.from([0x78, 0x9c, 0xff]).toString("base64")), "uninspectable_payload"],
     ["retained.bin", deflateSync(frameObject("blob", marker)), "object_obliterated"],
   ] as const) {
     writeFileSync(join(repo.root, name), bytes);
-    assert.throws(() => repo.stage([name]), (error: unknown) => error instanceof ObjectStoreError && error.code === code);
-    assert.deepEqual(readFileSync(join(repo.root, name)), bytes); assert.equal(repo.readIndex().some(entry => entry.path === name), false);
+    assert.deepEqual(repo.stage([name]), [name]);
+    assert.deepEqual(readFileSync(join(repo.root, name)), bytes); assert.equal(repo.readIndex().some(entry => entry.path === name), true);
   }
   assert.deepEqual(readFileSync(join(repo.controlDirectory, "denials.json")), denied);
+});
+
+
+test("native ref batches share one closure across every namespace and their final rename validation", async () => {
+ const { repo, ids, left, right } = await fixture(); const original = ObjectStore.prototype.read;
+ for (let seed = 1; seed <= 8; seed++) {
+  const reads = new Map<string, number>();
+  ObjectStore.prototype.read = function(id) { const object = original.call(this, id); if (ids.includes(id)) reads.set(id, (reads.get(id) ?? 0) + 1); return object; };
+  try {
+   repo.refs.transaction(Array.from({ length: seed + 1 }, (_, index) => ({ name: `refs/${["heads", "tags", "metadata"][index % 3]}/case-${seed}-${index}`, expected: null, next: index % 2 ? right : left })), undefined, { expected: repo.refs.rawHead(), next: seed % 2 ? left : right });
+  } finally { Object.defineProperty(ObjectStore.prototype, "read", { value: original }); }
+  assert.deepEqual([...reads.keys()].sort(), [...ids].sort()); assert.deepEqual([...reads.values()], Array(ids.length).fill(1));
+ }
 });

@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { FileTransport } from "../engine/transport.ts";
@@ -139,7 +141,7 @@ test("invalid bounds, omission lists, partial imports and malformed wire options
 
 test("HTTP bounded transfer and isolated demand reads verify only the requested historical payload", async () => {
   const { repo } = await source();
-  const child = fork(join(packageRoot, "test/helpers/partial-server.ts"), [dirname(repo.root)], { execArgv: [], env: { ...process.env, ...discardChildCoverage() }, stdio: ["ignore", "ignore", "inherit", "ipc"], timeout: 180_000 });
+  const child = fork(join(packageRoot, "test/helpers/partial-server.ts"), [dirname(repo.root)], { execArgv: [], env: { ...testEnvironment(), ...discardChildCoverage() }, stdio: ["ignore", "ignore", "inherit", "ipc"], timeout: 180_000 });
   const closed = once(child, "close");
   try {
     const [{ port }] = await once(child, "message");
@@ -293,7 +295,7 @@ test("a filtered clone of a filtered clone preserves the source's promises acros
   const direct = parseBundle(exportPartialBundle(first.objects, first.refs, ["refs/heads/main"], { filter: "blob:none" }));
   assert.ok(direct.header.promised!.includes(historical));
   assert.ok(direct.lines.every(line => line.type !== "blob"));
-  const child = fork(join(packageRoot, "test/helpers/partial-server.ts"), [dirname(firstPath)], { execArgv: [], env: { ...process.env, ...discardChildCoverage() }, stdio: ["ignore", "ignore", "inherit", "ipc"], timeout: 180_000 });
+  const child = fork(join(packageRoot, "test/helpers/partial-server.ts"), [dirname(firstPath)], { execArgv: [], env: { ...testEnvironment(), ...discardChildCoverage() }, stdio: ["ignore", "ignore", "inherit", "ipc"], timeout: 180_000 });
   const closed = once(child, "close");
   try {
     const [{ port }] = await once(child, "message");

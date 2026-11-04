@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // Review state merge tests: two reviewers, two branches, one record.
 //
 // The acceptance criteria require that review state is a record that merges per

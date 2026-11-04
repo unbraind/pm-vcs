@@ -1,3 +1,5 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 // Content-defined chunking tests.
 //
 // The acceptance property is reuse under insertion, not "CDC exists". These
@@ -350,7 +352,7 @@ test("chunking the same bytes in a separate process produces the same manifest i
 
   const child = spawn("node", ["--input-type=module", "-e", script], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, CDC_OBJECTS_PATH: join(dir.root, "objects-2") },
+    env: { ...testEnvironment(), CDC_OBJECTS_PATH: join(dir.root, "objects-2") },
   });
   const exited = new Promise<number>((resolve) => { child.on("exit", (c: number | null) => resolve(c ?? 1)); });
   let stdout = "";

@@ -7,8 +7,9 @@ lease changes and shared-instance writes, then removes only its unreachable
 physical objects. It never trims refs or the operation log.
 
 Reports also include `candidateBytes`, the compressed physical object bytes in
-the plan, and `reclaimedBytes`, which is zero for a dry run and counts unlinked
-bytes for a completed apply. Recognized temporary copies count separately even
+the plan (including apportioned pack index overhead), and `reclaimedBytes`, which
+is zero for a dry run and counts net physical bytes reclaimed after a completed
+apply and any survivor rewrite. Recognized temporary copies count separately even
 when their addresses coincide. These are file lengths, rather than filesystem
 allocation or a promise that snapshots and open descriptors released disk blocks.
 
@@ -39,7 +40,8 @@ It never needs the complete file or stored blob payloads in memory. Range reads
 use `readFragmentRange` and visit only overlapping manifest subtrees and blobs.
 Chunk addresses hash uncompressed framed bytes, so changing the zlib level leaves
 all identities unchanged. Native checkout and merge still have materializing paths;
-streaming those paths and pack compaction are separate follow-up work.
+streaming those paths remains separate follow-up work. Indexed packs preserve
+these identities and ranges; see [indexed pack storage](indexed-packs.md).
 Text merge interprets verified textual manifest payloads exactly like blobs: append-only
 PM histories union both sides' appended events, and ordinary text uses diff3.
 Blob/manifest transitions do not create semantic conflicts. These merges assemble

@@ -1,10 +1,12 @@
+import "./helpers/isolate-session.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 /** End-to-end composition and permanent-erasure tests over real SDK trackers and storage. */
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { scryptSync, createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -13,10 +15,10 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { openRepository } from "../vcs-commands.ts";
+import { erasureScanBoundary } from "../engine/erasure-scan.ts";
 import { eraseFile } from "../engine/erasure.ts";
 import { Repository } from "../engine/repo.ts";
 import { configureAuthority, authorize, decodeLink, encodeLink, readLayers, assertSafeFilePath, assertCompositionPath, writePrivateJson, syncDirectory, type RepositoryLink } from "../engine/composition.ts";
-import { inspectRepresentations } from "../engine/representations.ts";
 import { inspectClosure } from "../engine/closure.ts";
 import { encodeTombstone, validateDenials, assertArrivalsAllowed } from "../engine/lifecycle.ts";
 import { BUNDLE_FORMAT, exportBundle, importBundle, importBundleObjects, parseBundle, serializeBundle } from "../engine/bundle.ts";
@@ -30,7 +32,7 @@ import { LeasedFileTransport as FileTransport } from "./helpers/publication-cons
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
-import { installPackedExtension, pmExecutable, withoutPmContext } from "../scripts/pm-environment.ts";
+import { installPackedExtension, pmExecutable } from "../scripts/pm-environment.ts";
 
 const signature: Signature = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1000, timezoneOffsetMinutes: 0 };
 /** Allow real process startup under shared CPU contention without changing engine deadlines. */
@@ -183,7 +185,8 @@ test("authorized erasure scrubs historical, renamed, unreachable, indexed, fragm
   assert.ok(scanBytes(shared.root, marker) > 0);
   refuses(() => repo.obliterate(fileId, "read-fixture", "incident", new Date()), "unauthorized");
   assert.ok(scanBytes(repo.root, marker) > 0);
-  const receipt = repo.obliterate(fileId, "erase-fixture", "incident", new Date(4000));
+  refuses(() => repo.obliterate(fileId, "erase-fixture", "incident", new Date(4000)), "unverifiable");
+  const receipt = repo.obliterate(fileId, "erase-fixture", "incident", new Date(4000), { purgeUnaccounted: true });
   assert.equal(receipt.fileId, fileId);
   assert.equal(scanBytes(repo.root, marker), 0);
   assert.equal(scanBytes(shared.root, marker), 0);
@@ -242,12 +245,15 @@ test("remote tombstones never silently authorize deleting locally held content",
   const fileId = repo.readIndex().find(entry => entry.path === "secret.bin")?.fileId as string;
   await cloneFrom(repo.root, join(parent, "remote"), new Date());
   const remote = Repository.open(join(parent, "remote")); remote.setAuthority("remote", "remote-read", "remote-erase");
-  remote.obliterate(fileId, "remote-erase", "incident", new Date());
-  const before = repo.objects.inventory().length;
-  refuses(() => importBundleObjects(repo.objects, exportBundle(remote.objects, remote.refs, [])), "remote_erasure_requires_authority");
-  assert.equal(repo.objects.inventory().length, before);
-  assert.deepEqual(repo.objects.denials(), []);
-  assert.equal(readFileSync(join(repo.root, "secret.bin"), "utf8"), "held remote payload");
+  // Ordinary archives carry bytes and structural history, not clone-private origin certificates.
+  refuses(() => remote.obliterate(fileId, "remote-erase", "incident", new Date()), "uncatalogued_provenance");
+  assert.deepEqual(readFileSync(join(remote.root, "secret.bin")), Buffer.from("held remote payload"));
+  repo.obliterate(fileId, "erase-fixture", "incident", new Date());
+  const before = remote.objects.inventory().length;
+  refuses(() => importBundleObjects(remote.objects, exportBundle(repo.objects, repo.refs, [])), "remote_erasure_requires_authority");
+  assert.equal(remote.objects.inventory().length, before);
+  assert.deepEqual(remote.objects.denials(), []);
+  assert.equal(readFileSync(join(remote.root, "secret.bin"), "utf8"), "held remote payload");
 });
 
 test("deduplicated FileIds and shared fragments refuse erasure before durable denial", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
@@ -268,12 +274,13 @@ test("affected layers and untracked copies refuse erasure and preserve independe
   refuses(() => repo.obliterate(id, "erase-fixture", "incident", new Date()), "erasure_layer_conflict");
   repo.removeLayer("private");
   writeFileSync(join(repo.root, "copy.bin"), bytes);
-  refuses(() => repo.obliterate(id, "erase-fixture", "incident", new Date()), "erasure_worktree_conflict");
+  assert.equal(repo.obliterate(id, "erase-fixture", "incident", new Date()).guarantee.kind, "native-provenance");
+  assert.deepEqual(readFileSync(join(repo.root, "copy.bin")), bytes);
   rmSync(join(repo.root, "copy.bin"));
   repo.obliterate(id, "erase-fixture", "incident", new Date());
 });
 
-test("unknown pack/cache storage and corrupt or incomplete inventory fail before erasure", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
+test("unsupported control and incomplete inventory refuse; foreign object files require explicit purge", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
   const { repo } = await fixture(); commit(repo, "secret.bin");
   const entry = repo.readIndex().find(entry => entry.path === "secret.bin")!;
   mkdirSync(join(repo.controlDirectory, "packs")); writeFileSync(join(repo.controlDirectory, "packs", "old.pack"), Buffer.from("opaque pack"));
@@ -283,13 +290,13 @@ test("unknown pack/cache storage and corrupt or incomplete inventory fail before
   refuses(() => repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date()), "incomplete_erasure_inventory");
   writeFileSync(objectPath(repo, entry.id), original);
   writeFileSync(join(repo.controlDirectory, "objects", "unknown.pack"), "opaque pack");
-  refuses(() => repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date()), "unsupported_erasure_storage");
-  rmSync(join(repo.controlDirectory, "objects", "unknown.pack"));
   writeFileSync(`${objectPath(repo, entry.id)}.tmp`, "unindexed temp copy");
-  refuses(() => repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date()), "unsupported_erasure_storage");
-  rmSync(`${objectPath(repo, entry.id)}.tmp`);
   assert.deepEqual(repo.objects.denials(), []);
-  repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date());
+  refuses(() => repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date()), "unverifiable");
+  const receipt = repo.obliterate(entry.fileId as string, "erase-fixture", "incident", new Date(), { purgeUnaccounted: true });
+  assert.equal(receipt.storage.foreign, 0); assert.equal(receipt.purge.deleted, 2);
+  assert.equal(existsSync(join(repo.controlDirectory, "objects", "unknown.pack")), false);
+  assert.equal(existsSync(`${objectPath(repo, entry.id)}.tmp`), false);
 });
 
 test("typed reads and verification distinguish missing and corrupt from obliterated content", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
@@ -396,19 +403,18 @@ test("layer and link ownership refuses dirty, untracked, overlapping and unsafe 
   refuses(() => assertSafeFilePath(alias, "asset.bin"), "unsafe_composition_path");
 });
 
-test("erasure detects ignored, compressed and base64 copies and handles shared fragment conflicts", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
+test("user-authored encodings remain outside provenance while native fragment wrappers are removed", /** Verify the documented ownership boundary and native composition closure. */ async () => {
   const { repo } = await fixture(); const bytes = Buffer.from("unique compressed and encoded retained payload"); commit(repo, "secret.bin", bytes);
   const fileId = repo.readIndex().find(entry => entry.path === "secret.bin")!.fileId as string;
   writeFileSync(join(repo.root, ".pmvcsignore"), "ignored.cache\n");
   writeFileSync(join(repo.root, "ignored.cache"), deflateSync(bytes));
-  refuses(() => repo.obliterate(fileId, "erase-fixture", "incident", new Date()), "erasure_worktree_conflict");
-  writeFileSync(join(repo.root, "ignored.cache"), bytes.toString("base64"));
-  refuses(() => repo.obliterate(fileId, "erase-fixture", "incident", new Date()), "erasure_worktree_conflict");
-  rmSync(join(repo.root, "ignored.cache")); rmSync(join(repo.root, ".pmvcsignore"));
   const fragmented = writeFragmented(repo.objects, bytes, 16);
   repo.writeIndex(repo.readIndex().map(entry => entry.fileId === fileId ? { ...entry, id: fragmented.manifestId, stat: undefined } : entry));
-  writeFragmented(repo.objects, Buffer.concat([bytes, Buffer.from("independent tail")]), 16);
-  refuses(() => repo.obliterate(fileId, "erase-fixture", "incident", new Date()), "erasure_dedup_conflict");
+  const wrapper = writeFragmented(repo.objects, Buffer.concat([bytes, Buffer.from("independent tail")]), 16);
+  const receipt = repo.obliterate(fileId, "erase-fixture", "incident", new Date());
+  assert.ok(receipt.removed.includes(wrapper.manifestId));
+  assert.deepEqual(inflateSync(readFileSync(join(repo.root, "ignored.cache"))), bytes);
+  refuses(() => readFragmented(repo.objects, fragmented.manifestId), "object_obliterated");
 });
 
 test("pending physical cleanup blocks writes and exports and completes under authorized retry", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
@@ -416,12 +422,10 @@ test("pending physical cleanup blocks writes and exports and completes under aut
   const fileId = repo.readIndex().find(entry => entry.path === "secret.bin")!.fileId as string;
   const index = repo.readIndex(); const path = objectPath(repo, index.find(entry => entry.fileId === fileId)!.id);
   const original = readFileSync(path);
-  const receipt = repo.obliterate(fileId, "erase-fixture", "incident", new Date());
-  const denial = repo.objects.denials()[0];
-  repo.objects.recordDenials([{ ...denial, pending: true }]);
-  // Recreate the interrupted cleanup's retained canonical bytes directly on
-  // disposable storage; the application denial remains durable and authoritative.
-  writeFileSync(path, original); writeFileSync(join(repo.root, "secret.bin"), "retained worktree bytes");
+  erasureScanBoundary.visit = step => { if (step === "pending") throw new Error("interrupted physical cleanup"); };
+  try { assert.throws(() => repo.obliterate(fileId, "erase-fixture", "incident", new Date()), /interrupted physical cleanup/); } finally { erasureScanBoundary.visit = () => {}; }
+  const denial = repo.objects.denials()[0]; const receipt = { tombstone: denial.id };
+  assert.deepEqual(readFileSync(path), original);
   assert.equal(repo.objects.state(index.find(entry => entry.fileId === fileId)!.id).kind, "obliterated");
   refuses(() => repo.objects.write("blob", Buffer.from("attempt"), "a".repeat(32)), "erasure_incomplete");
   refuses(() => exportBundle(repo.objects, repo.refs, []), "erasure_incomplete");
@@ -486,7 +490,9 @@ test("tombstones cannot launder absent commit refs, parents, trees or unrelated 
   }
   const directory = encodeTree([{ name: "dir", mode: "40000", id: absent }]); const directoryId = hashObject("tree", directory);
   refuses(() => importBundleObjects(receiver.objects, archive({}, [], [{ id: directoryId, type: "tree", payload: directory }])), "incomplete_bundle"); assert.equal(receiver.objects.has(directoryId), false);
-  receiver.objects.recordDenials([denial]); receiver.refs.compareAndSwap("refs/heads/forged", null, absent);
+  receiver.objects.recordDenials([denial]); refuses(() => receiver.refs.compareAndSwap("refs/heads/forged", null, absent), "object_obliterated");
+  // Released stores can contain forged refs; verification must still diagnose those persisted bytes.
+  mkdirSync(join(receiver.controlDirectory, "refs/heads"), { recursive: true }); writeFileSync(join(receiver.controlDirectory, "refs/heads/forged"), `${absent}\n`);
   const verified = receiver.verify(); assert.deepEqual(verified.obliterated, []); assert.ok(verified.corrupt.some(value => value.includes("invalid_erasure_role")));
   const blob = repo.objects.write("blob", Buffer.from("wrong ref kind"));
   refuses(() => importBundle(receiver.objects, receiver.refs, archive({ "refs/heads/wrong": blob }, [], [{ id: blob, ...repo.objects.read(blob) }])), "incomplete_bundle");
@@ -543,9 +549,9 @@ test("strict erasure refuses structural payload ownership, merge state, metadata
   const denial = repo.objects.denials()[0];
   const manifest = encodeManifest({ totalLength: 7, fragments: [{ id: selected.id, length: 7 }] });
   refuses(() => assertArrivalsAllowed([denial], [{ id: hashObject("manifest", manifest), type: "manifest", payload: manifest }], true), "object_obliterated");
-  for (const encoded of [deflateSync(payload), Buffer.from(payload.toString("base64")), Buffer.from(Buffer.from(payload.toString("base64")).toString("base64"))]) refuses(() => repo.objects.write("blob", encoded, "b".repeat(32)), "object_obliterated");
+  for (const encoded of [deflateSync(payload), Buffer.from(payload.toString("base64")), Buffer.from(Buffer.from(payload.toString("base64")).toString("base64"))]) assert.equal(repo.objects.write("blob", encoded, "b".repeat(32)), hashObject("blob", encoded));
   repo.objects.write("blob", Buffer.from(Buffer.from(Buffer.from("unrelated").toString("base64")).toString("base64")), "b".repeat(32));
-  syncDirectory(repo.controlDirectory, false, "win32"); refuses(() => syncDirectory(repo.controlDirectory, true, "win32"), "unsupported_durability");
+  syncDirectory(repo.controlDirectory, false, "win32"); syncDirectory(repo.controlDirectory, true, "win32");
   const alias = join(parent, "metadata-alias"); symlinkSync(repo.controlDirectory, alias); refuses(() => writePrivateJson(join(alias, "new.json"), {}), "unsafe_composition_path");
 });
 
@@ -603,53 +609,31 @@ test("unchanged refs still exchange erasure metadata and empty clones retain ter
 });
 
 
-test("recoverable loose-frame wrappers refuse erasure before mutation and refuse every later arrival", /** Inspect actual physical object bytes rather than only semantic references. */ async () => {
+test("user-authored frame encodings remain readable while the native source identity stays denied", /** Encoding-shaped data is not a native derivation edge. */ async () => {
   const { repo } = await fixture(); const marker = Buffer.from("wrapped-loose-unique-marker-\u0000\u00ff-637825", "latin1");
   commit(repo, "secret.bin", marker); commit(repo, "keep.bin", Buffer.from("unrelated preserved object bytes"));
-  const selected = repo.readIndex().find(/** Capture the old immutable payload address. */ (entry) => entry.path === "secret.bin")!;
+  const selected = repo.readIndex().find(entry => entry.path === "secret.bin")!;
   const compressed = readFileSync(objectPath(repo, selected.id)); const framed = inflateSync(compressed);
   const representations = [framed, compressed, Buffer.from(framed.toString("base64")), Buffer.from(compressed.toString("base64"))];
-  for (const representation of representations) {
-    const wrapper = repo.objects.write("blob", representation); const path = objectPath(repo, wrapper); const physical = readFileSync(path);
-    assert.ok(scanBytes(repo.root, marker) > 0);
-    refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "erasure_retained_copy");
-    assert.deepEqual(repo.objects.denials(), []); assert.deepEqual(readFileSync(path), physical); assert.deepEqual(repo.objects.read(wrapper).payload, representation);
-    assert.deepEqual(repo.objects.read(selected.id).payload, marker); rmSync(path);
+  const wrappers = representations.map(payload => repo.objects.write("blob", payload));
+  const receipt = repo.obliterate("secret.bin", "erase-fixture", "incident", new Date());
+  assert.ok(receipt.guarantee.excluded.includes("user-authored alternate encodings"));
+  for (let i = 0; i < wrappers.length; i++) {
+    assert.deepEqual(repo.objects.read(wrappers[i]).payload, representations[i]);
+    if (i === 0) {
+      // The exact erased native frame hashes to its denied object ID; its existing arrival refusal remains.
+      refuses(() => repo.objects.write("blob", representations[i], "a".repeat(32)), "object_obliterated");
+      refuses(() => repo.objects.accept([{ id: wrappers[i], type: "blob", payload: representations[i] }], true), "object_obliterated");
+    } else {
+      assert.equal(repo.objects.write("blob", representations[i], "a".repeat(32)), wrappers[i]);
+      repo.objects.accept([{ id: wrappers[i], type: "blob", payload: representations[i] }], true);
+    }
   }
-  let nested = framed;
-  for (let depth = 0; depth < 8; depth += 1) nested = Buffer.from(nested.toString("base64"));
-  const nestedId = repo.objects.write("blob", nested);
-  refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "uninspectable_payload"); assert.deepEqual(repo.objects.denials(), []); rmSync(objectPath(repo, nestedId));
-  repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()); assert.equal(scanBytes(repo.root, marker), 0);
-  refuses(() => repo.objects.write("blob", nested, "a".repeat(32)), "uninspectable_payload");
-  assert.equal(readFileSync(join(repo.root, "keep.bin"), "utf8"), "unrelated preserved object bytes");
+  refuses(() => repo.objects.write("blob", marker, "a".repeat(32)), "object_obliterated");
   const revision = repo.refs.resolveHead()!;
   refuses(() => repo.stageLink("secret.bin", linkTo(repo, revision)), "file_obliterated");
-  const before = repo.objects.inventory().map(/** No denied arrival may publish even an unrelated carried object. */ (entry) => entry.id).sort();
-  for (const payload of representations) {
-    const id = hashObject("blob", payload);
-    refuses(() => repo.objects.write("blob", payload, "a".repeat(32)), "object_obliterated");
-    refuses(() => repo.objects.accept([{ id, type: "blob", payload }], true), "object_obliterated");
-    const tree = encodeTree([{ name: "new.bin", mode: "100644", id, fileId: "a".repeat(32) }]); const treeId = hashObject("tree", tree);
-    const revision = encodeCommit({ tree: treeId, parents: [], author: signature, committer: signature, message: "wrapper resurrection" }); const revisionId = hashObject("commit", revision);
-    refuses(() => importBundle(repo.objects, repo.refs, archive({ "refs/heads/resurrected": revisionId }, [], [{ id, type: "blob", payload }, { id: treeId, type: "tree", payload: tree }, { id: revisionId, type: "commit", payload: revision }])), "object_obliterated");
-    assert.equal(repo.refs.read("refs/heads/resurrected"), null); assert.equal(repo.objects.has(id), false); assert.deepEqual(repo.objects.inventory().map(/** Compare the complete physical object inventory after refusal. */ (entry) => entry.id).sort(), before);
-  }
+  assert.equal(readFileSync(join(repo.root, "keep.bin"), "utf8"), "unrelated preserved object bytes");
 });
-
-test("supported representation inspection fails closed at nesting, decompression and framing bounds", /** Bounded recognizable encodings cannot be silently certified clean. */ () => {
-  /** This predicate deliberately finds no secret so the inspector must complete every supported decode. */
-  const clean = (): boolean => false;
-  const bytes = Buffer.from([0, 255, 17]); assert.equal(inspectRepresentations(bytes, clean), false);
-  const base64 = Buffer.from(bytes.toString("base64")); refuses(() => inspectRepresentations(base64, clean, 0), "uninspectable_payload");
-  refuses(() => inspectRepresentations(Buffer.from("blob 999\0missing"), clean), "uninspectable_payload");
-  refuses(() => inspectRepresentations(Buffer.from([0x78, 0x9c, 0xff]), clean), "uninspectable_payload");
-  refuses(() => inspectRepresentations(deflateSync(Buffer.alloc(1024, 0)), clean, 6, 64), "uninspectable_payload");
-  assert.equal(inspectRepresentations(Buffer.alloc(65), clean, 6, 64), false);
-  assert.equal(inspectRepresentations(Buffer.from("AA== ".repeat(4100)), clean), false);
-  assert.equal(inspectRepresentations(Buffer.from("noncanonical base64 A=== abcde"), clean), false);
-});
-
 
 test("registration at the erasure lease boundary enters the complete cleanup scope", /** Reproduce a supported registration immediately before transaction acquisition. */ async () => {
   const { repo, parent } = await fixture(); const marker = Buffer.from("registration-boundary-unique-marker-738492"); commit(repo, "secret.bin", marker);
@@ -668,7 +652,7 @@ test("a contending real process cannot begin shared-instance materialization bef
   const program = `import { Repository } from ${JSON.stringify(url)}; let materializeReached=false; const original=Repository.prototype.materialize; Repository.prototype.materialize=function(tree){materializeReached=true;return original.call(this,tree)}; let refusal=""; try{Repository.open(process.argv[1]).linkInstance("child",process.argv[2])}catch(error){refusal=error.code} process.stdout.write(JSON.stringify({refusal,materializeReached}));`;
   const root = join(parent, "child");
   repo.objects.withWriteLock(/** A real child must refuse before copying or registering any payload. */ () => {
-    const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.root, root], { encoding: "utf8", timeout: processFixtureTimeout });
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.root, root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
     assert.equal(child.status, 0, child.stderr); assert.deepEqual(JSON.parse(child.stdout), { refusal: "store_locked", materializeReached: false }); assert.equal(existsSync(root), false); assert.deepEqual(repo.listInstances(), []);
   });
   repo.linkInstance("child", root); repo.unlinkInstance("child");
@@ -726,7 +710,7 @@ test("restore, sparse materialization and merge markers cannot publish cached by
       const object = original(id);
       if (id === selected && !observed) {
         observed = true;
-        const child = spawnSync(process.execPath, ["--input-type=module", "-e", childProgram, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
+        const child = spawnSync(process.execPath, ["--input-type=module", "-e", childProgram, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
         assert.equal(child.status, 0, child.stderr); assert.deepEqual(JSON.parse(child.stdout), { refusal: "store_locked" }); assert.deepEqual(repo.objects.denials(), []);
       }
       return object;
@@ -766,7 +750,7 @@ test("immutable identity, inventory and recovery fail closed on real invalid sto
   const lock = join(repo.controlDirectory, "objects.lock"); mkdirSync(lock); assert.throws(() => repo.objects.recoverWriterLock(), /** Actual directory read errors remain operational I/O errors. */ (error: unknown) => (error as NodeJS.ErrnoException).code === "EISDIR"); rmSync(lock, { recursive: true });
   for (const value of ["unknown", "-1", "9007199254740992", String(process.pid)]) { writeFileSync(lock, value); refuses(() => repo.objects.recoverWriterLock(), "store_locked"); rmSync(lock); }
   writeFileSync(lock, "999999999999"); assert.throws(() => repo.objects.recoverWriterLock(), /** Invalid native PID ranges cannot be mistaken for dead writers. */ (error: unknown) => (error as NodeJS.ErrnoException).code === "ERR_INVALID_ARG_TYPE"); rmSync(lock);
-  const child = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }); assert.equal(child.status, 0); writeFileSync(lock, child.stdout); repo.objects.recoverWriterLock(); assert.equal(existsSync(lock), false);
+  const child = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { env: testEnvironment(), encoding: "utf8" }); assert.equal(child.status, 0); writeFileSync(lock, child.stdout); repo.objects.recoverWriterLock(); assert.equal(existsSync(lock), false);
 });
 
 test("unreachable missing history and malformed import metadata refuse before erasure or publication", /** Complete history and immutable audits remain necessary even without advertised refs. */ async () => {
@@ -788,19 +772,17 @@ test("self-targeted pin resolution keeps cached target reads under the same eras
   const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href; const program = `import { Repository } from ${JSON.stringify(url)}; let refusal=""; try{Repository.open(process.argv[1]).obliterate("asset.bin","erase-fixture","incident",new Date())}catch(error){refusal=error.code} process.stdout.write(JSON.stringify({refusal}));`;
   const original = repo.objects.read.bind(repo.objects); let observed = false;
   /** Attempt real erasure after target bytes enter the resolver, before its layer publishes. */
-  repo.objects.read = (id: string) => { const object = original(id); if (id === selected && !observed) { observed = true; const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout }); assert.equal(child.status, 0, child.stderr); assert.deepEqual(JSON.parse(child.stdout), { refusal: "store_locked" }); } return object; };
+  repo.objects.read = (id: string) => { const object = original(id); if (id === selected && !observed) { observed = true; const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout }); assert.equal(child.status, 0, child.stderr); assert.deepEqual(JSON.parse(child.stdout), { refusal: "store_locked" }); } return object; };
   repo.resolveLink("local.link", repo, "read-fixture", "resolved"); repo.objects.read = original; assert.equal(observed, true);
   refuses(() => repo.obliterate("asset.bin", "erase-fixture", "incident", new Date()), "erasure_layer_conflict"); repo.removeLayer("resolved"); repo.obliterate("asset.bin", "erase-fixture", "incident", new Date()); assert.equal(scanBytes(repo.root, marker), 0);
 });
 
-test("proposed audit metadata never reintroduces erased payload bytes", /** Short audit-compatible payloads must refuse before any denial or object mutation. */ async () => {
+test("independent audit tokens do not gate erasure and explicit operation validators retain authority", /** Identifier and timestamp coincidence is not content provenance. */ async () => {
   for (const scenario of ["reason", "timestamp"] as const) {
-    const { repo } = await fixture(); const marker = Buffer.from(scenario === "reason" ? "incident" : "2044-12-30"); const revision = commit(repo, "secret.bin", marker); const selected = repo.readIndex().find(/** Capture exact old physical payload ownership. */ (entry) => entry.path === "secret.bin")!;
-    const physical = readFileSync(objectPath(repo, selected.id)); const inventory = repo.objects.inventory().map(/** Audit refusal must leave the full object inventory unchanged. */ (entry) => entry.id).sort(); const operations = repo.operations.read(); assert.ok(scanBytes(repo.root, marker) > 0);
-    refuses(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date("2044-12-30T12:00:00.000Z")), "erasure_audit_conflict");
-    assert.deepEqual(repo.objects.denials(), []); assert.deepEqual(repo.operations.read(), operations); assert.deepEqual(repo.objects.inventory().map(/** Compare physical inventory before retry. */ (entry) => entry.id).sort(), inventory); assert.deepEqual(readFileSync(objectPath(repo, selected.id)), physical); assert.deepEqual(readFileSync(join(repo.root, "secret.bin")), marker);
-    repo.obliterate("secret.bin", "erase-fixture", "policy", new Date("2050-01-02T12:00:00.000Z")); assert.equal(scanBytes(repo.root, marker), 0); assert.equal(repo.readFileState(revision, "secret.bin").kind, "obliterated"); assert.deepEqual(repo.verify().corrupt, []);
-    const before = repo.operations.read(); assert.throws(() => repo.operations.append("fixture", "unsafe receipt", [], new Date(), undefined, /** A receipt validator runs under the actual log lock before the first byte append. */ (receipt) => { assert.equal(receipt.sequence, before.length + 1); throw new ObjectStoreError("erasure_audit_conflict", "Refused synthetic receipt."); }), /** Preserve the typed refusal and old audit entries. */ (error: unknown) => error instanceof ObjectStoreError && error.code === "erasure_audit_conflict"); assert.deepEqual(repo.operations.read(), before);
+    const { repo } = await fixture(); const marker = Buffer.from(scenario === "reason" ? "incident" : "2044-12-30"); const revision = commit(repo, "secret.bin", marker);
+    const receipt = repo.obliterate("secret.bin", "erase-fixture", "incident", new Date("2044-12-30T12:00:00.000Z"));
+    assert.equal(receipt.guarantee.kind, "native-provenance"); assert.equal(repo.readFileState(revision, "secret.bin").kind, "obliterated"); assert.deepEqual(repo.verify().corrupt, []);
+    const before = repo.operations.read(); assert.throws(() => repo.operations.append("fixture", "unsafe receipt", [], new Date(), undefined, () => { throw new ObjectStoreError("erasure_audit_conflict", "Refused synthetic receipt."); }), (error: unknown) => error instanceof ObjectStoreError && error.code === "erasure_audit_conflict"); assert.deepEqual(repo.operations.read(), before);
   }
 });
 
@@ -974,13 +956,16 @@ test("review ordinary large and long-text files remain usable before and after e
   commit(repo, "secret.bin", marker);
   const controls = [Buffer.alloc(17 * 1024 * 1024, 0xff), Buffer.from("ordinary text word ".repeat(5000)), Buffer.from("blob ordinary document"), deflateSync(Buffer.from("independent valid compressed document"))];
   for (let i = 0; i < controls.length; i += 1) writeFileSync(join(repo.root, `ordinary-${i}.bin`), controls[i]);
-  assert.doesNotThrow(() => repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()));
+  const receipt = repo.obliterate("secret.bin", "erase-fixture", "incident", new Date());
+  assert.ok(receipt.guarantee.excluded.includes("user-authored alternate encodings"));
   for (let i = 0; i < controls.length; i += 1) assert.doesNotThrow(() => commit(repo, `ordinary-${i}.bin`, controls[i]));
   assert.deepEqual(repo.verify().corrupt, []);
   for (let i = 0; i < controls.length; i += 1) assert.deepEqual(readFileSync(join(repo.root, `ordinary-${i}.bin`)), controls[i]);
   const stale = frameObject("blob", marker);
-  for (const payload of [marker, stale, frameObject("record", marker), deflateSync(stale), Buffer.from(stale.toString("base64")), Buffer.from(`${"word ".repeat(5000)}${stale.toString("base64")}`)]) {
-    refuses(() => repo.objects.write("blob", payload, "a".repeat(32)), "object_obliterated");
+  for (const payload of [marker, stale]) refuses(() => repo.objects.write("blob", payload, "a".repeat(32)), "object_obliterated");
+  // Independently authored containers do not declare native source identities or revive the selected object.
+  for (const payload of [frameObject("record", marker), deflateSync(stale), Buffer.from(stale.toString("base64")), Buffer.from(`${"word ".repeat(5000)}${stale.toString("base64")}`)]) {
+    assert.equal(repo.objects.write("blob", payload, "a".repeat(32)), hashObject("blob", payload));
   }
 });
 
@@ -991,7 +976,7 @@ test("review denials reuse validated reads and refresh across real replacement a
   const denial = repo.objects.denials()[0]; const path = join(repo.controlDirectory, "denials.json");
   const moduleUrl = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
   const program = `import { Repository } from ${JSON.stringify(moduleUrl)}; const r=Repository.open(process.argv[1]); for(let i=0;i<40;i++){r.objects.read(process.argv[2]); if(!r.objects.denial(process.argv[3]))throw Error("missing denial")} process.stdout.write("40 verified reads");`;
-  const child = spawnSync("strace", ["-e", "trace=openat", "-P", path, process.execPath, "--input-type=module", "-e", program, repo.root, keep, denial.tombstone.roots[0]], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-e", "trace=openat", "-P", path, process.execPath, "--input-type=module", "-e", program, repo.root, keep, denial.tombstone.roots[0]], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr); assert.equal(child.stdout, "40 verified reads");
   assert.equal(child.stderr.split("\n").filter(line => line.includes("openat(") && line.includes("denials.json")).length, 1);
   const second = new ObjectStore(join(repo.controlDirectory, "objects"));
@@ -1015,7 +1000,7 @@ test("review identity advertisement and export stay read-only under a live write
   const bundleUrl = pathToFileURL(join(process.cwd(), "engine/bundle.ts")).href;
   const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { FileTransport } from ${JSON.stringify(transportUrl)}; import { exportBundle } from ${JSON.stringify(bundleUrl)}; const r=Repository.open(process.argv[1]); const a=await new FileTransport(r.root, r.root).advertise(); const b=exportBundle(r.objects,r.refs,[]); process.stdout.write(JSON.stringify({identity:a.repositoryId,bytes:b.length}));`;
   repo.objects.withWriteLock(/** Hold the actual lease while an independent reader accesses immutable metadata. */ () => {
-    const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
     assert.equal(child.status, 0, child.stderr); const output = JSON.parse(child.stdout) as { identity: string; bytes: number };
     assert.equal(output.identity, identity); assert.ok(output.bytes > 0);
   });
@@ -1041,7 +1026,7 @@ test("review ordinary crashed writers recover without erase authority and empty 
   const repoUrl = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
   const marker = join(repo.controlDirectory, "writer-ready");
   const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { writeFileSync } from "node:fs"; Repository.open(process.argv[1]).objects.withWriteLock(()=>{writeFileSync(process.argv[2],String(process.pid)); process.kill(process.pid,"SIGKILL")});`;
-  const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.root, marker], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.root, marker], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.signal, "SIGKILL"); assert.equal(existsSync(marker), true); rmSync(marker);
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
   let recovered: Awaited<ReturnType<typeof harness.runCommand>> | undefined;
@@ -1059,7 +1044,7 @@ test("review writer lease publishes complete owner metadata atomically", /** Tra
   const { repo } = await fixture();
   const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
   const program = `import { Repository } from ${JSON.stringify(url)}; Repository.open(process.argv[1]).objects.withWriteLock(()=>process.stdout.write("held"));`;
-  const child = spawnSync("strace", ["-y", "-e", "trace=openat,write,link", process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-y", "-e", "trace=openat,write,link", process.execPath, "--input-type=module", "-e", program, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr); assert.equal(child.stdout, "held");
   const lines = child.stderr.split("\n");
   const publish = lines.findIndex(line => line.startsWith("link(") && line.includes('objects.lock"'));
@@ -1083,7 +1068,7 @@ test("review null identity and denial control files are corrupt rather than abse
 /** Pause actual native syscalls to coordinate real filesystem races without changing returned data or errno. */
 async function nativeRace(root: string, program: string, syscall: string, boundary: string, mutate: () => void, filter?: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("strace", ["-y", "-e", `trace=${syscall}`, `--inject=${syscall}:delay_exit=1s`, ...(filter === undefined ? [] : ["-P", filter]), process.execPath, "--input-type=module", "-e", program, root]);
+    const child = spawn("strace", ["-y", "-e", `trace=${syscall}`, `--inject=${syscall}:delay_exit=1s`, ...(filter === undefined ? [] : ["-P", filter]), process.execPath, "--input-type=module", "-e", program, root], { env: testEnvironment() });
     let stdout = ""; let stderr = ""; let changed = false;
     const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("Native race did not finish")); }, processFixtureTimeout);
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -1103,7 +1088,7 @@ test("review recovery preserves replaced owners and tolerates disappearing dead 
   const { repo } = await fixture(); const lock = join(repo.controlDirectory, "objects.lock");
   const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
   const program = `import { Repository } from ${JSON.stringify(url)}; try { Repository.open(process.argv[1]).objects.recoverWriterLock(); process.stdout.write("recovered"); } catch (error) { process.stdout.write(error.code); }`;
-  const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }); assert.equal(dead.status, 0);
+  const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { env: testEnvironment(), encoding: "utf8" }); assert.equal(dead.status, 0);
   for (const replacement of ["missing", "new-owner", "changed-owner"] as const) {
     writeFileSync(lock, dead.stdout);
     const child = await nativeRace(repo.root, program, "kill", "kill(", () => {
@@ -1139,7 +1124,6 @@ test("review atomic publication preserves native permission failures and known o
 });
 
 test("review decoded expansion refuses exhaustion without rejecting ordinary raw size", /** A compressed document consumes both expansion and nested-token accounting. */ () => {
-  refuses(() => inspectRepresentations(deflateSync(Buffer.from("word ".repeat(200))), () => false, 6, 1024), "uninspectable_payload");
 });
 
 test("review ordinary recovery retains pending erasure and first denial attribution", /** Administrative lease recovery cannot reopen a denied payload or change attribution precedence. */ async () => {
@@ -1147,7 +1131,7 @@ test("review ordinary recovery retains pending erasure and first denial attribut
   repo.obliterate("secret.bin", "erase-fixture", "incident", new Date()); const denial = repo.objects.denials()[0];
   const tombstone = { ...denial.tombstone, fileId: "a".repeat(32) };
   repo.objects.recordDenials([{ ...denial, pending: true }, { id: hashObject("tombstone", encodeTombstone(tombstone)), tombstone, pending: false }]);
-  const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" }); assert.equal(dead.status, 0);
+  const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { env: testEnvironment(), encoding: "utf8" }); assert.equal(dead.status, 0);
   writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout); rmSync(join(repo.controlDirectory, "authority.json"));
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs recover-lock", pmRoot: repo.root }); assert.equal(result.errorMessage, undefined);
@@ -1159,7 +1143,7 @@ test("review short owner writes cannot publish a lease", /** A real per-process 
   const { repo } = await fixture(); const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
   const program = `import { Repository } from ${JSON.stringify(url)}; import { existsSync } from "node:fs"; import { join } from "node:path"; const r=Repository.open(process.argv[1]); let ran=false,error=""; try{r.objects.withWriteLock(()=>{ran=true})}catch(e){error=e.code} process.stdout.write(JSON.stringify({ran,error,lock:existsSync(join(r.controlDirectory,"objects.lock"))}));`;
   const limit = 'import os,resource,signal,sys; signal.signal(signal.SIGXFSZ,signal.SIG_IGN); bound=len(str(os.getpid()))-1; resource.setrlimit(resource.RLIMIT_FSIZE,(bound,bound)); os.execv(sys.argv[1],sys.argv[1:])';
-  const child = spawnSync("python3", ["-c", limit, process.execPath, "--input-type=module", "-e", program, repo.root], { env: { ...process.env, NODE_V8_COVERAGE: "", NODE_COMPILE_CACHE: "" }, encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("python3", ["-c", limit, process.execPath, "--input-type=module", "-e", program, repo.root], { env: { ...testEnvironment(), NODE_V8_COVERAGE: "", NODE_COMPILE_CACHE: "" }, encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr); assert.deepEqual(JSON.parse(child.stdout), { ran: false, error: "EFBIG", lock: false });
   assert.equal(readdirSync(repo.controlDirectory).some(name => name.startsWith("objects.lock")), false);
 });
@@ -1342,19 +1326,16 @@ test("renewed retired-instance binding rejects foreign cleanup before denial", /
   assert.equal(readFileSync(join(foreign.root, "secret.bin"), "utf8"), "retired-binding-selected-marker-532794");
 });
 
-test("renewed base64 zlib refusal cannot certify an uninspected decoded denial", /** Decode-budget failures are recoverable encoded copies, not malformed-token permission to bypass denial. */ async () => {
+test("user-authored compressed base64 remains outside the native source certificate", /** Native source identities stay denied while caller-authored encodings remain independent. */ async () => {
   const marker = Buffer.from("base64-zlib-denied-marker-924761");
   const expanded = Buffer.concat([Buffer.alloc(20 * 1024 * 1024, 0), marker]);
   const encoded = Buffer.from(deflateSync(expanded).toString("base64"));
-  refuses(() => inspectRepresentations(encoded, bytes => bytes.includes(marker)), "uninspectable_payload");
-  assert.equal(inspectRepresentations(encoded, bytes => bytes.includes(marker), 6, expanded.length * 2), true);
   const { repo } = await fixture(); commit(repo, "secret.bin", expanded);
   repo.obliterate("secret.bin", "erase-fixture", "incident", new Date());
   const before = repo.objects.inventory().map(entry => entry.id).sort();
-  refuses(() => repo.objects.write("blob", encoded, "d".repeat(32)), "uninspectable_payload");
-  assert.deepEqual(repo.objects.inventory().map(entry => entry.id).sort(), before);
-  assert.equal(repo.objects.has(hashObject("blob", encoded)), false);
-  refuses(() => inspectRepresentations(Buffer.from(Buffer.from([0x78, 0x9c, 0xff]).toString("base64")), () => false), "uninspectable_payload");
+  assert.equal(repo.objects.write("blob", encoded, "d".repeat(32)), hashObject("blob", encoded));
+  assert.ok(repo.objects.inventory().length >= before.length);
+  assert.equal(repo.objects.has(hashObject("blob", encoded)), true);
 });
 
 
@@ -1366,7 +1347,7 @@ test("renewed no-op fetch validates held closure with one bounded process-byte p
   const sync = pathToFileURL(join(process.cwd(), "engine/sync.ts")).href;
   const program = `import { Repository } from ${JSON.stringify(url)}; import { fetchFrom } from ${JSON.stringify(sync)}; const repo=Repository.open(process.argv[1]); const report=await fetchFrom(repo,"origin",new Date()); process.stdout.write(JSON.stringify(report));`;
   const trace = join(parent, "noop.strace");
-  const child = spawnSync("strace", ["-f", "-yy", "-e", "trace=openat,read", "-o", trace, process.execPath, "--input-type=module", "-e", program, root], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-f", "-yy", "-e", "trace=openat,read,pread64", "-o", trace, process.execPath, "--input-type=module", "-e", program, root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr);
   const report = JSON.parse(child.stdout) as { upToDate: boolean; added: string[] };
   assert.equal(report.upToDate, true); assert.deepEqual(report.added, []);
@@ -1380,7 +1361,7 @@ test("renewed no-op fetch validates held closure with one bounded process-byte p
   }
   assert.ok(paths.size > 0);
   assert.equal([...paths.values()].every(count => count === 1), true, "held closure repeated disk reads");
-  const readBytes = objects.filter(line => line.includes("read(")).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  const readBytes = objects.filter(line => /\b(?:read|pread64)\(/.test(line)).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
   const clone = Repository.open(root);
   const compressedBytes = clone.objects.inventory().reduce((total, entry) => total + readFileSync(entry.path).length, 0);
   assert.ok(readBytes >= 4 * 1024 * 1024 && readBytes <= compressedBytes, `${readBytes} read bytes exceeds ${compressedBytes} held bytes`);
@@ -1396,7 +1377,7 @@ test("renewed links read only bounded unrelated prefixes and preserve link valid
   const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
   const program = `import { Repository } from ${JSON.stringify(url)}; process.stdout.write(JSON.stringify(Repository.open(process.argv[1]).links()));`;
   const trace = join(parent, "links.strace");
-  const child = spawnSync("strace", ["-yy", "-e", "trace=read", "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-yy", "-e", "trace=read,pread64", "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr); assert.equal(JSON.parse(child.stdout)[0].id, link);
   const events = readFileSync(trace, "utf8").split("\n").filter(line => line.includes(objectPath(repo, large.id)));
   const bytes = events.reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
@@ -1418,7 +1399,7 @@ test("renewed scan and status read one private layer snapshot per operation", /*
   for (const operation of ["scan", "status"] as const) {
     const program = `import { Repository } from ${JSON.stringify(url)}; const result=Repository.open(process.argv[1]).${operation}(); process.stdout.write(JSON.stringify(result));`;
     const trace = join(parent, `${operation}.strace`);
-    const child = spawnSync("strace", ["-e", "trace=openat", "-P", path, "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
+    const child = spawnSync("strace", ["-e", "trace=openat", "-P", path, "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
     assert.equal(child.status, 0, child.stderr);
     assert.equal(readFileSync(trace, "utf8").split("\n").filter(line => line.includes("openat(")).length, 1, operation);
   }
@@ -1428,12 +1409,12 @@ test("renewed live writer lasting beyond one second completes before a bounded w
   const { repo } = await fixture(); const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
   const ownerProgram = `import { Repository } from ${JSON.stringify(url)}; Repository.open(process.argv[1]).objects.withWriteLock(()=>{process.stdout.write("ready"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,2500);});`;
   const waiterProgram = `import { Repository } from ${JSON.stringify(url)}; const repo=Repository.open(process.argv[1]); process.stdout.write("ready"); await new Promise(resolve=>process.stdin.once("data",resolve)); const start=performance.now(); repo.objects.withWriteLock(()=>process.stdout.write(String(performance.now()-start)));`;
-  const waiter = spawn(process.execPath, ["--input-type=module", "-e", waiterProgram, repo.root], { stdio: ["pipe", "pipe", "pipe"], timeout: processFixtureTimeout });
+  const waiter = spawn(process.execPath, ["--input-type=module", "-e", waiterProgram, repo.root], { env: testEnvironment(), stdio: ["pipe", "pipe", "pipe"], timeout: processFixtureTimeout });
   let output = ""; let errors = "";
   waiter.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); }); waiter.stderr.on("data", (chunk: Buffer) => { errors += chunk.toString(); });
   const waiterCompleted = new Promise<number | null>((resolve, reject) => { waiter.on("error", reject); waiter.on("close", resolve); });
   await new Promise<void>((resolve, reject) => { waiter.stdout.once("data", () => resolve()); waiter.once("error", reject); waiter.once("close", code => reject(new Error(`waiter exited ${code} before readiness: ${errors}`))); });
-  const owner = spawn(process.execPath, ["--input-type=module", "-e", ownerProgram, repo.root], { stdio: ["ignore", "pipe", "pipe"], timeout: processFixtureTimeout });
+  const owner = spawn(process.execPath, ["--input-type=module", "-e", ownerProgram, repo.root], { env: testEnvironment(), stdio: ["ignore", "pipe", "pipe"], timeout: processFixtureTimeout });
   const completed = new Promise<number | null>((resolve, reject) => { owner.on("error", reject); owner.on("close", resolve); });
   await new Promise<void>((resolve, reject) => { owner.stdout.once("data", () => resolve()); owner.once("error", reject); owner.once("close", code => reject(new Error(`owner exited ${code} before readiness`))); });
   refuses(() => repo.objects.recoverWriterLock(), "store_locked"); waiter.stdin.end("go");
@@ -1477,12 +1458,12 @@ test("renewed import closes shared payloads and standalone series once before re
   const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href; const bundle = pathToFileURL(join(process.cwd(), "engine/bundle.ts")).href;
   const program = `import { readFileSync } from "node:fs"; import { Repository } from ${JSON.stringify(url)}; import { importBundle } from ${JSON.stringify(bundle)}; const r=Repository.open(process.argv[1]); process.stdout.write(JSON.stringify(importBundle(r.objects,r.refs,readFileSync(process.argv[2]))));`;
   const trace = join(parent, "import.strace");
-  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read", "-P", objectPath(repo, id), "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root, bundlePath], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read,pread64", "-P", objectPath(repo, id), "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root, bundlePath], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr);
   assert.deepEqual(JSON.parse(child.stdout).added, [seriesId]); assert.equal(repo.refs.read("refs/heads/imported"), target);
   const events = readFileSync(trace, "utf8").split("\n");
   assert.equal(events.filter(line => line.includes("openat(")).length, 1);
-  const bytes = events.filter(line => line.includes("read(")).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  const bytes = events.filter(line => /\b(?:read|pread64)\(/.test(line)).reduce((total, line) => total + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
   assert.equal(bytes, readFileSync(objectPath(repo, id)).length);
   console.log(`renewed shared import trace: 2 FileIds, series base/patch and ref, 1 payload open, ${bytes} compressed bytes`);
 });
@@ -1599,7 +1580,7 @@ for (const linked of [false, true]) test(`renewal erasure recovery authorizes be
   if (linked) hub.linkInstance("recovery", join(parent, "recovery"));
   const repo = linked ? Repository.open(join(parent, "recovery")) : hub;
   const url = pathToFileURL(join(process.cwd(), "engine/repo.ts")).href;
-  const crash = spawnSync(process.execPath, ["--input-type=module", "-e", `import { Repository } from ${JSON.stringify(url)}; Repository.open(process.argv[1]).objects.withWriteLock(()=>process.kill(process.pid,"SIGKILL"));`, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
+  const crash = spawnSync(process.execPath, ["--input-type=module", "-e", `import { Repository } from ${JSON.stringify(url)}; Repository.open(process.argv[1]).objects.withWriteLock(()=>process.kill(process.pid,"SIGKILL"));`, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(crash.signal, "SIGKILL");
   const lock = join(hub.controlDirectory, "objects.lock"); const owner = readFileSync(lock);
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
@@ -1627,9 +1608,9 @@ test("renewal export discovers manifests with bounded prefixes and hashes all se
   const bundleUrl = pathToFileURL(join(process.cwd(), "engine/bundle.ts")).href;
   const trace = join(parent, "export.strace");
   const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { exportBundle,parseBundle } from ${JSON.stringify(bundleUrl)}; const r=Repository.open(process.argv[1]); const bundle=exportBundle(r.objects,r.refs,[]); process.stdout.write(JSON.stringify(parseBundle(bundle).header.objects));`;
-  const exported = spawnSync("strace", ["-yy", "-e", "trace=read", "-P", path, "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { encoding: "utf8", timeout: processFixtureTimeout });
+  const exported = spawnSync("strace", ["-yy", "-e", "trace=read,pread64", "-P", path, "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(exported.status, 0, exported.stderr); assert.ok((JSON.parse(exported.stdout) as string[]).includes(id));
-  const bytes = readFileSync(trace, "utf8").split("\n").filter(line => line.includes("read(")).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
+  const bytes = readFileSync(trace, "utf8").split("\n").filter(line => /\b(?:read|pread64)\(/.test(line)).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0);
   assert.equal(bytes, compressed.length + 64, "export fully read the payload again during discovery");
   console.log(`renewal export: ${bytes} compressed bytes = ${compressed.length} serialized hash pass + 64 discovery bytes`);
   writeFileSync(path, deflateSync(frameObject("blob", Buffer.from("different valid framed content"))));
@@ -1671,14 +1652,14 @@ test("renewal closure discards leaf bytes with native memory and one physical ha
   const closureUrl = pathToFileURL(join(process.cwd(), "engine/closure.ts")).href;
   const trace = join(parent, "memory.strace");
   const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { inspectClosure } from ${JSON.stringify(closureUrl)}; const r=Repository.open(process.argv[1]); global.gc(); const before=process.memoryUsage(); const peakBefore=process.resourceUsage().maxRSS*1024; const report=r.objects.withWriteLock(()=>inspectClosure(r.objects,[process.argv[2],process.argv[2]])); const after=process.memoryUsage(); process.stdout.write(JSON.stringify({report,before,after,peakBefore,peakAfter:process.resourceUsage().maxRSS*1024}));`;
-  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read", "-o", trace, process.execPath, "--expose-gc", "--max-old-space-size=32", "--input-type=module", "-e", program, repo.root, target], { encoding: "utf8", timeout: processFixtureTimeout });
+  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read,pread64", "-o", trace, process.execPath, "--expose-gc", "--max-old-space-size=32", "--input-type=module", "-e", program, repo.root, target], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr);
   const result = JSON.parse(child.stdout) as { report: ReturnType<typeof inspectClosure>; before: NodeJS.MemoryUsage; after: NodeJS.MemoryUsage; peakBefore: number; peakAfter: number };
   assert.deepEqual(result.report.missing, []); assert.deepEqual(result.report.corrupt, []);
   const events = readFileSync(trace, "utf8").split("\n");
   for (const [path, size] of compressed) {
     assert.equal(events.filter(line => line.includes("openat(") && line.includes(`"${path}"`)).length, 1);
-    assert.equal(events.filter(line => line.includes("read(") && line.includes(`<${path}>`)).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0), size);
+    assert.equal(events.filter(line => /\b(?:read|pread64)\(/.test(line) && line.includes(`<${path}>`)).reduce((sum, line) => sum + Number(/= ([0-9]+)$/.exec(line)?.[1] ?? 0), 0), size);
   }
   const retained = result.after.arrayBuffers - result.before.arrayBuffers; const peakGrowth = result.peakAfter - result.peakBefore;
   const compressedBytes = [...compressed.values()].reduce((sum, bytes) => sum + bytes, 0);
@@ -1704,7 +1685,7 @@ test("renewal closure caches malformed shared leaves without repeating physical 
     const tree = writeTree(repo.objects, ["a", "b"].map(name => ({ name, mode: "100644", id, fileId: name.repeat(32) })));
     const target = writeCommit(repo.objects, { tree, parents: [], author: signature, committer: signature, message: "shared malformed structure" });
     const trace = join(parent, `${type}.strace`);
-    const child = spawnSync("strace", ["-e", "trace=openat", "-P", objectPath(repo, id), "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root, target], { encoding: "utf8", timeout: processFixtureTimeout });
+    const child = spawnSync("strace", ["-e", "trace=openat", "-P", objectPath(repo, id), "-o", trace, process.execPath, "--input-type=module", "-e", program, repo.root, target], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
     assert.equal(child.status, 0, child.stderr);
     const report = JSON.parse(child.stdout) as ReturnType<typeof inspectClosure>;
     assert.equal(report.corrupt.length, 2); assert.deepEqual(report.missing, []);
@@ -1733,7 +1714,8 @@ test("renewal uploads hash the entire batch before denial decoding or publicatio
   assert.equal(repo.objects.has(healthy.id), false);
   writeFileSync(join(repo.controlDirectory, "denials.json"), "null");
   await assert.rejects(() => transport.uploadObjects([healthy, late]), (error: unknown) => error instanceof ObjectStoreError && error.code === "corrupt_object");
-  assert.equal(repo.objects.has(healthy.id), false);
+  assert.throws(() => repo.objects.has(healthy.id), { code: "bad_tombstone" });
+  assert.equal(existsSync(objectPath(repo, healthy.id)), false);
   await assert.rejects(() => transport.uploadObjects([healthy]), (error: unknown) => error instanceof ObjectStoreError && error.code === "bad_tombstone");
   writeFileSync(join(repo.controlDirectory, "denials.json"), denialBytes);
   const clean = Repository.init(join(repo.root, "clean-upload"));
@@ -1843,7 +1825,7 @@ test("grant repair lower-level configuration respects a live shared writer lease
   const compositionUrl = pathToFileURL(join(process.cwd(), "engine/composition.ts")).href;
   const program = `import { configureAuthority } from ${JSON.stringify(compositionUrl)}; try { configureAuthority(process.argv[1], "replacement", "new-read", "new-erase", { currentEraseCredential: "erase-fixture" }); process.stdout.write("changed"); } catch (error) { process.stdout.write(error.code); }`;
   repo.objects.withWriteLock(/** Keep a real filesystem lease active throughout the child's attempted replacement. */ () => {
-    const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.controlDirectory], { encoding: "utf8", timeout: processFixtureTimeout });
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.controlDirectory], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
     assert.equal(child.status, 0, child.stderr); assert.equal(child.stdout, "store_locked"); assert.deepEqual(readFileSync(path), before);
     configureAuthority(repo.controlDirectory, "nested", "new-read", "new-erase", { currentEraseCredential: "erase-fixture" });
     assert.equal(authorize(repo.controlDirectory, "erase", "new-erase"), "nested");
@@ -1920,9 +1902,9 @@ for (const caller of ["hub", "linked"] as const) {
     for (const root of [repo.root, sibling]) {
       const copy = join(root, "unrelated/custom/team/runtime/cache");
       mkdirSync(dirname(copy), { recursive: true }); writeFileSync(copy, selected);
-      refuses(() => invoked.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "erasure_worktree_conflict");
-      assert.deepEqual(active.objects.denials(), []); assert.deepEqual(readFileSync(copy), selected);
-      for (const instance of [repo.root, sibling]) assert.deepEqual(readFileSync(join(instance, "secret.bin")), selected);
+      assert.equal(invoked.obliterate("secret.bin", "erase-fixture", "incident", new Date()).guarantee.kind, "native-provenance");
+      assert.deepEqual(readFileSync(copy), selected);
+      for (const instance of [repo.root, sibling]) assert.equal(existsSync(join(instance, "secret.bin")), false);
       rmSync(join(root, "unrelated"), { recursive: true });
     }
     assert.doesNotThrow(() => invoked.obliterate("secret.bin", "erase-fixture", "incident", new Date()));
@@ -1951,8 +1933,8 @@ test("grant repair tracker coordinates retain root empty and external boundaries
       for (const root of [repo.root, sibling]) {
         mkdirSync(join(root, "outside/runtime"), { recursive: true }); writeFileSync(join(root, "outside/runtime/cache"), selected);
         const active = Repository.open(repo.root, pmRoot);
-        refuses(() => active.obliterate("secret.bin", "erase-fixture", "incident", new Date()), "erasure_worktree_conflict");
-        assert.deepEqual(repo.objects.denials(), []); rmSync(join(root, "outside"), { recursive: true });
+        assert.equal(active.obliterate("secret.bin", "erase-fixture", "incident", new Date()).guarantee.kind, "native-provenance");
+        assert.deepEqual(readFileSync(join(root, "outside/runtime/cache")), selected); rmSync(join(root, "outside"), { recursive: true });
       }
     }
     Repository.open(repo.root, pmRoot).obliterate("secret.bin", "erase-fixture", "incident", new Date());
@@ -1969,7 +1951,7 @@ test("grant repair installed CLI parses separate current and legacy flags and pr
   const readToken = join(parent, "cli-read"); const eraseToken = join(parent, "cli-erase"); const currentToken = join(parent, "cli-current");
   writeFileSync(readToken, "cli-read-grant"); writeFileSync(eraseToken, "cli-erase-grant"); writeFileSync(currentToken, "cli-erase-grant");
   const common = [pmExecutable, "--json", "vcs", "authority", "--principal", "fixture", "--read-token-file", readToken, "--erase-token-file", eraseToken];
-  const environment = { ...withoutPmContext(process.env), ...discardChildCoverage() };
+  const environment = { ...testEnvironment(), ...discardChildCoverage() };
   const initial = spawnSync(process.execPath, common, { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 }); assert.equal(initial.status, 0, initial.stderr + initial.stdout);
   const original = readFileSync(authorityPath); writeFileSync(readToken, "cli-new-read"); writeFileSync(eraseToken, "cli-new-erase");
   for (const flags of [[], ["--regenerate-legacy"], ["--current-erase-token-file", eraseToken], ["--current-erase-token-file", currentToken, "--regenerate-legacy"]]) {
@@ -1982,6 +1964,18 @@ test("grant repair installed CLI parses separate current and legacy flags and pr
   const created = spawnSync(process.execPath, [pmExecutable, "--json", "vcs", "layer", "ordinary", "src/search/a.txt", overlay], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
   assert.equal(created.status, 0, created.stderr + created.stdout); assert.equal(readFileSync(join(repo.root, "src/search/a.txt"), "utf8"), "ordinary CLI overlay\n"); repo.removeLayer("ordinary");
   commit(repo, "src/search/a.txt", Buffer.from("unrelated CLI source\n")); commit(repo, "secret.bin", Buffer.from("installed-cli-selected-marker-374698"));
-  const erased = spawnSync(process.execPath, [pmExecutable, "--json", "vcs", "obliterate", "secret.bin", "--erase-token-file", eraseToken, "--reason", "incident"], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
-  assert.equal(erased.status, 0, erased.stderr + erased.stdout); assert.equal(existsSync(join(repo.root, "secret.bin")), false); assert.equal(readFileSync(join(repo.root, "src/search/a.txt"), "utf8"), "unrelated CLI source\n");
+  const foreign = join(repo.objects.storageRoot(), "opaque-cache"); writeFileSync(foreign, "unaccounted CLI bytes");
+  const eraseArgs = [pmExecutable, "--json", "vcs", "obliterate", "secret.bin", "--erase-token-file", eraseToken, "--reason", "incident"];
+  const withoutPurge = spawnSync(process.execPath, eraseArgs, { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
+  assert.equal(withoutPurge.status, 1); assert.match(withoutPurge.stdout + withoutPurge.stderr, /unverifiable|purge-unaccounted/); assert.ok(existsSync(foreign));
+  const erased = spawnSync(process.execPath, [...eraseArgs, "--purge-unaccounted"], { cwd: repo.root, env: environment, encoding: "utf8", timeout: 120_000 });
+  assert.equal(erased.status, 0, erased.stderr + erased.stdout); assert.equal(existsSync(foreign), false);
+  assert.equal(JSON.parse(erased.stdout).erasure.purge.deleted, 1); assert.equal(existsSync(join(repo.root, "secret.bin")), false); assert.equal(readFileSync(join(repo.root, "src/search/a.txt"), "utf8"), "unrelated CLI source\n");
+});
+
+
+test("sparse-view CLI retains native publication failures after guarded worktree mutation", async t => {
+ const {repo}=await fixture();const harness=await createExtensionTestHarness(extension,{capabilities:["commands","schema"]});const before=repo.readIndex();const rename=fs.renameSync;const destination=join(repo.controlDirectory,"view.json");const failure=Object.assign(new Error("native view publication failed"),{code:"EIO"});
+ t.mock.method(fs,"renameSync",(...args:Parameters<typeof fs.renameSync>)=>{if(args[1]===destination)throw failure;return rename(...args);});
+ try{const result=await harness.runCommand({command:"vcs view",args:["**"],pmRoot:repo.root});assert.match(String(result.errorMessage),/native view publication failed/);assert.deepEqual(repo.readIndex(),before);assert.equal(existsSync(join(repo.controlDirectory,"objects.lock")),false);}finally{t.mock.restoreAll();}
 });

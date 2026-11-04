@@ -1,3 +1,4 @@
+import { durability } from "./durability.ts";
 // Sparse linked instances over a shared immutable object store.
 //
 // A repository's control directory holds two very different kinds of state.
@@ -17,7 +18,7 @@
 // Nothing here writes instance state into the shared object store, and nothing
 // here trusts a hint where the filesystem can be asked instead.
 
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -205,7 +206,7 @@ export function writeHints(controlDirectory: string, paths: readonly string[]): 
 }
 
 /**
- * Writes one small control file atomically: temp file, fsync-less write, rename.
+ * Writes one small control file atomically: temp file, flushed data and ancestry, journaled rename.
  *
  * Every per-instance state file is written through here so an interrupted write
  * leaves the previous state rather than a truncated file — the same discipline
@@ -219,9 +220,9 @@ function writeControlFile(path: string, contents: string): void {
   const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     writeFileSync(temporary, contents, { flag: "wx" });
-    renameSync(temporary, path);
+    durability.rename(temporary, path);
   } catch (error) {
-    rmSync(temporary, { force: true });
+    durability.remove(temporary, { force: true });
     throw error;
   }
 }
@@ -263,6 +264,11 @@ export class SharedObjectStore extends ObjectStore {
   /** Preserve actionable diagnostics throughout the verified legacy compatibility stream. */
   *readLines(id: ObjectId, type: ObjectType): Generator<string> {
     try { yield* super.readLines(id, type); } catch (error) { this.missing(id, error); }
+  }
+
+  /** Keep chunk-stream absence actionable for shared instances throughout the verified iterator. */
+  *readChunks(id: ObjectId, type: ObjectType, timeoutMs?: number): Generator<Buffer> {
+    try { yield* super.readChunks(id, type, timeoutMs); } catch (error) { this.missing(id, error); }
   }
 
   /** Translate only absence; preserve corruption and operational filesystem failures. */
@@ -372,31 +378,16 @@ function updateInstances(
   const path = join(controlDirectory, INSTANCE_REGISTRY_FILE);
   mkdirSync(controlDirectory, { recursive: true });
   const lockPath = `${path}.lock`;
-  let descriptor: number;
-  try {
-    descriptor = openSync(lockPath, "wx");
-  } catch (error) {
-    // `wx` fails with EEXIST only when the lock file is already there — another
-    // process holds the registry. Any other errno (EACCES, ENOSPC, ENOTDIR,
-    // EROFS, …) is a different fault about the directory itself, and reporting
-    // it as a busy lock would send the caller retrying a retry that can never
-    // succeed while telling them nothing about the real damage.
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    throw new ObjectStoreError(
-      "instance_registry_locked",
-      `The instance registry is locked by another process (${lockPath}); retry after that pm-vcs command completes.`,
-    );
-  }
+  const lease = durability.claim(lockPath, "instance_registry_locked");
   try {
     const before = readInstances(controlDirectory);
-    const after = mutate(before);
+    const after = mutate(before); lease.verify();
     if (after !== before) {
       writeControlFile(path, `${JSON.stringify({ instances: after }, null, 2)}\n`);
     }
     return after;
   } finally {
-    closeSync(descriptor);
-    unlinkSync(lockPath);
+    lease.release();
   }
 }
 

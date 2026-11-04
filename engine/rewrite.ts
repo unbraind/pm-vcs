@@ -167,7 +167,7 @@ export function mergePath(
   labels?: ConflictLabels,
   fileId?: FileId,
 ): { id: ObjectId; conflicts?: readonly ObjectId[]; conflict?: MergeConflict } {
-  return ctx.store.withWriteLock(/** Keep native reads and their resulting publication inside the shared erasure lease. */ () => {
+  return ctx.store.withDerivation([ourId, theirId, ...(baseId === null ? [] : [baseId])], /** Keep native inputs and publication inside the shared erasure lease. */ () => {
     // Only a durable denial means intentional absence. Verify every surviving
     // frame and hash before returning a conflict; missing or damaged bytes refuse.
     let fragmented = false;

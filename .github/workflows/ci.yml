@@ -75,10 +75,69 @@ jobs:
           ./node_modules/.bin/pm health --check-only --strict-exit --require-merge-drivers
 
       - name: Full npm release gate
-        run: npm run release:check
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -BG /
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          if (( available_kb < 20971520 )); then
+            printf 'Release gate stopped: fewer than 20 GiB free on root (%s KiB available).\n' "${available_kb}" >&2
+            exit 1
+          fi
+          gate_tmp="$(mktemp -d "${RUNNER_TEMP}/pm-vcs-npm.XXXXXXXX")"
+          gate_memory=""
+          # Every crash cut still uses native syscalls. Bound memory-backed
+          # storage to this matrix; other acceptance fixtures stay on disk.
+          if [ -d /dev/shm ] && [ -w /dev/shm ]; then
+            if memory_kb="$(df -Pk /dev/shm 2>/dev/null | awk 'NR == 2 { print $4 }')" && [[ "${memory_kb}" =~ ^[0-9]+$ ]] && (( memory_kb >= 2097152 )); then
+              gate_memory="$(mktemp -d /dev/shm/pm-vcs-crashes.XXXXXXXX)"
+              export PM_VCS_CRASH_TMPDIR="${gate_memory}"
+            fi
+          fi
+          storage_report() {
+            printf 'gate storage %s\n' "$1"
+            df -Pk "${gate_tmp}"
+            df -Pi "${gate_tmp}"
+            du -sk -- "${gate_tmp}"
+            if [ -n "${gate_memory}" ]; then du -sk -- "${gate_memory}"; fi
+            if [ -d coverage ]; then du -sk -- coverage; fi
+          }
+          trap 'gate_status=$?; storage_report before-cleanup || true; rm -rf -- "${gate_tmp}"; if [ -n "${gate_memory}" ]; then rm -rf -- "${gate_memory}"; fi; df -Pk "${RUNNER_TEMP}" || true; df -Pi "${RUNNER_TEMP}" || true; exit "${gate_status}"' EXIT
+          export TMPDIR="${gate_tmp}"
+          storage_report before-gate || true
+          NPM_CONFIG_USERCONFIG=/dev/null npm run release:check
 
       - name: Full Bun release gate
+        shell: bash
         run: |
+          set -euo pipefail
+          df -BG /
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          if (( available_kb < 20971520 )); then
+            printf 'Release gate stopped: fewer than 20 GiB free on root (%s KiB available).\n' "${available_kb}" >&2
+            exit 1
+          fi
+          gate_tmp="$(mktemp -d "${RUNNER_TEMP}/pm-vcs-bun.XXXXXXXX")"
+          gate_memory=""
+          # Every crash cut still uses native syscalls. Bound memory-backed
+          # storage to this matrix; other acceptance fixtures stay on disk.
+          if [ -d /dev/shm ] && [ -w /dev/shm ]; then
+            if memory_kb="$(df -Pk /dev/shm 2>/dev/null | awk 'NR == 2 { print $4 }')" && [[ "${memory_kb}" =~ ^[0-9]+$ ]] && (( memory_kb >= 2097152 )); then
+              gate_memory="$(mktemp -d /dev/shm/pm-vcs-crashes.XXXXXXXX)"
+              export PM_VCS_CRASH_TMPDIR="${gate_memory}"
+            fi
+          fi
+          storage_report() {
+            printf 'gate storage %s\n' "$1"
+            df -Pk "${gate_tmp}"
+            df -Pi "${gate_tmp}"
+            du -sk -- "${gate_tmp}"
+            if [ -n "${gate_memory}" ]; then du -sk -- "${gate_memory}"; fi
+            if [ -d coverage ]; then du -sk -- coverage; fi
+          }
+          trap 'gate_status=$?; storage_report before-cleanup || true; rm -rf -- "${gate_tmp}"; if [ -n "${gate_memory}" ]; then rm -rf -- "${gate_memory}"; fi; df -Pk "${RUNNER_TEMP}" || true; df -Pi "${RUNNER_TEMP}" || true; exit "${gate_status}"' EXIT
+          export TMPDIR="${gate_tmp}"
+          storage_report before-gate || true
           bun run release:check
           bun test --timeout 120000 ./test/tracker-lenses.test.ts ./test/change-bundles.test.ts
 
@@ -119,3 +178,9 @@ jobs:
 
       - name: Verify the installed PM CLI launcher
         run: node scripts/accept-native-toon.ts --init-only
+
+      - name: Build Windows storage acceptance
+        run: npm run build
+
+      - name: Verify Windows GC apply on a non-git tracker
+        run: node --test --test-concurrency=1 --test-name-pattern="Windows GC|native root case" test/durability.test.ts test/ref-publication-recovery.test.ts

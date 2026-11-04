@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 // Regression tests for issue #26 — the three defects the issue reports.
 //
 // Each test is written to compile and run against the pre-fix code and to FAIL

@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { chmodSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

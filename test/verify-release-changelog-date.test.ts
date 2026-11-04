@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /**
  * Executes the changelog-date verifier's rules against fixtures.
  *

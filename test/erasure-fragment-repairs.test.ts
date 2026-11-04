@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Bounded real leaf-link erasure and fragmented conflict regressions. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -119,13 +120,13 @@ for (const stagedLink of [false, true]) for (const ignored of [false, true]) {
   });
 }
 
-test("erasure refuses selected bytes retained in unrelated external leaf target text before denial", async () => {
+test("erasure preserves user-authored unrelated link text outside native provenance", async () => {
   const { repo, scratch } = await fixture(); const selected = "retained-link-text-marker-635284";
   writeFileSync(join(repo.root, "secret"), selected); repo.stage(["secret"]); repo.commit({ message: "selected", author }, new Date());
   const destination = join(scratch, selected); writeFileSync(destination, "independent outside bytes");
-  symlinkSync(destination, join(repo.root, "retained.link")); const before = state(repo);
-  assert.throws(() => repo.obliterate("secret", "erase-fixture", "incident", new Date()), { code: "erasure_worktree_conflict" });
-  assert.deepEqual(state(repo), before); assert.equal(readlinkSync(join(repo.root, "retained.link")), destination);
+  symlinkSync(destination, join(repo.root, "retained.link"));
+  assert.equal(repo.obliterate("secret", "erase-fixture", "incident", new Date()).guarantee.kind, "native-provenance");
+  assert.equal(readlinkSync(join(repo.root, "retained.link")), destination);
   assert.equal(readFileSync(destination, "utf8"), "independent outside bytes");
 });
 
@@ -241,6 +242,8 @@ test("erasure replacement after durable denial refuses completion and preserves 
   assert.equal(swapped, true); assert.equal(repo.objects.denials()[0]!.pending, true); assert.equal(readlinkSync(leaf), external);
   assert.equal(readFileSync(external, "utf8"), "outside sentinel"); assert.equal(repo.readFileState(tip, "owned").kind, "obliterated");
   assert.equal(repo.operations.read().at(-1)!.command, "commit");
+  assert.throws(() => repo.obliterate("owned", "erase-fixture", "incident", new Date()), { code: "worktree_path_changed" });
+  rmSync(leaf); // A replacement is foreign; recovery cannot extend the original deletion set.
   repo.obliterate("owned", "erase-fixture", "incident", new Date()); assert.equal(lstatSync(leaf, { throwIfNoEntry: false }), undefined);
   assert.equal(repo.objects.denials()[0]!.pending, false); assert.equal(readFileSync(external, "utf8"), "outside sentinel");
 });
@@ -262,4 +265,33 @@ test("erasure refuses an actual control-root link and disappearing owned or unow
     if (disappearing === "unowned") assert.deepEqual(readFileSync(join(repo.root, "secret")), selected);
     else { assert.equal(existsSync(join(repo.root, "secret")), false); writeFileSync(join(repo.root, "secret"), selected); }
   }
+});
+
+
+test("worktree erasure recovery never adopts a foreign leaf across pending and completed receipt lifetimes", async t => {
+  let cells = 0;
+  for (const link of [false, true]) for (const checkpoint of ["pending", "completed"] as const) {
+    const { repo, scratch } = await fixture(); const leaf = join(repo.root, "owned"); const target = join(scratch, "tripwire");
+    writeFileSync(leaf, "original inode"); writeFileSync(target, "foreign sentinel");
+    const first = new WorktreeMutation(repo.root, ".pmvcs");
+    try {
+      const plan = first.planErasure("a".repeat(32), new Map([["owned", lstatSync(leaf, { bigint: true })]]));
+      renameSync(leaf, join(scratch, "retired-original"));
+      if (link) symlinkSync(target, leaf); else writeFileSync(leaf, "foreign sentinel");
+      if (checkpoint === "completed") { plan.remove(leaf); assert.throws(() => plan.finish(), { code: "worktree_path_changed" }); }
+    } finally { first.close(); }
+    for (let retry = 0; retry < 3; retry++) {
+      const next = new WorktreeMutation(repo.root, ".pmvcs");
+      try {
+        assert.throws(() => { const plan = next.planErasure("a".repeat(32), new Map([["owned", lstatSync(leaf, { bigint: true })]]), true); plan.remove(leaf); plan.finish(); }, { code: checkpoint === "pending" && link ? "destructive_plan_conflict" : "worktree_path_changed" });
+      } finally { next.close(); }
+      assert.equal(readFileSync(leaf, "utf8"), "foreign sentinel"); assert.equal(readFileSync(target, "utf8"), "foreign sentinel");
+      if (link) assert.equal(readlinkSync(leaf), target);
+    }
+    rmSync(leaf); const final = new WorktreeMutation(repo.root, ".pmvcs");
+    try { const plan = final.planErasure("a".repeat(32), new Map(), true); for (const path of plan.paths) plan.remove(path); assert.equal(plan.finish().status, "completed"); }
+    finally { final.close(); }
+    assert.equal(readFileSync(target, "utf8"), "foreign sentinel"); cells++;
+  }
+  assert.equal(cells, 4); t.diagnostic("4 representation/receipt-lifetime cells, 12 repeated refusals, then convergence after foreign retirement");
 });

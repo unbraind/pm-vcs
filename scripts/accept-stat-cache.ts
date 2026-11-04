@@ -1,3 +1,4 @@
+import { durability } from "../engine/durability.ts";
 /**
  * Proves the installed pm CLI stops opening unchanged materialized file content.
  *
@@ -14,7 +15,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RACY_WINDOW_NS } from "../engine/worktree.ts";
@@ -96,7 +97,7 @@ export function main(platform: NodeJS.Platform, executable = pmExecutable, trace
     console.error(errorMessage(error, "stat-cache strace acceptance failed"));
     status = 1;
   }
-  rmSync(project, { recursive: true, force: true });
+  durability.remove(project, { recursive: true, force: true });
   return status;
 }
 

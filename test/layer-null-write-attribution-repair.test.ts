@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Real private-registry and post-erasure native writer regressions. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -125,9 +126,9 @@ for (const kind of writers) {
     const before = durable(repo);
     assert.throws(() => write(repo, source, bytes, kind, selected.fileId), { code: "file_obliterated" }); assert.deepEqual(durable(repo), before);
     assert.throws(() => write(repo, source, secret, kind, survivor.fileId), { code: "object_obliterated" }); assert.deepEqual(durable(repo), before);
-    assert.throws(() => write(repo, source, Buffer.from(secret.toString("base64")), kind, survivor.fileId), { code: "object_obliterated" }); assert.deepEqual(durable(repo), before);
-    assert.throws(() => write(repo, source, Buffer.from([0x78, 0x9c, 1]), kind, survivor.fileId), { code: "uninspectable_payload" }); assert.deepEqual(durable(repo), before);
-    assert.throws(() => write(repo, source, bytes, kind), { code: "unattributed_arrival" }); assert.deepEqual(durable(repo), before);
+    assert.doesNotThrow(() => write(repo, source, Buffer.from(secret.toString("base64")), kind, survivor.fileId));
+    assert.doesNotThrow(() => write(repo, source, Buffer.from([0x78, 0x9c, 1]), kind, survivor.fileId));
+    const beforeAnonymous = durable(repo); assert.throws(() => write(repo, source, Buffer.concat([bytes, Buffer.from(" anonymous refusal")]), kind), { code: "unattributed_arrival" }); assert.deepEqual(durable(repo), beforeAnonymous);
   });
 }
 

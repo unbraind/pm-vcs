@@ -1,3 +1,7 @@
+import { nativeOutputs, outputBirth } from "./native-outputs.ts";
+import type { BigIntStats } from "node:fs";
+import { durability } from "./durability.ts";
+import { withPublicationLock, publicationRootIds, validatePublicationIds } from "./publication.ts";
 import type { AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
 import { attachCheckpoint, createSemanticCheckpoint, type CheckpointRequest } from "./checkpoints.ts";
 import { signChange } from "./signatures.ts";
@@ -15,7 +19,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes, type KeyObject } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -39,7 +43,7 @@ import {
 import { type ObjectId, type PayloadState, ObjectStore, ObjectStoreError, hashObject, isObjectId, assertRegistryName, readControlJson } from "./objects.ts";
 
 import { assertCompositionPath, assertSafeFilePath, authorize, configureAuthority, decodeLink, encodeLink, pathsOverlap, readLayers, writePrivateJson, type AuthorityChangeAuthorization, type LocalLayer, type RepositoryLink } from "./composition.ts";
-import { eraseFile, type ErasureReceipt } from "./erasure.ts";
+import { eraseFile, validateErasureRequest, assertErasureOptions, type ErasureReceipt, type ErasureOptions } from "./erasure.ts";
 import { CDC_STAGING_THRESHOLD, STAGING_CDC_PARAMS, blobFileContentId, cdcFragmentedFileContentId, matchesFragmentedFile, readFragmented, writeCdcFragmentedFile } from "./fragments.ts";
 
 
@@ -342,15 +346,15 @@ export class Repository {
    *   is missing — an instance without its shared store cannot answer anything.
    */
   constructor(root: string, config?: RepositoryConfig, pmRoot?: string) {
-    this.root = root;
-    this.controlDirectory = join(root, CONTROL_DIRECTORY);
-    this.instanceLink = resolveInstanceLink(this.controlDirectory, root);
+    this.root = resolve(root);
+    this.controlDirectory = join(this.root, CONTROL_DIRECTORY);
+    this.instanceLink = resolveInstanceLink(this.controlDirectory, this.root);
     const shared = this.instanceLink?.controlDirectory ?? this.controlDirectory;
     this.objects = this.instanceLink === null
       ? new ObjectStore(join(shared, "objects"))
       : new SharedObjectStore(join(shared, "objects"));
     this.refs = new RefStore(shared, this.controlDirectory);
-    this.operations = new OperationLog(join(this.controlDirectory, "oplog.jsonl"));
+    this.operations = new OperationLog(join(this.controlDirectory, "oplog.jsonl"), this.objects);
     this.remotes = new RemoteStore(join(shared, "remotes.json"));
     this.config = config ?? readConfig(join(shared, "config.json"));
     this.pmRoot = pmRoot;
@@ -399,8 +403,8 @@ export class Repository {
     mkdirSync(join(repository.controlDirectory, "objects"), { recursive: true });
     mkdirSync(join(repository.controlDirectory, "refs", "heads"), { recursive: true });
     mkdirSync(join(repository.controlDirectory, "refs", "tags"), { recursive: true });
-    writeFileSync(formatPath, `${REPOSITORY_FORMAT}\n`);
-    writeFileSync(join(repository.controlDirectory, "index"), "");
+    writeFileSync(formatPath, `${REPOSITORY_FORMAT}\n`); durability.persist(formatPath);
+    writeFileSync(join(repository.controlDirectory, "index"), ""); durability.persist(join(repository.controlDirectory, "index"));
     writeConfig(join(repository.controlDirectory, "config.json"), config);
     initializeInstanceRegistry(repository.controlDirectory);
     repository.refs.setHeadToRef(`${BRANCH_PREFIX}${branch}`);
@@ -497,15 +501,15 @@ export class Repository {
     const temporary = `${this.mergeStatePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
     try {
       writeFileSync(temporary, JSON.stringify(state), { flag: "wx" });
-      renameSync(temporary, this.mergeStatePath);
+      durability.rename(temporary, this.mergeStatePath);
     } finally {
-      rmSync(temporary, { force: true });
+      durability.remove(temporary, { force: true });
     }
   }
 
   /** Removes the in-progress merge state, completing or abandoning the merge. */
   private clearMergeState(): void {
-    rmSync(this.mergeStatePath, { force: true });
+    durability.remove(this.mergeStatePath, { force: true });
   }
 
   /**
@@ -602,6 +606,16 @@ export class Repository {
    * @returns False only when a compare-and-swap observed a newer index.
    */
   private replaceIndex(entries: readonly IndexEntry[], expectedContents: string | null): boolean {
+    return withPublicationLock(this.indexPath, () => {
+    if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
+    const contents = encodeIndex(entries);
+    try { validatePublicationIds(this.indexPath, publicationRootIds(this.indexPath, contents)); }
+    catch (error) {
+      // Status may refresh stat hints on an older index with unavailable payloads.
+      // Preserve that readable state; an explicit staging write still validates.
+      if (expectedContents !== null && error instanceof ObjectStoreError && error.code === "publication_unverified") return false;
+      throw error;
+    }
     const lockPath = `${this.indexPath}.lock`;
     let descriptor: number;
     try {
@@ -615,18 +629,26 @@ export class Repository {
       );
     }
     let temporary: string | null = null;
+    let lockOwner: BigIntStats | undefined;
+    const changed = new ObjectStoreError("index_changed", "The index changed during publication recovery; re-read it and retry.");
+    /** The same predicate guards initial derivation and the final namespace mutation. */
+    const validate = (): void => { if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) throw changed; };
     try {
-      if (expectedContents !== null && readFileSync(this.indexPath, "utf8") !== expectedContents) return false;
+      lockOwner = fstatSync(descriptor, { bigint: true });
+      durability.recoverPublication(this.indexPath); validate();
       temporary = `${this.indexPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-      writeFileSync(temporary, encodeIndex(entries), { flag: "wx" });
-      renameSync(temporary, this.indexPath);
+      writeFileSync(temporary, contents, { flag: "wx" });
+      durability.rename(temporary, this.indexPath, validate);
       temporary = null;
       return true;
+    } catch (error) {
+      if (error !== changed) throw error;
     } finally {
-      if (temporary !== null) rmSync(temporary, { force: true });
-      closeSync(descriptor);
-      rmSync(lockPath, { force: true });
+      if (temporary !== null) durability.remove(temporary, { force: true });
+      durability.release(lockPath, descriptor, lockOwner);
     }
+    return false;
+    });
   }
 
   /**
@@ -665,6 +687,7 @@ export class Repository {
       ? [...new Set([...listWorkingTree(this.root, CONTROL_DIRECTORY, rules), ...index.keys()])]
       : paths.map((path) => normalizeRepoPath(this.root, path));
     const layers = this.layerPaths();
+    const outputs = new Map(nativeOutputs(this.controlDirectory).map(output => [output.path, output]));
     const denied = this.objects.denials();
     const changed: string[] = [];
     for (const path of targets) {
@@ -758,13 +781,21 @@ export class Repository {
           fileId = randomBytes(16).toString("hex");
         }
       }
-      if (chunked || retainedId !== undefined) {
-        const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
-        if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
-          throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
-        }
-      } else if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
-      else this.stageContent(path, content, fileId);
+      // A denied historical projection supplies no bytes to a fresh independent working-file edit.
+      if (conflictSource !== undefined && this.objects.denial(conflictSource.id) !== undefined) conflictSource = undefined;
+      const sources = conflictSource === undefined ? [] : [conflictSource.id];
+      const output = outputs.get(path);
+      if (output?.complete === true && outputBirth(lstatSync(absolute, { bigint: true })) === output.birth
+        && (chunked ? blobFileContentId(absolute) : hashObject("blob", content)) === output.id) sources.push(...output.objects);
+      this.objects.withDerivation(sources, () => {
+        if (chunked || retainedId !== undefined) {
+          const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
+          if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
+            throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
+          }
+        } else if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
+        else this.stageContent(path, content, fileId);
+      });
       const conflicts = conflictSource === undefined ? undefined : carryConflicts(this.objects, conflictSource.conflicts, conflictSource.id, id, fileId);
       index.set(path, { path, id, mode, fileId, ...(conflicts === undefined ? {} : { conflicts }), ...(copiedFrom === undefined ? {} : { copiedFrom }),
         ...(stat === undefined ? {} : { stat }) });
@@ -1009,7 +1040,7 @@ export class Repository {
   }
 
   /** Add an instance-private overlay after proving ownership, cleanliness and safe paths. */
-  addLayer(name: string, files: ReadonlyMap<string, { content: Buffer; executable: boolean }>): LocalLayer {
+  addLayer(name: string, files: ReadonlyMap<string, { content: Buffer; executable: boolean; source?: ObjectId }>): LocalLayer {
     return this.objects.withWriteLock(/** Layer publication cannot race staging or erasure. */ () => {
       this.objects.preflight([], true);
       const layers = this.layers();
@@ -1022,19 +1053,21 @@ export class Repository {
       const layer: LocalLayer = { name, files: [...files].map(/** Store snapshots only in private control metadata. */ ([path, value]) => {
         assertCompositionPath(path, this.ignoreRules());
         assertSafeFilePath(this.root, path, this.ignoreRules());
+        if (value.source !== undefined && !isObjectId(value.source)) throw new ObjectStoreError("bad_layers", "Layer source must be a native object identity.");
+        if (value.source !== undefined && this.objects.denial(value.source) !== undefined) throw new ObjectStoreError("object_obliterated", "Layer source is permanently denied.");
         this.objects.preflight([{ type: "blob", payload: value.content, id: hashObject("blob", value.content) }], true);
         if (dirty.has(path) || (existsSync(join(this.root, ...path.split("/"))) && !index.has(path))
           || [...owned, ...files.keys()].some(/** Parent collisions and existing private ownership are never implicit. */ (other) => (other !== path || owned.has(path)) && pathsOverlap(other, path))
           || this.objects.denial(index.get(path)?.id ?? "") !== undefined) {
           throw new ObjectStoreError("layer_collision", "Layer would overwrite dirty, untracked, obliterated or privately owned content.");
         }
-        return { path, content: value.content.toString("base64"), executable: value.executable };
+        return { path, content: value.content.toString("base64"), executable: value.executable, ...(value.source === undefined ? {} : { source: value.source }) };
       }).sort(/** Make local metadata stable for inspection and recovery. */ (a, b) => compareByteOrder(a.path, b.path)) };
       writePrivateJson(join(this.controlDirectory, "layers.json"), [...layers, layer]);
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
         for (const file of layer.files) {
-          mutation.write(file.path, Buffer.from(file.content, "base64"), file.executable ? 0o755 : 0o644);
+          mutation.write(file.path, Buffer.from(file.content, "base64"), file.executable ? 0o755 : 0o644, file.source === undefined ? undefined : { objects: [file.source] });
         }
       } finally {
         mutation.close();
@@ -1061,12 +1094,12 @@ export class Repository {
         const entry = index.get(file.path);
         if (entry !== undefined && entry.sparse !== true) restore.set(file.path, this.workingContent(file.path, this.objects.read(entry.id)));
       }
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
         for (const file of layer.files) {
           const content = restore.get(file.path);
           if (content === undefined) mutation.remove(file.path);
-          else mutation.write(file.path, content, index.get(file.path)!.mode === "100755" ? 0o755 : 0o644);
+          else mutation.write(file.path, content, index.get(file.path)!.mode === "100755" ? 0o755 : 0o644, { objects: [index.get(file.path)!.id], fileId: index.get(file.path)!.fileId });
         }
       } finally {
         mutation.close();
@@ -1088,10 +1121,10 @@ export class Repository {
       if (existsSync(join(this.root, path)) && previous === undefined) throw new ObjectStoreError("link_collision", "Descriptor path already holds untracked content.");
       if (previous !== undefined && this.status(readWorkingFile, false).unstaged.some(/** Preserve edits to an existing descriptor. */ (entry) => entry.path === path)) throw new ObjectStoreError("link_collision", "Descriptor has unstaged edits.");
       const fileId = previous?.fileId ?? randomBytes(16).toString("hex");
-      const id = this.objects.write("link", payload, fileId);
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const id = this.objects.write("link", payload, fileId, previous === undefined ? [] : [previous.id]);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
-        mutation.write(path, payload, 0o644);
+        mutation.write(path, payload, 0o644, { objects: [id], fileId });
       } finally {
         mutation.close();
       }
@@ -1119,7 +1152,7 @@ export class Repository {
         if (descriptor === undefined) throw new ObjectStoreError("unknown_link", "No typed link exists at that descriptor path.");
         if (target.identity() !== descriptor.link.repository) throw new ObjectStoreError("link_identity_mismatch", "Target repository identity does not match the immutable pin.");
         const tree = flattenTree(target.objects, readCommit(target.objects, descriptor.link.revision).tree);
-        const files = new Map<string, { content: Buffer; executable: boolean }>();
+        const files = new Map<string, { content: Buffer; executable: boolean; source: ObjectId }>();
         for (const mapping of descriptor.link.mappings) {
           assertCompositionPath(mapping.source, target.ignoreRules());
           assertSafeFilePath(target.root, mapping.source, target.ignoreRules());
@@ -1127,7 +1160,7 @@ export class Repository {
           if (entry === undefined) throw new ObjectStoreError("link_subset_missing", "Pinned revision does not contain a mapped source file.");
           const object = target.objects.read(entry.id);
           if (object.type === "link") throw new ObjectStoreError("nested_link", "Explicit resolution does not recursively follow links.");
-          files.set(mapping.destination, { content: target.workingContent(mapping.source, object), executable: entry.mode === "100755" });
+          files.set(mapping.destination, { content: target.workingContent(mapping.source, object), executable: entry.mode === "100755", source: entry.id });
         }
         return this.addLayer(layerName, files);
     }));
@@ -1153,7 +1186,7 @@ export class Repository {
 
   /** Verify the entire ref closure, including fragments and intentional terminal absence. */
   verify(): ClosureReport {
-    const targets = [...this.refs.list(BRANCH_PREFIX), ...this.refs.list(TAG_PREFIX)].map(/** Branches and tags require complete typed commit structure. */ (entry) => entry.target);
+    const targets = [...this.refs.list(BRANCH_PREFIX, true), ...this.refs.list(TAG_PREFIX, true)].map(/** Branches and tags require complete typed commit structure. */ (entry) => entry.target);
     return inspectClosure(this.objects, targets, [], this.objects.denials(), true);
   }
 
@@ -1197,8 +1230,20 @@ export class Repository {
   }
 
   /** Permanently erase all payloads of a FileId, including every shared instance. */
-  obliterate(selector: string, credential: string, reason: string, now: Date): ErasureReceipt {
-    return this.objects.withWriteLock(/** Keep the complete supported mutation inside the shared store transaction. */ () => {
+  obliterate(selector: string, credential: string, reason: string, now: Date, options: ErasureOptions = {}): ErasureReceipt {
+    assertErasureOptions(options);
+    if (options.recoverLock === true) {
+      const requested = { purgeUnaccounted: options.purgeUnaccounted };
+      return this.objects.withRecoveryValidation(
+        () => validateErasureRequest(this, this.erasureScopes(), selector, credential, reason, now, requested),
+        () => this.obliterate(selector, credential, reason, now, requested),
+      );
+    }
+    return this.objects.withWriteLock(() => eraseFile(this, this.erasureScopes(), selector, credential, reason, now, options));
+  }
+
+  /** Resolve every currently accountable instance scope inside the writer lease or read-only recovery CAS. */
+  private erasureScopes(): Repository[] {
       let pmRoot = this.pmRoot;
       if (pmRoot !== undefined && pmRoot !== "") {
         const absolute = resolve(this.root, pmRoot);
@@ -1209,12 +1254,10 @@ export class Repository {
       }
       const paths = [this.hubRoot, ...readInstances(this.sharedControlDirectory).map(/** Registered instances share this denial and physical cleanup scope. */ (entry) => resolve(this.hubRoot, entry.path))];
       paths.push(...this.retiredInstances().map(/** Unlink never silently relinquishes held private or working bytes. */ (path) => resolve(this.hubRoot, path)));
-      const instances = [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
+      return [...new Set(paths)].map(/** Missing and unbound scope entries require an explicit audited prune before cleanup. */ (path) => {
         if (path !== this.hubRoot && !this.instanceIsBound(path)) throw new ObjectStoreError("unbound_instance", "An inventoried instance is missing or no longer linked to this hub; explicitly prune retired paths before erasure.");
         return Repository.open(path, pmRoot);
       });
-      return eraseFile(this, instances, selector, credential, reason, now);
-    });
   }
 
   /**
@@ -1348,8 +1391,8 @@ export class Repository {
       let registeredHere = false;
       try {
         mkdirSync(instanceControl, { recursive: true });
-        writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`);
-        writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`);
+        writeFileSync(join(instanceControl, "format"), `${REPOSITORY_FORMAT}\n`); durability.persist(join(instanceControl, "format"));
+        writeFileSync(join(instanceControl, INSTANCE_LINK_FILE), `${JSON.stringify({ hub: relativeHub.split(sep).join("/") }, null, 2)}\n`); durability.persist(join(instanceControl, INSTANCE_LINK_FILE));
         if (include.length > 0) writeView(instanceControl, { include });
         const instance = new Repository(instanceRoot);
         instance.refs.setHeadToRef(branchRef);
@@ -1370,10 +1413,10 @@ export class Repository {
           // Removing just the control directory would leave the caller with a
           // half-materialized tree in a directory they handed over empty.
           if (createdRoot) {
-            rmSync(instanceRoot, { recursive: true, force: true });
+            durability.remove(instanceRoot, { recursive: true, force: true });
           } else {
             for (const entry of readdirSync(instanceRoot)) {
-              rmSync(join(instanceRoot, entry), { recursive: true, force: true });
+              durability.remove(join(instanceRoot, entry), { recursive: true, force: true });
             }
           }
           if (registeredHere) unregisterInstance(this.sharedControlDirectory, name);
@@ -1508,7 +1551,7 @@ export class Repository {
         }
         if (!wasVisible && nowVisible) materialized.set(entry.path, this.workingContent(entry.path, this.objects.read(entry.id)));
       }
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
         for (const entry of index) {
           const wasVisible = entry.sparse !== true;
@@ -1524,7 +1567,7 @@ export class Repository {
           }
           if (!wasVisible && nowVisible) {
             widened.push(entry.path);
-            mutation.write(entry.path, materialized.get(entry.path) as Buffer, entry.mode === "100755" ? 0o755 : 0o644);
+            mutation.write(entry.path, materialized.get(entry.path) as Buffer, entry.mode === "100755" ? 0o755 : 0o644, { objects: [entry.id], fileId: entry.fileId });
             // Materialized afresh from the object, so the staged identity carries
             // over but the sparse flag goes and no cached stat exists yet.
             const { sparse: _sparse, stat: _stat, ...rest } = entry;
@@ -1538,7 +1581,7 @@ export class Repository {
         mutation.prune();
         if (view === null) {
           const viewPath = join(this.controlDirectory, VIEW_FILE);
-          if (existsSync(viewPath)) unlinkSync(viewPath);
+          if (existsSync(viewPath)) durability.unlink(viewPath);
         } else {
           writeView(this.controlDirectory, view);
         }
@@ -1689,13 +1732,13 @@ export class Repository {
     now: Date,
   ): void {
     if (head.kind === "branch") {
-      this.refs.compareAndSwap(head.ref, expected, next);
+      this.refs.transaction([{ name: head.ref, expected, next }], undefined, { expected: `ref: ${head.ref}` });
       this.operations.append(command, summary, [{ ref: head.ref, before: expected, after: next }], now);
       return;
     }
     // Detached HEAD advances HEAD itself. Recorded as a transition on the literal
     // name "HEAD" so undo has something to compare and swap against.
-    this.refs.setHeadDetached(next);
+    this.refs.setHeadDetached(next, expected ?? undefined);
     this.operations.append(command, summary, [{ ref: "HEAD", before: expected, after: next }], now);
   }
 
@@ -2766,7 +2809,7 @@ export class Repository {
       const source = flattenTree(this.objects, readCommit(this.objects, this.resolve(revision)).tree);
       const index = new Map(this.readIndex().map((entry) => [entry.path, entry]));
       const restored: string[] = [];
-      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY);
+      const mutation = new WorktreeMutation(this.root, CONTROL_DIRECTORY, this.objects);
       try {
         for (const path of normalized) {
           const entry = source.get(path);
@@ -2775,7 +2818,7 @@ export class Repository {
             index.delete(path);
           } else {
             const content = this.workingContent(path, this.objects.read(entry.id));
-            mutation.write(path, content, entry.mode === "100755" ? 0o755 : 0o644);
+            mutation.write(path, content, entry.mode === "100755" ? 0o755 : 0o644, { objects: [entry.id], fileId: entry.fileId });
             index.set(path, { path, id: entry.id, mode: entry.mode === "100755" ? "100755" : "100644",
               ...(entry.fileId === undefined ? {} : { fileId: entry.fileId }),
               ...(entry.copiedFrom === undefined ? {} : { copiedFrom: entry.copiedFrom }),
