@@ -4,6 +4,7 @@
 
 ### Added
 
+- Compact loose chunks into indexed pack storage ([pm-vcs-phase6packs](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6packs.toon))
 - Export signed native history with an explicit replay capability and omission manifest ([pm-vcs-change-bundles](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-change-bundles.toon))
 - Retain validation checkpoints only while native semantic scope is unchanged ([pm-vcs-semantic-checkpoints](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-semantic-checkpoints.toon))
 - Stream ordinary large-file staging into native CDC manifests ([pm-vcs-phase6stage](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6stage.toon))
@@ -116,6 +117,7 @@
 
 ### Other
 
+- Fit the complete crash-cut matrix within CI runtime ([pm-vcs-crash-matrix-ci](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-crash-matrix-ci.toon))
 - Release readiness behind PM_RELEASE_APPROVED ([pm-vcs-release-gate](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-release-gate.toon))
 - Phase 5: the forge and the patch series ([pm-vcs-5h6j](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-5h6j.toon))
 - Phase 7: agents never stop on a conflict ([pm-vcs-phase7](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/epics/pm-vcs-phase7.toon))

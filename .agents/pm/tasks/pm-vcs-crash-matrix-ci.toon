@@ -2,14 +2,18 @@ id: pm-vcs-crash-matrix-ci
 title: Fit the complete crash-cut matrix within CI runtime
 description: Measure and reduce all native SIGKILL cuts without losing boundaries or assertions under Node and Bun; retain exact-count guards and owned temporary cleanup.
 type: Task
-status: in_progress
+status: closed
 priority: 2
 tags[3]: "gh:unbraind/pm-vcs#150",performance,testing
 created_at: "2026-11-02T20:52:00.247Z"
-updated_at: "2026-11-03T17:57:46.860Z"
-assignee: codex-sol
+updated_at: "2026-11-04T00:46:16.817Z"
+closed_at: "2026-11-04T00:46:16.806Z"
+completed_at: "2026-11-04T00:46:16.806Z"
 claim_principal: codex-sol
 author: codex-sol
+resolution: Implemented and merged in #150 (d240868).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #150 as d240868; checks successful at head 4100aa1: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-phase6packs,related,"2026-11-02T20:52:00.247Z",codex-sol,"cli:create:dep",detected
 comments[37]{created_at,author,text}:
@@ -213,4 +217,5 @@ tests[8]:
       source_ref: feat/indexed-pack-storage
 docs[1]{path,scope}:
   docs/crash-cut-matrix.md,project
+close_reason: "Delivered by #150 \"Compact loose objects into indexed packs without changing their identities\" (merged as d240868). Checks successful at the PR head 4100aa1: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""
