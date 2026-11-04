@@ -3,6 +3,7 @@ import type { BigIntStats } from "node:fs";
 import { durability } from "./durability.ts";
 import { withPublicationLock, publicationRootIds, validatePublicationIds } from "./publication.ts";
 import type { AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
+import { TrackerAdmissionRefusal } from "./tracker-admission.ts";
 import { attachCheckpoint, createSemanticCheckpoint, type CheckpointRequest } from "./checkpoints.ts";
 import { signChange } from "./signatures.ts";
 import { inspectClosure, type ClosureReport } from "./closure.ts";
@@ -1710,6 +1711,35 @@ export class Repository {
       const id = writeCommit(this.objects, { ...base, changeId: identityWithoutChangeLine(base) });
       this.advanceHead(head, parent, id, "commit", `Committed ${id.slice(0, 12)}: ${splitLines(options.message)[0] ?? ""}`, now);
       return id;
+    });
+  }
+
+  /** Publish verified captured bytes with the latest index inside one native writer lease.
+   * Captured pairs bypass the working-file stat cache: a peer may already have changed
+   * the live tracker. Validate the entire scope before creating objects or changing the index.
+   */
+  commitCaptured(options: CommitOptions, files: readonly { readonly path: string; readonly content: Buffer }[], expectedTip: ObjectId | null, now: Date): ObjectId {
+    return this.objects.withWriteLock(/** Read the parent and every modified index entry under the publication lease. */ () => {
+      if (this.refs.readHead().target !== expectedTip) throw new TrackerAdmissionRefusal("tracker_tip_changed", "Review the current native tip and start a new capture with that expectedTip; no revision was published.");
+      this.assertNoMergeInProgress();
+      const index = new Map(this.committableIndex().map(entry => [entry.path, entry]));
+      const rules = this.ignoreRules(); const layers = this.layerPaths();
+      const denied = this.objects.denials();
+      for (const file of files) {
+        if (normalizeRepoPath(this.root, file.path) !== file.path || isIgnored(file.path, rules) || isProtectedWorktreePath(this.root, file.path, true) || layers.has(file.path)
+          || index.get(file.path)?.sparse === true || (index.get(file.path)?.conflicts?.length ?? 0) > 0 || denied.some(row => row.tombstone.fileId === index.get(file.path)?.fileId)) {
+          throw new ObjectStoreError("path_ignored", "Captured tracker paths must be visible, permitted, workspace-local files; review ignore rules, private layers and erased identities.");
+        }
+        if (isRecordPath(file.path, this.config)) parseWorkingRecord(file.path, file.content);
+      }
+      for (const file of files) {
+        const previous = index.get(file.path);
+        const fileId = previous === undefined ? randomBytes(16).toString("hex") : previous.fileId ?? migratedFileId(previous);
+        index.set(file.path, { path: file.path, id: this.stageContent(file.path, file.content, fileId), mode: previous?.mode ?? "100644", fileId,
+          ...(previous?.copiedFrom === undefined ? {} : { copiedFrom: previous.copiedFrom }) });
+      }
+      this.writeIndex([...index.values()]);
+      return this.commit(options, now);
     });
   }
 

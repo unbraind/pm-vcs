@@ -1,0 +1,40 @@
+id: pm-vcs-tracker-admission
+title: Admit coherent tracker pairs into native revisions
+description: "Certify selected canonical item documents and history heads before native capture, including SDK-certifiable transaction membership."
+type: Feature
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-11-04T21:41:27.622Z"
+updated_at: "2026-11-04T22:24:42.207Z"
+author: codex-agent
+acceptance_criteria: "Concurrent writers yield a verified coherent snapshot or typed retry; custom folders and formats use SDK resolution; mismatched pairs never publish a native tip; resume checks only affected records; typed SDK plus CLI, compact TOON/JSON, strict bounded schemas, docs, seeded model and interleaving tests, public non-git real-data evidence."
+comments[8]{created_at,author,text}:
+  "2026-11-04T21:41:38.414Z",codex-agent,"Overlap rechecked: core public SDK provides locateItem/readLocatedItem, readHistorySnapshot/verifyHistoryEntries, item transaction journals and canonical codecs. Core workspace/item transactions commit tracker changes but do not version arbitrary source and tracker artifacts together. pm-vcs checkpoints check assurance scope after capture; pm-evidence and pm-context consume evidence/context rather than admit native tips. This feature owns selected tracker capture admission only, without a distributed transaction or a new history codec. No duplicate item or upstream capture feature found."
+  "2026-11-04T21:49:37.628Z",codex-agent,"Implemented SDK TrackerCapture plus vcs commit-tracker over one strict bounded selection schema. Capture retains SDK-verified exact bytes; native publication checks expected parent and modifies the latest index under the existing store lease. Retry sessions are explicitly process-local: only affected records are re-resolved, settings changes invalidate retained proofs, and successful sessions cannot publish twice. Committed SDK journal result membership is required for item-transaction markers; missing or partial evidence produces a payload-free retry coordinate. No status-name decisions, tracker mutations, distributed-transaction claim or durable replay journal were added."
+  "2026-11-04T22:02:25.458Z",codex-agent,"Public committed tracker validation on a disposable non-git copy: 175 items, 175 histories, 3312 history entries, 350 native files, 7167088 selected bytes (5681588 history bytes), zero retries, 77860 ms measured; source tracker digest unchanged. Added selected-member transaction closure: if a committed SDK transaction appears in a later captured pair, previously captured selected members missing that transaction become affected retry records. This avoids mixing pre-transaction and post-transaction selected members while keeping resume narrow."
+  "2026-11-04T22:11:39.777Z",codex-agent,"Validation: seeded model (seed 0x53295) passed 500 sequences across native bundle replay, signed change-bundle replay, file fetch/clone, older revisions, whitespace/CRLF, relationships, explicit scope under ambient focus and random custom status IDs/roles. All state comparisons use SDK read-back against revision-indexed SDK-produced model documents. Targeted admission tests passed 17/17; separate model passed 1/1 with 500 sequences. New capture module measured 100/100/100/100; CLI reader separately measured 100/100/100/100 after bounded-read control-flow cleanup. Typecheck, test typecheck, lint, docstrings (606 declarations), and zero-duplication gate passed. Pinned SDK remains 2026.10.30; peer and manifest host floor now match the history snapshot and transaction certificate APIs instead of advertising older unsupported hosts."
+  "2026-11-04T22:11:44.695Z",codex-agent,"Behavioral revert proof in disposable source copies: disabling only the canonical SDK history-agreement guard fails the torn-pair regression 1/1; disabling only expected-native-tip CAS fails the competing-session regression 1/1. Original worktree functions were never mutated; restored passing torn-pair and CLI regression executed through pm test --run --progress (2/2 passed). Packed acceptance passed npm global, Bun global, npx, bunx and project-local layouts on one artifact; output sizes were JSON 130 bytes, TOON 107 bytes and retry 339 bytes. Final rebuilt artifact acceptance is being repeated after the host-floor metadata update. Full unchanged npm/Bun release gates will run in CI; no merge or release is authorized."
+  "2026-11-04T22:12:55.350Z",codex-agent,"Implementation and documentation are ready for orchestrator review. Host compatibility now refuses pre-2026.10.30 runtimes through the existing manifest contract without changing the pinned development SDK. Real data, deterministic interleavings (including selected-member transaction closure), model replay, compact outputs and behavioral revert evidence are recorded above. Final-head CI will provide unchanged npm plus Bun release:check results; the PR will carry the exact run URL and counts. Release this agent claim for the verifier; keep the item in progress until the orchestrator verifies and closes it."
+  "2026-11-04T22:18:55.153Z",codex-agent,"Final review preserved existing native executable modes, copied provenance and deterministic legacy FileId migration when replacing selected bytes; the added native-field regression passed 1/1. The complete admission plus manifest run passed 20/20, including 500 seeded sequences and transaction-read boundary competition. Scope failures now identify outside-workspace records with an actionable compact retry; terminal SDK refusals retain their stable code in CLI error text. Strict pm health passes using the CI-pinned project extension; the existing provenance-value advisory is retained without any history repair. The initial local extension-host skew matches existing pm-vcs-5lre and was resolved by reproducing the CI extension setup."
+  "2026-11-04T22:24:39.646Z",codex-agent,"Final feature artifact SHA-256 a09e991c0574c95c13f0ec2e4564d37a32e448a2eeebdf0905a17c3bb3cd5c62 passed all five consumer layouts (npm global, Bun global, npx, bunx, project-local); JSON/TOON/retry receipts measured 130/107/339 bytes. Latest focused admission tests passed 18/18 with both new modules at 100 percent in every coverage dimension; seeded model passed 1/1 (500 sequences); manifest conformance passed 2/2; final edge/native-field checks passed 4/4. Typecheck, test typecheck, lint, docstrings, duplicate gate, changelog generation/check and strict health pass. Implementation evidence is complete; full final-head npm/Bun release gates remain CI evidence to be linked in the PR. Claim released for orchestrator verification; item intentionally not closed."
+files[13]{path,scope}:
+  engine/repo.ts,project
+  engine/tracker-admission.ts,project
+  index.ts,project
+  manifest.json,project
+  package-lock.json,project
+  package.json,project
+  test/helpers/tmp.ts,project
+  test/manifest-vocabulary.test.ts,project
+  test/tracker-admission.test.ts,project
+  test/validate-tracker-admission-data.ts,project
+  test/validate-tracker-admission-installs.ts,project
+  tracker-admission-commands.ts,project
+  vcs-commands.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=1 --test-name-pattern=torn test/tracker-admission.test.ts,project,codex-agent,"2026-11-04T22:07:28.788Z",local_mutation,feat/tracker-consistent-revision-admission
+docs[2]{path,scope}:
+  docs/tracker-admission-example.json,project
+  README.md,project
+body: ""
