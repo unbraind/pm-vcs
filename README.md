@@ -1191,12 +1191,15 @@ there is no persisted retry journal and no frozen mutation plan to replay.
 
 Native publication binds the branch (or detached HEAD) at capture creation,
 checks that identity and the expected tip, and reads the latest index while
-holding the native writer lease. It stores the certified bytes directly, bypassing
+holding the native writer lease. It stores the certified content directly (canonical SDK fields for configured
+native records), bypassing
 live-file stat caches. A writer advancing after capture cannot substitute new
 item bytes into the revision. Source files are the immutable staged versions.
 Each selected pair is a verified historical snapshot; this does not promise
 simultaneous latest state across unrelated items or a distributed transaction
-with source writers. Ordinary `vcs commit` retains its general file semantics;
+with source writers. Native record transport preserves custom status IDs
+opaquely; lifecycle roles and admission validity remain owned by the configured
+SDK registry. Ordinary `vcs commit` retains its general file semantics;
 use this command when tracker admission is required.
 
 This feature works without Git, including resumable SDK captures, native bundle

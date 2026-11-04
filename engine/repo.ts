@@ -821,9 +821,9 @@ export class Repository {
    *   object — storing it as a blob instead would silently drop it out of
    *   field-aware merging for the rest of its history.
    */
-  private stageContent(path: string, content: Buffer, fileId: string): ObjectId {
+  private stageContent(path: string, content: Buffer, fileId: string, canonical?: RecordDocument): ObjectId {
     if (!isRecordPath(path, this.config)) return this.objects.write("blob", content, fileId);
-    return this.objects.write("record", encodeRecord(parseWorkingRecord(path, content)), fileId);
+    return this.objects.write("record", encodeRecord(canonical ?? parseWorkingRecord(path, content)), fileId);
   }
 
   /**
@@ -1718,7 +1718,7 @@ export class Repository {
    * Captured pairs bypass the working-file stat cache: a peer may already have changed
    * the live tracker. Validate the entire scope before creating objects or changing the index.
    */
-  commitCaptured(options: CommitOptions, files: readonly { readonly path: string; readonly content: Buffer }[], expectedTip: ObjectId | null, now: Date, expectedHead?: string): ObjectId {
+  commitCaptured(options: CommitOptions, files: readonly { readonly path: string; readonly content: Buffer; readonly record?: RecordDocument }[], expectedTip: ObjectId | null, now: Date, expectedHead?: string): ObjectId {
     return this.objects.withWriteLock(/** Read the parent and every modified index entry under the publication lease. */ () => {
       const head = this.refs.readHead();
       if (head.target !== expectedTip || (expectedHead !== undefined && (head.kind === "branch" ? head.ref : "HEAD") !== expectedHead)) throw new TrackerAdmissionRefusal("tracker_tip_changed", "Review the current native branch and tip, then start a new capture with that expectedTip; no revision was published.");
@@ -1731,12 +1731,14 @@ export class Repository {
           || index.get(file.path)?.sparse === true || (index.get(file.path)?.conflicts?.length ?? 0) > 0 || denied.some(row => row.tombstone.fileId === index.get(file.path)?.fileId)) {
           throw new ObjectStoreError("path_ignored", "Captured tracker paths must be visible, permitted, workspace-local files; review ignore rules, private layers and erased identities.");
         }
-        if (isRecordPath(file.path, this.config)) parseWorkingRecord(file.path, file.content);
+        if (isRecordPath(file.path, this.config)) {
+          if (file.record === undefined) parseWorkingRecord(file.path, file.content); else encodeRecord(file.record);
+        }
       }
       for (const file of files) {
         const previous = index.get(file.path);
         const fileId = previous === undefined ? randomBytes(16).toString("hex") : previous.fileId ?? migratedFileId(previous);
-        index.set(file.path, { path: file.path, id: this.stageContent(file.path, file.content, fileId), mode: previous?.mode ?? "100644", fileId,
+        index.set(file.path, { path: file.path, id: this.stageContent(file.path, file.content, fileId, file.record), mode: previous?.mode ?? "100644", fileId,
           ...(previous?.copiedFrom === undefined ? {} : { copiedFrom: previous.copiedFrom }) });
       }
       this.writeIndex([...index.values()]);

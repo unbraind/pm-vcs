@@ -6,12 +6,29 @@ import {
   type ItemDocument,
   type ItemMetadata,
 } from "@unbrained/pm-cli/sdk";
+import { decodeToon } from "@unbrained/pm-cli/sdk/testing";
 
 import { decodeRecord, encodeRecord, type RecordDocument } from "./model.ts";
 import { ObjectStoreError } from "./objects.ts";
 
 /** Required fields that distinguish a native PM item from an arbitrary JSON record. */
 const PM_ITEM_FIELDS = ["id", "title", "description", "type", "status", "priority", "created_at", "updated_at"] as const;
+
+/** Preserve tracker-specific status IDs as opaque native data, without assigning lifecycle roles.
+ * Existing default-schema documents keep their released normalization. Admission separately
+ * verifies the canonical document against its actual SDK workspace schema before publication.
+ */
+function parseNativeItem(text: string): ItemDocument {
+  try { return parseItemDocument(text, { format: "toon" }); }
+  catch (original) {
+    const raw: unknown = decodeToon(text);
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw original;
+    const row = raw as Record<string, unknown>;
+    const metadata = Object.hasOwn(row, "front_matter") ? row.front_matter : row;
+    if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata) || typeof (metadata as Record<string, unknown>).status !== "string") throw original;
+    return parseItemDocument(text, { format: "toon", schema: { version: 1, files: {}, statuses: [{ id: (metadata as Record<string, string>).status }], fields: [], workflow: {}, unknown_field_policy: "allow" } });
+  }
+}
 
 /**
  * Decodes a configured working-tree record through its native format.
@@ -31,7 +48,7 @@ export function parseWorkingRecord(path: string, content: Buffer): RecordDocumen
   let toonParseFailed = false;
   if (path.endsWith(".toon")) {
     try {
-      const item = parseItemDocument(content.toString("utf8"), { format: "toon" });
+      const item = parseNativeItem(content.toString("utf8"));
       return decodeRecord(Buffer.from(JSON.stringify({ ...item.metadata, body: item.body }), "utf8"));
     } catch (error) {
       toonParseFailed = true;

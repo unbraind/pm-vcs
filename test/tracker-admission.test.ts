@@ -9,14 +9,15 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, renameSync, 
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient, readHistorySnapshot, verifyHistoryEntries, readLocatedItem, locateItem, readSettings, resolveItemTypeRegistry, serializeItemDocument, commitItemMutations, commitWorkspaceTransaction, type ItemDocument, type PmClientFullMutationOptions } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createExtensionTestHarness, encodeToon } from "@unbrained/pm-cli/sdk/testing";
 import extension, { TrackerCapture, TrackerAdmissionRefusal, parseTrackerAdmissionRequest } from "../index.ts";
 import { trackerAdmissionBoundary } from "../engine/tracker-admission.ts";
 import { generateKeyPairSync } from "node:crypto";
 import { exportChangeBundle, importChangeBundle, type ChangeBundleAuthorization } from "../engine/change-bundles.ts";
 import { publicKeyText } from "../engine/signatures.ts";
 import { Repository } from "../engine/repo.ts";
-import { readCommit, migratedFileId, type Signature } from "../engine/model.ts";
+import { readCommit, migratedFileId, decodeRecord, type Signature } from "../engine/model.ts";
+import { parseWorkingRecord, renderWorkingRecord } from "../engine/record-format.ts";
 import { flattenTree } from "../engine/worktree.ts";
 import { exportBundle, importBundle } from "../engine/bundle.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
@@ -60,7 +61,8 @@ async function document(pmRoot: string, id: string): Promise<ItemDocument> {
 function materialize(repo: Repository, revision: string, target: string) {
   for (const [path, entry] of flattenTree(repo.objects, readCommit(repo.objects, revision).tree)) {
     const file = join(target, path); mkdirSync(dirname(file), { recursive: true });
-    assert.equal(repo.objects.read(entry.id).type, "blob"); writeFileSync(file, repo.objects.readTyped(entry.id, "blob"));
+    const object = repo.objects.read(entry.id);
+    writeFileSync(file, object.type === "record" ? renderWorkingRecord(path, decodeRecord(object.payload)) : object.payload);
   }
 }
 
@@ -174,6 +176,9 @@ function random(seed: number) { let state = seed; return () => { state = (Math.i
 
 test("500 seeded model sequences preserve SDK state across native bundle replay and file sync", { timeout: 600000 }, async () => {
   const f = await fixture(); const next = random(0x53295);
+  const configPath = join(f.repo.controlDirectory, "config.json");
+  writeFileSync(configPath, JSON.stringify({ recordPaths: ["**/*.toon"], recordPolicy: {} }));
+  const recordRepository = Repository.open(f.root);
   const customStatuses: string[] = [];
   for (const role of ["active", "blocked", "draft"]) { const status = `custom-${next() % 100000}`; customStatuses.push(status); await f.client.schemaAddStatus(status, { role: [role], author: "fixture" }); }
   await f.client.update(f.a, { ...scope, comment: ["text=Seed comment"], note: ["text=Seed note"], learning: ["text=Seed learning"], file: ["path=README.md"], doc: ["path=README.md,scope=project,note=Guide"], acceptanceCriteria: "Read all native fields" });
@@ -195,8 +200,8 @@ test("500 seeded model sequences preserve SDK state across native bundle replay 
     await f.client.focus(f.b);
     await f.client.update(f.a, { ...scope, ...mutation, status: customStatuses[next() % customStatuses.length] });
     model.set(f.a, await document(f.pmRoot, f.a));
-    const parent = f.repo.refs.readHead().target;
-    const report = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: parent }).commit(options, new Date(sequence + 1)); assert.ok(report.ok);
+    const parent = recordRepository.refs.readHead().target;
+    const report = await new TrackerCapture(recordRepository, f.pmRoot, { items: [f.a], expectedTip: parent }).commit(options, new Date(sequence + 1)); assert.ok(report.ok);
     const bytes = exportBundle(f.repo.objects, f.repo.refs, ["refs/heads/main"]);
     const signed = exportChangeBundle(f.repo.objects, { [branch]: report.revision }, policy.scope, author.email, keys.privateKey);
     const state = { revision: report.revision, bytes, signed, model: structuredClone(model.get(f.a)!) }; snapshots.push(state);
@@ -407,4 +412,26 @@ test("capture binds branch identity even when a peer switches HEAD to the same r
   await assert.rejects(branch.commit(options, new Date(4)), { code: "tracker_tip_changed" });
   const detached = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline.revision }).commit(options, new Date(5)); assert.ok(detached.ok);
   assert.equal(f.repo.refs.read("refs/heads/main"), baseline.revision); assert.equal(f.repo.refs.read("refs/heads/peer"), baseline.revision);
+});
+
+test("record codecs refuse malformed shapes and preserve SDK custom-status documents and aliases", async () => {
+  for (const value of [null, true, 1, [], { title: "Missing status" }, { front_matter: null }, { front_matter: 1 }, { front_matter: [] }, { front_matter: { status: 1 } }]) {
+    assert.throws(() => parseWorkingRecord("invalid.toon", Buffer.from(encodeToon(value))));
+  }
+  const f = await fixture(); await f.client.schemaAddStatus("custom-running", { role: ["active"], alias: ["active-alias"], author: "fixture" });
+  await f.client.update(f.a, { ...scope, status: "custom-running", parent: f.b, unset: ["sprint", "release"], dep: [`id=${f.b},kind=related`], body: "  body\r\nwith whitespace  \r\n" });
+  const expected = await document(f.pmRoot, f.a); const itemPath = join(f.pmRoot, `tasks/${f.a}.toon`);
+  writeFileSync(itemPath, encodeToon({ front_matter: { ...expected.metadata, status: "active-alias" }, body: expected.body }));
+  const legacy = parseWorkingRecord("legacy.toon", Buffer.from(encodeToon({ front_matter: expected.metadata, body: expected.body })));
+  assert.equal(legacy.status, expected.metadata.status);
+  writeFileSync(join(f.repo.controlDirectory, "config.json"), JSON.stringify({ recordPaths: ["**/*.toon"], recordPolicy: {} }));
+  const repo = Repository.open(f.root);
+  const report = await new TrackerCapture(repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(report.ok);
+  const target = temp(); materialize(repo, report.revision, target);
+  const found = { id: f.a, type: "Task", item_format: "toon" as const, itemPath: join(target, `.agents/pm/tasks/${f.a}.toon`) };
+  const settings = await readSettings(f.pmRoot);
+  const actual = (await readLocatedItem(found, { schema: settings.schema })).document;
+  assert.deepEqual(actual, expected);
+  const history = await readHistorySnapshot(join(target, `.agents/pm/history/${f.a}.jsonl`), f.a);
+  assert.equal(verifyHistoryEntries(history.entries, actual).ok, true);
 });

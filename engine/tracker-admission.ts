@@ -5,6 +5,7 @@ import { relative, resolve } from "node:path";
 import type * as Sdk from "@unbrained/pm-cli/sdk";
 import type { CommitOptions, Repository } from "./repo.ts";
 import { ObjectStoreError, type ObjectId } from "./objects.ts";
+import { decodeRecord, type RecordDocument } from "./model.ts";
 
 /** Selection and expected native parent, validated before reading tracker state. */
 export interface TrackerAdmissionRequest {
@@ -50,7 +51,7 @@ const require = createRequire(import.meta.url);
 /** Acquire public SDK capabilities lazily through Node's supported package loader. */
 function sdk(): typeof Sdk { return require("@unbrained/pm-cli/sdk") as typeof Sdk; }
 interface Pair {
-  readonly files: readonly { readonly path: string; readonly content: Buffer }[];
+  readonly files: readonly { readonly path: string; readonly content: Buffer; readonly record?: RecordDocument }[];
   readonly transactions: ReadonlyMap<string, readonly string[]>;
 }
 /** Test observer for real competing writers at every asynchronous capture boundary. @internal */
@@ -123,7 +124,8 @@ export class TrackerCapture {
       const transactions = await transactionMembership(this.pmRoot, located.id, history.entries);
       if (transactions === null) return { id: rawId, reason };
       reason = "outside_workspace";
-      const files = [{ path: located.itemPath, content: Buffer.from(item.raw) }, { path: historyPath, content: Buffer.from(history.raw_bytes) }].map(file => {
+      const record = decodeRecord(Buffer.from(JSON.stringify({ ...item.document.metadata, body: item.document.body })));
+      const files = [{ path: located.itemPath, content: Buffer.from(item.raw), record }, { path: historyPath, content: Buffer.from(history.raw_bytes) }].map(file => {
         const path = relative(this.repository.root, resolve(file.path)).split("\\").join("/");
         if (path === "" || path === ".." || path.startsWith("../") || path.startsWith("/")) throw new Error("External tracker.");
         return { ...file, path };
