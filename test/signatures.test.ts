@@ -3,7 +3,7 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real native changes, adversarial signatures and atomic receiver policy enforcement. */
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
-import { fork } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -468,29 +468,23 @@ test("2,000 native signed changes report measured verification wall time", async
 test("a separate revoker cannot cross a held publication lease and its next successful revocation fences the next push", async () => {
   const { repository, dir, keys, id } = fixture();
   const receiver = Repository.init(join(dir.root, "receiver")); const fingerprint = trust(receiver, keys.publicKey);
-  const receipt = join(dir.root, "revocation-receipt.json");
-  const worker = fork(join(packageRoot, "test/helpers/signature-policy-worker.ts"), [receiver.root, fingerprint, receipt], { env: testEnvironment(), stdio: ["ignore", "ignore", "inherit", "ipc"] });
-  /** Await a bounded IPC barrier so the race has a controlled, observable ordering. */
-  const message = () => new Promise<{ status: string; code?: string }>((resolveMessage, reject) => {
-    const timeout = setTimeout(() => reject(new Error("revocation worker timeout")), 10000);
-    worker.once("message", value => { clearTimeout(timeout); resolveMessage(value as { status: string; code?: string }); });
-  });
-  try {
-    assert.equal((await message()).status, "ready");
-    const inFlight = message();
-    receiver.objects.withWriteLock(() => {
-      worker.send({ action: "revoke" });
-      const deadline = performance.now() + 20000;
-      while (!existsSync(receipt) && performance.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-      assert.ok(existsSync(receipt), "revoker must attempt the real shared lease before its owner releases it");
+  /** A completed child attempt is the barrier: the parent retains its lease until the real revoker exits. */
+  const revoke = (): { status: string; code?: string } => {
+    const worker = spawnSync(process.execPath, [join(packageRoot, "test/helpers/signature-policy-worker.ts"), receiver.root, fingerprint], {
+      env: testEnvironment(), encoding: "utf8", timeout: 60_000,
     });
-    assert.deepEqual(await inFlight, { status: "refused", code: "store_locked" });
-    const next = message(); worker.send({ action: "revoke" }); assert.equal((await next).status, "revoked");
-    repository.refs.compareAndSwap("refs/heads/main", repository.refs.resolveHead(), id);
-    const wire = new FileTransport("receiver", receiver.root);
-    await assert.rejects(wire.push(exportBundle(repository.objects, repository.refs, []), [{ ref: "refs/heads/main", expected: null, next: id }], false, new Date()), { reason: "revoked" });
-    assert.equal(receiver.refs.resolveHead(), null);
-  } finally { worker.kill(); }
+    assert.equal(worker.error, undefined);
+    assert.equal(worker.status, 0, worker.stderr);
+    return JSON.parse(worker.stdout) as { status: string; code?: string };
+  };
+  receiver.objects.withWriteLock(() => {
+    assert.deepEqual(revoke(), { status: "refused", code: "store_locked" });
+  });
+  assert.deepEqual(revoke(), { status: "revoked" });
+  repository.refs.compareAndSwap("refs/heads/main", repository.refs.resolveHead(), id);
+  const wire = new FileTransport("receiver", receiver.root);
+  await assert.rejects(wire.push(exportBundle(repository.objects, repository.refs, []), [{ ref: "refs/heads/main", expected: null, next: id }], false, new Date()), { reason: "revoked" });
+  assert.equal(receiver.refs.resolveHead(), null);
 });
 
 test("agent CLI signs, verifies, trusts and revokes while every written repository file and output stays free of private key material", async () => {
