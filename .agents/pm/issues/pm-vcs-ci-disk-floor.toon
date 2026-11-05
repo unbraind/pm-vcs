@@ -1,0 +1,19 @@
+id: pm-vcs-ci-disk-floor
+title: Provision the runner disk space required by release gates
+description: "CI run 42034001234, Node 22 job 127267289998, exits before npm release checks because the runner has 19640512 KiB free while the existing gate requires at least 20971520 KiB (20 GiB). Bun is consequently skipped. Provision or prepare sufficient disposable runner storage while retaining the disk floor and all release thresholds. This is an infrastructure follow-up discovered during PR 182 review, separate from its bisect regressions."
+type: Issue
+status: open
+priority: 1
+tags[3]: ci,follow-up,infrastructure
+created_at: "2026-11-05T14:48:29.941Z"
+updated_at: "2026-11-05T14:50:40.781Z"
+author: codex-agent
+acceptance_criteria: Retain the 20 GiB disk guard and existing coverage thresholds; demonstrate complete npm and Bun release gates on supported CI Node versions.
+repro_steps: Run the CI workflow on the standard runner image and inspect the full npm release gate preflight.
+expected_result: The runner satisfies the existing free-disk prerequisite before either full release gate starts.
+actual_result: The Node 22 job exits at the disk preflight before executing release tests.
+files[1]{path,scope}:
+  .github/workflows/ci.yml,project
+docs[1]{path,scope}:
+  "https://github.com/unbraind/pm-vcs/actions/runs/42034001234/job/127267289998",project
+body: ""

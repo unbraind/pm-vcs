@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { once } from "node:events";
+import { createServer, type Socket } from "node:net";
 import { after, afterEach, test } from "node:test";
 
 import { PmClient, runTest, type TestRunResult } from "@unbrained/pm-cli/sdk";
@@ -22,6 +24,7 @@ import { cloneFrom } from "../engine/sync.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
+import { waitForFileRemoval } from "./helpers/file-removal.ts";
 import { installPackedExtension, pmExecutable } from "../scripts/pm-environment.ts";
 
 /** Every fixture directory created by this suite, torn down once at the end. */
@@ -180,15 +183,16 @@ if (readFileSync("state.txt", "utf8").trim().startsWith("broken")) process.exit(
  * @param fixture - Fixture whose tracker receives the item.
  * @param title - Item title.
  * @param countFile - Absolute path the probe appends one line to per execution.
+ * @param timeoutSeconds - Watchdog for the linked command; held probes outlive the parent test deadline.
  * @returns The item id.
  */
-async function linkedTestItem(fixture: Fixture, title: string, countFile: string): Promise<string> {
+async function linkedTestItem(fixture: Fixture, title: string, countFile: string, timeoutSeconds = 60): Promise<string> {
   // A stale counter from an earlier run would miscount this one's executions.
   rmSync(countFile, { force: true });
   const created = await fixture.client.create({ type: "Task", title, author: "agent-a" });
   const item = created.item.id;
   await runTest(item, {
-    addJson: [JSON.stringify({ command: "node probe.js", timeout_seconds: 60, env_set: { BISECT_COUNT_FILE: countFile } })],
+    addJson: [JSON.stringify({ command: "node probe.js", timeout_seconds: timeoutSeconds, env_set: { BISECT_COUNT_FILE: countFile } })],
   }, { author: "agent-a", path: fixture.pmRoot });
   return item;
 }
@@ -491,11 +495,42 @@ test("a SIGINT between steps halts the walk, restores the original state and sta
   rmSync(countFile, { force: true });
 });
 
-test("a walk killed mid-flight resumes from the durable state without retesting judged changes", async () => {
+test("worker completion observes a receipt removed before watcher registration", async () => {
+  const dir = makeTempDir();
+  try {
+    const receipt = join(dir.root, "worker-receipt");
+    writeFileSync(receipt, "finished");
+    rmSync(receipt);
+    await waitForFileRemoval(receipt, 100);
+  } finally { dir.cleanup(); }
+});
+
+test("a walk killed mid-flight resumes from the durable state without retesting judged changes", { timeout: 300_000 }, async (t) => {
   const fixture = await setup();
   const countFile = join(fixture.root, "bisect-count-crash.txt");
-  const item = await linkedTestItem(fixture, "Crash resume", countFile);
-  writeFileSync(join(fixture.root, "probe.js"), PROBE);
+  // The parent deadline and its socket cleanup always precede the SDK watchdog.
+  const item = await linkedTestItem(fixture, "Crash resume", countFile, 600);
+  const linked = await runTest(item, { list: true }, { author: "agent-a", path: fixture.pmRoot });
+  assert.ok((linked.tests[0]?.timeout_seconds ?? 0) > 300, "the held probe watchdog must outlive the parent test deadline");
+  // The second probe remains in flight until the parent explicitly releases it.
+  // Serial candidate execution means the first verdict is durable before this connection exists.
+  const sockets = new Set<Socket>();
+  let arrivals = 0;
+  let blockedSocket: Socket | undefined;
+  const server = createServer(socket => {
+    sockets.add(socket); socket.once("close", () => sockets.delete(socket));
+    if (++arrivals === 2) { blockedSocket = socket; server.emit("candidate-blocked"); }
+    else socket.end();
+  });
+  t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => { server.close(() => resolve()); }); });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  writeFileSync(join(fixture.root, "probe.js"), `const { appendFileSync, readFileSync } = require("node:fs");
+const { connect } = require("node:net");
+const state = readFileSync("state.txt", "utf8").trim();
+appendFileSync(process.env.BISECT_COUNT_FILE, state + "\\n");
+connect(${address.port}, "127.0.0.1").once("end", () => process.exit(state.startsWith("broken") ? 1 : 0)).resume();
+`);
   const base = edit(fixture, "state.txt", "ok", "base");
   commitFiles(fixture, ["probe.js"], "base with probe");
   for (let index = 0; index < 14; index += 1) edit(fixture, "state.txt", `slow ${index}`, `change ${index}`);
@@ -505,56 +540,48 @@ test("a walk killed mid-flight resumes from the durable state without retesting 
   await fixture.bisect(["start", base, bad], { item });
 
   installPackedExtension(fixture.root);
+  const blocked = once(server, "candidate-blocked", { signal: AbortSignal.timeout(120_000) });
   const child = spawn(process.execPath, [pmExecutable, "vcs", "bisect", "run"], {
     cwd: fixture.root,
     stdio: "ignore",
     env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "child-agent", PM_SOURCE_WORKSPACE_ROOT: fixture.root },
   });
-  const statePath = join(fixture.root, ".pmvcs", "BISECT_STATE");
-  const deadline = Date.now() + 120_000;
-  let crashed = false;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => { setTimeout(resolve, 20); });
-    if (child.exitCode !== null) break;
-    let steps = 0;
-    try {
-      const state = JSON.parse(readFileSync(statePath, "utf8")) as { steps: { by: string }[]; pending?: unknown };
-      steps = state.steps.length;
-      if (state.pending === undefined || runsRecorded(countFile) <= state.steps.filter((step) => step.by === "run").length) continue;
-    } catch {
-      continue;
-    }
-    if (steps >= 3) {
-      child.kill("SIGKILL");
-      crashed = true;
-      break;
-    }
-  }
-  assert.ok(crashed, "the child never persisted a walk step");
-  await new Promise((resolve) => { child.once("exit", resolve); });
+  const childExited = once(child, "exit");
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); });
+  await Promise.race([blocked, childExited.then(() => { throw new Error("the walk exited before reaching the probe barrier"); })]);
+  assert.equal(runsRecorded(countFile), 2, "one judged probe and one explicitly blocked probe started");
+  assert.ok(child.kill("SIGKILL"));
+  await childExited;
   const abandoned = storedSession(fixture);
   assert.equal(abandoned?.status, "active");
-  assert.ok((abandoned?.steps.length ?? 0) >= 3);
+  assert.equal(abandoned?.steps.length, 3, "two boundaries and exactly one judged candidate are durable");
+  assert.ok(abandoned?.pending, "the second candidate remains pending at the crash barrier");
   const childRuns = (abandoned?.steps ?? []).filter((step) => step.by === "run").length;
   // Candidate workspaces never move the original checkout, even on SIGKILL.
   assert.equal(fixture.repository.refs.readHead().target, bad);
 
   const workerReceipt = join(fixture.root, ".pmvcs", "BISECT_WORKER");
-  if (existsSync(workerReceipt)) {
-    const refused = await fixture.bisect(["run"]);
-    assert.match(refused.errorMessage ?? "", /Another bisect command or test worker/);
-    const refusedReset = await fixture.bisect(["reset"]);
-    assert.match(refusedReset.errorMessage ?? "", /Another bisect command or test worker/);
-  }
-  const workerDeadline = Date.now() + 60_000;
-  while (existsSync(workerReceipt) && Date.now() < workerDeadline) await new Promise((resolve) => { setTimeout(resolve, 20); });
-  assert.equal(existsSync(workerReceipt), false, "orphaned SDK worker never finished");
+  assert.equal(existsSync(workerReceipt), true, "the blocked SDK worker still owns its receipt");
+  const refused = await fixture.bisect(["run"]);
+  assert.match(refused.errorMessage ?? "", /Another bisect command or test worker/);
+  const refusedReset = await fixture.bisect(["reset"]);
+  assert.match(refusedReset.errorMessage ?? "", /Another bisect command or test worker/);
+  // Install the notification and check current absence before releasing the probe.
+  // The worker awaits SDK cleanup and lock release before removing this receipt.
+  const workerFinished = waitForFileRemoval(workerReceipt);
+  assert.ok(blockedSocket);
+  blockedSocket.end();
+  await workerFinished;
+  assert.equal(existsSync(workerReceipt), false, "orphaned SDK worker finished");
   const resumed = await fixture.bisect(["run"]);
-  const done = (resumed.result as { bisect: { status: string; verdict: { commit: string }; steps: { by: string }[] } }).bisect;
+  const done = (resumed.result as { bisect: { status: string; verdict: { commit: string }; steps: { by: string; retry?: true }[] } }).bisect;
   assert.equal(done.status, "done");
   assert.equal(done.verdict.commit, culprit);
   const totalRuns = done.steps.filter((step) => step.by === "run").length;
-  assert.ok(runsRecorded(countFile) <= totalRuns);
+  assert.equal(runsRecorded(countFile), totalRuns, "the abandoned attempt accounts for exactly one retry step");
+  assert.equal(done.steps.filter(step => step.retry === true).length, 1, "the abandoned candidate is recorded as exactly one retry");
+  const probes = readFileSync(countFile, "utf8").trim().split("\n");
+  assert.equal(probes.filter(state => state === probes[0]).length, 1, "the durably judged candidate is never retested");
   assert.ok(totalRuns > childRuns, "the resume executed candidates of its own");
   assert.equal(fixture.repository.refs.readHead().target, bad);
   assert.equal(trackedClean(fixture), true);
