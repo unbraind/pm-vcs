@@ -1725,7 +1725,7 @@ export class Repository {
    * Captured pairs bypass the working-file stat cache: a peer may already have changed
    * the live tracker. Validate the entire scope before creating objects or changing the index.
    */
-  commitCaptured(options: CommitOptions, files: readonly { readonly path: string; readonly content: Buffer; readonly record?: RecordDocument; readonly itemId?: string; readonly itemRoot?: string }[], expectedTip: ObjectId | null, now: Date, expectedHead?: string): ObjectId {
+  commitCaptured(options: CommitOptions, files: readonly { readonly path: string; readonly content: Buffer; readonly record?: RecordDocument; readonly itemId?: string; readonly itemRoot?: string; readonly itemFolders?: readonly string[] }[], expectedTip: ObjectId | null, now: Date, expectedHead?: string): ObjectId {
     return this.objects.withWriteLock(/** Read the parent and every modified index entry under the publication lease. */ () => {
       const head = this.refs.readHead();
       if (head.target !== expectedTip || (expectedHead !== undefined && (head.kind === "branch" ? head.ref : "HEAD") !== expectedHead)) throw new TrackerAdmissionRefusal("tracker_tip_changed", "Review the current native branch and tip, then start a new capture with that expectedTip; no revision was published.");
@@ -1741,8 +1741,11 @@ export class Repository {
           || (view !== null && !viewIncludes(view, file.path)) || index.get(file.path)?.sparse === true || (index.get(file.path)?.conflicts?.length ?? 0) > 0 || denied.some(row => row.tombstone.fileId === index.get(file.path)?.fileId)) {
           throw new ObjectStoreError("path_ignored", "Captured tracker paths must be visible, permitted, workspace-local files; review ignore rules, private layers and erased identities.");
         }
-        if (file.itemId !== undefined && [...index.keys()].some(path => path !== file.path
-          && path.startsWith(file.itemRoot ? `${file.itemRoot}/` : "") && (path.endsWith(`/${file.itemId}.toon`) || path.endsWith(`/${file.itemId}.md`)))) {
+        const prefix = file.itemRoot ? `${file.itemRoot}/` : "";
+        if (file.itemId !== undefined && file.itemFolders?.some(folder => ["toon", "md"].some(extension => {
+          const candidate = `${prefix}${folder}/${file.itemId}.${extension}`;
+          return candidate !== file.path && index.has(candidate);
+        }))) {
           throw new ObjectStoreError("tracker_path_changed", "A selected tracker item is indexed at another path; explicitly stage its removal or move before capture.");
         }
         if (isRecordPath(file.path, this.config)) {

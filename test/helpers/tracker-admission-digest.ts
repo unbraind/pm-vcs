@@ -7,7 +7,14 @@ import { join } from "node:path";
 export function trackerAdmissionDigest(pmRoot: string, path = pmRoot): string {
   const hash = createHash("sha256");
   for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    if (path === pmRoot && entry.isDirectory() && ["runtime", "search", "locks", "extensions"].includes(entry.name)) continue;
+    if (path === pmRoot && entry.isDirectory() && ["runtime", "search", "locks"].includes(entry.name)) continue;
+    if (path === pmRoot && entry.isDirectory() && entry.name === "extensions") {
+      const manifest = join(path, entry.name, ".managed-extensions.json");
+      if (readdirSync(join(path, entry.name)).includes(".managed-extensions.json")) {
+        hash.update("extensions/.managed-extensions.json"); hash.update(readFileSync(manifest));
+      }
+      continue;
+    }
     hash.update(entry.name); hash.update(entry.isDirectory() ? trackerAdmissionDigest(pmRoot, join(path, entry.name)) : readFileSync(join(path, entry.name)));
   }
   return hash.digest("hex");

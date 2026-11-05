@@ -53,7 +53,7 @@ const require = createRequire(import.meta.url);
 /** Acquire public SDK capabilities lazily through Node's supported package loader. */
 function sdk(): typeof Sdk { return require("@unbrained/pm-cli/sdk") as typeof Sdk; }
 interface Pair {
-  readonly files: readonly { readonly path: string; readonly content: Buffer; readonly record?: RecordDocument; readonly itemId?: string; readonly itemRoot?: string }[];
+  readonly files: readonly { readonly path: string; readonly content: Buffer; readonly record?: RecordDocument; readonly itemId?: string; readonly itemRoot?: string; readonly itemFolders?: readonly string[] }[];
   readonly transactions: ReadonlyMap<string, readonly string[]>;
 }
 /** Test observer for real competing writers at every asynchronous capture boundary. @internal */
@@ -138,7 +138,7 @@ export class TrackerCapture {
       const transactions = await transactionMembership(this.pmRoot, located.id, history.entries);
       if (transactions === null) return { id: rawId, reason };
       reason = "outside_workspace";
-      const files = [{ path: located.itemPath, content: Buffer.from(item.raw), itemId: located.id }, { path: historyPath, content: Buffer.from(history.raw_bytes) }].map(file => {
+      const files = [{ path: located.itemPath, content: Buffer.from(item.raw), itemId: located.id, itemFolders: Object.values(registry.type_to_folder) }, { path: historyPath, content: Buffer.from(history.raw_bytes) }].map(file => {
         const path = relative(this.repository.root, resolve(file.path)).split(sep).join("/");
         if (path === "" || path === ".." || path.startsWith("../") || path.startsWith("/")) throw new Error("External tracker.");
         return { ...file, path, itemRoot: relative(this.repository.root, resolve(this.pmRoot)).split(sep).join("/") };
