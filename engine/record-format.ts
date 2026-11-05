@@ -1,6 +1,6 @@
 // Working-tree codecs for structured records.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   parseItemDocument,
@@ -47,18 +47,36 @@ function schemaDefinitions<T>(file: string, section: "statuses" | "fields"): T[]
   } catch { return []; }
 }
 
+const workingSchemaCache = new Map<string, { sources: Array<[string, string]>; schema: PmSettings["schema"] }>();
+
+/** Track replacement, resizing and nanosecond edits, including creation of an optional source. */
+function schemaSourceSignature(file: string): string {
+  const stat = statSync(file, { bigint: true, throwIfNoEntry: false });
+  return stat === undefined ? "-" : `${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+}
+
 /** Hydrate codec definitions for the synchronous native staging API; SDK codecs own their meaning.
  * Invalid/missing configuration retains the released opaque-status codec so historical records
  * never depend on today's schema. File-backed custom fields accompany strict unknown-field policy.
  */
 function workingSchema(pmRoot: string): PmSettings["schema"] | undefined {
   try {
-    const settings = JSON.parse(readFileSync(resolve(pmRoot, "settings.json"), "utf8")) as { schema?: PmSettings["schema"] };
+    const root = resolve(pmRoot);
+    const cached = workingSchemaCache.get(root);
+    if (cached?.sources.every(([file, signature]) => schemaSourceSignature(file) === signature)) return cached.schema;
+    const settingsPath = resolve(root, "settings.json");
+    const sources: Array<[string, string]> = [[settingsPath, schemaSourceSignature(settingsPath)]];
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { schema?: PmSettings["schema"] };
     const inline = settings.schema;
+    const statusesPath = resolve(root, inline?.files?.statuses?.trim() || "schema/statuses.json");
+    const fieldsPath = resolve(root, inline?.files?.fields?.trim() || "schema/fields.json");
+    sources.push([statusesPath, schemaSourceSignature(statusesPath)], [fieldsPath, schemaSourceSignature(fieldsPath)]);
     const base = { version: 1, files: {}, statuses: [], fields: [], workflow: {}, unknown_field_policy: "allow" as const, ...inline };
-    const statuses = schemaDefinitions<PmSettings["schema"]["statuses"][number]>(resolve(pmRoot, inline?.files?.statuses?.trim() || "schema/statuses.json"), "statuses");
-    const fields = schemaDefinitions<PmSettings["schema"]["fields"][number]>(resolve(pmRoot, inline?.files?.fields?.trim() || "schema/fields.json"), "fields");
-    return { ...base, statuses: [...resolveRuntimeStatusRegistry(base).definitions, ...statuses], fields: [...base.fields, ...fields] };
+    const statuses = schemaDefinitions<PmSettings["schema"]["statuses"][number]>(statusesPath, "statuses");
+    const fields = schemaDefinitions<PmSettings["schema"]["fields"][number]>(fieldsPath, "fields");
+    const schema = { ...base, statuses: [...resolveRuntimeStatusRegistry(base).definitions, ...statuses], fields: [...base.fields, ...fields] };
+    workingSchemaCache.set(root, { sources, schema });
+    return schema;
   } catch { return undefined; }
 }
 

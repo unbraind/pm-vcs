@@ -1,8 +1,6 @@
 import "./helpers/isolate-session.ts";
 /** Measure only an explicitly supplied disposable public-tracker copy; never modify the source tracker. */
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -10,18 +8,10 @@ import { Repository } from "../engine/repo.ts";
 import { TrackerCapture } from "../engine/tracker-admission.ts";
 import { flattenTree } from "../engine/worktree.ts";
 import { readCommit } from "../engine/model.ts";
+import { trackerAdmissionDigest } from "./helpers/tracker-admission-digest.ts";
 const input = process.argv[2]; assert.ok(input, "Supply a disposable non-git public tracker copy.");
 const root = resolve(input); const pmRoot = join(root, ".agents/pm");
-/** Digest all tracker bytes except derived runtime directories, with stable relative coordinates. */
-function digest(path: string): string {
-  const hash = createHash("sha256");
-  for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    if (["runtime", "search", "locks", "extensions"].includes(entry.name)) continue;
-    hash.update(entry.name); hash.update(entry.isDirectory() ? digest(join(path, entry.name)) : readFileSync(join(path, entry.name)));
-  }
-  return hash.digest("hex");
-}
-const before = digest(pmRoot);
+const before = trackerAdmissionDigest(pmRoot);
 const client = new PmClient({ cwd: root, pmRoot, noExtensions: true });
 const list = await client.listAllComplete({ includeBody: true });
 const ids = list.items.map(item => item.id).sort();
@@ -39,5 +29,5 @@ if (head !== null) for (const [path, entry] of flattenTree(repo.objects, readCom
   const bytes = repo.objects.readTyped(entry.id, "blob"); selectedBytes += bytes.length;
   if (path.endsWith(".jsonl")) { historyBytes += bytes.length; historyEntries += bytes.toString("utf8").split("\n").filter(Boolean).length; }
 }
-assert.equal(digest(pmRoot), before, "Admission must leave every source tracker byte unchanged.");
+assert.equal(trackerAdmissionDigest(pmRoot), before, "Admission must leave every source tracker byte unchanged.");
 console.log(JSON.stringify({ sourceItems: ids.length, admitted, retries, reasons: Object.fromEntries(reasons), nativeFiles: head === null ? 0 : flattenTree(repo.objects, readCommit(repo.objects, head).tree).size, selectedBytes, historyBytes, historyEntries, elapsedMs: Math.round(performance.now() - started), sourceUnchanged: true, gitRequired: false }));

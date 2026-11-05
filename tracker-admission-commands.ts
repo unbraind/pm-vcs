@@ -38,7 +38,7 @@ export function registerTrackerAdmissionCommands(api: ExtensionApi): void {
       const message = requiredArgument(context, 0, "message", "Supply a native revision message.");
       const repository = openRepository(context);
       const now = new Date();
-      return new TrackerCapture(repository, context.pm_root, raw).commit({ message, author: signatureFor(context, now) }, now);
+      return new TrackerCapture(repository, context.pm_root, raw).commit({ message: `${message}\n`, author: signatureFor(context, now) }, now);
     },
   });
 }
