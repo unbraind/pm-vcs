@@ -50,14 +50,15 @@ test("the package ships README-linked docs and examples, excluding evidence and 
     const linked = [...readme.matchAll(/\]\((docs\/[^)#]+)(?:#[^)]*)?\)/gu)].map((match) => match[1]);
     for (const file of linked) assert.ok(manifest.files.includes(file), file);
     assert.ok(manifest.files.includes("docs/bisect-demo.txt"));
+    assert.ok(manifest.files.includes("docs/tracker-admission-example.json"));
     assert.ok(manifest.files.every((file) => !file.startsWith("docs/") || !file.endsWith("/")));
     for (const file of ["certification-2026.10.4.md", "action-revision-audit.md", "phase6-scale-receipt.md", "future-scratch.md"]) {
       writeFileSync(join(root, "docs", file), contaminants[0][1]);
     }
     const result = verifyPack(root);
     assert.deepEqual(result.failures, []);
-    // Thirteen consumer docs, README, package manifest and one compiled fixture file.
-    assert.equal(result.count, 16);
+    // Fourteen consumer docs, README, package manifest and one compiled fixture file.
+    assert.equal(result.count, 17);
     assert.match(manifest.scripts["release:check"], /&& npm run pack:check &&/u);
     assert.equal(manifest.scripts["pack:check"], "node scripts/verify-pack-privacy.ts");
   } finally { rmSync(root, { recursive: true, force: true }); }

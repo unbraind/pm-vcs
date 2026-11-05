@@ -6,12 +6,12 @@ status: in_progress
 priority: 2
 tags[1]: "gh:unbraind/pm-vcs#180"
 created_at: "2026-11-04T21:41:27.622Z"
-updated_at: "2026-11-05T02:44:19.988Z"
+updated_at: "2026-11-05T03:09:33.141Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: "Concurrent writers yield a verified coherent snapshot or typed retry; custom folders and formats use SDK resolution; mismatched pairs never publish a native tip; resume checks only affected records; typed SDK plus CLI, compact TOON/JSON, strict bounded schemas, docs, seeded model and interleaving tests, public non-git real-data evidence."
-comments[16]{created_at,author,text}:
+comments[17]{created_at,author,text}:
   "2026-11-04T21:41:38.414Z",codex-agent,"Overlap rechecked: core public SDK provides locateItem/readLocatedItem, readHistorySnapshot/verifyHistoryEntries, item transaction journals and canonical codecs. Core workspace/item transactions commit tracker changes but do not version arbitrary source and tracker artifacts together. pm-vcs checkpoints check assurance scope after capture; pm-evidence and pm-context consume evidence/context rather than admit native tips. This feature owns selected tracker capture admission only, without a distributed transaction or a new history codec. No duplicate item or upstream capture feature found."
   "2026-11-04T21:49:37.628Z",codex-agent,"Implemented SDK TrackerCapture plus vcs commit-tracker over one strict bounded selection schema. Capture retains SDK-verified exact bytes; native publication checks expected parent and modifies the latest index under the existing store lease. Retry sessions are explicitly process-local: only affected records are re-resolved, settings changes invalidate retained proofs, and successful sessions cannot publish twice. Committed SDK journal result membership is required for item-transaction markers; missing or partial evidence produces a payload-free retry coordinate. No status-name decisions, tracker mutations, distributed-transaction claim or durable replay journal were added."
   "2026-11-04T22:02:25.458Z",codex-agent,"Public committed tracker validation on a disposable non-git copy: 175 items, 175 histories, 3312 history entries, 350 native files, 7167088 selected bytes (5681588 history bytes), zero retries, 77860 ms measured; source tracker digest unchanged. Added selected-member transaction closure: if a committed SDK transaction appears in a later captured pair, previously captured selected members missing that transaction become affected retry records. This avoids mixing pre-transaction and post-transaction selected members while keeping resume narrow."
@@ -28,7 +28,8 @@ comments[16]{created_at,author,text}:
   "2026-11-05T02:25:44.471Z",codex-agent,"Self-review also fixed SDK create-marker audit suffixes and configured JSON-markdown record hashing/body round-trips, and scoped duplicate-path rejection to the selected tracker namespace (unrelated source documents with the same filename remain allowed). Plain non-git root trackers, deep blob metadata, custom registry aliases, legacy records, created items and adopted lifecycle steps have passing allow cases. Linked pm test --run --progress passed all 33 selected tests; the 500-sequence model also passed. Strict tracker health is clean except its retained provenance advisory; pinned merge install corrected shared merge-driver drift without changing history. Full unchanged npm and Bun release gates follow on a committed source/self-host snapshot."
   "2026-11-05T02:36:42.538Z",codex-agent,"Additional verified instances of the review defect classes: canonical commit preparation now validates signatures and item headers before captured index publication, using the same native encoder as ordinary commits. Exact regression: node --test --test-concurrency=2 --test-name-pattern=\"captured signature\" test/tracker-admission.test.ts; removing only the preflight encoding in a disposable copy FAILS the byte-identical index assertion, restored implementation PASSES (invalid signature and invalid item-header corpus). Strict unknown-field schemas also require their file-backed custom field definitions when hashing aliases. Exact regression: node --test --test-concurrency=2 --test-name-pattern=\"file-backed custom fields\" test/tracker-admission.test.ts; reverting only workingSchema field hydration FAILS unchanged-item status, restored implementation PASSES. Both were executed through linked pm test --run --progress (2/2 passed). The earlier full-gate attempt was stopped before completion to keep final evidence on one unchanged committed implementation; both full gates restart after the source/self-host refresh."
   "2026-11-05T02:44:16.579Z",codex-agent,"Commit refusal preflight is now pure for the object store as well as the index: buildTree uses one canonical algorithm for candidate hashing and actual publication, with a publish flag controlling only storage. A seeded property test (25 candidate trees) verifies identical IDs and unchanged candidate object inventory. Exact regression: node --test --test-concurrency=2 --test-name-pattern=\"captured signature\" test/tracker-admission.test.ts; reverting only candidate hashing to tree publication FAILS the new unchanged-object-inventory assertion; restored implementation PASSES. Linked pm acceptance also covers the seeded property and actual npm archives with stale and absent dist. Full release gates restart from the subsequent committed source and self-host snapshot."
-files[18]{path,scope}:
+  "2026-11-05T03:09:27.779Z",codex-agent,"Previous-head CI run 41929441808 completed with two deterministic ordinary-suite failures: the production inventory assertion still expected 95 files after this PR added two modules (actual 97), and the packed fixture assertion expected 16 members after adding the tracker admission example (actual 17). Both explicit inventories now include the new artifacts by name and count; coverage remains 100 percent per file and duplicate threshold remains zero. Focused real inventory/pack regressions pass 2/2. Missing coverage from that run also reflects the release runner stopping before its serial batch after ordinary-suite failure; it is not counted as passing coverage. Superseded local gate attempts are incomplete, with heavy disk journal waits observed; current-head full npm/Bun gates remain required."
+files[20]{path,scope}:
   engine/record-format.ts,project
   engine/repo.ts,project
   engine/tracker-admission.ts,project
@@ -41,17 +42,20 @@ files[18]{path,scope}:
   test/helpers/tmp.ts,project
   test/helpers/tracker-admission-artifact.ts,project
   test/manifest-vocabulary.test.ts,project
+  test/raw-coverage.test.ts,project
   test/tracker-admission-artifact.test.ts,project
   test/tracker-admission.test.ts,project
   test/validate-tracker-admission-data.ts,project
   test/validate-tracker-admission-installs.ts,project
+  test/verify-pack-privacy.test.ts,project
   tracker-admission-commands.ts,project
   vcs-commands.ts,project
-tests[4]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+tests[5]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-concurrency=1 --test-name-pattern=torn test/tracker-admission.test.ts,project,codex-agent,"2026-11-04T22:07:28.788Z",local_mutation,feat/tracker-consistent-revision-admission
   node --test --test-concurrency=2 --test-skip-pattern=500 test/tracker-admission.test.ts test/tracker-admission-artifact.test.ts,project,codex-agent,"2026-11-05T02:14:36.995Z",local_mutation,feat/tracker-consistent-revision-admission
   node --test --test-concurrency=2 --test-name-pattern='captured signature|file-backed custom fields' test/tracker-admission.test.ts,project,codex-agent,"2026-11-05T02:35:08.088Z",local_mutation,feat/tracker-consistent-revision-admission
   node --test --test-concurrency=2 --test-name-pattern='captured signature|seeded tree candidate|install validator' test/tracker-admission.test.ts test/tracker-admission-artifact.test.ts,project,codex-agent,"2026-11-05T02:41:39.932Z",local_mutation,feat/tracker-consistent-revision-admission
+  node --test --test-concurrency=2 --test-name-pattern='production coverage contains|package ships README-linked' test/raw-coverage.test.ts test/verify-pack-privacy.test.ts,project,codex-agent,"2026-11-05T03:09:32.955Z",local_mutation,feat/tracker-consistent-revision-admission
 docs[2]{path,scope}:
   docs/tracker-admission-example.json,project
   README.md,project
