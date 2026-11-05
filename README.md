@@ -1199,7 +1199,13 @@ Each selected pair is a verified historical snapshot; this does not promise
 simultaneous latest state across unrelated items or a distributed transaction
 with source writers. Native record transport preserves custom status IDs
 opaquely; lifecycle roles and admission validity remain owned by the configured
-SDK registry. Ordinary `vcs commit` retains its general file semantics;
+SDK registry. Configured `.toon` and JSON-markdown `.md` record paths use the
+same SDK status registry for capture, working-file comparisons and ordinary
+staging. Blob capture preserves the original bytes and accepts SDK metadata that
+exceeds native record limits; configured records return `record_unrepresentable`
+with a storage remedy when their metadata cannot be encoded. Captured paths must
+be visible in the active view. If an item moved, stage removal of its old indexed
+path before capture; duplicate item documents are refused. Ordinary `vcs commit` retains its general file semantics;
 use this command when tracker admission is required.
 
 This feature works without Git, including resumable SDK captures, native bundle

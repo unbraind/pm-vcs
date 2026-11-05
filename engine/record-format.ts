@@ -1,8 +1,13 @@
 // Working-tree codecs for structured records.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   parseItemDocument,
+  resolveRuntimeStatusRegistry,
+  type PmSettings,
   serializeItemDocument,
+  splitFrontMatter,
   type ItemDocument,
   type ItemMetadata,
 } from "@unbrained/pm-cli/sdk";
@@ -18,22 +23,40 @@ const PM_ITEM_FIELDS = ["id", "title", "description", "type", "status", "priorit
  * Existing default-schema documents keep their released normalization. Admission separately
  * verifies the canonical document against its actual SDK workspace schema before publication.
  */
-function parseNativeItem(text: string): ItemDocument {
-  try { return parseItemDocument(text, { format: "toon" }); }
+function parseNativeItem(text: string, pmRoot: string | undefined, format: "toon" | "json_markdown"): ItemDocument {
+  try { return parseItemDocument(text, { format, schema: pmRoot === undefined ? undefined : workingSchema(pmRoot) }); }
   catch (original) {
-    const raw: unknown = decodeToon(text);
+    const raw: unknown = format === "toon" ? decodeToon(text) : JSON.parse(splitFrontMatter(text).frontMatter);
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw original;
     const row = raw as Record<string, unknown>;
     const metadata = Object.hasOwn(row, "front_matter") ? row.front_matter : row;
     if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata) || typeof (metadata as Record<string, unknown>).status !== "string") throw original;
-    return parseItemDocument(text, { format: "toon", schema: { version: 1, files: {}, statuses: [{ id: (metadata as Record<string, string>).status }], fields: [], workflow: {}, unknown_field_policy: "allow" } });
+    return parseItemDocument(text, { format, schema: { version: 1, files: {}, statuses: [{ id: (metadata as Record<string, string>).status }], fields: [], workflow: {}, unknown_field_policy: "allow" } });
   }
+}
+
+/** Read only optional status configuration; the SDK registry owns defaults, aliases and normalization.
+ * This synchronous adapter serves the native synchronous staging API. Invalid/missing configuration
+ * retains the released opaque-status codec, so historical records never depend on today's schema.
+ */
+function workingSchema(pmRoot: string): PmSettings["schema"] | undefined {
+  try {
+    const settings = JSON.parse(readFileSync(resolve(pmRoot, "settings.json"), "utf8")) as { schema?: PmSettings["schema"] };
+    const inline = settings.schema;
+    const base = { version: 1, files: {}, statuses: [], fields: [], workflow: {}, unknown_field_policy: "allow" as const, ...inline };
+    let loaded: PmSettings["schema"]["statuses"] = [];
+    try {
+      const raw = JSON.parse(readFileSync(resolve(pmRoot, inline?.files?.statuses?.trim() || "schema/statuses.json"), "utf8")) as PmSettings["schema"]["statuses"] | { statuses?: PmSettings["schema"]["statuses"]; definitions?: PmSettings["schema"]["statuses"] };
+      loaded = Array.isArray(raw) ? raw : raw.statuses ?? raw.definitions ?? [];
+    } catch { /* Optional SDK schema file; inline definitions remain available. */ }
+    return { ...base, statuses: [...resolveRuntimeStatusRegistry(base).definitions, ...loaded] };
+  } catch { return undefined; }
 }
 
 /**
  * Decodes a configured working-tree record through its native format.
  *
- * Native `.toon` PM items use the pm SDK's canonical parser and are flattened
+ * Native `.toon` and JSON-markdown PM items use the pm SDK's canonical parser and are flattened
  * into top-level fields so independent metadata edits merge independently. JSON
  * remains the fallback for every record path, including legacy `.toon` paths
  * that deliberately stored JSON before native TOON support existed.
@@ -43,12 +66,12 @@ function parseNativeItem(text: string): ItemDocument {
  * @returns Canonical record fields for object storage and merging.
  * @throws ObjectStoreError When neither the PM TOON nor JSON codec accepts the document.
  */
-export function parseWorkingRecord(path: string, content: Buffer): RecordDocument {
+export function parseWorkingRecord(path: string, content: Buffer, pmRoot?: string): RecordDocument {
   let toonError: unknown;
   let toonParseFailed = false;
-  if (path.endsWith(".toon")) {
+  if (path.endsWith(".toon") || path.endsWith(".md")) {
     try {
-      const item = parseNativeItem(content.toString("utf8"));
+      const item = parseNativeItem(content.toString("utf8"), pmRoot, path.endsWith(".toon") ? "toon" : "json_markdown");
       return decodeRecord(Buffer.from(JSON.stringify({ ...item.metadata, body: item.body }), "utf8"));
     } catch (error) {
       toonParseFailed = true;
@@ -62,10 +85,10 @@ export function parseWorkingRecord(path: string, content: Buffer): RecordDocumen
   } catch {
     throw new ObjectStoreError(
       "malformed_object",
-      `Record path ${path} is neither a valid native PM TOON item nor a valid JSON object.`
+      `Record path ${path} is neither a valid native PM item nor a valid JSON object.`
       + (!toonParseFailed
         ? ""
-        : ` Native TOON parser: ${String(toonError).replace(/^[^:]+: /, "")}`),
+        : ` Native item parser: ${String(toonError).replace(/^[^:]+: /, "")}`),
     );
   }
 }
@@ -75,16 +98,16 @@ export function parseWorkingRecord(path: string, content: Buffer): RecordDocumen
  *
  * @param path - Canonical repository-relative path.
  * @param document - Canonical stored record.
- * @returns Native PM TOON for PM item paths, canonical JSON otherwise.
+ * @returns Native PM TOON or JSON-markdown for PM item paths, canonical JSON otherwise.
  */
 export function renderWorkingRecord(path: string, document: RecordDocument): Buffer {
-  if (path.endsWith(".toon") && PM_ITEM_FIELDS.every((field) => document[field] !== undefined)) {
+  if ((path.endsWith(".toon") || path.endsWith(".md")) && PM_ITEM_FIELDS.every((field) => document[field] !== undefined)) {
     const metadata = Object.fromEntries(Object.entries(document).filter(([field]) => field !== "body"));
     const item: ItemDocument = {
       metadata: metadata as ItemMetadata,
       body: typeof document.body === "string" ? document.body : "",
     };
-    return Buffer.from(serializeItemDocument(item, { format: "toon" }), "utf8");
+    return Buffer.from(serializeItemDocument(item, { format: path.endsWith(".toon") ? "toon" : "json_markdown" }), "utf8");
   }
   return encodeRecord(document);
 }

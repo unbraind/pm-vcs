@@ -3,7 +3,7 @@ import { constants, openSync, closeSync, fstatSync, readSync } from "node:fs";
 import { resolve } from "node:path";
 import type { CommandHandlerContext, ExtensionApi } from "@unbrained/pm-cli/sdk/authoring";
 import { TrackerAdmissionRefusal, TrackerCapture } from "./engine/tracker-admission.ts";
-import { openRepository, requiredArgument, signatureFor } from "./vcs-commands.ts";
+import { openRepository, requiredArgument, signatureFor, sourceWorkingRoot } from "./vcs-commands.ts";
 /** Read one bounded regular JSON file; refuse before opening any native revision for mutation. */
 function input(context: CommandHandlerContext): unknown {
   const path = context.options?.input;
@@ -11,7 +11,7 @@ function input(context: CommandHandlerContext): unknown {
   let descriptor: number | undefined;
   let value: unknown;
   try {
-    descriptor = openSync(resolve(context.source_workspace_root ?? context.repo_root ?? context.pm_root, path), constants.O_RDONLY | constants.O_NONBLOCK);
+    descriptor = openSync(resolve(sourceWorkingRoot(context), path), constants.O_RDONLY | constants.O_NONBLOCK);
     const stat = fstatSync(descriptor);
     if (!stat.isFile()) throw new Error("Invalid input file.");
     const content = Buffer.alloc(32769);

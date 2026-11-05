@@ -2,8 +2,8 @@ import "./helpers/isolate-session.ts";
 /** Exercise one packed artifact under actual supported launch/install layouts without host configuration. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { trackerAdmissionArtifact } from "./helpers/tracker-admission-artifact.ts";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { testEnvironment } from "./helpers/test-environment.ts";
@@ -17,9 +17,7 @@ function run(bin: string, args: readonly string[], cwd: string, overrides = envi
   return execFileSync(bin, [...args], { cwd, env: overrides, encoding: "utf8", timeout: 180000, stdio: ["ignore", "pipe", "pipe"] });
 }
 try {
-  run("npm", ["pack", "--ignore-scripts", "--pack-destination", root], packageRoot);
-  const archive = join(root, readdirSync(root).find(name => name.endsWith(".tgz"))!);
-  const digest = createHash("sha256").update(readFileSync(archive)).digest("hex");
+  const { archive, digest } = trackerAdmissionArtifact(packageRoot, root);
   const results: { mode: string; jsonBytes: number; toonBytes: number; retryBytes: number }[] = [];
   for (const mode of ["npm-global", "bun-global", "npx", "bunx", "project-local"]) {
     const project = join(root, mode); mkdirSync(project);

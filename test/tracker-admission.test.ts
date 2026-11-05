@@ -8,7 +8,7 @@ import { installPackedExtension, pmExecutable } from "../scripts/pm-environment.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
-import { PmClient, readHistorySnapshot, verifyHistoryEntries, readLocatedItem, locateItem, readSettings, resolveItemTypeRegistry, serializeItemDocument, commitItemMutations, commitWorkspaceTransaction, type ItemDocument, type PmClientFullMutationOptions } from "@unbrained/pm-cli/sdk";
+import { normalizeStatusInput, resolveRuntimeStatusRegistry, appendHistoryEntry, createHistoryEntry, PmClient, readHistorySnapshot, verifyHistoryEntries, readLocatedItem, locateItem, readSettings, resolveItemTypeRegistry, serializeItemDocument, commitItemMutations, commitWorkspaceTransaction, type ItemDocument, type PmClientFullMutationOptions } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, encodeToon } from "@unbrained/pm-cli/sdk/testing";
 import extension, { TrackerCapture, TrackerAdmissionRefusal, parseTrackerAdmissionRequest } from "../index.ts";
 import { trackerAdmissionBoundary } from "../engine/tracker-admission.ts";
@@ -226,6 +226,7 @@ test("500 seeded model sequences preserve SDK state across native bundle replay 
     copyFileSync(join(f.pmRoot, "settings.json"), join(target, ".agents/pm/settings.json"));
     mkdirSync(join(target, ".agents/pm/schema"), { recursive: true });
     copyFileSync(join(f.pmRoot, "schema/statuses.json"), join(target, ".agents/pm/schema/statuses.json"));
+    assert.deepEqual(await document(join(target, ".agents/pm"), f.a), selected.model, `materialized sequence ${sequence}`);
     const itemPath = join(target, `.agents/pm/tasks/${f.a}.toon`);
     const variant = serializeItemDocument(selected.model, { format: "toon" });
     writeFileSync(itemPath, sequence % 2 === 0 ? variant.replaceAll("\n", "\r\n") : variant + "\n");
@@ -427,6 +428,15 @@ test("record codecs refuse malformed shapes and preserve SDK custom-status docum
   writeFileSync(join(f.repo.controlDirectory, "config.json"), JSON.stringify({ recordPaths: ["**/*.toon"], recordPolicy: {} }));
   const repo = Repository.open(f.root);
   const report = await new TrackerCapture(repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(report.ok);
+  const canonical = repo.readIndex().find(entry => entry.path.endsWith(".toon"))!.id;
+  assert.ok(!repo.status().unstaged.some(entry => entry.path.endsWith(".toon")));
+  repo.stage([`.agents/pm/tasks/${f.a}.toon`]);
+  assert.equal(repo.readIndex().find(entry => entry.path.endsWith(".toon"))!.id, canonical);
+  writeFileSync(itemPath, readFileSync(itemPath, "utf8").replace(expected.metadata.title, "Ordinary alias edit"));
+  repo.stage([`.agents/pm/tasks/${f.a}.toon`]);
+  const ordinary = repo.commit(options, new Date(2));
+  const stored = flattenTree(repo.objects, readCommit(repo.objects, ordinary).tree).get(`.agents/pm/tasks/${f.a}.toon`)!;
+  assert.equal(decodeRecord(repo.objects.read(stored.id).payload).status, expected.metadata.status);
   const target = temp(); materialize(repo, report.revision, target);
   const found = { id: f.a, type: "Task", item_format: "toon" as const, itemPath: join(target, `.agents/pm/tasks/${f.a}.toon`) };
   const settings = await readSettings(f.pmRoot);
@@ -434,4 +444,202 @@ test("record codecs refuse malformed shapes and preserve SDK custom-status docum
   assert.deepEqual(actual, expected);
   const history = await readHistorySnapshot(join(target, `.agents/pm/history/${f.a}.jsonl`), f.a);
   assert.equal(verifyHistoryEntries(history.entries, actual).ok, true);
+});
+
+test("captured new paths outside the active sparse view refuse before publication", async () => {
+  const f = await fixture(); f.repo.setView(["visible/**"]);
+  const before = f.repo.readIndex();
+  await assert.rejects(new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)), { code: "path_ignored" });
+  assert.deepEqual(f.repo.readIndex(), before); assert.equal(f.repo.refs.readHead().target, null);
+  f.repo.setView(null);
+  assert.ok((await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(2))).ok);
+});
+
+test("captured replacements retain erasure derivation from a separately owned source payload", async () => {
+  const f = await fixture(); const path = `.agents/pm/tasks/${f.a}.toon`;
+  writeFileSync(join(f.root, "source.txt"), "Independent source seed"); f.repo.stage(["source.txt"]);
+  const source = f.repo.readIndex()[0]; const fileId = "b".repeat(32);
+  const previous = f.repo.objects.withDerivation([source.id], () => f.repo.objects.write("blob", readFileSync(join(f.root, path)), fileId));
+  f.repo.writeIndex([...f.repo.readIndex(), { path, id: previous, mode: "100644", fileId }]);
+  const baseline = f.repo.commit(options, new Date(1));
+  await f.client.update(f.a, { ...scope, title: "Derived replacement" });
+  const next = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline }).commit(options, new Date(2)); assert.ok(next.ok);
+  const replacement = f.repo.readIndex().find(row => row.path === path)!;
+  // SDK-authored live files are independent materializations; test store erasure with that leaf absent.
+  rmSync(join(f.root, path));
+  f.repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+  f.repo.obliterate(source.fileId!, "erase-fixture", "provenance", new Date(3));
+  assert.equal(f.repo.objects.state(replacement.id).kind, "obliterated");
+});
+
+test("captured commit refusals preserve every byte of the preexisting staged index", async () => {
+  for (const refusal of ["empty_commit", "out_of_view_change"]) {
+    const f = await fixture();
+    const baseline = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(baseline.ok);
+    const path = `.agents/pm/tasks/${f.a}.toon`; const bytes = readFileSync(join(f.root, path));
+    if (refusal === "empty_commit") {
+      writeFileSync(join(f.root, path), bytes.toString().replace("First", "Staged independent edit")); f.repo.stage([path]); writeFileSync(join(f.root, path), bytes);
+    } else {
+      f.repo.writeIndex([...f.repo.readIndex(), { path: "hidden.txt", id: f.repo.objects.write("blob", Buffer.from("invisible")), mode: "100644", fileId: "a".repeat(32), sparse: true }]);
+      await f.client.update(f.a, { ...scope, title: "Captured but refused" });
+    }
+    const indexPath = join(f.repo.controlDirectory, "index"); const before = readFileSync(indexPath);
+    await assert.rejects(new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline.revision }).commit({ ...options, allowEmpty: false }, new Date(2)), { code: refusal });
+    assert.deepEqual(readFileSync(indexPath), before); assert.equal(f.repo.refs.readHead().target, baseline.revision);
+  }
+});
+
+test("receipt steps missing from a coherent earlier history snapshot force a resumable retry", async () => {
+  const f = await fixture();
+  let entered: () => void = () => {}; const capturedHistory = new Promise<void>(resolve => { entered = resolve; });
+  let release: () => void = () => {}; const committed = new Promise<void>(resolve => { release = resolve; });
+  trackerAdmissionBoundary.visit = async step => { if (step === "history") { entered(); await committed; } };
+  const capture = new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: null });
+  let report: ReturnType<TrackerCapture["commit"]> | undefined;
+  await commitItemMutations({ pmRoot: f.pmRoot, transactionId: "same-item-twice", author: "fixture", mutations: [
+    { op: "update", id: f.a, options: { ...scope, title: "First step" } }, { op: "update", id: f.a, options: { ...scope, title: "Later step" } },
+  ], onTransition: async ({ transition }) => {
+    if (transition === "step_recorded" && report === undefined) { report = capture.commit(options, new Date(1)); await capturedHistory; }
+  } });
+  release(); const result = await report!; assert.equal(result.ok, false); if (result.ok) assert.fail();
+  assert.deepEqual(result.retry, [{ id: f.a, reason: "transaction_unverified" }]); assert.equal(f.repo.refs.readHead().target, null);
+  trackerAdmissionBoundary.visit = defaultBoundary;
+  assert.ok((await capture.commit(options, new Date(2))).ok);
+});
+
+test("unrelated workspace object results cannot enlist selected peers in an item transaction", async () => {
+  const f = await fixture();
+  await commitWorkspaceTransaction({ pmRoot: f.pmRoot, transactionId: "object-result", author: "fixture", steps: [
+    { id: "owned", async inspect() { return { state: "pending" }; }, async apply() { await f.client.update(f.a, { ...scope, title: "Marked", message: "bulk-item-transaction object-result owned apply" }); return { id: f.a }; }, async compensate() {} },
+    { id: "unrelated", async inspect() { return { state: "pending" }; }, async apply() { return { id: f.b }; }, async compensate() {} },
+  ] });
+  assert.ok((await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a, f.b], expectedTip: null }).commit(options, new Date(1))).ok);
+});
+
+test("create and adopted lifecycle steps without history markers remain admissible", async () => {
+  const f = await fixture(); await f.client.close(f.b, "Already closed", scope);
+  const c = "admission-created";
+  await commitItemMutations({ pmRoot: f.pmRoot, transactionId: "adopted", author: "fixture", mutations: [
+    { op: "create", id: c, options: { ...scope, type: "Task", title: "Created" } },
+    { op: "update", id: f.a, options: { ...scope, title: "Marked update" } },
+    { op: "close", id: f.b, reason: "Adopt existing closure" }, { op: "release", id: f.a },
+  ] });
+  const result = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a, f.b, c], expectedTip: null }).commit(options, new Date(1));
+  assert.ok(result.ok, JSON.stringify(result));
+});
+
+test("moved tracker paths refuse duplicate item documents until old removal is explicitly staged", async () => {
+  for (const format of ["toon", "json"] as const) {
+    const f = await fixture(format);
+    mkdirSync(join(f.root, "docs")); writeFileSync(join(f.root, `docs/${f.a}.md`), "Unrelated reference document");
+    f.repo.stage([`docs/${f.a}.md`]);
+    const baseline = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(baseline.ok);
+    const extension = format === "toon" ? "toon" : "md";
+    const previous = `.agents/pm/tasks/${f.a}.${extension}`; const next = `.agents/pm/issues/${f.a}.${extension}`;
+    renameSync(join(f.root, previous), join(f.root, next)); const before = f.repo.readIndex();
+    await assert.rejects(new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline.revision }).commit(options, new Date(2)), { code: "tracker_path_changed" });
+    assert.deepEqual(f.repo.readIndex(), before);
+    f.repo.stage([previous]);
+    const report = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline.revision }).commit(options, new Date(3)); assert.ok(report.ok);
+    const paths = [...flattenTree(f.repo.objects, readCommit(f.repo.objects, report.revision).tree).keys()];
+    assert.ok(paths.includes(next)); assert.ok(!paths.includes(previous));
+  }
+});
+
+test("blob captures accept deep SDK metadata while record captures give an accurate bounded refusal", async () => {
+  const f = await fixture(); const before = await document(f.pmRoot, f.a);
+  let deep: Record<string, unknown> = {};
+  for (let depth = 0; depth < 40; depth++) deep = { child: deep };
+  const after = { ...before, metadata: { ...before.metadata, deep } };
+  const path = join(f.pmRoot, `tasks/${f.a}.toon`);
+  writeFileSync(path, serializeItemDocument(after, { format: "toon" }));
+  await appendHistoryEntry(join(f.pmRoot, `history/${f.a}.jsonl`), createHistoryEntry({ nowIso: before.metadata.updated_at, author: "fixture", op: "update", before, after }));
+  const blob = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(blob.ok);
+  writeFileSync(join(f.repo.controlDirectory, "config.json"), JSON.stringify({ recordPaths: ["**/*.toon"], recordPolicy: {} }));
+  const repo = Repository.open(f.root); const beforeIndex = repo.readIndex();
+  const record = await new TrackerCapture(repo, f.pmRoot, { items: [f.a], expectedTip: blob.revision }).commit(options, new Date(2));
+  assert.equal(record.ok, false); if (record.ok) assert.fail();
+  assert.deepEqual(record.retry, [{ id: f.a, reason: "record_unrepresentable" }]); assert.match(record.remedy, /blob storage/);
+  assert.deepEqual(repo.readIndex(), beforeIndex); assert.equal(repo.refs.readHead().target, blob.revision);
+});
+
+test("relative selection files use the same workspace root precedence as opening the repository", async () => {
+  const f = await fixture(); const other = temp();
+  writeFileSync(join(f.root, "selection.json"), JSON.stringify({ items: [f.a], expectedTip: null }));
+  writeFileSync(join(other, "selection.json"), JSON.stringify({ items: [f.b], expectedTip: null }));
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const handler = harness.activation.commands.handlers.find(entry => entry.command === "vcs commit-tracker")!;
+  const result = await handler.run({ command: "vcs commit-tracker", args: ["Local selection"], options: { input: "selection.json" }, global: {}, pm_root: f.pmRoot, repo_root: f.root, source_workspace_root: other }) as { ok: boolean; revision: string };
+  assert.ok(result.ok);
+  const paths = [...flattenTree(f.repo.objects, readCommit(f.repo.objects, result.revision).tree).keys()];
+  assert.ok(paths.some(path => path.includes(f.a))); assert.ok(!paths.some(path => path.includes(f.b)));
+});
+
+test("working record aliases follow optional inline and file-backed SDK registries while legacy bytes remain readable", async () => {
+  const f = await fixture();
+  await f.client.schemaAddStatus("custom-running", { role: ["active"], alias: ["active-alias"], author: "fixture" });
+  await f.client.update(f.a, { ...scope, status: "custom-running" });
+  const model = await document(f.pmRoot, f.a);
+  const raw = Buffer.from(encodeToon({ front_matter: { ...model.metadata, status: "active-alias" }, body: model.body }));
+  const settingsPath = join(f.pmRoot, "settings.json"); const settings = await readSettings(f.pmRoot);
+  const statuses = settings.schema.statuses;
+  const configured = join(f.pmRoot, "custom-statuses.json");
+  writeFileSync(settingsPath, JSON.stringify({ ...settings, schema: { ...settings.schema, statuses: [], files: { ...settings.schema.files, statuses: "custom-statuses.json" } } }));
+  for (const file of [statuses, { statuses }, { definitions: statuses }]) {
+    writeFileSync(configured, JSON.stringify(file));
+    assert.equal(parseWorkingRecord("item.toon", raw, f.pmRoot).status, (await document(f.pmRoot, f.a)).metadata.status);
+  }
+  writeFileSync(settingsPath, JSON.stringify({ ...settings, schema: { ...settings.schema, statuses, files: {} } }));
+  for (const file of ["{}", "null", "invalid JSON"]) {
+    writeFileSync(join(f.pmRoot, "schema/statuses.json"), file);
+    assert.equal(parseWorkingRecord("item.toon", raw, f.pmRoot).status, model.metadata.status);
+  }
+  writeFileSync(settingsPath, "{}"); rmSync(join(f.pmRoot, "schema/statuses.json"));
+  const legacy = Buffer.from(serializeItemDocument(model, { format: "toon" }));
+  assert.equal(parseWorkingRecord("item.toon", legacy, f.pmRoot).status, model.metadata.status);
+  writeFileSync(settingsPath, "invalid JSON");
+  assert.equal(parseWorkingRecord("item.toon", legacy, f.pmRoot).status, model.metadata.status);
+});
+
+test("direct captured records reuse canonical staging and prepared lifecycle mutations certify selected peers", async () => {
+  const repo = Repository.init(temp(), "main", { recordPaths: ["*.json"], recordPolicy: {} });
+  repo.commitCaptured(options, [{ path: "value.json", content: Buffer.from('{"value":1}') }], null, new Date(1));
+  assert.equal(decodeRecord(repo.objects.read(repo.readIndex()[0].id).payload).value, 1);
+  const f = await fixture(); await f.client.claim(f.b, { author: "fixture" });
+  await commitItemMutations({ pmRoot: f.pmRoot, transactionId: "lifecycle", author: "fixture", mutations: [
+    { op: "close", id: f.a, reason: "Completed", options: scope }, { op: "release", id: f.b, options: scope },
+  ] });
+  const result = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a, f.b], expectedTip: null }).commit(options, new Date(1)); assert.ok(result.ok, JSON.stringify(result));
+});
+
+
+test("configured JSON-markdown records share SDK schema hashing and preserve their materialized body", async () => {
+  const f = await fixture("json");
+  await f.client.schemaAddStatus("custom-running", { role: ["active"], alias: ["active-alias"], author: "fixture" });
+  const before = await document(f.pmRoot, f.a); const settings = await readSettings(f.pmRoot);
+  const expected = { ...before, metadata: { ...before.metadata, status: normalizeStatusInput("active-alias", resolveRuntimeStatusRegistry(settings.schema))! }, body: "Markdown body" };
+  await appendHistoryEntry(join(f.pmRoot, `history/${f.a}.jsonl`), createHistoryEntry({ nowIso: before.metadata.updated_at, author: "fixture", op: "update", before, after: expected }));
+  const path = `.agents/pm/tasks/${f.a}.md`;
+  assert.equal(parseWorkingRecord(path, Buffer.from(serializeItemDocument(expected, { format: "json_markdown" }))).status, expected.metadata.status);
+  writeFileSync(join(f.root, path), serializeItemDocument(expected, { format: "json_markdown" }).replace(`"status": "${expected.metadata.status}"`, '"status": "active-alias"'));
+  writeFileSync(join(f.repo.controlDirectory, "config.json"), JSON.stringify({ recordPaths: ["**/*.md"], recordPolicy: {} }));
+  const repo = Repository.open(f.root);
+  assert.deepEqual(await document(f.pmRoot, f.a), expected);
+  const report = await new TrackerCapture(repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(report.ok, JSON.stringify(report));
+  assert.ok(!repo.status().unstaged.some(entry => entry.path === path));
+  const id = repo.readIndex().find(entry => entry.path === path)!.id; repo.stage([path]);
+  assert.equal(repo.readIndex().find(entry => entry.path === path)!.id, id);
+  const target = temp(); materialize(repo, report.revision, target);
+  const actual = (await readLocatedItem({ id: f.a, type: "Task", item_format: "json_markdown", itemPath: join(target, path) }, { schema: settings.schema })).document;
+  assert.deepEqual(actual, expected);
+});
+
+
+test("capture supports a plain directory tracker at the native repository root without git", async () => {
+  const root = temp(); const client = new PmClient({ cwd: root, pmRoot: root, noExtensions: true });
+  await client.init("plain", { defaults: true, author: "fixture" });
+  const id = (await client.create({ ...scope, type: "Task", title: "Root tracker" })).item.id;
+  const repo = Repository.init(root);
+  const report = await new TrackerCapture(repo, root, { items: [id], expectedTip: null }).commit(options, new Date(1)); assert.ok(report.ok);
+  assert.equal(existsSync(join(root, ".git")), false);
 });

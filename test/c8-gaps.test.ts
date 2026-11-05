@@ -66,11 +66,11 @@ test("commit decoding rejects duplicate and malformed stable change identities",
 test("working record codecs preserve actionable parser detail and normalize a non-string body", () => {
   assert.throws(
     () => parseWorkingRecord("broken.json", Buffer.from("not json")),
-    /is neither a valid native PM TOON item nor a valid JSON object\.$/,
+    /is neither a valid native PM item nor a valid JSON object\.$/,
   );
   assert.throws(
     () => parseWorkingRecord("broken.toon", Buffer.from("not toon or json")),
-    /Native TOON parser: Invalid item metadata/,
+    /Native item parser: Invalid item metadata/,
   );
   const document: RecordDocument = {
     id: "item-1",

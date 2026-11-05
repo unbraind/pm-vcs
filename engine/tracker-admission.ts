@@ -5,6 +5,8 @@ import { relative, resolve } from "node:path";
 import type * as Sdk from "@unbrained/pm-cli/sdk";
 import type { CommitOptions, Repository } from "./repo.ts";
 import { ObjectStoreError, type ObjectId } from "./objects.ts";
+import { parseWorkingRecord } from "./record-format.ts";
+import { isRecordPath } from "./config.ts";
 import { decodeRecord, type RecordDocument } from "./model.ts";
 
 /** Selection and expected native parent, validated before reading tracker state. */
@@ -15,7 +17,7 @@ export interface TrackerAdmissionRequest {
 /** One compact retry coordinate; no documents, patches or private source text. */
 export interface TrackerRetryWitness {
   readonly id: string;
-  readonly reason: "pair_unavailable" | "history_mismatch" | "transaction_unverified" | "outside_workspace";
+  readonly reason: "pair_unavailable" | "history_mismatch" | "transaction_unverified" | "outside_workspace" | "record_unrepresentable";
 }
 /** Bounded admission receipt rendered by the host as TOON or JSON. */
 export type TrackerAdmissionResult = {
@@ -51,7 +53,7 @@ const require = createRequire(import.meta.url);
 /** Acquire public SDK capabilities lazily through Node's supported package loader. */
 function sdk(): typeof Sdk { return require("@unbrained/pm-cli/sdk") as typeof Sdk; }
 interface Pair {
-  readonly files: readonly { readonly path: string; readonly content: Buffer; readonly record?: RecordDocument }[];
+  readonly files: readonly { readonly path: string; readonly content: Buffer; readonly record?: RecordDocument; readonly itemId?: string; readonly itemRoot?: string }[];
   readonly transactions: ReadonlyMap<string, readonly string[]>;
 }
 /** Test observer for real competing writers at every asynchronous capture boundary. @internal */
@@ -64,7 +66,7 @@ async function transactionMembership(pmRoot: string, id: string, entries: readon
   for (const entry of entries) {
     for (const value of [entry.context?.item_transaction_step, entry.message]) {
       if (typeof value !== "string" || !value.startsWith("bulk-item-transaction ")) continue;
-      const match = /^bulk-item-transaction ([A-Za-z0-9._-]+) ([A-Za-z0-9._-]+) (apply|compensate)$/.exec(value);
+      const match = /^bulk-item-transaction ([A-Za-z0-9._-]+) ([A-Za-z0-9._-]+) (apply|compensate)(?: \| [^\r\n]*)?$/.exec(value);
       if (match === null) return null;
       const steps = markers.get(match[1]) ?? new Set<string>(); steps.add(match[2]); markers.set(match[1], steps);
     }
@@ -79,7 +81,19 @@ async function transactionMembership(pmRoot: string, id: string, entries: readon
       const result = Object.hasOwn(receipt.journal.results, step) ? receipt.journal.results[step] : undefined;
       if (!receipt.journal.completedStepIds.includes(step) || result === null || typeof result !== "object" || Array.isArray(result) || result.id !== id) return null;
     }
-    membership.set(transactionId, Object.values(receipt.journal.results).flatMap(result => result !== null && typeof result === "object" && !Array.isArray(result) && typeof result.id === "string" ? [result.id] : []));
+    const members = new Set<string>([id]);
+    const plan = receipt.journal.recoveryData;
+    const itemSteps = plan !== null && typeof plan === "object" && !Array.isArray(plan) && plan.kind === "item-mutations-v1"
+      ? receipt.journal.stepIds : [];
+    for (const [step, result] of Object.entries(receipt.journal.results)) {
+      // SDK create/adopted close/release steps need not append history. Only prepared
+      // item mutations require markers; arbitrary workspace results do not certify membership.
+      if (result === null || typeof result !== "object" || Array.isArray(result) || typeof result.id !== "string"
+        || !itemSteps.includes(step) || !["update", "close", "release"].includes(String(result.op)) || !Object.hasOwn(receipt.journal.compensationData, step)) continue;
+      if (!receipt.journal.completedStepIds.includes(step) || (result.id === id && !steps.has(step))) return null;
+      members.add(result.id);
+    }
+    membership.set(transactionId, [...members]);
   }
   return membership;
 }
@@ -124,13 +138,19 @@ export class TrackerCapture {
       const transactions = await transactionMembership(this.pmRoot, located.id, history.entries);
       if (transactions === null) return { id: rawId, reason };
       reason = "outside_workspace";
-      const record = decodeRecord(Buffer.from(JSON.stringify({ ...item.document.metadata, body: item.document.body })));
-      const files = [{ path: located.itemPath, content: Buffer.from(item.raw), record }, { path: historyPath, content: Buffer.from(history.raw_bytes) }].map(file => {
+      const files = [{ path: located.itemPath, content: Buffer.from(item.raw), itemId: located.id }, { path: historyPath, content: Buffer.from(history.raw_bytes) }].map(file => {
         const path = relative(this.repository.root, resolve(file.path)).split("\\").join("/");
         if (path === "" || path === ".." || path.startsWith("../") || path.startsWith("/")) throw new Error("External tracker.");
-        return { ...file, path };
+        return { ...file, path, itemRoot: relative(this.repository.root, resolve(this.pmRoot)).split("\\").join("/") };
       });
-      return { files, transactions };
+      reason = "record_unrepresentable";
+      const captured = files.map(file => {
+        if (file.itemId === undefined || !isRecordPath(file.path, this.repository.config)) return file;
+        // Admission cannot create a record representation that ordinary staging cannot read.
+        parseWorkingRecord(file.path, file.content, this.pmRoot);
+        return { ...file, record: decodeRecord(Buffer.from(JSON.stringify({ ...item.document.metadata, body: item.document.body }))) };
+      });
+      return { files: captured, transactions };
     } catch { return { id: rawId, reason }; }
   }
   /** Verify pending records and publish exact captured bytes under the native writer lease.
@@ -175,6 +195,7 @@ export class TrackerCapture {
     }
     if (retry.length > 0) return { ok: false, code: "tracker_capture_retry", checked: pending.length, reused, retry,
       remedy: retry.some(row => row.reason === "outside_workspace") ? "Start a new capture in a native workspace containing the selected tracker, then retry the same selection."
+        : retry.some(row => row.reason === "record_unrepresentable") ? "The selected item cannot be encoded as a native record; use blob storage for its path or simplify its structured metadata, then start a new capture."
         : "Wait for tracker writers to settle or restore readable committed transaction receipts, then resume this capture; CLI callers retry the same input." };
     const published = this.repository.commitCaptured(options, this.request.items.flatMap(id => this.verified.get(id)!.files), this.request.expectedTip, now, this.expectedHead);
     this.consumed = true;
