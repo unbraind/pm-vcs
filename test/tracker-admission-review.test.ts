@@ -4,15 +4,16 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs, { mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { join, relative } from "node:path";
+import nativePath, { join, relative, win32 } from "node:path";
 import { afterEach, mock, test } from "node:test";
-import { PmClient, readSettings, readLocatedItem, serializeItemDocument } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness, encodeToon } from "@unbrained/pm-cli/sdk/testing";
+import { PmClient, parseItemDocument, readSettings, readLocatedItem, serializeItemDocument, splitFrontMatter } from "@unbrained/pm-cli/sdk";
+import { createExtensionTestHarness, decodeToon, encodeToon } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
-import { TrackerCapture } from "../engine/tracker-admission.ts";
+import { TrackerCapture, trackerWorkspacePath } from "../engine/tracker-admission.ts";
 import { flattenTree } from "../engine/worktree.ts";
 import { readCommit } from "../engine/model.ts";
 import { parseWorkingRecord } from "../engine/record-format.ts";
+import { ObjectStoreError } from "../engine/objects.ts";
 import { Repository } from "../engine/repo.ts";
 import { trackerAdmissionDigest } from "./helpers/tracker-admission-digest.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
@@ -230,4 +231,63 @@ test("tracker byte validation hashes the managed extension manifest and excludes
   writeFileSync(manifest, '{"extensions":["changed"]}'); assert.notEqual(await trackerAdmissionDigest(f.pmRoot), initial);
   writeFileSync(manifest, '{"extensions":[]}'); assert.equal(await trackerAdmissionDigest(f.pmRoot), initial);
   rmSync(manifest); assert.equal(await trackerAdmissionDigest(f.pmRoot), absent, "Deleting the manifest must also change the digest.");
+});
+
+
+test("native record fallback failures preserve the original SDK diagnostic and decoder cause", () => {
+  const cases = [
+    { format: "json_markdown" as const, path: "invalid.md", text: "{broken}\n\nbody", fallback: () => JSON.parse(splitFrontMatter("{broken}\n\nbody").frontMatter) },
+    { format: "toon" as const, path: "invalid.toon", text: 'id: "unterminated', fallback: () => decodeToon('id: "unterminated') },
+  ];
+  for (const entry of cases) {
+    let original: Error | undefined; let fallback: Error | undefined;
+    try { parseItemDocument(entry.text, { format: entry.format }); } catch (error) { assert.ok(error instanceof Error); original = error; }
+    try { entry.fallback(); } catch (error) { assert.ok(error instanceof Error); fallback = error; }
+    assert.ok(original); assert.ok(fallback);
+    const diagnostic = original.message.replace(/^[^:]+: /, "");
+    assert.throws(() => parseWorkingRecord(entry.path, Buffer.from(entry.text)), error => {
+      assert.ok(error instanceof ObjectStoreError); assert.equal(error.code, "malformed_object");
+      assert.ok(error.message.endsWith(`Native item parser: ${diagnostic}`));
+      assert.ok(error.cause instanceof Error); assert.equal(error.cause.name, original.name); assert.equal(error.cause.message, original.message);
+      assert.ok(error.cause.cause instanceof Error); assert.equal(error.cause.cause.name, fallback.name); assert.equal(error.cause.cause.message, fallback.message);
+      return true;
+    });
+  }
+  // A successful decoder followed by a failed opaque-status parse is also only a fallback.
+  const text = encodeToon({ front_matter: { status: "opaque-status" }, body: "" });
+  assert.throws(() => parseWorkingRecord("invalid.toon", Buffer.from(text)), error => {
+    assert.ok(error instanceof ObjectStoreError); assert.ok(error.cause instanceof Error); assert.ok(error.cause.cause instanceof Error);
+    return true;
+  });
+  // Previously supported generic JSON records still bypass native parse failures.
+  for (const path of ["legacy.toon", "legacy.md"]) assert.deepEqual(parseWorkingRecord(path, Buffer.from('{"field":"value"}')), { field: "value" });
+});
+
+test("tracker coordinates reject cross-drive and foreign UNC paths using win32 rules", () => {
+  const cases = [
+    { root: "C:\\workspace", allowed: "C:\\workspace\\.agents\\pm\\tasks\\x.toon", expected: ".agents/pm/tasks/x.toon", refused: ["D:\\tracker\\tasks\\x.toon", "\\server\\share\\tracker\\x.toon", "C:\\workspace-other\\x.toon", "C:\\workspace", "C:\\"] },
+    { root: "\\server\\share\\workspace", allowed: "\\server\\share\\workspace\\tasks\\x.toon", expected: "tasks/x.toon", refused: ["\\other\\share\\workspace\\x.toon", "\\server\\other-share\\workspace\\x.toon", "C:\\workspace\\x.toon", "\\server\\share\\workspace-other\\x.toon"] },
+  ];
+  for (const entry of cases) {
+    assert.equal(trackerWorkspacePath(entry.root, entry.allowed, win32), entry.expected);
+    for (const file of entry.refused) assert.throws(() => trackerWorkspacePath(entry.root, file, win32), error => error instanceof ObjectStoreError && error.code === "outside_workspace");
+  }
+});
+
+test("foreign Windows item and history coordinates return typed retries without publication", async () => {
+  const f = await fixture(); const repo = Repository.init(f.root);
+  const before = { index: repo.readIndex(), head: repo.refs.readHead(), objects: repo.objects.inventory(), tracker: await trackerAdmissionDigest(f.pmRoot) };
+  const relativePath = nativePath.relative; const absolutePath = nativePath.isAbsolute;
+  for (const suffix of [`.toon`, `.jsonl`]) for (const target of ["D:\\tracker\\tasks\\x.toon", "\\server\\share\\tracker\\x.toon"]) {
+    // Keep real SDK reads on the host filesystem; emulate only the OS path result at admission.
+    const relativeMock = mock.method(nativePath, "relative", (root: string, file: string) => root === f.root && file.endsWith(suffix) ? win32.relative("C:\\workspace", target) : relativePath(root, file));
+    const absoluteMock = mock.method(nativePath, "isAbsolute", (file: string) => absolutePath(file) || win32.isAbsolute(file));
+    try {
+      const result = await new TrackerCapture(repo, f.pmRoot, { items: [f.item.id], expectedTip: null }).commit({ message: "Refused coordinate\n", author: { name: "fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 } }, new Date(1));
+      assert.equal(result.ok, false); if (result.ok) assert.fail();
+      assert.equal(result.code, "tracker_capture_retry"); assert.deepEqual(result.retry, [{ id: f.item.id, reason: "outside_workspace" }]);
+      assert.match(result.remedy, /workspace containing/);
+    } finally { relativeMock.mock.restore(); absoluteMock.mock.restore(); }
+    assert.deepEqual({ index: repo.readIndex(), head: repo.refs.readHead(), objects: repo.objects.inventory(), tracker: await trackerAdmissionDigest(f.pmRoot) }, before);
+  }
 });

@@ -27,12 +27,17 @@ const PM_ITEM_FIELDS = ["id", "title", "description", "type", "status", "priorit
 function parseNativeItem(text: string, pmRoot: string | undefined, format: "toon" | "json_markdown"): ItemDocument {
   try { return parseItemDocument(text, { format, schema: pmRoot === undefined ? undefined : workingSchema(pmRoot) }); }
   catch (original) {
-    const raw: unknown = format === "toon" ? decodeToon(text) : JSON.parse(splitFrontMatter(text).frontMatter);
-    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw original;
-    const row = raw as Record<string, unknown>;
-    const metadata = Object.hasOwn(row, "front_matter") ? row.front_matter : row;
-    if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata) || typeof (metadata as Record<string, unknown>).status !== "string") throw original;
-    return parseItemDocument(text, { format, schema: { version: 1, files: {}, statuses: [{ id: (metadata as Record<string, string>).status }], fields: [], workflow: {}, unknown_field_policy: "allow" } });
+    try {
+      const raw: unknown = format === "toon" ? decodeToon(text) : JSON.parse(splitFrontMatter(text).frontMatter);
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw original;
+      const row = raw as Record<string, unknown>;
+      const metadata = Object.hasOwn(row, "front_matter") ? row.front_matter : row;
+      if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata) || typeof (metadata as Record<string, unknown>).status !== "string") throw original;
+      return parseItemDocument(text, { format, schema: { version: 1, files: {}, statuses: [{ id: (metadata as Record<string, string>).status }], fields: [], workflow: {}, unknown_field_policy: "allow" } });
+    } catch (fallback) {
+      if (fallback !== original) Object.defineProperty(original, "cause", { value: fallback, configurable: true, writable: true });
+      throw original;
+    }
   }
 }
 
@@ -114,13 +119,15 @@ export function parseWorkingRecord(path: string, content: Buffer, pmRoot?: strin
   try {
     return decodeRecord(content);
   } catch {
-    throw new ObjectStoreError(
+    const error = new ObjectStoreError(
       "malformed_object",
       `Record path ${path} is neither a valid native PM item nor a valid JSON object.`
       + (!toonParseFailed
         ? ""
         : ` Native item parser: ${String(toonError).replace(/^[^:]+: /, "")}`),
     );
+    if (toonParseFailed) Object.defineProperty(error, "cause", { value: toonError, configurable: true, writable: true });
+    throw error;
   }
 }
 

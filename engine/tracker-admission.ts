@@ -1,7 +1,7 @@
 /** Optimistic admission of explicit tracker pairs; SDK codecs own all tracker semantics. */
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { relative, resolve, sep } from "node:path";
+import nativePath from "node:path";
 import type * as Sdk from "@unbrained/pm-cli/sdk";
 import type { CommitOptions, Repository } from "./repo.ts";
 import { ObjectStoreError, type ObjectId } from "./objects.ts";
@@ -97,6 +97,13 @@ async function transactionMembership(pmRoot: string, id: string, entries: readon
   }
   return membership;
 }
+/** Convert a native tracker coordinate only when it is a file inside the native workspace. @internal */
+export function trackerWorkspacePath(root: string, file: string, paths: Pick<typeof nativePath, "relative" | "resolve" | "isAbsolute" | "sep"> = nativePath): string {
+  const native = paths.relative(root, paths.resolve(file));
+  const path = native.split(paths.sep).join("/");
+  if (paths.isAbsolute(native) || path === "" || path === ".." || path.startsWith("../") || path.startsWith("/")) throw new ObjectStoreError("outside_workspace", "External tracker.");
+  return path;
+}
 /** One resumable capture, retaining immutable verified bytes while retrying only affected records.
  * No frozen mutation plan is replayed: each pending target is resolved and verified afresh through
  * the SDK. A session is local to one process and native parent; CLI invocations start fresh sessions.
@@ -139,9 +146,10 @@ export class TrackerCapture {
       if (transactions === null) return { id: rawId, reason };
       reason = "outside_workspace";
       const files = [{ path: located.itemPath, content: Buffer.from(item.raw), itemId: located.id, itemFolders: Object.values(registry.type_to_folder) }, { path: historyPath, content: Buffer.from(history.raw_bytes) }].map(file => {
-        const path = relative(this.repository.root, resolve(file.path)).split(sep).join("/");
-        if (path === "" || path === ".." || path.startsWith("../") || path.startsWith("/")) throw new Error("External tracker.");
-        return { ...file, path, itemRoot: relative(this.repository.root, resolve(this.pmRoot)).split(sep).join("/") };
+        const path = trackerWorkspacePath(this.repository.root, file.path);
+        // A root-level tracker has the empty item prefix, rather than a file coordinate.
+        const itemRoot = nativePath.relative(this.repository.root, nativePath.resolve(this.pmRoot)) === "" ? "" : trackerWorkspacePath(this.repository.root, this.pmRoot);
+        return { ...file, path, itemRoot };
       });
       reason = "record_unrepresentable";
       const captured = files.map(file => {
