@@ -6,7 +6,7 @@ status: in_progress
 priority: 2
 tags[5]: dependencies,"gh:unbraind/pm-vcs#173","gh:unbraind/pm-vcs#182",migration,sdk
 created_at: "2026-11-05T10:22:28.965Z"
-updated_at: "2026-11-05T15:24:36.614Z"
+updated_at: "2026-11-05T15:51:14.254Z"
 author: codex-toolchain-1104
 acceptance_criteria: Repeat both concurrency cases 20 times alone and at CI concurrency on both pins; preserve assertions; document causes and gates; commit tracker and refreshed self-host archive; open a replacement PR without modifying the Dependabot branch.
 comments[25]{created_at,author,text}:
@@ -43,9 +43,8 @@ files[7]{path,scope}:
   test/helpers/file-removal.ts,project
   test/helpers/signature-policy-worker.ts,project
   test/signatures.test.ts,project
-tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
-  "NPM_CONFIG_USERCONFIG=/dev/null nice -n 10 node --test --test-concurrency=4 --test-name-pattern=\"a walk killed mid-flight|a separate revoker cannot\" test/bisect.test.ts test/signatures.test.ts",project,240,codex-toolchain-1104,"2026-11-05T10:35:19.044Z",local_mutation,fix/toolchain-2026-11-4
-  "NPM_CONFIG_USERCONFIG=/dev/null node --test --test-concurrency=2 --test-name-pattern=\"worker completion observes|a walk killed mid-flight|a separate revoker cannot\" test/bisect.test.ts test/signatures.test.ts",project,600,codex-agent,"2026-11-05T12:43:47.194Z",local_mutation,fix/toolchain-2026-11-4
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  "NPM_CONFIG_USERCONFIG=/dev/null npm run build && NPM_CONFIG_USERCONFIG=/dev/null nice -n 10 node --test --test-concurrency=2 --test-name-pattern=\"worker completion observes|a walk killed mid-flight|a separate revoker cannot\" test/bisect.test.ts test/signatures.test.ts",project,900,claude-orchestrator,"2026-11-05T15:51:14.048Z",local_mutation,fix/toolchain-2026-11-4
 docs[3]{path,scope}:
   "https://github.com/unbraind/pm-vcs/actions/runs/41960589334",project
   "https://github.com/unbraind/pm-vcs/actions/runs/42034001234",project
