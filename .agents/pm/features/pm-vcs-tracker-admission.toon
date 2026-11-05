@@ -6,12 +6,12 @@ status: in_progress
 priority: 2
 tags[1]: "gh:unbraind/pm-vcs#180"
 created_at: "2026-11-04T21:41:27.622Z"
-updated_at: "2026-11-05T06:26:56.227Z"
+updated_at: "2026-11-05T06:53:10.025Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: "Concurrent writers yield a verified coherent snapshot or typed retry; custom folders and formats use SDK resolution; mismatched pairs never publish a native tip; resume checks only affected records; typed SDK plus CLI, compact TOON/JSON, strict bounded schemas, docs, seeded model and interleaving tests, public non-git real-data evidence."
-comments[23]{created_at,author,text}:
+comments[24]{created_at,author,text}:
   "2026-11-04T21:41:38.414Z",codex-agent,"Overlap rechecked: core public SDK provides locateItem/readLocatedItem, readHistorySnapshot/verifyHistoryEntries, item transaction journals and canonical codecs. Core workspace/item transactions commit tracker changes but do not version arbitrary source and tracker artifacts together. pm-vcs checkpoints check assurance scope after capture; pm-evidence and pm-context consume evidence/context rather than admit native tips. This feature owns selected tracker capture admission only, without a distributed transaction or a new history codec. No duplicate item or upstream capture feature found."
   "2026-11-04T21:49:37.628Z",codex-agent,"Implemented SDK TrackerCapture plus vcs commit-tracker over one strict bounded selection schema. Capture retains SDK-verified exact bytes; native publication checks expected parent and modifies the latest index under the existing store lease. Retry sessions are explicitly process-local: only affected records are re-resolved, settings changes invalidate retained proofs, and successful sessions cannot publish twice. Committed SDK journal result membership is required for item-transaction markers; missing or partial evidence produces a payload-free retry coordinate. No status-name decisions, tracker mutations, distributed-transaction claim or durable replay journal were added."
   "2026-11-04T22:02:25.458Z",codex-agent,"Public committed tracker validation on a disposable non-git copy: 175 items, 175 histories, 3312 history entries, 350 native files, 7167088 selected bytes (5681588 history bytes), zero retries, 77860 ms measured; source tracker digest unchanged. Added selected-member transaction closure: if a committed SDK transaction appears in a later captured pair, previously captured selected members missing that transaction become affected retry records. This avoids mixing pre-transaction and post-transaction selected members while keeping resume narrow."
@@ -35,7 +35,8 @@ comments[23]{created_at,author,text}:
   "2026-11-05T06:22:38.470Z",codex-agent,"Review round 2: synced the remote branch and merged current origin/main. Verified all three unresolved threads with every comment and the latest CodeRabbit body; no outside-diff findings. Plan: stat-validated schema cache per resolved tracker root, root-only runtime digest exclusions, canonical CLI message terminator; each receives a behavioral revert proof. Self-review the whole PR for these classes, then unchanged npm and Bun release gates."
   "2026-11-05T06:26:33.557Z",codex-agent,"Self-review complete for the full PR: status, scan and staging all share workingRecord/workingSchema; no second schema hydration implementation needs caching. The validation digest now excludes only direct runtime directories, and hashes nested custom folders with those names. commit-tracker now follows the same trim-plus-single-newline contract as vcs commit/merge/describe/revert; SDK commit options remain caller-owned. New regressions run in real non-git trackers and compare actual stored CLI messages. Focused pm test receipt: 3 passed, 0 failed/skipped/cancelled."
   "2026-11-05T06:26:56.226Z",codex-agent,"Behavioral revert proofs (disposable copy, fixed implementation restored in finally): node --test --test-concurrency=2 --test-name-pattern=\"working schema cache\" test/tracker-admission-review.test.ts fails with only workingSchema reverted (schema reads rise above 3); restored passes 1/1. Pattern \"tracker byte validation\" fails when only recursive runtime exclusions revert (nested mutation digest stays equal); restored passes 1/1. Pattern \"commit-tracker stores exactly\" fails when only the message terminator reverts (stored message differs from vcs commit); restored passes 1/1. All three reverted commands exit 1 with assertion failures, all restored commands exit 0. npm run check passed: typecheck, lint and zero-duplication gate (97 production sources, unchanged threshold 0%). Preparing unchanged full release gates under isolated HOME and empty Git configuration, limited to two CPUs."
-files[22]{path,scope}:
+  "2026-11-05T06:53:06.707Z",codex-agent,"Prior-head CI run 41967083815 exposed two deterministic feature regressions beyond the review threads: test/repo.test.ts still expected the old TOON-only diagnostic after the codec gained JSON-markdown support, and the tar inspection in test/tracker-admission-artifact.test.ts omitted testEnvironment(). Both test contracts are corrected without changing runtime behavior or thresholds. Its Node 26 concurrent-instance lock wait was a separate transient failure; do not treat the earlier whole-source coverage report as a measured pass because ordinary-test failures prevented the serial coverage batch. Current local release gate uses two workers; the initial disk-backed attempt was interrupted without a verdict, then restarted unchanged with disposable memory-backed fixtures. Review-fix implementation 9eb7e7a is pushed; fresh CI run 41983146293 is in progress, with both Windows launcher checks and CodeQL passed."
+files[23]{path,scope}:
   engine/record-format.ts,project
   engine/repo.ts,project
   engine/tracker-admission.ts,project
@@ -50,6 +51,7 @@ files[22]{path,scope}:
   test/helpers/tracker-admission-digest.ts,project
   test/manifest-vocabulary.test.ts,project
   test/raw-coverage.test.ts,project
+  test/repo.test.ts,project
   test/tracker-admission-artifact.test.ts,project
   test/tracker-admission-review.test.ts,project
   test/tracker-admission.test.ts,project

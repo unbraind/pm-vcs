@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { trackerAdmissionArtifact } from "./helpers/tracker-admission-artifact.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
+import { testEnvironment } from "./helpers/test-environment.ts";
 
 test("install validator packages newly built bytes even when dist is stale or absent", () => {
   const scope = makeTempDir();
@@ -21,7 +22,7 @@ test("install validator packages newly built bytes even when dist is stale or ab
       const artifact = trackerAdmissionArtifact(root, destination);
       assert.match(artifact.digest, /^[0-9a-f]{64}$/);
       assert.equal(readFileSync(join(root, "dist/index.js"), "utf8"), "fresh built artifact");
-      assert.equal(execFileSync("tar", ["-xOf", artifact.archive, "package/dist/index.js"], { encoding: "utf8" }), "fresh built artifact");
+      assert.equal(execFileSync("tar", ["-xOf", artifact.archive, "package/dist/index.js"], { encoding: "utf8", env: testEnvironment() }), "fresh built artifact");
     }
   } finally { scope.cleanup(); }
 });
