@@ -18,7 +18,7 @@ import { publicKeyText } from "../engine/signatures.ts";
 import { Repository } from "../engine/repo.ts";
 import { readCommit, migratedFileId, decodeRecord, type Signature } from "../engine/model.ts";
 import { parseWorkingRecord, renderWorkingRecord } from "../engine/record-format.ts";
-import { flattenTree } from "../engine/worktree.ts";
+import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { exportBundle, importBundle } from "../engine/bundle.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
@@ -651,8 +651,10 @@ test("captured signature and item-header refusals leave staged state byte-identi
     const baseline = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(baseline.ok);
     await f.client.update(f.a, { ...scope, title: "Valid captured change" });
     const before = readFileSync(join(f.repo.controlDirectory, "index"));
+    const objects = f.repo.objects.inventory().map(row => row.id).sort();
     await assert.rejects(new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline.revision }).commit({ ...options, ...invalid }, new Date(2)), { code: invalid.code });
     assert.deepEqual(readFileSync(join(f.repo.controlDirectory, "index")), before); assert.equal(f.repo.refs.readHead().target, baseline.revision);
+    assert.deepEqual(f.repo.objects.inventory().map(row => row.id).sort(), objects);
   }
 });
 
@@ -671,4 +673,20 @@ test("file-backed custom fields under strict schemas retain the same alias hash 
   const repo = Repository.open(f.root); const report = await new TrackerCapture(repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(report.ok, JSON.stringify(report));
   assert.ok(!repo.status().unstaged.some(row => row.path === path));
   const id = repo.readIndex().find(row => row.path === path)!.id; repo.stage([path]); assert.equal(repo.readIndex().find(row => row.path === path)!.id, id);
+});
+
+
+test("seeded tree candidate identities equal publication without preflight object writes", () => {
+  const repo = Repository.init(temp()); const next = random(0x180);
+  const ids = ["one", "two", "three"].map(value => repo.objects.write("blob", Buffer.from(value)));
+  for (let sample = 0; sample < 25; sample++) {
+    const files = new Map(Array.from({ length: sample % 7 }, (_, index) => [`folder-${next() % 3}/file-${index}`, {
+      id: ids[next() % ids.length], mode: next() % 2 === 0 ? "100644" as const : "100755" as const,
+      fileId: (sample * 7 + index).toString(16).padStart(32, "0"),
+    }] as const));
+    const before = repo.objects.inventory().map(row => row.id).sort();
+    const candidate = buildTree(repo.objects, files, false);
+    assert.deepEqual(repo.objects.inventory().map(row => row.id).sort(), before);
+    assert.equal(buildTree(repo.objects, files), candidate);
+  }
 });

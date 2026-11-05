@@ -588,14 +588,14 @@ export class Repository {
 
 
   /** Build the ordinary and merge commit tree from the same validated index snapshot. */
-  private indexTree(index: readonly IndexEntry[]): ObjectId {
+  private indexTree(index: readonly IndexEntry[], publish = true): ObjectId {
     return buildTree(this.objects, new Map(index.map((entry) => [entry.path, {
       id: entry.id,
       mode: entry.mode as FileMode,
       fileId: entry.fileId,
       copiedFrom: entry.copiedFrom,
       conflicts: entry.conflicts,
-    }])));
+    }])), publish);
   }
 
   /**
@@ -1676,6 +1676,7 @@ export class Repository {
       const head = this.refs.readHead();
       const parent = head.target;
       const prepared = this.validateCommitIndex(index, options, parent);
+      this.indexTree(index);
       const id = writeCommit(this.objects, { ...prepared, changeId: identityWithoutChangeLine(prepared) });
       this.advanceHead(head, parent, id, "commit", `Committed ${id.slice(0, 12)}: ${splitLines(options.message)[0] ?? ""}`, now);
       return id;
@@ -1703,7 +1704,7 @@ export class Repository {
         + "Widen the view with `pm vcs view <patterns>`, review the change, and commit it from a working tree that can see it.",
       );
     }
-    const tree = this.indexTree(index);
+    const tree = this.indexTree(index, false);
     if (!options.allowEmpty && parent !== null && readCommit(this.objects, parent).tree === tree) {
       throw new ObjectStoreError(
         "empty_commit",
