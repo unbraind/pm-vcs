@@ -853,7 +853,7 @@ Everything below is tracked as an epic in this repository's own tracker, under
 ## Requirements
 
 - Node.js ≥ 22.18 (`engines`), tested on 22 and 26
-- `@unbrained/pm-cli` ≥ 2026.10.10 (manifest and peer dependency floor for host-bound SDK and guarded tracker formats)
+- `@unbrained/pm-cli` ≥ 2026.10.30 (manifest and peer dependency floor for SDK history snapshots and item-transaction certificates)
 - Works under `npm`/`npx` and `bun`/`bunx`
 - Runtime dependency: `pako` for bounded native DEFLATE verification, alongside the Node standard library and host-provided pm SDK
 
@@ -1153,3 +1153,61 @@ GitHub OIDC releases keep provenance enabled.
 A maintainer enables the disabled workflow after merge with
 `gh workflow enable release.yml --repo unbraind/pm-vcs`. Workflow activation is
 manual; the package does not install an automatic setup workflow.
+
+### Admit coherent tracker snapshots
+
+`pm vcs commit-tracker "Record verified tracker work" --input selection.json`
+commits the current staged source and explicitly selected item/history pairs.
+The [selection example](docs/tracker-admission-example.json) uses an unborn
+native parent; replace `expectedTip` with the exact current native revision on
+an existing branch. IDs are canonical full item IDs, with 1–100 unique entries.
+Only `items` and `expectedTip` are accepted; the JSON file is limited to 32 KiB.
+
+The SDK resolves registered type folders and item formats, reads each canonical
+document and its exact history bytes, and verifies their agreement using core
+history verification. SDK item-transaction markers additionally require a
+retained committed journal proving that item's step membership. Missing,
+partial, foreign or unreadable transaction evidence produces a retry. If a
+selected member was captured before a transaction already certified in another
+selected member, only that earlier member becomes an affected retry target. Capture
+never repairs history or changes tracker documents. Existing historical formats
+continue to be read through the SDK.
+
+A success returns `{ok:true,revision,checked,reused}`. A torn or unavailable pair
+returns `{ok:false,code:"tracker_capture_retry",checked,reused,retry:[{id,reason}],remedy}`;
+inspect `ok` when using this agent-oriented command. The host renders both compact
+TOON (default) and `--json`. A changed native parent throws `tracker_tip_changed`
+with a remedy and publishes no revision. Invalid selections are refused before
+mutation. All selected pairs must verify before any native index or tip changes.
+
+The public `TrackerCapture` SDK class uses the same admission and publication
+path. Construct it with a `Repository`, tracker root and parsed selection, then
+call `commit(options, now)`. After a retry, calling `commit` on that same instance
+rereads only failed records; successful pairs retain their immutable captured
+bytes. A tracker settings change invalidates all retained certificates. A
+successful commit consumes the session; overlapping calls on one session refuse
+with `tracker_capture_busy` until the active attempt finishes. CLI invocations start fresh sessions;
+there is no persisted retry journal and no frozen mutation plan to replay.
+
+Native publication binds the branch (or detached HEAD) at capture creation,
+checks that identity and the expected tip, and reads the latest index while
+holding the native writer lease. It stores the certified content directly (canonical SDK fields for configured
+native records), bypassing
+live-file stat caches. A writer advancing after capture cannot substitute new
+item bytes into the revision. Source files are the immutable staged versions.
+Each selected pair is a verified historical snapshot; this does not promise
+simultaneous latest state across unrelated items or a distributed transaction
+with source writers. Native record transport preserves custom status IDs
+opaquely; lifecycle roles and admission validity remain owned by the configured
+SDK registry. Configured `.toon` and JSON-markdown `.md` record paths use the
+same SDK field and status registries for capture, working-file comparisons and ordinary
+staging. Blob capture preserves the original bytes and accepts SDK metadata that
+exceeds native record limits; configured records return `record_unrepresentable`
+with a storage remedy when their metadata cannot be encoded. Captured paths must
+be visible in the active view. If an item moved, stage removal of its old indexed
+path before capture; duplicate item documents are refused. Ordinary `vcs commit` retains its general file semantics;
+use this command when tracker admission is required.
+
+This feature works without Git, including resumable SDK captures, native bundle
+export/import and file-transport synchronization. Only the `vcs git` command
+group needs a Git repository.

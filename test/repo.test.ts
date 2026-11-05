@@ -1031,7 +1031,7 @@ test("staging a non-JSON file at a configured record path is refused", () => {
     () => repo.stage(["item.toon"]),
     (error: unknown) => error instanceof ObjectStoreError
       && error.code === "malformed_object"
-      && error.message.includes("Native TOON parser: Invalid item metadata"),
+      && error.message.includes("Native item parser: Invalid item metadata"),
   );
 });
 

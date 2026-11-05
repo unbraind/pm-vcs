@@ -1,5 +1,6 @@
 import { writeBundleFile } from "./engine/managed-exports.ts";
 import { registerChangeBundleCommands } from "./change-bundle-commands.ts";
+import { registerTrackerAdmissionCommands } from "./tracker-admission-commands.ts";
 import { registerCheckpointCommands } from "./checkpoint-commands.ts";
 import { registerSigningCommands } from "./signing-commands.ts";
 import { verifyChangeSignature, type ChangeSignatureResult } from "./engine/signatures.ts";
@@ -398,6 +399,7 @@ export function registerVcsCommands(api: ExtensionApi): void {
   registerBisectCommands(api);
   registerSigningCommands(api);
   registerCheckpointCommands(api);
+  registerTrackerAdmissionCommands(api);
   registerChangeBundleCommands(api);
   api.registerCommand({
     name: "vcs init",

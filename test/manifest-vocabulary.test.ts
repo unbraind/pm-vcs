@@ -34,7 +34,7 @@ test("the extension manifest uses only keys the pm CLI recognizes", () => {
   assert.match(pin, /^\d+\.\d+\.\d+$/, "the pinned CLI version must be an exact three-part version");
   const installed = JSON.parse(readFileSync(resolve(repoRoot, "node_modules/@unbrained/pm-cli/package.json"), "utf8")) as { version: string };
   assert.equal(installed.version, pin, "metadata checks must use the actual installed SDK matching the dev pin");
-  assert.equal(extensionManifest.pm_min_version, "2026.10.10", "the runtime floor covers guarded tracker formats independently of the dev pin");
+  assert.equal(extensionManifest.pm_min_version, "2026.10.30", "the runtime floor covers SDK history snapshots and item-transaction certificates independently of dependency resolution");
   const result = checkExtensionManifestCompatibility(extensionManifest, { pmVersion: installed.version });
   const unknownKeyFindings = result.findings.filter((finding) => finding.code === "manifest_unknown_key");
   assert.deepStrictEqual(
@@ -46,12 +46,12 @@ test("the extension manifest uses only keys the pm CLI recognizes", () => {
 
 
 test("published host requirements agree and refuse runtimes below the guarded tracker floor", () => {
-  const floor = "2026.10.10";
+  const floor = "2026.10.30";
   assert.equal(packageJson.peerDependencies["@unbrained/pm-cli"], `>=${floor}`);
   assert.equal(extensionManifest.pm_min_version, floor);
   const readme = readFileSync(resolve(repoRoot, "README.md"), "utf8");
-  assert.match(readme, /`@unbrained\/pm-cli` ≥ 2026\.10\.10 \(manifest and peer dependency floor/);
-  for (const pmVersion of ["2026.8.1", "2026.10.9"]) {
+  assert.match(readme, /`@unbrained\/pm-cli` ≥ 2026\.10\.30 \(manifest and peer dependency floor/);
+  for (const pmVersion of ["2026.8.1", "2026.10.9", "2026.10.10", "2026.10.29"]) {
     const result = checkExtensionManifestCompatibility(extensionManifest, { pmVersion });
     assert.ok(result.findings.some(finding => finding.code === "pm_min_version_unmet"), `${pmVersion} must be refused before loading`);
   }

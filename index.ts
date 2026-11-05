@@ -1,3 +1,4 @@
+export { TrackerCapture, TrackerAdmissionRefusal, parseTrackerAdmissionRequest, type TrackerAdmissionRequest, type TrackerAdmissionResult, type TrackerRetryWitness } from "./engine/tracker-admission.ts";
 export { type ErasureOptions } from "./engine/erasure.ts";
 export { type ErasureAccountabilityReport, type ErasurePurgeCancellation, type ErasurePurgeEntry, type ErasurePurgeReceipt } from "./engine/erasure-accountability.ts";
 export { ErasureStorageRefusal, type ErasureFileClass, type ErasureStorageReport } from "./engine/erasure-scan.ts";

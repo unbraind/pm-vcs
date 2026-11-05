@@ -3,6 +3,7 @@ import type { BigIntStats } from "node:fs";
 import { durability } from "./durability.ts";
 import { withPublicationLock, publicationRootIds, validatePublicationIds } from "./publication.ts";
 import type { AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
+import { TrackerAdmissionRefusal } from "./tracker-admission.ts";
 import { attachCheckpoint, createSemanticCheckpoint, type CheckpointRequest } from "./checkpoints.ts";
 import { signChange } from "./signatures.ts";
 import { inspectClosure, type ClosureReport } from "./closure.ts";
@@ -587,14 +588,14 @@ export class Repository {
 
 
   /** Build the ordinary and merge commit tree from the same validated index snapshot. */
-  private indexTree(index: readonly IndexEntry[]): ObjectId {
+  private indexTree(index: readonly IndexEntry[], publish = true): ObjectId {
     return buildTree(this.objects, new Map(index.map((entry) => [entry.path, {
       id: entry.id,
       mode: entry.mode as FileMode,
       fileId: entry.fileId,
       copiedFrom: entry.copiedFrom,
       conflicts: entry.conflicts,
-    }])));
+    }])), publish);
   }
 
   /**
@@ -752,7 +753,7 @@ export class Repository {
         ? chunked && blobFileContentId(absolute) === previous.id
         : this.objects.hasType(previous.id, "manifest") && matchesFragmentedFile(this.objects, previous.id, absolute)) ? previous.id : undefined;
       const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : isLink ? hashObject("link", encodeLink(decodeLink(content)))
-        : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(parseWorkingRecord(path, content))) : hashObject("blob", content));
+        : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(this.workingRecord(path, content))) : hashObject("blob", content));
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
       let fileId = existing === undefined ? undefined : existing.fileId ?? migratedFileId(existing);
@@ -820,9 +821,9 @@ export class Repository {
    *   object — storing it as a blob instead would silently drop it out of
    *   field-aware merging for the rest of its history.
    */
-  private stageContent(path: string, content: Buffer, fileId: string): ObjectId {
+  private stageContent(path: string, content: Buffer, fileId: string, canonical?: RecordDocument): ObjectId {
     if (!isRecordPath(path, this.config)) return this.objects.write("blob", content, fileId);
-    return this.objects.write("record", encodeRecord(parseWorkingRecord(path, content)), fileId);
+    return this.objects.write("record", encodeRecord(canonical ?? this.workingRecord(path, content)), fileId);
   }
 
   /**
@@ -910,11 +911,16 @@ export class Repository {
     };
   }
 
+  /** Resolve native item status aliases through the same SDK registry for staging and status. */
+  private workingRecord(path: string, content: Buffer): RecordDocument {
+    return parseWorkingRecord(path, content, this.pmRoot ?? join(this.root, ".agents/pm"));
+  }
+
   /** Identify working bytes without reading stored payloads; exact descriptor hashes retain their typed identity. */
   private workingIdentifier(path: string, content: Buffer, expected: ObjectId | undefined): ObjectId {
     const link = hashObject("link", content);
     if (link === expected) return link;
-    return isRecordPath(path, this.config) ? hashObject("record", encodeRecord(parseWorkingRecord(path, content))) : hashObject("blob", content);
+    return isRecordPath(path, this.config) ? hashObject("record", encodeRecord(this.workingRecord(path, content))) : hashObject("blob", content);
   }
 
   /**
@@ -1669,47 +1675,97 @@ export class Repository {
       const index = this.committableIndex();
       const head = this.refs.readHead();
       const parent = head.target;
-      // A sparse entry whose content differs from HEAD describes a change to a
-      // path this working tree never materialized, so nothing the caller did could
-      // have made it — and committing it would silently attribute an invisible
-      // change. The one honest answer is a refusal naming every path, because a
-      // commit that changes files the committer cannot see is exactly the silent
-      // drop this engine refuses to perform.
-      const committedPaths = new Map(flattenTree(this.objects, parent === null ? null : readCommit(this.objects, parent).tree));
-      const unseen = index.filter((entry) => entry.sparse === true
-        && (committedPaths.get(entry.path)?.id !== entry.id || committedPaths.get(entry.path)?.mode !== entry.mode
-          || JSON.stringify(committedPaths.get(entry.path)?.conflicts) !== JSON.stringify(entry.conflicts)))
-        .map((entry) => entry.path)
-        .sort(compareByteOrder);
-      if (unseen.length > 0) {
-        throw new ObjectStoreError(
-          "out_of_view_change",
-          `The staged change includes ${unseen.join(", ")}, which is outside this working tree's view. `
-          + "Widen the view with `pm vcs view <patterns>`, review the change, and commit it from a working tree that can see it.",
-        );
-      }
-      const tree = this.indexTree(index);
-      if (!options.allowEmpty && parent !== null && readCommit(this.objects, parent).tree === tree) {
-        throw new ObjectStoreError(
-          "empty_commit",
-          "Nothing staged differs from HEAD. Stage a change, or pass allowEmpty to record one anyway.",
-        );
-      }
-      const base = {
-        tree,
-        parents: parent === null ? [] : [parent],
-        author: options.author,
-        committer: options.committer ?? options.author,
-        message: options.message,
-        ...(options.items === undefined ? {} : { items: options.items }),
-      };
-      // A new commit's change id is the id it would have with no change line, so
-      // the identity is a function of the content the commit describes rather than
-      // of the metadata rewriting later changes. Deriving it here, before the
-      // commit is stored, is what keeps the property deterministic with no seed.
-      const id = writeCommit(this.objects, { ...base, changeId: identityWithoutChangeLine(base) });
+      const prepared = this.validateCommitIndex(index, options, parent);
+      this.indexTree(index);
+      const id = writeCommit(this.objects, { ...prepared, changeId: identityWithoutChangeLine(prepared) });
       this.advanceHead(head, parent, id, "commit", `Committed ${id.slice(0, 12)}: ${splitLines(options.message)[0] ?? ""}`, now);
       return id;
+    });
+  }
+
+  /** Validate the candidate using ordinary commit semantics before replacing staged state. */
+  private validateCommitIndex(index: readonly IndexEntry[], options: CommitOptions, parent: ObjectId | null): Commit {
+    // A sparse entry whose content differs from HEAD describes a change to a
+    // path this working tree never materialized, so nothing the caller did could
+    // have made it — and committing it would silently attribute an invisible
+    // change. The one honest answer is a refusal naming every path, because a
+    // commit that changes files the committer cannot see is exactly the silent
+    // drop this engine refuses to perform.
+    const committedPaths = new Map(flattenTree(this.objects, parent === null ? null : readCommit(this.objects, parent).tree));
+    const unseen = index.filter((entry) => entry.sparse === true
+      && (committedPaths.get(entry.path)?.id !== entry.id || committedPaths.get(entry.path)?.mode !== entry.mode
+        || JSON.stringify(committedPaths.get(entry.path)?.conflicts) !== JSON.stringify(entry.conflicts)))
+      .map((entry) => entry.path)
+      .sort(compareByteOrder);
+    if (unseen.length > 0) {
+      throw new ObjectStoreError(
+        "out_of_view_change",
+        `The staged change includes ${unseen.join(", ")}, which is outside this working tree's view. `
+        + "Widen the view with `pm vcs view <patterns>`, review the change, and commit it from a working tree that can see it.",
+      );
+    }
+    const tree = this.indexTree(index, false);
+    if (!options.allowEmpty && parent !== null && readCommit(this.objects, parent).tree === tree) {
+      throw new ObjectStoreError(
+        "empty_commit",
+        "Nothing staged differs from HEAD. Stage a change, or pass allowEmpty to record one anyway.",
+      );
+    }
+    const base = {
+      tree, parents: parent === null ? [] : [parent], author: options.author,
+      committer: options.committer ?? options.author, message: options.message,
+      ...(options.items === undefined ? {} : { items: options.items }),
+    };
+    // Canonical encoding validates every header and signature before captured staging changes.
+    identityWithoutChangeLine(base);
+    return base;
+  }
+
+  /** Publish verified captured bytes with the latest index inside one native writer lease.
+   * Captured pairs bypass the working-file stat cache: a peer may already have changed
+   * the live tracker. Validate the entire scope before creating objects or changing the index.
+   */
+  commitCaptured(options: CommitOptions, files: readonly { readonly path: string; readonly content: Buffer; readonly record?: RecordDocument; readonly itemId?: string; readonly itemRoot?: string; readonly itemFolders?: readonly string[] }[], expectedTip: ObjectId | null, now: Date, expectedHead?: string): ObjectId {
+    return this.objects.withWriteLock(/** Read the parent and every modified index entry under the publication lease. */ () => {
+      const head = this.refs.readHead();
+      if (head.target !== expectedTip || (expectedHead !== undefined && (head.kind === "branch" ? head.ref : "HEAD") !== expectedHead)) throw new TrackerAdmissionRefusal("tracker_tip_changed", "Review the current native branch and tip, then start a new capture with that expectedTip; no revision was published.");
+      this.assertNoMergeInProgress();
+      const original = new Map(this.committableIndex().map(entry => [entry.path, entry]));
+      const index = new Map(original);
+      const records = new Map<string, RecordDocument>();
+      const rules = this.ignoreRules(); const layers = this.layerPaths();
+      const view = this.view();
+      const denied = this.objects.denials();
+      for (const file of files) {
+        if (normalizeRepoPath(this.root, file.path) !== file.path || isIgnored(file.path, rules) || isProtectedWorktreePath(this.root, file.path, true) || layers.has(file.path)
+          || (view !== null && !viewIncludes(view, file.path)) || index.get(file.path)?.sparse === true || (index.get(file.path)?.conflicts?.length ?? 0) > 0 || denied.some(row => row.tombstone.fileId === index.get(file.path)?.fileId)) {
+          throw new ObjectStoreError("path_ignored", "Captured tracker paths must be visible, permitted, workspace-local files; review ignore rules, private layers and erased identities.");
+        }
+        const prefix = file.itemRoot ? `${file.itemRoot}/` : "";
+        if (file.itemId !== undefined && file.itemFolders?.some(folder => ["toon", "md"].some(extension => {
+          const candidate = `${prefix}${folder}/${file.itemId}.${extension}`;
+          return candidate !== file.path && index.has(candidate);
+        }))) {
+          throw new ObjectStoreError("tracker_path_changed", "A selected tracker item is indexed at another path; explicitly stage its removal or move before capture.");
+        }
+        if (isRecordPath(file.path, this.config)) {
+          const record = file.record ?? this.workingRecord(file.path, file.content);
+          encodeRecord(record); records.set(file.path, record);
+        }
+      }
+      for (const file of files) {
+        const previous = index.get(file.path);
+        const fileId = previous === undefined ? randomBytes(16).toString("hex") : previous.fileId ?? migratedFileId(previous);
+        index.set(file.path, { path: file.path, id: isRecordPath(file.path, this.config) ? hashObject("record", encodeRecord(records.get(file.path)!)) : hashObject("blob", file.content), mode: previous?.mode ?? "100644", fileId,
+          ...(previous?.copiedFrom === undefined ? {} : { copiedFrom: previous.copiedFrom }) });
+      }
+      this.validateCommitIndex([...index.values()], options, head.target);
+      for (const file of files) {
+        const previous = original.get(file.path);
+        this.objects.withDerivation(previous === undefined ? [] : [previous.id], () => this.stageContent(file.path, file.content, index.get(file.path)!.fileId!, records.get(file.path)));
+      }
+      this.writeIndex([...index.values()]);
+      return this.commit(options, now);
     });
   }
 

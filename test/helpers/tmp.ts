@@ -16,7 +16,7 @@ import { basename, dirname, join, resolve } from "node:path";
 if (process.argv[1]?.endsWith(".test.ts")) {
   // Packed CLI semantics keep every native call while avoiding unrelated host
   // writeback contention inside their unchanged command deadlines.
-  const parent = basename(process.argv[1]) === "first-class-conflicts.test.ts" ? process.env.PM_VCS_CRASH_TMPDIR ?? tmpdir() : tmpdir();
+  const parent = ["first-class-conflicts.test.ts", "tracker-admission.test.ts"].includes(basename(process.argv[1])) ? process.env.PM_VCS_CRASH_TMPDIR ?? tmpdir() : tmpdir();
   const scope = realpathSync(mkdtempSync(join(parent, "pm-vcs-suite-")));
   process.env.TMPDIR = scope; process.env.TEMP = scope; process.env.TMP = scope;
   const removeScope = rmSync;

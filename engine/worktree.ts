@@ -21,15 +21,16 @@ import {
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { type IgnoreRules, isControlPath, isIgnored, isInstallationRuntimePath, isRuntimeIgnored, isPrunableDirectory } from "./ignore.ts";
-import { validConflictIds, compareByteOrder, type FileId, type FileMode, isFileId, type TreeEntry, readTree, writeTree } from "./model.ts";
+import { validConflictIds, compareByteOrder, type FileId, type FileMode, isFileId, type TreeEntry, encodeTree, readTree, writeTree } from "./model.ts";
 import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreError, type StoredObject } from "./objects.ts";
 
 import type { ConflictSummary } from "./conflicts.ts";
 import { WorktreeMutation } from "./worktree-mutation.ts";
+import { RACY_WINDOW_NS } from "./stat-cache.ts";
+
+export { RACY_WINDOW_NS };
 
 const INDEX_HEADER = "pm-vcs-index 4";
-/** Conservative upper bound for one coarse filesystem timestamp tick. */
-export const RACY_WINDOW_NS = 2_000_000_000n;
 
 /**
  * Whether a stored path is already in canonical repository-relative form.
@@ -506,11 +507,13 @@ export function flattenTree(
  *
  * @param store - Destination object store.
  * @param files - Path-to-blob map using canonical paths.
+ * @param publish - False computes the identical tree identity without storing any objects.
  * @returns The root tree's id.
  */
 export function buildTree(
   store: ObjectStore,
   files: ReadonlyMap<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId; conflicts?: readonly ObjectId[] }>,
+  publish = true,
 ): ObjectId {
   // Group by first segment: names with no further segment become file entries,
   // the rest recurse into a subtree built from their remaining path.
@@ -533,10 +536,10 @@ export function buildTree(
     ...[...subdirectories].map(([name, nested]) => ({
       name,
       mode: "40000" as FileMode,
-      id: buildTree(store, nested),
+      id: buildTree(store, nested, publish),
     })),
   ];
-  return writeTree(store, entries);
+  return publish ? writeTree(store, entries) : hashObject("tree", encodeTree(entries));
 }
 
 /**
