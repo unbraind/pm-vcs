@@ -35,21 +35,30 @@ function parseNativeItem(text: string, pmRoot: string | undefined, format: "toon
   }
 }
 
-/** Read only optional status configuration; the SDK registry owns defaults, aliases and normalization.
- * This synchronous adapter serves the native synchronous staging API. Invalid/missing configuration
- * retains the released opaque-status codec, so historical records never depend on today's schema.
+/** Read optional SDK schema arrays without inventing field or status normalization rules. */
+function schemaDefinitions<T>(file: string, section: "statuses" | "fields"): T[] {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (Array.isArray(raw)) return raw as T[];
+    if (raw === null || typeof raw !== "object") return [];
+    const row = raw as Record<string, unknown>;
+    const definitions = Array.isArray(row[section]) ? row[section] : row.definitions;
+    return Array.isArray(definitions) ? definitions as T[] : [];
+  } catch { return []; }
+}
+
+/** Hydrate codec definitions for the synchronous native staging API; SDK codecs own their meaning.
+ * Invalid/missing configuration retains the released opaque-status codec so historical records
+ * never depend on today's schema. File-backed custom fields accompany strict unknown-field policy.
  */
 function workingSchema(pmRoot: string): PmSettings["schema"] | undefined {
   try {
     const settings = JSON.parse(readFileSync(resolve(pmRoot, "settings.json"), "utf8")) as { schema?: PmSettings["schema"] };
     const inline = settings.schema;
     const base = { version: 1, files: {}, statuses: [], fields: [], workflow: {}, unknown_field_policy: "allow" as const, ...inline };
-    let loaded: PmSettings["schema"]["statuses"] = [];
-    try {
-      const raw = JSON.parse(readFileSync(resolve(pmRoot, inline?.files?.statuses?.trim() || "schema/statuses.json"), "utf8")) as PmSettings["schema"]["statuses"] | { statuses?: PmSettings["schema"]["statuses"]; definitions?: PmSettings["schema"]["statuses"] };
-      loaded = Array.isArray(raw) ? raw : raw.statuses ?? raw.definitions ?? [];
-    } catch { /* Optional SDK schema file; inline definitions remain available. */ }
-    return { ...base, statuses: [...resolveRuntimeStatusRegistry(base).definitions, ...loaded] };
+    const statuses = schemaDefinitions<PmSettings["schema"]["statuses"][number]>(resolve(pmRoot, inline?.files?.statuses?.trim() || "schema/statuses.json"), "statuses");
+    const fields = schemaDefinitions<PmSettings["schema"]["fields"][number]>(resolve(pmRoot, inline?.files?.fields?.trim() || "schema/fields.json"), "fields");
+    return { ...base, statuses: [...resolveRuntimeStatusRegistry(base).definitions, ...statuses], fields: [...base.fields, ...fields] };
   } catch { return undefined; }
 }
 

@@ -1200,7 +1200,7 @@ simultaneous latest state across unrelated items or a distributed transaction
 with source writers. Native record transport preserves custom status IDs
 opaquely; lifecycle roles and admission validity remain owned by the configured
 SDK registry. Configured `.toon` and JSON-markdown `.md` record paths use the
-same SDK status registry for capture, working-file comparisons and ordinary
+same SDK field and status registries for capture, working-file comparisons and ordinary
 staging. Blob capture preserves the original bytes and accepts SDK metadata that
 exceeds native record limits; configured records return `record_unrepresentable`
 with a storage remedy when their metadata cannot be encoded. Captured paths must

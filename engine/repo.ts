@@ -1675,27 +1675,15 @@ export class Repository {
       const index = this.committableIndex();
       const head = this.refs.readHead();
       const parent = head.target;
-      const tree = this.validateCommitIndex(index, options, parent);
-      const base = {
-        tree,
-        parents: parent === null ? [] : [parent],
-        author: options.author,
-        committer: options.committer ?? options.author,
-        message: options.message,
-        ...(options.items === undefined ? {} : { items: options.items }),
-      };
-      // A new commit's change id is the id it would have with no change line, so
-      // the identity is a function of the content the commit describes rather than
-      // of the metadata rewriting later changes. Deriving it here, before the
-      // commit is stored, is what keeps the property deterministic with no seed.
-      const id = writeCommit(this.objects, { ...base, changeId: identityWithoutChangeLine(base) });
+      const prepared = this.validateCommitIndex(index, options, parent);
+      const id = writeCommit(this.objects, { ...prepared, changeId: identityWithoutChangeLine(prepared) });
       this.advanceHead(head, parent, id, "commit", `Committed ${id.slice(0, 12)}: ${splitLines(options.message)[0] ?? ""}`, now);
       return id;
     });
   }
 
   /** Validate the candidate using ordinary commit semantics before replacing staged state. */
-  private validateCommitIndex(index: readonly IndexEntry[], options: CommitOptions, parent: ObjectId | null): ObjectId {
+  private validateCommitIndex(index: readonly IndexEntry[], options: CommitOptions, parent: ObjectId | null): Commit {
     // A sparse entry whose content differs from HEAD describes a change to a
     // path this working tree never materialized, so nothing the caller did could
     // have made it — and committing it would silently attribute an invisible
@@ -1722,7 +1710,14 @@ export class Repository {
         "Nothing staged differs from HEAD. Stage a change, or pass allowEmpty to record one anyway.",
       );
     }
-    return tree;
+    const base = {
+      tree, parents: parent === null ? [] : [parent], author: options.author,
+      committer: options.committer ?? options.author, message: options.message,
+      ...(options.items === undefined ? {} : { items: options.items }),
+    };
+    // Canonical encoding validates every header and signature before captured staging changes.
+    identityWithoutChangeLine(base);
+    return base;
   }
 
   /** Publish verified captured bytes with the latest index inside one native writer lease.

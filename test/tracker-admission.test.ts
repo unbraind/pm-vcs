@@ -590,7 +590,7 @@ test("working record aliases follow optional inline and file-backed SDK registri
     assert.equal(parseWorkingRecord("item.toon", raw, f.pmRoot).status, (await document(f.pmRoot, f.a)).metadata.status);
   }
   writeFileSync(settingsPath, JSON.stringify({ ...settings, schema: { ...settings.schema, statuses, files: {} } }));
-  for (const file of ["{}", "null", "invalid JSON"]) {
+  for (const file of ["{}", "null", "1", "invalid JSON"]) {
     writeFileSync(join(f.pmRoot, "schema/statuses.json"), file);
     assert.equal(parseWorkingRecord("item.toon", raw, f.pmRoot).status, model.metadata.status);
   }
@@ -642,4 +642,33 @@ test("capture supports a plain directory tracker at the native repository root w
   const repo = Repository.init(root);
   const report = await new TrackerCapture(repo, root, { items: [id], expectedTip: null }).commit(options, new Date(1)); assert.ok(report.ok);
   assert.equal(existsSync(join(root, ".git")), false);
+});
+
+
+test("captured signature and item-header refusals leave staged state byte-identical", async () => {
+  for (const invalid of [{ author: { ...author, name: "Invalid\nidentity" }, code: "invalid_signature" }, { items: ["Invalid\nitem"], code: "invalid_commit_item" }]) {
+    const f = await fixture();
+    const baseline = await new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(baseline.ok);
+    await f.client.update(f.a, { ...scope, title: "Valid captured change" });
+    const before = readFileSync(join(f.repo.controlDirectory, "index"));
+    await assert.rejects(new TrackerCapture(f.repo, f.pmRoot, { items: [f.a], expectedTip: baseline.revision }).commit({ ...options, ...invalid }, new Date(2)), { code: invalid.code });
+    assert.deepEqual(readFileSync(join(f.repo.controlDirectory, "index")), before); assert.equal(f.repo.refs.readHead().target, baseline.revision);
+  }
+});
+
+test("file-backed custom fields under strict schemas retain the same alias hash during capture and staging", async () => {
+  const f = await fixture();
+  await f.client.schemaAddStatus("custom-running", { role: ["active"], alias: ["active-alias"], author: "fixture" });
+  await f.client.update(f.a, { ...scope, status: "custom-running" });
+  await f.client.schemaAddField("ticket_code", { type: "string", commands: ["create", "update"], author: "fixture" });
+  const before = await document(f.pmRoot, f.a); const after = { ...before, metadata: { ...before.metadata, ticket_code: "ABC" } };
+  const settings = JSON.parse(readFileSync(join(f.pmRoot, "settings.json"), "utf8")) as { schema: Record<string, unknown> };
+  writeFileSync(join(f.pmRoot, "settings.json"), JSON.stringify({ ...settings, schema: { ...settings.schema, unknown_field_policy: "reject" } }));
+  const path = `.agents/pm/tasks/${f.a}.toon`;
+  writeFileSync(join(f.root, path), encodeToon({ front_matter: { ...after.metadata, status: "active-alias" }, body: after.body }));
+  await appendHistoryEntry(join(f.pmRoot, `history/${f.a}.jsonl`), createHistoryEntry({ nowIso: before.metadata.updated_at, author: "fixture", op: "update", before, after }));
+  writeFileSync(join(f.repo.controlDirectory, "config.json"), JSON.stringify({ recordPaths: ["**/*.toon"], recordPolicy: {} }));
+  const repo = Repository.open(f.root); const report = await new TrackerCapture(repo, f.pmRoot, { items: [f.a], expectedTip: null }).commit(options, new Date(1)); assert.ok(report.ok, JSON.stringify(report));
+  assert.ok(!repo.status().unstaged.some(row => row.path === path));
+  const id = repo.readIndex().find(row => row.path === path)!.id; repo.stage([path]); assert.equal(repo.readIndex().find(row => row.path === path)!.id, id);
 });
