@@ -1,7 +1,7 @@
 /** Optimistic admission of explicit tracker pairs; SDK codecs own all tracker semantics. */
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { relative, resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import type * as Sdk from "@unbrained/pm-cli/sdk";
 import type { CommitOptions, Repository } from "./repo.ts";
 import { ObjectStoreError, type ObjectId } from "./objects.ts";
@@ -139,9 +139,9 @@ export class TrackerCapture {
       if (transactions === null) return { id: rawId, reason };
       reason = "outside_workspace";
       const files = [{ path: located.itemPath, content: Buffer.from(item.raw), itemId: located.id }, { path: historyPath, content: Buffer.from(history.raw_bytes) }].map(file => {
-        const path = relative(this.repository.root, resolve(file.path)).split("\\").join("/");
+        const path = relative(this.repository.root, resolve(file.path)).split(sep).join("/");
         if (path === "" || path === ".." || path.startsWith("../") || path.startsWith("/")) throw new Error("External tracker.");
-        return { ...file, path, itemRoot: relative(this.repository.root, resolve(this.pmRoot)).split("\\").join("/") };
+        return { ...file, path, itemRoot: relative(this.repository.root, resolve(this.pmRoot)).split(sep).join("/") };
       });
       reason = "record_unrepresentable";
       const captured = files.map(file => {

@@ -690,3 +690,13 @@ test("seeded tree candidate identities equal publication without preflight objec
     assert.equal(buildTree(repo.objects, files), candidate);
   }
 });
+
+test("operator tracker paths retain native literal characters in captured revision paths", async () => {
+  const root = temp(); const folder = process.platform === "win32" ? "tracker space" : "tracker\\literal";
+  const pmRoot = join(root, folder); const client = new PmClient({ cwd: root, pmRoot, noExtensions: true });
+  await client.init("operator-paths", { defaults: true, author: "fixture" });
+  const id = (await client.create({ ...scope, type: "Task", title: "Native path" })).item.id;
+  const repo = Repository.init(root); const result = await new TrackerCapture(repo, pmRoot, { items: [id], expectedTip: null }).commit(options, new Date(1)); assert.ok(result.ok);
+  const paths = [...flattenTree(repo.objects, readCommit(repo.objects, result.revision).tree).keys()];
+  assert.equal(paths.length, 2); assert.ok(paths.every(path => path.startsWith(`${folder}/`)));
+});

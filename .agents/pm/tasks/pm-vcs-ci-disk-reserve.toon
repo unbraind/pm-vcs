@@ -1,0 +1,14 @@
+id: pm-vcs-ci-disk-reserve
+title: Restore release-gate runner capacity without lowering the disk reserve
+description: "Node 26 CI on PR 180 refused the full npm gate before tests because the runner had less than the required 20 GiB free. Evidence: https://github.com/unbraind/pm-vcs/actions/runs/41960474672/job/127025384518 . GitHub refuses to rerun this completed job while another job in the workflow is still active. Arrange an eligible runner and collect complete npm and Bun release results while preserving the existing resource guard and quality thresholds."
+type: Task
+status: open
+priority: 2
+tags[3]: ci,follow-up,infrastructure
+created_at: "2026-11-05T03:29:08.898Z"
+updated_at: "2026-11-05T03:29:11.950Z"
+author: codex-agent
+parent: pm-vcs-tracker-admission
+files[1]{path,scope}:
+  .github/workflows/ci.yml,project
+body: ""
