@@ -3,7 +3,7 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 /** Linked-test-driven bisect sessions over real temporary repositories and trackers. */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { once } from "node:events";
 import { createServer, type Socket } from "node:net";
@@ -24,6 +24,7 @@ import { cloneFrom } from "../engine/sync.ts";
 import { buildTree, flattenTree } from "../engine/worktree.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
+import { waitForFileRemoval } from "./helpers/file-removal.ts";
 import { installPackedExtension, pmExecutable } from "../scripts/pm-environment.ts";
 
 /** Every fixture directory created by this suite, torn down once at the end. */
@@ -182,15 +183,16 @@ if (readFileSync("state.txt", "utf8").trim().startsWith("broken")) process.exit(
  * @param fixture - Fixture whose tracker receives the item.
  * @param title - Item title.
  * @param countFile - Absolute path the probe appends one line to per execution.
+ * @param timeoutSeconds - Watchdog for the linked command; held probes outlive the parent test deadline.
  * @returns The item id.
  */
-async function linkedTestItem(fixture: Fixture, title: string, countFile: string): Promise<string> {
+async function linkedTestItem(fixture: Fixture, title: string, countFile: string, timeoutSeconds = 60): Promise<string> {
   // A stale counter from an earlier run would miscount this one's executions.
   rmSync(countFile, { force: true });
   const created = await fixture.client.create({ type: "Task", title, author: "agent-a" });
   const item = created.item.id;
   await runTest(item, {
-    addJson: [JSON.stringify({ command: "node probe.js", timeout_seconds: 60, env_set: { BISECT_COUNT_FILE: countFile } })],
+    addJson: [JSON.stringify({ command: "node probe.js", timeout_seconds: timeoutSeconds, env_set: { BISECT_COUNT_FILE: countFile } })],
   }, { author: "agent-a", path: fixture.pmRoot });
   return item;
 }
@@ -493,10 +495,23 @@ test("a SIGINT between steps halts the walk, restores the original state and sta
   rmSync(countFile, { force: true });
 });
 
-test("a walk killed mid-flight resumes from the durable state without retesting judged changes", async (t) => {
+test("worker completion observes a receipt removed before watcher registration", async () => {
+  const dir = makeTempDir();
+  try {
+    const receipt = join(dir.root, "worker-receipt");
+    writeFileSync(receipt, "finished");
+    rmSync(receipt);
+    await waitForFileRemoval(receipt, 100);
+  } finally { dir.cleanup(); }
+});
+
+test("a walk killed mid-flight resumes from the durable state without retesting judged changes", { timeout: 300_000 }, async (t) => {
   const fixture = await setup();
   const countFile = join(fixture.root, "bisect-count-crash.txt");
-  const item = await linkedTestItem(fixture, "Crash resume", countFile);
+  // The parent deadline and its socket cleanup always precede the SDK watchdog.
+  const item = await linkedTestItem(fixture, "Crash resume", countFile, 600);
+  const linked = await runTest(item, { list: true }, { author: "agent-a", path: fixture.pmRoot });
+  assert.ok((linked.tests[0]?.timeout_seconds ?? 0) > 300, "the held probe watchdog must outlive the parent test deadline");
   // The second probe remains in flight until the parent explicitly releases it.
   // Serial candidate execution means the first verdict is durable before this connection exists.
   const sockets = new Set<Socket>();
@@ -551,25 +566,20 @@ connect(${address.port}, "127.0.0.1").once("end", () => process.exit(state.start
   assert.match(refused.errorMessage ?? "", /Another bisect command or test worker/);
   const refusedReset = await fixture.bisect(["reset"]);
   assert.match(refusedReset.errorMessage ?? "", /Another bisect command or test worker/);
-  // Install the notification before releasing the probe; no transient state is polled.
-  const workerFinished = new Promise<void>((resolve, reject) => {
-    const watcher = watch(dirname(workerReceipt), () => {
-      if (!existsSync(workerReceipt)) { clearTimeout(timeout); watcher.close(); resolve(); }
-    });
-    const timeout = setTimeout(() => { watcher.close(); reject(new Error("orphaned SDK worker never finished")); }, 60_000);
-    watcher.once("error", error => { clearTimeout(timeout); watcher.close(); reject(error); });
-    t.after(() => { clearTimeout(timeout); watcher.close(); });
-  });
+  // Install the notification and check current absence before releasing the probe.
+  // The worker awaits SDK cleanup and lock release before removing this receipt.
+  const workerFinished = waitForFileRemoval(workerReceipt);
   assert.ok(blockedSocket);
   blockedSocket.end();
   await workerFinished;
   assert.equal(existsSync(workerReceipt), false, "orphaned SDK worker finished");
   const resumed = await fixture.bisect(["run"]);
-  const done = (resumed.result as { bisect: { status: string; verdict: { commit: string }; steps: { by: string }[] } }).bisect;
+  const done = (resumed.result as { bisect: { status: string; verdict: { commit: string }; steps: { by: string; retry?: true }[] } }).bisect;
   assert.equal(done.status, "done");
   assert.equal(done.verdict.commit, culprit);
   const totalRuns = done.steps.filter((step) => step.by === "run").length;
   assert.equal(runsRecorded(countFile), totalRuns, "the abandoned attempt accounts for exactly one retry step");
+  assert.equal(done.steps.filter(step => step.retry === true).length, 1, "the abandoned candidate is recorded as exactly one retry");
   const probes = readFileSync(countFile, "utf8").trim().split("\n");
   assert.equal(probes.filter(state => state === probes[0]).length, 1, "the durably judged candidate is never retested");
   assert.ok(totalRuns > childRuns, "the resume executed candidates of its own");
