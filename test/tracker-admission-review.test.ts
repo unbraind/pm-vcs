@@ -1,6 +1,7 @@
 import "./helpers/isolate-session.ts";
 /** Review regressions exercise real non-git trackers and the same native CLI handlers. */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs, { mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join, relative } from "node:path";
@@ -37,6 +38,9 @@ test("working schema cache reuses resolved roots and invalidates every configure
   writeFileSync(settingsPath, JSON.stringify({ ...settings, schema }));
   writeFileSync(statusesPath, JSON.stringify([{ id: "custom_one", aliases: ["active_alias"] }]));
   writeFileSync(fieldsPath, JSON.stringify([{ key: "ticket_code", type: "string" }]));
+  // Cache reuse is safe only after every source has aged beyond the filesystem timestamp tick.
+  const stableTime = new Date(Date.now() - 10_000);
+  for (const path of [settingsPath, statusesPath, fieldsPath]) utimesSync(path, stableTime, stableTime);
   const raw = Buffer.from(encodeToon({ front_matter: { ...f.item, status: "active_alias", ticket_code: "ABC" }, body: "" }));
   const sources = new Set([settingsPath, statusesPath, fieldsPath]); const reads: string[] = [];
   const read = fs.readFileSync;
@@ -73,25 +77,89 @@ test("working schema cache reuses resolved roots and invalidates every configure
   writeFileSync(settingsPath, JSON.stringify({ ...settings, schema })); assert.equal(parse().status, "custom_longer");
 });
 
+test("working schema cache rereads same-tick same-mtime rewrites of every schema source", async () => {
+  for (const source of ["settings.json", "chosen-statuses.json", "chosen-fields.json"]) {
+    const f = await fixture(); const settings = await readSettings(f.pmRoot);
+    const statuses = [{ id: "custom_one", aliases: ["active_alias"] }];
+    const schema = { ...settings.schema, statuses: source === "settings.json" ? statuses : [], fields: [], files: { statuses: "chosen-statuses.json", fields: "chosen-fields.json" }, unknown_field_policy: "reject" };
+    const contents = new Map([
+      ["settings.json", JSON.stringify({ ...settings, schema })],
+      ["chosen-statuses.json", JSON.stringify(source === "settings.json" ? [] : statuses)],
+      ["chosen-fields.json", JSON.stringify([{ key: "ticket_code", type: "string" }])],
+    ]);
+    const tick = Math.floor(Date.now() / 1000) * 1000;
+    for (const [name, bytes] of contents) {
+      writeFileSync(join(f.pmRoot, name), bytes); utimesSync(join(f.pmRoot, name), (tick - 10_000) / 1000, (tick - 10_000) / 1000);
+    }
+    const raw = Buffer.from(encodeToon({ front_matter: { ...f.item, status: "active_alias", ticket_code: "ABC" }, body: "" }));
+    const parse = () => parseWorkingRecord("item.toon", raw, f.pmRoot).status;
+    assert.equal(parse(), "custom_one", "Warm a stable schema before making one source racy.");
+    const now = mock.method(Date, "now", () => tick + 100);
+    try {
+      const path = join(f.pmRoot, source); utimesSync(path, tick / 1000, tick / 1000);
+      assert.equal(parse(), "custom_one");
+      const before = statSync(path, { bigint: true });
+      writeFileSync(path, contents.get(source)!.replace(source === "chosen-fields.json" ? "ticket_code" : "custom_one", source === "chosen-fields.json" ? "absent_code" : "custom_two"));
+      utimesSync(path, tick / 1000, tick / 1000);
+      const after = statSync(path, { bigint: true });
+      assert.deepEqual([after.ino, after.size, after.mtimeNs], [before.ino, before.size, before.mtimeNs], "Force an identical cache signature despite changed bytes.");
+      const expected = source === "chosen-fields.json" ? "active_alias" : "custom_two";
+      assert.equal(parse(), expected, `${source} must be reread inside the timestamp tick.`);
+      now.mock.mockImplementation(() => tick + 3000);
+      assert.equal(parse(), expected, "Aged sources can populate the cache with the new schema.");
+      assert.equal(parse(), expected);
+    } finally { now.mock.restore(); }
+  }
+});
+
+test("tracker byte validation includes configured item folders inside root runtime directories", async () => {
+  const f = await fixture();
+  for (const [index, folder] of ["search", "runtime/cards", "locks", "extensions"].entries()) {
+    const type = `Experiment${index}`;
+    await f.client.schemaAddType(type, { folder, author: "fixture" });
+    const item = (await f.client.create({ type, title: "Custom source", unset: ["parent", "sprint", "release"], author: "fixture" })).item;
+    const path = join(f.pmRoot, folder, `${item.id}.toon`); const bytes = readFileSync(path);
+    const before = await trackerAdmissionDigest(f.pmRoot);
+    writeFileSync(path, bytes.toString().replace("Custom source", "Edited source"));
+    assert.notEqual(await trackerAdmissionDigest(f.pmRoot), before, `${folder} item bytes must be included.`);
+    writeFileSync(path, bytes); assert.equal(await trackerAdmissionDigest(f.pmRoot), before);
+    renameSync(path, path.replace(/\.toon$/, ".md"));
+    assert.notEqual(await trackerAdmissionDigest(f.pmRoot), before, "Both native document formats and renames must be visible.");
+    const markdown = await trackerAdmissionDigest(f.pmRoot);
+    writeFileSync(join(f.pmRoot, folder, "derived-cache"), "derived");
+    assert.equal(await trackerAdmissionDigest(f.pmRoot), markdown, "Derived files must stay excluded beside custom item documents.");
+  }
+});
+
+test("tracker byte validation separates entry types and filename-content boundaries", async () => {
+  const f = await fixture(); const file = join(f.pmRoot, "probe-a"); const renamed = `${file}b`;
+  writeFileSync(file, "bc"); const before = await trackerAdmissionDigest(f.pmRoot);
+  renameSync(file, renamed); writeFileSync(renamed, "c");
+  assert.notEqual(await trackerAdmissionDigest(f.pmRoot), before, "a + bc and ab + c must have distinct framed input.");
+  rmSync(renamed); mkdirSync(file); const directory = await trackerAdmissionDigest(f.pmRoot);
+  rmSync(file, { recursive: true }); writeFileSync(file, createHash("sha256").digest());
+  assert.notEqual(await trackerAdmissionDigest(f.pmRoot), directory, "A file containing a directory digest is still a different entry type.");
+});
+
 test("tracker byte validation includes nested custom folders named like root runtime directories", async () => {
   const f = await fixture();
   await f.client.schemaAddType("Experiment", { folder: "research/search", author: "fixture" });
   const item = (await f.client.create({ type: "Experiment", title: "Nested source", unset: ["parent", "sprint", "release"], author: "fixture" })).item;
-  const before = trackerAdmissionDigest(f.pmRoot);
+  const before = await trackerAdmissionDigest(f.pmRoot);
   for (const name of ["runtime", "search", "locks", "extensions"]) {
     mkdirSync(join(f.pmRoot, name), { recursive: true }); writeFileSync(join(f.pmRoot, name, "cache"), "derived");
-    assert.equal(trackerAdmissionDigest(f.pmRoot), before);
+    assert.equal(await trackerAdmissionDigest(f.pmRoot), before);
     const nested = join(f.pmRoot, "research", name); mkdirSync(nested, { recursive: true });
     const file = join(nested, "probe"); writeFileSync(file, "tracked");
-    assert.notEqual(trackerAdmissionDigest(f.pmRoot), before); rmSync(file);
+    assert.notEqual(await trackerAdmissionDigest(f.pmRoot), before); rmSync(file);
     // Remove only directories this test added, preserving the SDK's custom item folder.
     if (name !== "search") rmSync(nested, { recursive: true });
   }
-  assert.equal(trackerAdmissionDigest(f.pmRoot), before);
+  assert.equal(await trackerAdmissionDigest(f.pmRoot), before);
   const path = join(f.pmRoot, `research/search/${item.id}.toon`); const bytes = readFileSync(path);
   writeFileSync(path, bytes.toString().replace("Nested source", "Changed source"));
-  assert.notEqual(trackerAdmissionDigest(f.pmRoot), before, "Custom item byte changes must fail the validator's immutability assertion.");
-  writeFileSync(path, bytes); assert.equal(trackerAdmissionDigest(f.pmRoot), before);
+  assert.notEqual(await trackerAdmissionDigest(f.pmRoot), before, "Custom item byte changes must fail the validator's immutability assertion.");
+  writeFileSync(path, bytes); assert.equal(await trackerAdmissionDigest(f.pmRoot), before);
 });
 
 test("commit-tracker stores exactly the same terminated message as the vcs commit handler", async () => {
@@ -153,13 +221,13 @@ test("tracker byte validation hashes the managed extension manifest and excludes
   const f = await fixture(); const extensions = join(f.pmRoot, "extensions");
   mkdirSync(extensions, { recursive: true });
   const manifest = join(extensions, ".managed-extensions.json");
-  rmSync(manifest, { force: true }); const absent = trackerAdmissionDigest(f.pmRoot);
-  writeFileSync(manifest, '{"extensions":[]}'); const initial = trackerAdmissionDigest(f.pmRoot);
+  rmSync(manifest, { force: true }); const absent = await trackerAdmissionDigest(f.pmRoot);
+  writeFileSync(manifest, '{"extensions":[]}'); const initial = await trackerAdmissionDigest(f.pmRoot);
   assert.notEqual(initial, absent, "Adding a tracked manifest must change the source digest.");
   mkdirSync(join(extensions, "derived")); writeFileSync(join(extensions, "derived/cache"), "derived");
-  writeFileSync(join(extensions, "cache"), "first"); assert.equal(trackerAdmissionDigest(f.pmRoot), initial);
-  writeFileSync(join(extensions, "cache"), "changed"); assert.equal(trackerAdmissionDigest(f.pmRoot), initial);
-  writeFileSync(manifest, '{"extensions":["changed"]}'); assert.notEqual(trackerAdmissionDigest(f.pmRoot), initial);
-  writeFileSync(manifest, '{"extensions":[]}'); assert.equal(trackerAdmissionDigest(f.pmRoot), initial);
-  rmSync(manifest); assert.equal(trackerAdmissionDigest(f.pmRoot), absent, "Deleting the manifest must also change the digest.");
+  writeFileSync(join(extensions, "cache"), "first"); assert.equal(await trackerAdmissionDigest(f.pmRoot), initial);
+  writeFileSync(join(extensions, "cache"), "changed"); assert.equal(await trackerAdmissionDigest(f.pmRoot), initial);
+  writeFileSync(manifest, '{"extensions":["changed"]}'); assert.notEqual(await trackerAdmissionDigest(f.pmRoot), initial);
+  writeFileSync(manifest, '{"extensions":[]}'); assert.equal(await trackerAdmissionDigest(f.pmRoot), initial);
+  rmSync(manifest); assert.equal(await trackerAdmissionDigest(f.pmRoot), absent, "Deleting the manifest must also change the digest.");
 });

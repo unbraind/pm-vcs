@@ -15,6 +15,7 @@ import { decodeToon } from "@unbrained/pm-cli/sdk/testing";
 
 import { decodeRecord, encodeRecord, type RecordDocument } from "./model.ts";
 import { ObjectStoreError } from "./objects.ts";
+import { RACY_WINDOW_NS } from "./stat-cache.ts";
 
 /** Required fields that distinguish a native PM item from an arbitrary JSON record. */
 const PM_ITEM_FIELDS = ["id", "title", "description", "type", "status", "priority", "created_at", "updated_at"] as const;
@@ -47,12 +48,14 @@ function schemaDefinitions<T>(file: string, section: "statuses" | "fields"): T[]
   } catch { return []; }
 }
 
-const workingSchemaCache = new Map<string, { sources: Array<[string, string]>; schema: PmSettings["schema"] }>();
+const workingSchemaCache = new Map<string, { sources: Array<[string, string | null]>; schema: PmSettings["schema"] }>();
 
-/** Track replacement, resizing and nanosecond edits, including creation of an optional source. */
-function schemaSourceSignature(file: string): string {
+/** Track source identity, refusing to cache observations inside the filesystem timestamp tick. */
+function schemaSourceSignature(file: string): string | null {
   const stat = statSync(file, { bigint: true, throwIfNoEntry: false });
-  return stat === undefined ? "-" : `${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+  if (stat === undefined) return "-";
+  if (BigInt(Date.now()) * 1_000_000n - stat.mtimeNs < RACY_WINDOW_NS) return null;
+  return `${stat.ino}:${stat.size}:${stat.mtimeNs}`;
 }
 
 /** Hydrate codec definitions for the synchronous native staging API; SDK codecs own their meaning.
@@ -64,8 +67,9 @@ function workingSchema(pmRoot: string): PmSettings["schema"] | undefined {
     const root = resolve(pmRoot);
     const cached = workingSchemaCache.get(root);
     if (cached?.sources.every(([file, signature]) => schemaSourceSignature(file) === signature)) return cached.schema;
+    workingSchemaCache.delete(root);
     const settingsPath = resolve(root, "settings.json");
-    const sources: Array<[string, string]> = [[settingsPath, schemaSourceSignature(settingsPath)]];
+    const sources: Array<[string, string | null]> = [[settingsPath, schemaSourceSignature(settingsPath)]];
     const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { schema?: PmSettings["schema"] };
     const inline = settings.schema;
     const statusesPath = resolve(root, inline?.files?.statuses?.trim() || "schema/statuses.json");
@@ -75,7 +79,7 @@ function workingSchema(pmRoot: string): PmSettings["schema"] | undefined {
     const statuses = schemaDefinitions<PmSettings["schema"]["statuses"][number]>(statusesPath, "statuses");
     const fields = schemaDefinitions<PmSettings["schema"]["fields"][number]>(fieldsPath, "fields");
     const schema = { ...base, statuses: [...resolveRuntimeStatusRegistry(base).definitions, ...statuses], fields: [...base.fields, ...fields] };
-    workingSchemaCache.set(root, { sources, schema });
+    if (sources.every(([, signature]) => signature !== null)) workingSchemaCache.set(root, { sources, schema });
     return schema;
   } catch { return undefined; }
 }

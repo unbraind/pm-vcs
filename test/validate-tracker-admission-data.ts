@@ -11,7 +11,7 @@ import { readCommit } from "../engine/model.ts";
 import { trackerAdmissionDigest } from "./helpers/tracker-admission-digest.ts";
 const input = process.argv[2]; assert.ok(input, "Supply a disposable non-git public tracker copy.");
 const root = resolve(input); const pmRoot = join(root, ".agents/pm");
-const before = trackerAdmissionDigest(pmRoot);
+const before = await trackerAdmissionDigest(pmRoot);
 const client = new PmClient({ cwd: root, pmRoot, noExtensions: true });
 const list = await client.listAllComplete({ includeBody: true });
 const ids = list.items.map(item => item.id).sort();
@@ -29,5 +29,5 @@ if (head !== null) for (const [path, entry] of flattenTree(repo.objects, readCom
   const bytes = repo.objects.readTyped(entry.id, "blob"); selectedBytes += bytes.length;
   if (path.endsWith(".jsonl")) { historyBytes += bytes.length; historyEntries += bytes.toString("utf8").split("\n").filter(Boolean).length; }
 }
-assert.equal(trackerAdmissionDigest(pmRoot), before, "Admission must leave every source tracker byte unchanged.");
+assert.equal(await trackerAdmissionDigest(pmRoot), before, "Admission must leave every source tracker byte unchanged.");
 console.log(JSON.stringify({ sourceItems: ids.length, admitted, retries, reasons: Object.fromEntries(reasons), nativeFiles: head === null ? 0 : flattenTree(repo.objects, readCommit(repo.objects, head).tree).size, selectedBytes, historyBytes, historyEntries, elapsedMs: Math.round(performance.now() - started), sourceUnchanged: true, gitRequired: false }));

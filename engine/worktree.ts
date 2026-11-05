@@ -26,10 +26,11 @@ import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreErr
 
 import type { ConflictSummary } from "./conflicts.ts";
 import { WorktreeMutation } from "./worktree-mutation.ts";
+import { RACY_WINDOW_NS } from "./stat-cache.ts";
+
+export { RACY_WINDOW_NS };
 
 const INDEX_HEADER = "pm-vcs-index 4";
-/** Conservative upper bound for one coarse filesystem timestamp tick. */
-export const RACY_WINDOW_NS = 2_000_000_000n;
 
 /**
  * Whether a stored path is already in canonical repository-relative form.
