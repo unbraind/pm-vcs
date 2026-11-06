@@ -26,16 +26,22 @@ test("fixture cleanup retries an injected transient ENOTEMPTY without hiding per
   fault.remaining = 0; await failed.cleanup(); assert.equal(existsSync(failed.root), false);
 });
 
-test("fixture teardown joins child close, stops watchers and drains queued writers before removal", async () => {
+for (const finish of [true, false]) test(`fixture teardown joins child close, stops watchers and drains queued writers before removal (${finish ? "exit" : "termination"})`, async () => {
   const fixture = makeManagedTempDir(); let closed = false;
-  fixture.watcher(watch(fixture.root)).once("close", () => { closed = true; });
-  const child = fixture.child(spawn(process.execPath, ["-e", "process.send('ready');process.on('message',()=>{require('node:fs').mkdirSync(process.argv[1]+'/.pm-cli/locks',{recursive:true});process.exit(0)})", fixture.root], { env: testEnvironment(), stdio: ["ignore", "ignore", "ignore", "ipc"] }));
+  const watcher = fixture.watcher(watch(fixture.root)).once("close", () => { closed = true; });
+  const child = fixture.child(spawn(process.execPath, ["-e", "process.send('ready');process.on('message',message=>{if(message!=='finish')return;require('node:fs').mkdirSync(process.argv[1]+'/.pm-cli/locks',{recursive:true});process.exit(0)})", fixture.root], { env: testEnvironment(), stdio: ["ignore", "ignore", "ignore", "ipc"] }));
   await once(child, "message");
   const childClosed = once(child, "close");
-  fixture.task(new Promise<void>((resolve, reject) => { setTimeout(() => { try { writeFileSync(join(fixture.root, "pending"), "settled"); resolve(); } catch (error) { reject(error); } }, 20); }));
-  const finish = setTimeout(() => { if (child.connected) child.send("finish"); }, 250);
-  try { await fixture.cleanup(); assert.equal(child.exitCode, 0); assert.ok(closed); assert.equal(existsSync(fixture.root), false); }
-  finally { clearTimeout(finish); if (child.connected) child.send("finish"); await childClosed; await fixture.cleanup(); }
+  let childDidClose = false; child.once("close", () => { childDidClose = true; });
+  fixture.task(once(watcher, "close").then(() => { writeFileSync(join(fixture.root, "pending"), "settled"); }));
+  child.send(finish ? "finish" : "hold");
+  try {
+    await fixture.cleanup();
+    assert.ok(childDidClose, "Cleanup must join child close, including pipe closure");
+    assert.ok(child.exitCode === 0 || child.signalCode === "SIGTERM" || child.signalCode === "SIGKILL", "Cleanup may stop a child that has not exited within its grace period");
+    if (!finish) assert.equal(child.exitCode, null, "The held child must be terminated by cleanup");
+    assert.ok(closed); assert.equal(existsSync(fixture.root), false);
+  } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await childClosed; await fixture.cleanup(); }
 });
 
 test("fixture teardown surfaces task failures after closing all other owners and removing its directory", async () => {

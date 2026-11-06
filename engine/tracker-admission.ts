@@ -8,6 +8,7 @@ import { ObjectStoreError, type ObjectId } from "./objects.ts";
 import { parseWorkingRecord } from "./record-format.ts";
 import { isRecordPath } from "./config.ts";
 import { decodeRecord, type RecordDocument } from "./model.ts";
+import { readTrackerSource } from "./tracker-source.ts";
 
 /** Selection and expected native parent, validated before reading tracker state. */
 export interface TrackerAdmissionRequest {
@@ -133,10 +134,14 @@ export class TrackerCapture {
       const located = await api.locateItem(this.pmRoot, rawId, settings.id_prefix, settings.item_format, registry.type_to_folder);
       await trackerAdmissionBoundary.visit("located", rawId);
       if (located === null || located.id !== rawId) return { id: rawId, reason };
-      const item = await api.readLocatedItem(located, { schema: settings.schema });
-      await trackerAdmissionBoundary.visit("item", rawId);
+      reason = "outside_workspace";
+      const itemPath = trackerWorkspacePath(this.repository.root, located.itemPath);
       const historyPath = api.getHistoryPath(this.pmRoot, located.id);
-      const history = await api.readHistorySnapshot(historyPath, located.id);
+      const historyCoordinate = trackerWorkspacePath(this.repository.root, historyPath);
+      reason = "pair_unavailable";
+      const item = await readTrackerSource(this.repository.root, itemPath, address => api.readLocatedItem({ ...located, itemPath: address }, { schema: settings.schema }));
+      await trackerAdmissionBoundary.visit("item", rawId);
+      const history = await readTrackerSource(this.repository.root, historyCoordinate, address => api.readHistorySnapshot(address, located.id));
       await trackerAdmissionBoundary.visit("history", rawId);
       reason = "history_mismatch";
       if (history.raw_bytes === null || history.entries.length === 0 || item.document.metadata.id !== located.id
@@ -159,7 +164,10 @@ export class TrackerCapture {
         return { ...file, record: decodeRecord(Buffer.from(JSON.stringify({ ...item.document.metadata, body: item.document.body }))) };
       });
       return { files: captured, transactions };
-    } catch { return { id: rawId, reason }; }
+    } catch (error) {
+      if (error instanceof ObjectStoreError && ["path_ignored", "tracker_source_unsupported"].includes(error.code)) throw error;
+      return { id: rawId, reason };
+    }
   }
   /** Verify pending records and publish exact captured bytes under the native writer lease.
    * Repeated calls after a retry read only failed records; successful calls consume the session.
