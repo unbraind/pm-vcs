@@ -349,9 +349,13 @@ sources or competing destinations throw `AmbiguousMoveError` (`ambiguous_move`)
 with sorted candidates and an explicit staging remedy. Planning completes before
 storing payloads or publishing the index. Small-file snapshots retained by the
 plan are capped at four MiB; excess snapshots are released and reread with
-canonical-content and mode validation into private disk snapshots before any
-payload or provenance publication. Temporary snapshots are removed on success
-and refusal; a deferred-read refusal preserves existing objects and provenance.
+canonical-content and mode validation into one private anonymous disk snapshot
+before any payload or provenance publication. Its mode is 0600, and its name is
+unlinked and its parent namespace flushed before the first payload byte is
+written, so process death releases the
+held bytes without leaving control directories that block erasure. Before unlink,
+only an empty supported owner temporary can remain. A deferred-read refusal
+preserves existing objects and provenance.
 Large regular files
 keep their existing streaming path. This does not introduce a similarity
 threshold or guess an identity when both inode and content evidence disappear.

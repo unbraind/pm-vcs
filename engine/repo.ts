@@ -1,3 +1,4 @@
+import { objectFiles, type ObjectFile } from "./object-files.ts";
 import { inferMoveSource, resolveMoveIntents, type MoveIntent, type MoveCandidate } from "./moves.ts";
 import { nativeOutputs, outputBirth } from "./native-outputs.ts";
 import type { BigIntStats } from "node:fs";
@@ -21,7 +22,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { closeSync, fstatSync, existsSync, mkdirSync, mkdtempSync, rmSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, existsSync, mkdirSync, unlinkSync, readSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes, type KeyObject } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -703,7 +704,9 @@ export class Repository {
     const reserved = new Set([...declared.values()]);
     const inferred = new Map<FileId, MoveCandidate>();
     const publish: Array<() => void> = [];
-    const prepare: Array<(directory: string) => void> = [];
+    const prepare: Array<(file: ObjectFile) => void> = [];
+    let snapshot: ObjectFile | undefined;
+    let snapshotBytes = 0;
     let bufferedBytes = 0;
     const changed: string[] = [];
     for (const path of targets) {
@@ -811,16 +814,16 @@ export class Repository {
       if (buffered !== undefined) bufferedBytes += buffered.length;
       // Release an over-budget snapshot before visiting another working file.
       content = Buffer.alloc(0);
-      let payloadFile: string;
+      let payloadOffset: number;
+      let payloadLength: number;
       if (buffered === undefined && !chunked && retainedId === undefined) {
-        const slot = prepare.length;
-        prepare.push(directory => {
+        prepare.push(file => {
           const current = read(this.root, path);
           if (current.executable !== executable || this.stagingContentId(path, current.content, isLink) !== id) {
             throw new ObjectStoreError("source_changed", "Working file changed after staging identity planning; retry add.");
           }
-          payloadFile = join(directory, String(slot));
-          writeFileSync(payloadFile, current.content, { mode: 0o600, flag: "wx" });
+          payloadOffset = snapshotBytes; payloadLength = current.content.length;
+          writeFileSync(file.fd, current.content); snapshotBytes += payloadLength;
           stat = current.stat;
         });
       }
@@ -831,7 +834,7 @@ export class Repository {
             throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
           }
         } else {
-          const payload = buffered ?? readFileSync(payloadFile);
+          const payload = buffered ?? this.readStagingSnapshot(snapshot!.fd, payloadOffset, payloadLength);
           if (isLink) this.objects.write("link", encodeLink(decodeLink(payload)), fileId);
           else this.stageContent(path, payload, fileId);
         }
@@ -843,15 +846,37 @@ export class Repository {
       });
       if (!existing || existing.id !== id || existing.mode !== mode || existing.fileId !== fileId) changed.push(path);
     }
-    // Validate every released snapshot before publishing any payload or provenance.
-    // Disk snapshots bound retained memory and avoid re-reading mutable sources at publication.
-    const directory = prepare.length === 0 ? undefined : mkdtempSync(join(this.controlDirectory, "stage-"));
+    // Unlink the private snapshot before writing bytes: process death then closes its
+    // only descriptor. A crash before unlink leaves only an empty, supported owner temporary.
+    let temporary: string | undefined;
     try {
-      if (directory !== undefined) for (const snapshot of prepare) snapshot(directory);
+      if (prepare.length > 0) {
+        temporary = join(this.controlDirectory, `objects.lock.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+        snapshot = objectFiles.open(temporary, "wx+", 0o600);
+        unlinkSync(temporary);
+        durability.directory(this.controlDirectory);
+        for (const capture of prepare) capture(snapshot);
+      }
       for (const write of publish) write();
       this.writeIndex([...index.values()]);
-    } finally { if (directory !== undefined) rmSync(directory, { recursive: true, force: true }); }
+    } finally {
+      if (snapshot !== undefined) {
+        try { durability.discardUnpublished(temporary!, snapshot.fd, fstatSync(snapshot.fd, { bigint: true })); }
+        finally { snapshot.close(); }
+      }
+    }
     return changed.sort(compareByteOrder);
+  }
+
+  /** Read one complete private snapshot at its explicit offset without moving the shared descriptor cursor. */
+  private readStagingSnapshot(fd: number, position: number, length: number): Buffer {
+    const bytes = Buffer.alloc(length); let offset = 0;
+    while (offset < length) {
+      const count = readSync(fd, bytes, offset, length - offset, position + offset);
+      if (count === 0) throw new ObjectStoreError("source_changed", "Private staging snapshot was truncated; retry add.");
+      offset += count;
+    }
+    return bytes;
   }
 
   /** Hash the exact canonical bytes used by both identity planning and deferred staging reads. */
