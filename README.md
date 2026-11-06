@@ -170,7 +170,7 @@ pm vcs diff main feature
 | --- | --- |
 | `pm vcs init` | Create a repository. `--record-path` declares which paths hold structured records; `--set-field` declares how their fields merge. |
 | `pm vcs status` | The three-way difference between HEAD, the index and the working tree. Stable indexed paths are checked from stat metadata without re-reading content; racy timestamp-window entries are always hashed. |
-| `pm vcs add [paths…]` | Stage paths, or everything. A path that no longer exists stages as a deletion. |
+| `pm vcs add [paths…]` | Stage paths, or everything. A path that no longer exists stages as a deletion. Use `pm vcs add DEST --file-id ID` to record an edited move explicitly. |
 | `pm vcs commit --message` | Record the index. `--item id[,id...]` stores validated PM work associations. Refuses an empty commit unless `--allow-empty`. |
 | `pm vcs log [rev]` | First-parent history, newest first. |
 | `pm vcs diff [from] [to]` | Unified diff between two revisions' trees. |
@@ -202,6 +202,19 @@ pm vcs diff main feature
 | `pm vcs files <item-id>` | Resolve a PM item's linked arbitrary files to stable identities and changes. |
 | `pm vcs changes <item-id>` | Report explicit and file-derived stable ChangeIds for a PM item. |
 | `pm vcs items [from..to]` | Report PM items explicitly associated with, or linked to files changed by, native revisions. |
+
+For an edited move whose inode or content no longer identifies its source, use
+`pm vcs add DEST --file-id ID` after moving the file. Obtain `ID` from `pm vcs trace
+OLD_PATH`. The source must be absent and the destination unoccupied in the index.
+The declaration wins over inode/content inference and is saved atomically in the
+index, then in the commit's tree. Repeating the same declaration is safe. Copies
+retain separate identities; a live source cannot be claimed as a move.
+
+Tied move evidence refuses with code `ambiguous_move`, candidate source paths,
+destinations and FileIds, plus the explicit staging remedy. No payload or index
+is published by a refused staging batch. Merge and rebase follow the recorded
+FileId when one side moves and both sides edit. Conflicting moves or destination
+collisions remain conflicts. Bundles and clones retain the canonical tree bytes.
 
 ### Repository links, private layers and permanent erasure
 

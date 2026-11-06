@@ -332,6 +332,30 @@ original as copy provenance so the merged tree remains valid and auditable. Lega
 from the old path and object ID, so agents upgrading the same checkout independently converge;
 filesystem identity preserves a move even when its bytes change before staging.
 
+`Repository.stage(paths, reader, moves)` accepts explicit `{ fileId, path }` mappings;
+`pm vcs add DEST --file-id ID` exposes a single mapping. Under the shared writer
+lease, staging validates all declarations and reserves their sources before any
+inference. Sources must be uniquely indexed, live identities, absent from the
+working tree, and destinations must be allowed and unoccupied. Retrying an
+already staged mapping is idempotent. Erasure, sparse-view, private-layer and
+control-path guards apply before payload publication. The atomic index records
+the selected FileId and copy provenance; no auxiliary identity log or new object
+schema is needed. A crash before publication leaves the previous index; retrying
+the declaration after writer-lock recovery converges. After publication, ordinary
+staging, replay and clone carry the same identity in existing canonical trees.
+
+Inference considers inode evidence first, then identical content. Tied move
+sources or competing destinations throw `AmbiguousMoveError` (`ambiguous_move`)
+with sorted candidates and an explicit staging remedy. Planning completes before
+storing payloads or publishing the index. This does not introduce a similarity
+threshold or guess an identity when both inode and content evidence disappear.
+
+Three-way merge and replay share FileId alignment: uniquely identified entries
+are compared at the agreed destination before merging their content. Opposite-side
+edits therefore follow the move. Divergent destinations and occupied paths retain
+identity conflicts, while legacy trees without FileIds keep their existing path
+semantics. Persisted tree/index encodings and old object hashes are unchanged.
+
 Commits may carry validated PM item IDs. `engine/attribution.ts` derives file traces from
 immutable parent/tree deltas and joins them to the pm SDK's linked-file records. The join is
 bidirectional: `vcs files` and `vcs changes` go from PM item to history; `vcs items` goes from

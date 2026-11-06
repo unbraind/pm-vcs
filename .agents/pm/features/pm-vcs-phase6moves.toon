@@ -2,12 +2,35 @@ id: pm-vcs-phase6moves
 title: Preserve explicit FileId intent for ambiguous edited moves
 description: "Same-inode rename plus edit and unambiguous unchanged-content moves retain FileIds today. An edited move across filesystems can lose both inode and content evidence, so guessing can conflate independent files. Add an explicit native move or identity-mapping operation with collision and erasure guards."
 type: Feature
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T15:48:35.100Z"
-updated_at: "2026-10-21T15:48:35.100Z"
+updated_at: "2026-11-06T18:33:28.052Z"
+assignee: codex-astra
+claim_principal: codex-astra
 author: codex-agent
 acceptance_criteria: An explicitly declared edited move retains its FileId and PM ChangeId trace across filesystems; independent copies keep new identities; ambiguous inference never silently picks an unrelated source.
 parent: pm-vcs-b7cb
+comments[4]{created_at,author,text}:
+  "2026-11-06T18:11:18.317Z",codex-astra,"Design: add explicit FileId mapping to native staging, validated under the shared writer lease and committed in the existing index/tree identity fields. Reserve declared identities before inference; return typed ambiguous_move with candidate paths and a concrete remedy for tied move evidence. Align three-way merge inputs by unique FileId before content merging so replay uses the same path. Tests will cover adversarial pairing, seeded oracle sequences, separate processes, and crash/retry/clone convergence. Full release certification remains in CI as requested."
+  "2026-11-06T18:19:42.161Z",codex-astra,Implementation uses the existing tree FileId as durable move authority. Focused attribution tests pass 7/7. The seeded identity-keyed oracle passed 18 rounds of two-sided edits/moves plus reversed merges; separate-process disjoint and competing declarations passed. Merge and rebase produced the same tree; fatal before/after-index cuts recovered and cloned correctly. Working stat hints are intentionally excluded from byte-equality claims; canonical committed tree/payload bytes are checked.
+  "2026-11-06T18:25:27.816Z",codex-astra,"Behavioral revert proofs in a disposable source copy: reverting only Repository.stage/stageLocked to main made all 7 selected tests fail (explicit authority, ambiguous candidates, invalid intent corpus, OS-process claims, both SIGKILL boundaries, real PM command). Restoring staging and reverting only mergeTrees made both the merge/rebase/clone regression and seeded oracle fail (2/2). The unchanged implementation passes the 10-test suite, and c8 reports 100/100/100/100 on engine/moves.ts and engine/merge-moves.ts. Additional guard fixtures and broader existing regressions are running before final certification."
+  "2026-11-06T18:33:28.051Z",codex-astra,"Local validation complete: new regression suite 12/12 through pinned pm test --run --only-index 1 --progress --timeout 600; broader staging, attribution, model, repository, rewrite and command regressions 158/158, no skips or cancellations. All 12 new tests fail on behavioral reverts in disposable copies: stage/stageLocked 7/7 plus the two additional guard tests 2/2; mergeTrees 2/2; alignFileMoves 1/1. Restored code passes. New modules have measured 100/100/100/100 coverage. Build, test typecheck, lint, docstrings, zero-duplication and production audit pass. Full npm and Bun release gates remain assigned to CI. The tracker disables test-result persistence, so the exact run receipt is summarized here without changing policy. CLI UX observation: invalid files/docs argument usage returned a zero shell exit despite reporting an error; corrected repeated --add forms succeeded."
+files[9]{path,scope}:
+  engine/merge-moves.ts,project
+  engine/moves.ts,project
+  engine/repo.ts,project
+  engine/rewrite.ts,project
+  index.ts,project
+  test/explicit-moves.test.ts,project
+  test/helpers/move-intent-worker.ts,project
+  test/raw-coverage.test.ts,project
+  vcs-commands.ts,project
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 test/explicit-moves.test.ts,project,codex-astra,"2026-11-06T18:17:53.715Z",local_mutation,explicit-fileid-intent-for-ambiguous-moves
+  node --test --test-concurrency=2 test/attribution.test.ts test/phase6-staging.test.ts test/rewrite.test.ts test/repo.test.ts test/model.test.ts test/vcs-commands.test.ts,project,codex-astra,"2026-11-06T18:29:47.424Z",local_mutation,explicit-fileid-intent-for-ambiguous-moves
+docs[2]{path,scope}:
+  ARCHITECTURE.md,project
+  README.md,project
 body: ""

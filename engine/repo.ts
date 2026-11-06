@@ -1,3 +1,4 @@
+import { inferMoveSource, resolveMoveIntents, type MoveIntent, type MoveCandidate } from "./moves.ts";
 import { nativeOutputs, outputBirth } from "./native-outputs.ts";
 import type { BigIntStats } from "node:fs";
 import { durability } from "./durability.ts";
@@ -673,23 +674,30 @@ export class Repository {
    * @param paths - Paths to stage, or an empty array for everything.
    * @param read - Working-file reader; injectable so the cache bypass remains
    *   directly testable without relying on elapsed-time benchmarks.
+   * @param moves - Explicit destination/FileId mappings; validated before any staging writes.
    * @returns The paths whose staged state changed.
    */
-  stage(paths: readonly string[], read: typeof readWorkingFile = readWorkingFile): string[] {
-    return this.objects.withWriteLock(/** Hold layer masking and payload publication in one transaction. */ () => this.stageLocked(paths, read));
+  stage(paths: readonly string[], read: typeof readWorkingFile = readWorkingFile, moves: readonly MoveIntent[] = []): string[] {
+    return this.objects.withWriteLock(/** Hold layer masking and payload publication in one transaction. */ () => this.stageLocked(paths, read, moves));
   }
 
   /** Stage selected working paths with private layers excluded before any byte is read. */
-  private stageLocked(paths: readonly string[], read: typeof readWorkingFile): string[] {
+  private stageLocked(paths: readonly string[], read: typeof readWorkingFile, moves: readonly MoveIntent[]): string[] {
     const originalEntries = this.readIndex();
     const index = new Map(originalEntries.map((entry) => [entry.path, entry]));
     const rules = this.ignoreRules();
     const targets = paths.length === 0
       ? [...new Set([...listWorkingTree(this.root, CONTROL_DIRECTORY, rules), ...index.keys()])]
-      : paths.map((path) => normalizeRepoPath(this.root, path));
+      : [...new Set(paths.map((path) => normalizeRepoPath(this.root, path)))];
     const layers = this.layerPaths();
     const outputs = new Map(nativeOutputs(this.controlDirectory).map(output => [output.path, output]));
     const denied = this.objects.denials();
+    const declared = resolveMoveIntents(this.root, originalEntries, targets, moves, (source, path) =>
+      ![source.path, path].some(candidate => layers.has(candidate) || isIgnored(candidate, rules) || isProtectedWorktreePath(this.root, candidate, true))
+      && !denied.some(denial => denial.tombstone.fileId === (source.fileId ?? migratedFileId(source))));
+    const reserved = new Set([...declared.values()]);
+    const inferred = new Map<FileId, MoveCandidate>();
+    const publish: Array<() => void> = [];
     const changed: string[] = [];
     for (const path of targets) {
       if (layers.has(path) && paths.length > 0) throw new ObjectStoreError("layer_excluded", "Private overlay paths cannot be staged; remove the layer first.");
@@ -734,12 +742,13 @@ export class Repository {
         const observed = readWorkingStat(this.root, path);
         const existing = index.get(path);
         const observedMode = observed.executable ? "100755" : "100644";
-        if (existing?.fileId !== undefined && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
+        if (!declared.has(path) && existing?.fileId !== undefined && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
         regular = !observed.symbolicLink;
         chunked = regular && observed.stat.size >= BigInt(CDC_STAGING_THRESHOLD) && !isRecordPath(path, this.config) && !isLink;
         if (chunked) { content = Buffer.alloc(0); executable = observed.executable; stat = observed.stat; }
         else ({ content, executable, stat } = read(this.root, path));
-      } catch {
+      } catch (error) {
+        if (declared.has(path)) throw error;
         // A sparse entry's path is intentionally absent: its file was never in
         // this working tree's view, so the miss is not a staged deletion.
         // Deleting it here would drop out-of-view content from the next commit
@@ -756,18 +765,21 @@ export class Repository {
         : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(this.workingRecord(path, content))) : hashObject("blob", content));
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
-      let fileId = existing === undefined ? undefined : existing.fileId ?? migratedFileId(existing);
-      let copiedFrom = existing?.copiedFrom;
-      let conflictSource = existing;
+      const explicit = declared.get(path);
+      const identitySource = explicit ?? existing;
+      let fileId = identitySource === undefined ? undefined : identitySource.fileId ?? migratedFileId(identitySource);
+      let copiedFrom = identitySource?.copiedFrom;
+      let conflictSource = identitySource;
+      if (explicit !== undefined && explicit.path !== path && index.delete(explicit.path)) changed.push(explicit.path);
       if (fileId === undefined) {
-        const identityMatches = stat === undefined ? [] : originalEntries.filter((entry) => entry.path !== path
+        const identityMatches = stat === undefined ? [] : originalEntries.filter((entry) => !reserved.has(entry) && entry.path !== path
           && !denied.some(/** Erased identities cannot be inferred from a recycled filesystem inode. */ (denial) => denial.tombstone.fileId === entry.fileId)
           && entry.stat?.dev === stat.dev && entry.stat.ino === stat.ino);
-        const contentMatches = originalEntries.filter((entry) => entry.path !== path && !denied.some(/** A matching denied address is refused at publication, never adopted as a new live identity. */ (denial) => denial.tombstone.fileId === entry.fileId) && entry.id === id
+        const contentMatches = originalEntries.filter((entry) => !reserved.has(entry) && entry.path !== path && !denied.some(/** A matching denied address is refused at publication, never adopted as a new live identity. */ (denial) => denial.tombstone.fileId === entry.fileId) && entry.id === id
           && entry.mode === mode);
-        const matches = identityMatches.length === 1 ? identityMatches : contentMatches;
-        if (matches.length === 1) {
-          const source = matches[0];
+        const matches = identityMatches.length > 0 ? identityMatches : contentMatches;
+        const source = inferMoveSource(this.root, path, matches, inferred);
+        if (source !== undefined) {
           conflictSource = source;
           const sourceFileId = source.fileId ?? migratedFileId(source);
           if (!existsSync(join(this.root, ...source.path.split("/")))) {
@@ -788,7 +800,7 @@ export class Repository {
       const output = outputs.get(path);
       if (output?.complete === true && outputBirth(lstatSync(absolute, { bigint: true })) === output.birth
         && (chunked ? blobFileContentId(absolute) : hashObject("blob", content)) === output.id) sources.push(...output.objects);
-      this.objects.withDerivation(sources, () => {
+      publish.push(() => this.objects.withDerivation(sources, () => {
         if (chunked || retainedId !== undefined) {
           const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
           if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
@@ -796,12 +808,15 @@ export class Repository {
           }
         } else if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
         else this.stageContent(path, content, fileId);
+      }));
+      publish.push(() => {
+        const conflicts = conflictSource === undefined ? undefined : carryConflicts(this.objects, conflictSource.conflicts, conflictSource.id, id, fileId);
+        index.set(path, { path, id, mode, fileId, ...(conflicts === undefined ? {} : { conflicts }), ...(copiedFrom === undefined ? {} : { copiedFrom }),
+          ...(stat === undefined ? {} : { stat }) });
       });
-      const conflicts = conflictSource === undefined ? undefined : carryConflicts(this.objects, conflictSource.conflicts, conflictSource.id, id, fileId);
-      index.set(path, { path, id, mode, fileId, ...(conflicts === undefined ? {} : { conflicts }), ...(copiedFrom === undefined ? {} : { copiedFrom }),
-        ...(stat === undefined ? {} : { stat }) });
       if (!existing || existing.id !== id || existing.mode !== mode || existing.fileId !== fileId) changed.push(path);
     }
+    for (const write of publish) write();
     this.writeIndex([...index.values()]);
     return changed.sort(compareByteOrder);
   }
