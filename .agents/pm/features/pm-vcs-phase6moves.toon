@@ -6,17 +6,18 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-21T15:48:35.100Z"
-updated_at: "2026-11-06T18:33:28.052Z"
+updated_at: "2026-11-06T18:39:13.592Z"
 assignee: codex-astra
 claim_principal: codex-astra
 author: codex-agent
 acceptance_criteria: An explicitly declared edited move retains its FileId and PM ChangeId trace across filesystems; independent copies keep new identities; ambiguous inference never silently picks an unrelated source.
 parent: pm-vcs-b7cb
-comments[4]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-11-06T18:11:18.317Z",codex-astra,"Design: add explicit FileId mapping to native staging, validated under the shared writer lease and committed in the existing index/tree identity fields. Reserve declared identities before inference; return typed ambiguous_move with candidate paths and a concrete remedy for tied move evidence. Align three-way merge inputs by unique FileId before content merging so replay uses the same path. Tests will cover adversarial pairing, seeded oracle sequences, separate processes, and crash/retry/clone convergence. Full release certification remains in CI as requested."
   "2026-11-06T18:19:42.161Z",codex-astra,Implementation uses the existing tree FileId as durable move authority. Focused attribution tests pass 7/7. The seeded identity-keyed oracle passed 18 rounds of two-sided edits/moves plus reversed merges; separate-process disjoint and competing declarations passed. Merge and rebase produced the same tree; fatal before/after-index cuts recovered and cloned correctly. Working stat hints are intentionally excluded from byte-equality claims; canonical committed tree/payload bytes are checked.
   "2026-11-06T18:25:27.816Z",codex-astra,"Behavioral revert proofs in a disposable source copy: reverting only Repository.stage/stageLocked to main made all 7 selected tests fail (explicit authority, ambiguous candidates, invalid intent corpus, OS-process claims, both SIGKILL boundaries, real PM command). Restoring staging and reverting only mergeTrees made both the merge/rebase/clone regression and seeded oracle fail (2/2). The unchanged implementation passes the 10-test suite, and c8 reports 100/100/100/100 on engine/moves.ts and engine/merge-moves.ts. Additional guard fixtures and broader existing regressions are running before final certification."
   "2026-11-06T18:33:28.051Z",codex-astra,"Local validation complete: new regression suite 12/12 through pinned pm test --run --only-index 1 --progress --timeout 600; broader staging, attribution, model, repository, rewrite and command regressions 158/158, no skips or cancellations. All 12 new tests fail on behavioral reverts in disposable copies: stage/stageLocked 7/7 plus the two additional guard tests 2/2; mergeTrees 2/2; alignFileMoves 1/1. Restored code passes. New modules have measured 100/100/100/100 coverage. Build, test typecheck, lint, docstrings, zero-duplication and production audit pass. Full npm and Bun release gates remain assigned to CI. The tracker disables test-result persistence, so the exact run receipt is summarized here without changing policy. CLI UX observation: invalid files/docs argument usage returned a zero shell exit despite reporting an error; corrected repeated --add forms succeeded."
+  "2026-11-06T18:39:13.592Z",codex-astra,Committed self-host verification passed at 243c627 after post-commit regeneration (no archive change). Package privacy passed for 365 files with zero findings; release changelog-date and publish-attestation checks passed. The all-object identity audit refuses one address in the shared physical database; a fresh reachable-only clone of this exact candidate passes with five approved identities. Existing pm-vcs-identity-isolation tracks the unrelated shared-object limitation. No audit weakening or history rewrite was performed.
 files[9]{path,scope}:
   engine/merge-moves.ts,project
   engine/moves.ts,project
