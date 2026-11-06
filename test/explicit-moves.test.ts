@@ -255,7 +255,8 @@ test("tied inode evidence on edited hardlink moves requires explicit identity", 
 test("identity planning bounds retained payloads and rejects content or mode drift on deferred reads", () => {
   for (const mode of ["memory", "content", "mode"]) {
     const repo = fresh();
-    const result = JSON.parse(execFileSync(process.execPath, ["--expose-gc", join(packageRoot, "test/helpers/staging-buffer-worker.ts"), repo.root, mode], { env: testEnvironment(), encoding: "utf8", timeout: 60_000 })) as { peak: number; reads: number; paths: number };
+    // Finish backing-store reclamation before sampling, as the release suite does.
+    const result = JSON.parse(execFileSync(process.execPath, ["--expose-gc", "--no-concurrent-array-buffer-sweeping", join(packageRoot, "test/helpers/staging-buffer-worker.ts"), repo.root, mode], { env: testEnvironment(), encoding: "utf8", timeout: 60_000 })) as { peak: number; reads: number; paths: number };
     assert.ok(result.peak <= 6 * 1024 * 1024, `staging retained ${result.peak} bytes above baseline for ${mode}`);
     assert.ok(result.reads > result.paths, "a bounded plan must reread its released snapshots");
   }
