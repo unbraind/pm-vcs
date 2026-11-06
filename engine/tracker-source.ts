@@ -43,6 +43,8 @@ function ignored(): never { throw new ObjectStoreError("path_ignored", "Captured
 export async function readTrackerSource<T>(root: string, path: string, read: (address: string) => Promise<T>): Promise<T> {
   if (!worktreeMutationCapabilities.descriptorPaths()) throw new ObjectStoreError("tracker_source_unsupported", "Tracker capture requires confined descriptor paths on this platform.");
   const sources: Source[] = [];
+  const failures: unknown[] = [];
+  let result: T;
   const canonicalRoot = realpathSync(root);
   /** Register ownership before checking fstat so every failure closes all acquired handles. */
   const open = (address: string, stat: BigIntStats, directory: boolean, coordinate: string): ObjectFile => {
@@ -91,9 +93,15 @@ export async function readTrackerSource<T>(root: string, path: string, read: (ad
     verify();
     trackerSourceBoundary.visit("opened", path);
     verify();
-    const result = await read(`/proc/self/fd/${file.fd}`);
+    result = await read(`/proc/self/fd/${file.fd}`);
     trackerSourceBoundary.visit("read", path);
     verify();
-    return result;
-  } finally { for (const source of sources.reverse()) source.file?.close(); }
+  } finally {
+    for (const source of sources.reverse()) {
+      try { source.file?.close(); } catch (error) { failures.push(error); }
+    }
+  }
+  // An in-flight refusal bypasses this point, preserving even a thrown undefined value.
+  if (failures.length > 0) throw failures[0];
+  return result;
 }

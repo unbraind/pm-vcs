@@ -11,6 +11,7 @@ import { TrackerCapture, trackerAdmissionBoundary } from "../engine/tracker-admi
 import { readTrackerSource, trackerSourceBoundary } from "../engine/tracker-source.ts";
 import { worktreeMutationCapabilities } from "../engine/worktree-mutation.ts";
 import { objectFiles } from "../engine/object-files.ts";
+import { ObjectStoreError } from "../engine/objects.ts";
 import { readCommit } from "../engine/model.ts";
 import { flattenTree } from "../engine/worktree.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
@@ -163,3 +164,26 @@ test("a legal leaf link whose target changes during resolution is refused", asyn
   trackerSourceBoundary.visit = (step, path) => { if (step === "checked" && path === "target") compete(link, "target", "link"); };
   await assert.rejects(readTrackerSource(dir.root, "link", async () => assert.fail("changed link must not be read")), { code: "tracker_source_changed" });
 });
+
+for (const outcome of ["success", "reader-refusal", "link-refusal"]) {
+  test(`close failures release every descriptor and preserve ${outcome}`, async () => {
+    const dir = makeTempDir(); owned.push(dir); mkdirSync(join(dir.root, "nested"));
+    writeFileSync(join(dir.root, "nested/file"), "safe"); symlinkSync("../../outside", join(dir.root, "nested/link"));
+    const baseline = objectFiles.active.size; const originalOpened = objectFiles.opened;
+    const closers: (() => void)[] = []; let attempts = 0;
+    const primary = new ObjectStoreError("reader_refused", "Synthetic SDK read refusal.");
+    const closeError = new Error("Synthetic close failure after native close.");
+    objectFiles.opened = file => {
+      const close = file.close; closers.push(close);
+      file.close = () => { attempts++; close(); throw closeError; };
+    };
+    try {
+      const pending = readTrackerSource(dir.root, outcome === "link-refusal" ? "nested/link" : "nested/file", async address => {
+        if (outcome === "reader-refusal") throw primary;
+        return readFileSync(address);
+      });
+      await assert.rejects(pending, error => outcome === "link-refusal" ? error instanceof ObjectStoreError && error.code === "path_ignored" : error === (outcome === "success" ? closeError : primary));
+      assert.equal(attempts, closers.length); assert.ok(attempts >= 2); assert.equal(objectFiles.active.size, baseline);
+    } finally { objectFiles.opened = originalOpened; for (const close of closers) close(); }
+  });
+}
