@@ -7,9 +7,9 @@ status: in_progress
 priority: 2
 tags[3]: "gh:unbraind/pm-vcs#187",regression,security
 created_at: "2026-11-06T11:08:35.600Z"
-updated_at: "2026-11-06T11:39:49.961Z"
+updated_at: "2026-11-06T13:00:44.454Z"
 author: codex-astra
-comments[9]{created_at,author,text}:
+comments[11]{created_at,author,text}:
   "2026-11-06T11:08:55.315Z",codex-astra,"Read issue #187 and queue rules. Reproducing external item/history publication with a real competing OS process and deterministic scheduling seams. Plan: reuse confined descriptor infrastructure for both SDK capture reads, preserve legal local leaf links and path_ignored refusals, prove regressions on main and behavioral reverts, run focused gates and committed self-host verification, then submit one PR and complete the review loop. Full release certification is delegated to CI as requested. Registry reports pm CLI 2026.11.6; tracker writes use the repository-pinned 2026.11.4 without a dependency bump."
   "2026-11-06T11:13:14.555Z",codex-astra,"Main reproduction proof: node --test --test-concurrency=2 test/tracker-capture-races.test.ts produced 1 pass and 1 failure (Missing expected rejection): unchanged external links refused, while a separate Node process replaced the links at the captured boundary and main published. The fix rejects both before outside bytes are read. Both SDK item and history paths now use the same descriptor-confined reader with O_NOFOLLOW and pre/post dev/ino and content-stamp validation; successful cached pairs retain verified immutable buffers. Expanding coverage to ancestor/target/leaf races, legal links, cleanup and no-publication assertions. No SDK mocks or sleep synchronization."
   "2026-11-06T11:18:03.279Z",codex-astra,"Behavioral revert proofs in a disposable detached worktree: run node --test --test-concurrency=2 --test-name-pattern=\"external .*replaced by an OS process\" test/tracker-capture-races.test.ts. Restoring only TrackerCapture.pair from main: 0 passed, 3 failed with Missing expected rejection. Bypassing only item confinement: 2 passed, 1 failed (item-only leak). Bypassing only history confinement: 2 passed, 1 failed (history-only leak). The reviewed worktree was never reverted. Reader uses only selected directory chains and the existing owned-descriptor registry, not a recursive workspace scan. Linux descriptor addressing is required; other platforms explicitly refuse with tracker_source_unsupported rather than retaining a known unsafe fallback."
@@ -19,11 +19,15 @@ comments[9]{created_at,author,text}:
   "2026-11-06T11:36:14.811Z",codex-astra,"Review round 1 at c846e28 completed with one valid cleanup finding (PRRT_kwDOToJT7M60fNUx): a close failure could stop descriptor cleanup and mask the original refusal. Fixing all-handle cleanup with original-error precedence and real-descriptor fault regression; no source confinement finding was raised. Final-head targeted rerun passed 89/89 and isolated candidate identity audit passed (5 approved public identities). Main capture compatibility corpus also passed 9/9 in a disposable revert worktree."
   "2026-11-06T11:37:21.223Z",codex-astra,"Round 1 cleanup correction now attempts every retained close, preserves an in-flight reader/path refusal, and surfaces the first cleanup error only after an otherwise successful read. Three real-descriptor fault regressions pass (success, reader refusal, link refusal). Behavioral revert of only readTrackerSource to c846e28 in a disposable worktree fails all 3 regressions; the live implementation remains fixed. No agents were launched."
   "2026-11-06T11:39:47.388Z",codex-astra,"Cleanup fix validation complete: 42/42 race and cleanup tests pass (also via pm test --run --only-index 1 --progress), reader coverage remains 100/100/100/100, and build, source/test typechecks, lint, zero-duplication and docstrings pass. The existing 50-test command now carries a 900-second linked-test timeout because its 500-sequence model exceeds the default 120 seconds. Preparing the fix commit and regenerated bundle, then replying to the single review thread and requesting round 2 on the new head. CI and CodeQL remain queued on the initial head."
-files[3]{path,scope}:
+  "2026-11-06T12:56:35.741Z",codex-astra,"Final-head Node 22 CI exposed two gate failures: the explicit production-source inventory still expected 98 files after adding the confined reader (actual 99), and fixture teardown asserted a naturally exited child even though cleanup may terminate it under load. Capture admission/source coverage reached 100 percent in CI. Correcting the inventory and replacing the fixture timing assumption with process-event synchronization before re-running focused gates and review round 3."
+  "2026-11-06T13:00:41.161Z",codex-astra,"CI correction validated: fixture-lifetime plus raw-coverage tests pass 10/10, including a deliberately held real child that cleanup terminates; the command also passes through pm test --run --only-index 3 --progress. Capture regressions still pass 42/42. Disposable proof: restoring the inventory expectation to 98 fails with 99 !== 98; restoring the old child exitCode === 0 assertion fails the deterministic held-child case with null !== 0. Source/test typechecks, lint, zero duplication and docstrings pass. CodeRabbit round 2 completed on 782fedf with no new findings; its single prior cleanup thread is resolved. Preparing a gate-fix commit and review round 3. Full CI on 782fedf is not certified: Node 22 failed the two documented tests and Node 26 was still running."
+files[5]{path,scope}:
   engine/tracker-admission.ts,project
   engine/tracker-source.ts,project
+  test/fixture-lifetime.test.ts,project
+  test/raw-coverage.test.ts,project
   test/tracker-capture-races.test.ts,project
-tests[2]:
+tests[3]:
   - command: node --test --test-concurrency=2 test/tracker-capture-races.test.ts
     scope: project
     provenance:
@@ -41,6 +45,13 @@ tests[2]:
       source_ref: capture-refuses-symlink-replacement-race
     updated_by: codex-astra
     updated_at: "2026-11-06T11:39:45.083Z"
+  - command: node --test --test-concurrency=2 test/fixture-lifetime.test.ts test/raw-coverage.test.ts
+    scope: project
+    provenance:
+      author: codex-astra
+      created_at: "2026-11-06T12:58:44.155Z"
+      source_kind: local_mutation
+      source_ref: capture-refuses-symlink-replacement-race
 docs[1]{path,scope}:
   README.md,project
 body: ""
