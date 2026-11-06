@@ -1189,6 +1189,17 @@ successful commit consumes the session; overlapping calls on one session refuse
 with `tracker_capture_busy` until the active attempt finishes. CLI invocations start fresh sessions;
 there is no persisted retry journal and no frozen mutation plan to replay.
 
+Item and history reads are confined to pinned workspace directory and file
+descriptors, with no-follow opens and identity checks before and after each SDK
+read. Replacing a leaf, ancestor or allowed link target during the read refuses
+the pair before publication. Unchanged direct leaf links to ordinary workspace
+files retain their dereferenced bytes; external links, ancestor links, chained
+links and control-file links retain the `path_ignored` refusal. Verified cached
+pairs carry this provenance even if their live files later change or disappear.
+Capture currently requires Linux descriptor paths; unavailable descriptor
+addressing returns `tracker_source_unsupported` rather than falling back to
+pathname checks that cannot prevent ancestor replacement races.
+
 Native publication binds the branch (or detached HEAD) at capture creation,
 checks that identity and the expected tip, and reads the latest index while
 holding the native writer lease. It stores the certified content directly (canonical SDK fields for configured

@@ -1,0 +1,27 @@
+id: pm-vcs-capture-race
+title: Refuse tracker capture symlink replacement races
+description: "Bind item and history capture to confined filesystem descriptors, preserve legal symlink behavior, and prove refusal with deterministic competing OS processes."
+type: Issue
+status: in_progress
+priority: 2
+tags[3]: "gh:unbraind/pm-vcs#187",regression,security
+created_at: "2026-11-06T11:08:35.600Z"
+updated_at: "2026-11-06T11:21:51.129Z"
+author: codex-astra
+comments[6]{created_at,author,text}:
+  "2026-11-06T11:08:55.315Z",codex-astra,"Read issue #187 and queue rules. Reproducing external item/history publication with a real competing OS process and deterministic scheduling seams. Plan: reuse confined descriptor infrastructure for both SDK capture reads, preserve legal local leaf links and path_ignored refusals, prove regressions on main and behavioral reverts, run focused gates and committed self-host verification, then submit one PR and complete the review loop. Full release certification is delegated to CI as requested. Registry reports pm CLI 2026.11.6; tracker writes use the repository-pinned 2026.11.4 without a dependency bump."
+  "2026-11-06T11:13:14.555Z",codex-astra,"Main reproduction proof: node --test --test-concurrency=2 test/tracker-capture-races.test.ts produced 1 pass and 1 failure (Missing expected rejection): unchanged external links refused, while a separate Node process replaced the links at the captured boundary and main published. The fix rejects both before outside bytes are read. Both SDK item and history paths now use the same descriptor-confined reader with O_NOFOLLOW and pre/post dev/ino and content-stamp validation; successful cached pairs retain verified immutable buffers. Expanding coverage to ancestor/target/leaf races, legal links, cleanup and no-publication assertions. No SDK mocks or sleep synchronization."
+  "2026-11-06T11:18:03.279Z",codex-astra,"Behavioral revert proofs in a disposable detached worktree: run node --test --test-concurrency=2 --test-name-pattern=\"external .*replaced by an OS process\" test/tracker-capture-races.test.ts. Restoring only TrackerCapture.pair from main: 0 passed, 3 failed with Missing expected rejection. Bypassing only item confinement: 2 passed, 1 failed (item-only leak). Bypassing only history confinement: 2 passed, 1 failed (history-only leak). The reviewed worktree was never reverted. Reader uses only selected directory chains and the existing owned-descriptor registry, not a recursive workspace scan. Linux descriptor addressing is required; other platforms explicitly refuse with tracker_source_unsupported rather than retaining a known unsafe fallback."
+  "2026-11-06T11:20:36.032Z",codex-astra,"The linked regression command passed 39/39 through pm test --run --progress. Build, source and test typechecks, lint, duplication (0 percent) and docstring gates pass. The shared physical Git object database still fails audit:identities for one unapproved identity; existing follow-up pm-vcs-identity-isolation already tracks this. No metadata was deleted or allowlist changed. Candidate identities will be checked in an isolated clone and every new commit uses the required public SteveBot identity."
+  "2026-11-06T11:21:22.218Z",codex-astra,"Focused reader coverage passes at 100/100/100/100 across 39 tests. Local strict pm health reports the existing extension-host version-skew condition tracked by pm-vcs-5lre, plus an advisory legacy provenance warning; authority/integrity checks pass. CI installs its own pinned extension. No history repair, dependency bump, allowlist relaxation or unrelated tracker edits were performed."
+  "2026-11-06T11:21:49.503Z",codex-astra,"Existing admission coverage passed 50/50 with no skipped or canceled tests, including 500 seeded replay/file-sync sequences, custom folders, TOON and JSON-markdown, strict schemas, non-git root trackers, retry caches and real packed CLI acceptance. New capture suite passed 39/39 and reader-only coverage is 100 percent for statements, branches, functions and lines. Full npm and Bun release gates remain CI certification as requested. Implementation is ready for the one-PR review loop; the item remains in progress for orchestrator verification."
+files[3]{path,scope}:
+  engine/tracker-admission.ts,project
+  engine/tracker-source.ts,project
+  test/tracker-capture-races.test.ts,project
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 test/tracker-capture-races.test.ts,project,codex-astra,"2026-11-06T11:18:23.977Z",local_mutation,capture-refuses-symlink-replacement-race
+  node --test --test-concurrency=2 test/tracker-admission.test.ts test/tracker-admission-review.test.ts test/tracker-admission-artifact.test.ts,project,codex-astra,"2026-11-06T11:21:47.670Z",local_mutation,capture-refuses-symlink-replacement-race
+docs[1]{path,scope}:
+  README.md,project
+body: ""
