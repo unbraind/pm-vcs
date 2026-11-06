@@ -21,7 +21,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { closeSync, fstatSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, existsSync, mkdirSync, mkdtempSync, rmSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes, type KeyObject } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -695,12 +695,15 @@ export class Repository {
     const layers = this.layerPaths();
     const outputs = new Map(nativeOutputs(this.controlDirectory).map(output => [output.path, output]));
     const denied = this.objects.denials();
+    const view = this.view();
     const declared = resolveMoveIntents(this.root, originalEntries, targets, moves, (source, path) =>
-      ![source.path, path].some(candidate => layers.has(candidate) || isIgnored(candidate, rules) || isProtectedWorktreePath(this.root, candidate, true))
+      (view === null || viewIncludes(view, path))
+      && ![source.path, path].some(candidate => layers.has(candidate) || isIgnored(candidate, rules) || isProtectedWorktreePath(this.root, candidate, true))
       && !denied.some(denial => denial.tombstone.fileId === (source.fileId ?? migratedFileId(source))));
     const reserved = new Set([...declared.values()]);
     const inferred = new Map<FileId, MoveCandidate>();
     const publish: Array<() => void> = [];
+    const prepare: Array<(directory: string) => void> = [];
     let bufferedBytes = 0;
     const changed: string[] = [];
     for (const path of targets) {
@@ -735,7 +738,8 @@ export class Repository {
         );
       }
       // Store I/O faults must escape staging, never masquerade as working-file deletion.
-      const previous = index.get(path);
+      const explicit = declared.get(path);
+      const previous = explicit ?? index.get(path);
       const isLink = previous !== undefined && this.objects.hasType(previous.id, "link");
       let content: Buffer;
       let executable: boolean;
@@ -768,7 +772,6 @@ export class Repository {
       const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : this.stagingContentId(path, content, isLink));
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
-      const explicit = declared.get(path);
       const identitySource = explicit ?? existing;
       let fileId = identitySource === undefined ? undefined : identitySource.fileId ?? migratedFileId(identitySource);
       let copiedFrom = identitySource?.copiedFrom;
@@ -786,7 +789,7 @@ export class Repository {
         if (source !== undefined) {
           conflictSource = source;
           const sourceFileId = source.fileId ?? migratedFileId(source);
-          if (!existsSync(join(this.root, ...source.path.split("/")))) {
+          if (lstatSync(join(this.root, source.path), { throwIfNoEntry: false }) === undefined) {
             fileId = sourceFileId;
             copiedFrom = source.copiedFrom;
             if (index.delete(source.path)) changed.push(source.path);
@@ -808,6 +811,19 @@ export class Repository {
       if (buffered !== undefined) bufferedBytes += buffered.length;
       // Release an over-budget snapshot before visiting another working file.
       content = Buffer.alloc(0);
+      let payloadFile: string;
+      if (buffered === undefined && !chunked && retainedId === undefined) {
+        const slot = prepare.length;
+        prepare.push(directory => {
+          const current = read(this.root, path);
+          if (current.executable !== executable || this.stagingContentId(path, current.content, isLink) !== id) {
+            throw new ObjectStoreError("source_changed", "Working file changed after staging identity planning; retry add.");
+          }
+          payloadFile = join(directory, String(slot));
+          writeFileSync(payloadFile, current.content, { mode: 0o600, flag: "wx" });
+          stat = current.stat;
+        });
+      }
       publish.push(() => this.objects.withDerivation(sources, () => {
         if (chunked || retainedId !== undefined) {
           const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
@@ -815,14 +831,7 @@ export class Repository {
             throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
           }
         } else {
-          let payload = buffered;
-          if (payload === undefined) {
-            const current = read(this.root, path);
-            if (current.executable !== executable || this.stagingContentId(path, current.content, isLink) !== id) {
-              throw new ObjectStoreError("source_changed", "Working file changed after staging identity planning; retry add.");
-            }
-            payload = current.content; stat = current.stat;
-          }
+          const payload = buffered ?? readFileSync(payloadFile);
           if (isLink) this.objects.write("link", encodeLink(decodeLink(payload)), fileId);
           else this.stageContent(path, payload, fileId);
         }
@@ -834,8 +843,14 @@ export class Repository {
       });
       if (!existing || existing.id !== id || existing.mode !== mode || existing.fileId !== fileId) changed.push(path);
     }
-    for (const write of publish) write();
-    this.writeIndex([...index.values()]);
+    // Validate every released snapshot before publishing any payload or provenance.
+    // Disk snapshots bound retained memory and avoid re-reading mutable sources at publication.
+    const directory = prepare.length === 0 ? undefined : mkdtempSync(join(this.controlDirectory, "stage-"));
+    try {
+      if (directory !== undefined) for (const snapshot of prepare) snapshot(directory);
+      for (const write of publish) write();
+      this.writeIndex([...index.values()]);
+    } finally { if (directory !== undefined) rmSync(directory, { recursive: true, force: true }); }
     return changed.sort(compareByteOrder);
   }
 

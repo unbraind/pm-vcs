@@ -1,5 +1,5 @@
 /** Explicit staging identity and deterministic refusal of ambiguous move inference. */
-import { existsSync, lstatSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { type FileId, compareByteOrder, isFileId, migratedFileId } from "./model.ts";
 import { ObjectStoreError } from "./objects.ts";
@@ -46,7 +46,7 @@ export function resolveMoveIntents(root: string, entries: readonly IndexEntry[],
 
 /** Select inference only when it does not compete with a declaration or another move. */
 export function inferMoveSource(root: string, path: string, matches: readonly IndexEntry[], inferred: Map<FileId, MoveCandidate>): IndexEntry | undefined {
-  const absent = matches.filter(entry => !existsSync(join(root, entry.path)));
+  const absent = matches.filter(entry => lstatSync(join(root, entry.path), { throwIfNoEntry: false }) === undefined);
   if (matches.length > 1 && absent.length > 0) throw new AmbiguousMoveError(matches.map(entry => ({ path, source: entry.path, fileId: entry.fileId ?? migratedFileId(entry) })));
   if (matches.length !== 1) return undefined;
   const source = matches[0];

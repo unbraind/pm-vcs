@@ -1,7 +1,7 @@
 import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { fork, execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync, linkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync, linkSync, symlinkSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -12,7 +12,7 @@ import { AmbiguousMoveError, type MoveIntent, type MoveCandidate, resolveMoveInt
 import { alignFileMoves } from "../engine/merge-moves.ts";
 import { readCommit, type Signature, migratedFileId } from "../engine/model.ts";
 import { mergeTrees } from "../engine/rewrite.ts";
-import { buildTree, flattenTree, type IndexEntry } from "../engine/worktree.ts";
+import { buildTree, flattenTree, readWorkingFile, type IndexEntry } from "../engine/worktree.ts";
 import { cloneFrom } from "../engine/sync.ts";
 import { traceFile } from "../engine/attribution.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -252,12 +252,90 @@ test("tied inode evidence on edited hardlink moves requires explicit identity", 
 });
 
 
-test("identity planning bounds retained payloads and rejects content or mode drift on deferred reads", () => {
+test("identity planning bounds retained payloads and rejects content or mode drift on deferred reads", (t) => {
   for (const mode of ["memory", "content", "mode"]) {
     const repo = fresh();
     // Finish backing-store reclamation before sampling, as the release suite does.
-    const result = JSON.parse(execFileSync(process.execPath, ["--expose-gc", "--no-concurrent-array-buffer-sweeping", join(packageRoot, "test/helpers/staging-buffer-worker.ts"), repo.root, mode], { env: testEnvironment(), encoding: "utf8", timeout: 60_000 })) as { peak: number; reads: number; paths: number };
+    const result = JSON.parse(execFileSync(process.execPath, ["--expose-gc", "--no-concurrent-array-buffer-sweeping", join(packageRoot, "test/helpers/staging-buffer-worker.ts"), repo.root, mode], { env: testEnvironment(), encoding: "utf8", timeout: 60_000 })) as { peak: number; reads: number; paths: number; skippedMode?: boolean; retainedObjects?: number };
+    if (result.skippedMode) { assert.equal(mode, "mode"); t.diagnostic("Mode-drift assertion omitted: this filesystem cannot change executable permissions."); continue; }
     assert.ok(result.peak <= 6 * 1024 * 1024, `staging retained ${result.peak} bytes above baseline for ${mode}`);
     assert.ok(result.reads > result.paths, "a bounded plan must reread its released snapshots");
+    if (result.retainedObjects !== undefined) t.diagnostic(`${mode} refusal preserved the index and existing objects; ${result.retainedObjects} new objects remained and retry converged.`);
   }
+});
+
+test("dangling source symlink copies keep independent identities without ambiguous move refusals", () => {
+  const repo = fresh(); symlinkSync("missing-target", join(repo.root, "source")); repo.stage(["source"]);
+  const original = repo.readIndex()[0]; forgetStats(repo);
+  symlinkSync("missing-target", join(repo.root, "copy")); repo.stage(["copy"]);
+  const copy = repo.readIndex().find(entry => entry.path === "copy")!;
+  assert.notEqual(copy.fileId, original.fileId); assert.equal(copy.copiedFrom, original.fileId);
+  assert.equal(repo.readIndex().find(entry => entry.path === "source")?.fileId, original.fileId);
+  forgetStats(repo); symlinkSync("missing-target", join(repo.root, "third")); repo.stage(["third"]);
+  assert.equal(repo.readIndex().length, 3); assert.equal(new Set(repo.readIndex().map(entry => entry.fileId)).size, 3);
+});
+
+test("explicit move destinations respect the active view before any payload or index publication", () => {
+  const repo = fresh(); put(repo, "visible", "base\n"); repo.stage(["visible"]); commit(repo, "base");
+  repo.setView(["visible", "allowed"]); const original = repo.readIndex()[0];
+  renameSync(join(repo.root, "visible"), join(repo.root, "hidden")); put(repo, "hidden", "edited outside view\n");
+  const before = readFileSync(join(repo.controlDirectory, "index")); const inventory = repo.objects.inventory();
+  assert.throws(() => repo.stage(["hidden"], undefined, [{ path: "hidden", fileId: original.fileId! }]), { code: "invalid_move_intent" });
+  assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), before); assert.deepEqual(repo.objects.inventory(), inventory);
+  renameSync(join(repo.root, "hidden"), join(repo.root, "allowed")); repo.stage(["allowed"], undefined, [{ path: "allowed", fileId: original.fileId! }]);
+  assert.equal(repo.readIndex()[0].fileId, original.fileId); assert.equal(repo.readIndex()[0].sparse, undefined); commit(repo, "allowed move");
+});
+
+test("explicit edited link moves retain descriptor kind, identity and pinned resolution", () => {
+  const repo = fresh(); const target = fresh(); target.setAuthority("fixture", "target-read", "target-erase");
+  put(target, "asset", "first pin\n"); target.stage(["asset"]); const first = commit(target, "first");
+  const descriptor = { version: 1 as const, repository: target.identity(), revision: first, mappings: [{ source: "asset", destination: "vendor/asset" }] };
+  repo.stageLink("dependency.link", descriptor); commit(repo, "link"); const original = repo.readIndex()[0];
+  put(target, "asset", "second pin\n"); target.stage(["asset"]); const second = commit(target, "second");
+  const edited = { ...descriptor, revision: second }; unlinkSync(join(repo.root, "dependency.link")); put(repo, "moved.link", JSON.stringify(edited));
+  repo.stage(["moved.link"], undefined, [{ path: "moved.link", fileId: original.fileId! }]);
+  assert.equal(repo.readIndex()[0].fileId, original.fileId); assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "link");
+  assert.deepEqual(repo.links().map(({ path, link }) => ({ path, link })), [{ path: "moved.link", link: edited }]);
+  repo.resolveLink("moved.link", target, "target-read", "resolved"); assert.equal(readFileSync(join(repo.root, "vendor/asset"), "utf8"), "second pin\n");
+});
+
+test("occupied move destinations remain identity conflicts through the shared tree merge", () => {
+  const repo = fresh(); const f = { fileId: "f".repeat(32), mode: "100644" as const, id: repo.objects.write("blob", Buffer.from("F")) };
+  const g = { fileId: "a".repeat(32), mode: "100644" as const, id: repo.objects.write("blob", Buffer.from("G")) };
+  const base = buildTree(repo.objects, new Map([["old", f], ["dest", g]])); const moved = buildTree(repo.objects, new Map([["dest", f]]));
+  for (const [ours, theirs] of [[moved, base], [base, moved]]) {
+    const result = mergeTrees({ store: repo.objects, config: repo.config, committer: author }, base, ours, theirs);
+    assert.ok(result.conflicts.some(conflict => conflict.path === "dest" && conflict.reason === "identity"));
+    assert.equal(flattenTree(repo.objects, result.tree).get("dest")?.fileId, f.fileId);
+  }
+});
+
+
+test("mode drift skips only the unsupported permission mutation", () => {
+  const repo = fresh();
+  const preload = 'import fs from "node:fs"; import { syncBuiltinESMExports } from "node:module"; fs.chmodSync = () => {}; syncBuiltinESMExports();';
+  const result = JSON.parse(execFileSync(process.execPath, ["--expose-gc", "--no-concurrent-array-buffer-sweeping", `--import=data:text/javascript,${encodeURIComponent(preload)}`, join(packageRoot, "test/helpers/staging-buffer-worker.ts"), repo.root, "mode"], { env: testEnvironment(), encoding: "utf8", timeout: 60_000 })) as { skippedMode?: boolean };
+  assert.equal(result.skippedMode, true);
+});
+
+
+test("deferred snapshot refusal preserves payload and provenance inventories", () => {
+  const repo = fresh(); repo.objects.write("blob", Buffer.from("preserved"), "f".repeat(32));
+  const paths = Array.from({ length: 10 }, (_, i) => `snapshot-${i}`);
+  for (const [i, path] of paths.entries()) writeFileSync(join(repo.root, path), Buffer.alloc(512 * 1024, i));
+  const before = readFileSync(join(repo.controlDirectory, "index")); const inventory = repo.objects.inventory().map(entry => entry.id);
+  const owners = readdirSync(join(repo.controlDirectory, "payload-owners")).sort();
+  const derivations = readdirSync(join(repo.controlDirectory, "derivations")).sort().map(name => [name, readFileSync(join(repo.controlDirectory, "derivations", name), "utf8")]);
+  const visits = new Set<string>();
+  const read = (root: string, path: string): ReturnType<typeof readWorkingFile> => {
+    if (visits.has(path) && path === paths.at(-1)) put(repo, path, "changed after identity planning");
+    visits.add(path); return readWorkingFile(root, path);
+  };
+  assert.throws(() => repo.stage(paths, read), { code: "source_changed" });
+  assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), before); assert.deepEqual(repo.objects.inventory().map(entry => entry.id), inventory);
+  assert.deepEqual(readdirSync(join(repo.controlDirectory, "payload-owners")).sort(), owners);
+  assert.deepEqual(readdirSync(join(repo.controlDirectory, "derivations")).sort().map(name => [name, readFileSync(join(repo.controlDirectory, "derivations", name), "utf8")]), derivations);
+  assert.deepEqual(readdirSync(repo.controlDirectory).filter(name => name.startsWith("stage-")), []);
+  repo.stage(paths); assert.equal(repo.readIndex().length, paths.length);
+  assert.deepEqual(readdirSync(repo.controlDirectory).filter(name => name.startsWith("stage-")), []);
 });
