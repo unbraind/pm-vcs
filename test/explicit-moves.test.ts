@@ -1,6 +1,6 @@
 import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
-import { fork } from "node:child_process";
+import { fork, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirSync, linkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -249,4 +249,14 @@ test("tied inode evidence on edited hardlink moves requires explicit identity", 
   repo.stage(["a", "b"]); const a = repo.readIndex()[0]; renameSync(join(repo.root, "a"), join(repo.root, "dest")); unlinkSync(join(repo.root, "b")); put(repo, "dest", "entirely edited\n");
   assert.throws(() => repo.stage(["dest"]), (error: unknown) => error instanceof AmbiguousMoveError && error.candidates.length === 2);
   repo.stage(["dest"], undefined, [{ path: "dest", fileId: a.fileId! }]); assert.equal(repo.readIndex().find(entry => entry.path === "dest")?.fileId, a.fileId);
+});
+
+
+test("identity planning bounds retained payloads and rejects content or mode drift on deferred reads", () => {
+  for (const mode of ["memory", "content", "mode"]) {
+    const repo = fresh();
+    const result = JSON.parse(execFileSync(process.execPath, ["--expose-gc", join(packageRoot, "test/helpers/staging-buffer-worker.ts"), repo.root, mode], { env: testEnvironment(), encoding: "utf8", timeout: 60_000 })) as { peak: number; reads: number; paths: number };
+    assert.ok(result.peak <= 6 * 1024 * 1024, `staging retained ${result.peak} bytes above baseline for ${mode}`);
+    assert.ok(result.reads > result.paths, "a bounded plan must reread its released snapshots");
+  }
 });

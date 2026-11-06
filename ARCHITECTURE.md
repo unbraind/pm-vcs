@@ -347,7 +347,10 @@ staging, replay and clone carry the same identity in existing canonical trees.
 Inference considers inode evidence first, then identical content. Tied move
 sources or competing destinations throw `AmbiguousMoveError` (`ambiguous_move`)
 with sorted candidates and an explicit staging remedy. Planning completes before
-storing payloads or publishing the index. This does not introduce a similarity
+storing payloads or publishing the index. Small-file snapshots retained by the
+plan are capped at four MiB; excess snapshots are released and reread with
+canonical-content and mode validation before publication. Large regular files
+keep their existing streaming path. This does not introduce a similarity
 threshold or guess an identity when both inode and content evidence disappear.
 
 Three-way merge and replay share FileId alignment: uniquely identified entries

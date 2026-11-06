@@ -4,21 +4,22 @@ description: "Same-inode rename plus edit and unambiguous unchanged-content move
 type: Feature
 status: in_progress
 priority: 2
-tags: []
+tags[1]: "gh:unbraind/pm-vcs#189"
 created_at: "2026-10-21T15:48:35.100Z"
-updated_at: "2026-11-06T18:39:13.592Z"
-assignee: codex-astra
-claim_principal: codex-astra
+updated_at: "2026-11-06T18:57:11.224Z"
 author: codex-agent
 acceptance_criteria: An explicitly declared edited move retains its FileId and PM ChangeId trace across filesystems; independent copies keep new identities; ambiguous inference never silently picks an unrelated source.
 parent: pm-vcs-b7cb
-comments[5]{created_at,author,text}:
+comments[8]{created_at,author,text}:
   "2026-11-06T18:11:18.317Z",codex-astra,"Design: add explicit FileId mapping to native staging, validated under the shared writer lease and committed in the existing index/tree identity fields. Reserve declared identities before inference; return typed ambiguous_move with candidate paths and a concrete remedy for tied move evidence. Align three-way merge inputs by unique FileId before content merging so replay uses the same path. Tests will cover adversarial pairing, seeded oracle sequences, separate processes, and crash/retry/clone convergence. Full release certification remains in CI as requested."
   "2026-11-06T18:19:42.161Z",codex-astra,Implementation uses the existing tree FileId as durable move authority. Focused attribution tests pass 7/7. The seeded identity-keyed oracle passed 18 rounds of two-sided edits/moves plus reversed merges; separate-process disjoint and competing declarations passed. Merge and rebase produced the same tree; fatal before/after-index cuts recovered and cloned correctly. Working stat hints are intentionally excluded from byte-equality claims; canonical committed tree/payload bytes are checked.
   "2026-11-06T18:25:27.816Z",codex-astra,"Behavioral revert proofs in a disposable source copy: reverting only Repository.stage/stageLocked to main made all 7 selected tests fail (explicit authority, ambiguous candidates, invalid intent corpus, OS-process claims, both SIGKILL boundaries, real PM command). Restoring staging and reverting only mergeTrees made both the merge/rebase/clone regression and seeded oracle fail (2/2). The unchanged implementation passes the 10-test suite, and c8 reports 100/100/100/100 on engine/moves.ts and engine/merge-moves.ts. Additional guard fixtures and broader existing regressions are running before final certification."
   "2026-11-06T18:33:28.051Z",codex-astra,"Local validation complete: new regression suite 12/12 through pinned pm test --run --only-index 1 --progress --timeout 600; broader staging, attribution, model, repository, rewrite and command regressions 158/158, no skips or cancellations. All 12 new tests fail on behavioral reverts in disposable copies: stage/stageLocked 7/7 plus the two additional guard tests 2/2; mergeTrees 2/2; alignFileMoves 1/1. Restored code passes. New modules have measured 100/100/100/100 coverage. Build, test typecheck, lint, docstrings, zero-duplication and production audit pass. Full npm and Bun release gates remain assigned to CI. The tracker disables test-result persistence, so the exact run receipt is summarized here without changing policy. CLI UX observation: invalid files/docs argument usage returned a zero shell exit despite reporting an error; corrected repeated --add forms succeeded."
   "2026-11-06T18:39:13.592Z",codex-astra,Committed self-host verification passed at 243c627 after post-commit regeneration (no archive change). Package privacy passed for 365 files with zero findings; release changelog-date and publish-attestation checks passed. The all-object identity audit refuses one address in the shared physical database; a fresh reachable-only clone of this exact candidate passes with five approved identities. Existing pm-vcs-identity-isolation tracks the unrelated shared-object limitation. No audit weakening or history rewrite was performed.
-files[9]{path,scope}:
+  "2026-11-06T18:44:12.599Z",codex-astra,"Opened PR https://github.com/unbraind/pm-vcs/pull/189 at 478e3e4 and immediately queued CodeRabbit round 1. GraphQL rate limiting prevented gh pr create; a REST read proved no existing PR before one REST creation. Exact-head CI is queued at https://github.com/unbraind/pm-vcs/actions/runs/42273246563 and CodeQL at https://github.com/unbraind/pm-vcs/actions/runs/42273246633. The final candidate also passed the unchanged all-object audit in a fresh reachable-only clone. Review and CI are pending evidence, not approval."
+  "2026-11-06T18:54:56.748Z",codex-astra,"Self-review found and fixed a scale regression in the new plan-before-publish staging flow: retained small-file snapshots are now capped at four MiB. Excess snapshots are released and reread with the same canonical hash function and mode checks before publication. A separate-process fixture stages 32 half-MiB files and checks live ArrayBuffer growth plus real content/mode drift refusals. The bounded implementation passes; restoring only stage/stageLocked from the first PR head makes this new test fail with 16,318,468 bytes retained above baseline against a six-MiB allowance. CodeRabbit automatic review was skipped; the requested manual queue remains pending. Greptile reported an expired trial and Sourcery exhausted its budget; these are missing reviews, not approval."
+  "2026-11-06T18:57:09.120Z",codex-astra,"Final implementation validation: the expanded regression suite passes 13/13 through pinned pm test (no skips or cancellations); seven focused cache, streaming, symlink, record and link regressions pass after bounded rereads. The two new modules remain measured at 100/100/100/100, and the shared canonical staging hash helper is exercised for blob, record and link payloads. The additional memory/drift regression fails on the unbounded staging-function revert; all 13 tests now have behavioral revert evidence. Releasing my claim for review and orchestrator verification; the item stays in_progress and is not closed. Full CI and the queued review remain pending, with final exact-head receipts to be reported on PR 189."
+files[10]{path,scope}:
   engine/merge-moves.ts,project
   engine/moves.ts,project
   engine/repo.ts,project
@@ -26,6 +27,7 @@ files[9]{path,scope}:
   index.ts,project
   test/explicit-moves.test.ts,project
   test/helpers/move-intent-worker.ts,project
+  test/helpers/staging-buffer-worker.ts,project
   test/raw-coverage.test.ts,project
   vcs-commands.ts,project
 tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:

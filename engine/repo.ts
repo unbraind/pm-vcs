@@ -158,6 +158,9 @@ export const REPOSITORY_FORMAT = "pmvcs-1";
 /** Branch a fresh repository starts on. */
 export const DEFAULT_BRANCH = "main";
 
+/** Bound retained staging snapshots while planning all identity refusals before publication. */
+const STAGING_BUFFER_LIMIT = 4 * 1024 * 1024;
+
 /**
  * Matches a diff3 conflict-marker line anywhere in a file.
  *
@@ -698,6 +701,7 @@ export class Repository {
     const reserved = new Set([...declared.values()]);
     const inferred = new Map<FileId, MoveCandidate>();
     const publish: Array<() => void> = [];
+    let bufferedBytes = 0;
     const changed: string[] = [];
     for (const path of targets) {
       if (layers.has(path) && paths.length > 0) throw new ObjectStoreError("layer_excluded", "Private overlay paths cannot be staged; remove the layer first.");
@@ -761,8 +765,7 @@ export class Repository {
       const retainedId = regular && previous !== undefined && !isLink && !isRecordPath(path, this.config) && (this.objects.hasType(previous.id, "blob")
         ? chunked && blobFileContentId(absolute) === previous.id
         : this.objects.hasType(previous.id, "manifest") && matchesFragmentedFile(this.objects, previous.id, absolute)) ? previous.id : undefined;
-      const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : isLink ? hashObject("link", encodeLink(decodeLink(content)))
-        : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(this.workingRecord(path, content))) : hashObject("blob", content));
+      const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : this.stagingContentId(path, content, isLink));
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
       const explicit = declared.get(path);
@@ -772,9 +775,10 @@ export class Repository {
       let conflictSource = identitySource;
       if (explicit !== undefined && explicit.path !== path && index.delete(explicit.path)) changed.push(explicit.path);
       if (fileId === undefined) {
-        const identityMatches = stat === undefined ? [] : originalEntries.filter((entry) => !reserved.has(entry) && entry.path !== path
+        const identityStat = stat;
+        const identityMatches = identityStat === undefined ? [] : originalEntries.filter((entry) => !reserved.has(entry) && entry.path !== path
           && !denied.some(/** Erased identities cannot be inferred from a recycled filesystem inode. */ (denial) => denial.tombstone.fileId === entry.fileId)
-          && entry.stat?.dev === stat.dev && entry.stat.ino === stat.ino);
+          && entry.stat?.dev === identityStat.dev && entry.stat.ino === identityStat.ino);
         const contentMatches = originalEntries.filter((entry) => !reserved.has(entry) && entry.path !== path && !denied.some(/** A matching denied address is refused at publication, never adopted as a new live identity. */ (denial) => denial.tombstone.fileId === entry.fileId) && entry.id === id
           && entry.mode === mode);
         const matches = identityMatches.length > 0 ? identityMatches : contentMatches;
@@ -800,14 +804,28 @@ export class Repository {
       const output = outputs.get(path);
       if (output?.complete === true && outputBirth(lstatSync(absolute, { bigint: true })) === output.birth
         && (chunked ? blobFileContentId(absolute) : hashObject("blob", content)) === output.id) sources.push(...output.objects);
+      const buffered = content.length + bufferedBytes <= STAGING_BUFFER_LIMIT ? content : undefined;
+      if (buffered !== undefined) bufferedBytes += buffered.length;
+      // Release an over-budget snapshot before visiting another working file.
+      content = Buffer.alloc(0);
       publish.push(() => this.objects.withDerivation(sources, () => {
         if (chunked || retainedId !== undefined) {
           const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
           if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
             throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
           }
-        } else if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
-        else this.stageContent(path, content, fileId);
+        } else {
+          let payload = buffered;
+          if (payload === undefined) {
+            const current = read(this.root, path);
+            if (current.executable !== executable || this.stagingContentId(path, current.content, isLink) !== id) {
+              throw new ObjectStoreError("source_changed", "Working file changed after staging identity planning; retry add.");
+            }
+            payload = current.content; stat = current.stat;
+          }
+          if (isLink) this.objects.write("link", encodeLink(decodeLink(payload)), fileId);
+          else this.stageContent(path, payload, fileId);
+        }
       }));
       publish.push(() => {
         const conflicts = conflictSource === undefined ? undefined : carryConflicts(this.objects, conflictSource.conflicts, conflictSource.id, id, fileId);
@@ -819,6 +837,13 @@ export class Repository {
     for (const write of publish) write();
     this.writeIndex([...index.values()]);
     return changed.sort(compareByteOrder);
+  }
+
+  /** Hash the exact canonical bytes used by both identity planning and deferred staging reads. */
+  private stagingContentId(path: string, content: Buffer, isLink: boolean): ObjectId {
+    if (isLink) return hashObject("link", encodeLink(decodeLink(content)));
+    if (isRecordPath(path, this.config)) return hashObject("record", encodeRecord(this.workingRecord(path, content)));
+    return hashObject("blob", content);
   }
 
   /**
