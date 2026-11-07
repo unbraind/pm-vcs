@@ -35,19 +35,58 @@ test("all production fsync, rename, link and deletion operations use the single 
     for (const node of source.statements) if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && /^(?:node:)?fs(?:\/promises)?$/.test(node.moduleSpecifier.text)) {
       const clause = node.importClause; if (clause?.name) namespaces.add(clause.name.text); const bindings = clause?.namedBindings;
       if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
-      if (bindings && ts.isNamedImports(bindings)) for (const element of bindings.elements) if (forbidden.test((element.propertyName ?? element.name).text)) names.add(element.name.text);
+      if (bindings && ts.isNamedImports(bindings)) for (const element of bindings.elements) {
+        const imported = (element.propertyName ?? element.name).text;
+        if (forbidden.test(imported)) names.add(element.name.text);
+        if (imported === "promises") namespaces.add(element.name.text);
+      }
     }
+    /** Follow namespace aliases and fs.promises without mistaking unrelated backends for filesystem receivers. */
+    const namespace = (expression: ts.Expression): boolean => ts.isIdentifier(expression) ? namespaces.has(expression.text)
+      : ts.isPropertyAccessExpression(expression) && expression.name.text === "promises" && namespace(expression.expression);
+    /** Literal and dynamic computed calls cannot conceal a destructive filesystem operation. */
+    const operation = (expression: ts.Expression): boolean => ts.isIdentifier(expression) ? names.has(expression.text)
+      : ts.isPropertyAccessExpression(expression) ? namespace(expression.expression) && forbidden.test(expression.name.text)
+      : ts.isElementAccessExpression(expression) && namespace(expression.expression)
+        && (!ts.isStringLiteral(expression.argumentExpression) || forbidden.test(expression.argumentExpression.text));
+    /** Retain aliases copied or destructured from actual filesystem imports throughout the file. */
+    const aliases = (node: ts.Node): void => {
+      if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
+        if (ts.isIdentifier(node.name)) {
+          if (namespace(node.initializer)) namespaces.add(node.name.text);
+          if (operation(node.initializer)) names.add(node.name.text);
+        } else if (ts.isObjectBindingPattern(node.name) && namespace(node.initializer)) {
+          for (const element of node.name.elements) if (ts.isIdentifier(element.name)) {
+            const member = (element.propertyName ?? element.name).getText(source).replace(/["']/g, "");
+            if (forbidden.test(member)) names.add(element.name.text);
+            if (member === "promises") namespaces.add(element.name.text);
+          }
+        }
+      }
+      ts.forEachChild(node, aliases);
+    };
+    for (let previous = -1; previous !== names.size + namespaces.size;) { previous = names.size + namespaces.size; aliases(source); }
     /** Calls through the configured backend remain governed by durability rather than a coincidentally named method. */
     const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node)) { const expression = node.expression; if (ts.isIdentifier(expression) && names.has(expression.text) || ts.isPropertyAccessExpression(expression) && namespaces.has(expression.expression.getText(source)) && forbidden.test(expression.name.text)) found.push(expression.getText(source)); }
+      if (ts.isCallExpression(node) && operation(node.expression)) found.push(node.expression.getText(source));
       ts.forEachChild(node, visit);
     };
     visit(source); return found;
   };
-  for (const file of globSync(["*.ts", "engine/**/*.ts", "scripts/**/*.ts"], { cwd: packageRoot })) if (file !== "engine/durability.ts") assert.deepEqual(violations(file, readFileSync(join(packageRoot, file), "utf8")), [], file);
+  for (const file of globSync(["*.ts", "src/**/*.ts", "engine/**/*.ts", "scripts/**/*.ts"], { cwd: packageRoot })) if (file !== "engine/durability.ts") assert.deepEqual(violations(file, readFileSync(join(packageRoot, file), "utf8")), [], file);
   for (const method of ["rm", "unlink", "rename", "link", "rmdir", "fsync", "rmSync"]) assert.equal(violations("raw.ts", `import fs from "node:fs"; fs.${method}("fixture");`).length, 1);
   assert.equal(violations("alias.ts", 'import { unlink as retire } from "node:fs/promises"; retire("fixture");').length, 1);
   assert.equal(violations("bare-alias.ts", 'import { rm as retire } from "fs/promises"; retire("fixture");').length, 1);
+  for (const method of ["fsync", "rename", "unlink", "link", "rm", "rmdir", "unlinkSync"]) {
+    for (const body of [
+      `import * as native from "node:fs"; native["${method}"]("fixture");`,
+      `import fs from "fs"; const retire = fs.${method}; retire("fixture");`,
+      `import fs from "node:fs"; const { ${method}: retire } = fs; retire("fixture");`,
+      `import { promises as native } from "node:fs"; native.${method}("fixture");`,
+      `import fs from "node:fs"; const native = fs.promises; native.${method}("fixture");`,
+    ]) assert.equal(violations("adversarial.ts", body).length, 1, body);
+  }
+  assert.equal(violations("computed.ts", 'import fs from "node:fs"; fs[operator]("fixture");').length, 1);
   assert.deepEqual(violations("backend.ts", 'backend.unlink("fixture");'), []);
 });
 

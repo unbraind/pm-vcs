@@ -42,7 +42,7 @@ import { summarizeConflicts, type ConflictSummary, type ResolutionOptions } from
 import { DEFAULT_CONFIG, type RepositoryConfig } from "./engine/config.ts";
 import { orderCommitsNewestFirst, resolveFileId, traceFile, type FileChangeTrace } from "./engine/attribution.ts";
 import { divergence, reachable } from "./engine/merge.ts";
-import { type Signature, compareByteOrder, decodeRecord, decodeCommit, decodeTree, effectiveChangeId, readCommit } from "./engine/model.ts";
+import { type Signature, compareByteOrder, decodeRecord, decodeCommit, decodeTree, effectiveChangeId, isFileId, readCommit } from "./engine/model.ts";
 import { ObjectStoreError, type ObjectId } from "./engine/objects.ts";
 import { type Operation } from "./engine/oplog.ts";
 import { FIELD_STRATEGIES, type FieldStrategy } from "./engine/records.ts";
@@ -471,12 +471,16 @@ export function registerVcsCommands(api: ExtensionApi): void {
 
   api.registerCommand({
     name: "vcs add",
+    flags: [{ long: "--file-id", value_name: "id", value_type: "string", description: "Preserve this indexed FileId at one explicitly moved destination" }],
     description:
       "Stage working-tree paths, or everything when no path is given. A path that no longer exists is staged as a deletion.",
     arguments: [{ name: "paths", description: "Paths to stage; omit to stage everything", required: false, variadic: true }],
     run(context: CommandHandlerContext): VcsEnvelope & { staged: readonly string[] } {
       const repository = openRepository(context);
-      return { ok: true, staged: repository.stage(context.args) };
+      const fileId = optionalString(context.options, "fileId");
+      if (context.options?.fileId !== undefined && !isFileId(fileId ?? "")) throw new ObjectStoreError("invalid_move_intent", "--file-id requires a complete 32-character lowercase hexadecimal FileId.");
+      if (fileId !== undefined && context.args.length !== 1) throw new ObjectStoreError("invalid_move_intent", "Use --file-id with exactly one destination path.");
+      return { ok: true, staged: repository.stage(context.args, undefined, fileId === undefined ? [] : [{ fileId, path: context.args[0] }]) };
     },
   });
 

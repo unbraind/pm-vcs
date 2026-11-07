@@ -1,3 +1,4 @@
+import { alignFileMoves } from "./merge-moves.ts";
 import { retainedAttestation } from "./signatures.ts";
 import { inheritedConflict, competingResolutions, carryConflicts, encodeConflict, fieldSide } from "./conflicts.ts";
 import { manifestFragments } from "./manifest-pages.ts";
@@ -311,7 +312,7 @@ export function mergeTrees(
     const theirs = flattenTree(ctx.store, theirTree);
     const files = new Map<string, { id: ObjectId; mode: FileMode; fileId?: FileId; copiedFrom?: FileId; conflicts?: readonly ObjectId[] }>();
     const merged: string[] = [];
-    const conflicts: MergeConflict[] = [];
+    const conflicts: MergeConflict[] = alignFileMoves(base, ours, theirs).map(path => ({ path, reason: "identity" }));
 
     /** Preserve compatible file identity and surface deterministic conflicts when both sides disagree. */
     const reconcileIdentity = (

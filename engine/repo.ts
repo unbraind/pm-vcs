@@ -1,3 +1,5 @@
+import { objectFiles, type ObjectFile } from "./object-files.ts";
+import { inferMoveSource, isMoveSource, resolveMoveIntents, type MoveIntent, type MoveCandidate } from "./moves.ts";
 import { nativeOutputs, outputBirth } from "./native-outputs.ts";
 import type { BigIntStats } from "node:fs";
 import { durability } from "./durability.ts";
@@ -20,7 +22,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { closeSync, fstatSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, existsSync, mkdirSync, readSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes, type KeyObject } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -156,6 +158,9 @@ export const REPOSITORY_FORMAT = "pmvcs-1";
 
 /** Branch a fresh repository starts on. */
 export const DEFAULT_BRANCH = "main";
+
+/** Bound retained staging snapshots while planning all identity refusals before publication. */
+const STAGING_BUFFER_LIMIT = 4 * 1024 * 1024;
 
 /**
  * Matches a diff3 conflict-marker line anywhere in a file.
@@ -673,23 +678,42 @@ export class Repository {
    * @param paths - Paths to stage, or an empty array for everything.
    * @param read - Working-file reader; injectable so the cache bypass remains
    *   directly testable without relying on elapsed-time benchmarks.
+   * @param moves - Explicit destination/FileId mappings; validated before any staging writes.
    * @returns The paths whose staged state changed.
    */
-  stage(paths: readonly string[], read: typeof readWorkingFile = readWorkingFile): string[] {
-    return this.objects.withWriteLock(/** Hold layer masking and payload publication in one transaction. */ () => this.stageLocked(paths, read));
+  stage(paths: readonly string[], read: typeof readWorkingFile = readWorkingFile, moves: readonly MoveIntent[] = []): string[] {
+    return this.objects.withWriteLock(/** Hold layer masking and payload publication in one transaction. */ () => this.stageLocked(paths, read, moves));
   }
 
   /** Stage selected working paths with private layers excluded before any byte is read. */
-  private stageLocked(paths: readonly string[], read: typeof readWorkingFile): string[] {
+  private stageLocked(paths: readonly string[], read: typeof readWorkingFile, moves: readonly MoveIntent[]): string[] {
     const originalEntries = this.readIndex();
     const index = new Map(originalEntries.map((entry) => [entry.path, entry]));
     const rules = this.ignoreRules();
     const targets = paths.length === 0
       ? [...new Set([...listWorkingTree(this.root, CONTROL_DIRECTORY, rules), ...index.keys()])]
-      : paths.map((path) => normalizeRepoPath(this.root, path));
+      : [...new Set(paths.map((path) => normalizeRepoPath(this.root, path)))];
     const layers = this.layerPaths();
     const outputs = new Map(nativeOutputs(this.controlDirectory).map(output => [output.path, output]));
     const denied = this.objects.denials();
+    const view = this.view();
+    /** Both explicit and inferred identities must belong to the caller's visible, stageable scope. */
+    const sourceAllowed = (source: IndexEntry): boolean => isMoveSource(source)
+      && (view === null || viewIncludes(view, source.path))
+      && !layers.has(source.path) && !isIgnored(source.path, rules) && !isProtectedWorktreePath(this.root, source.path, true)
+      && !denied.some(denial => denial.tombstone.fileId === (source.fileId ?? migratedFileId(source)));
+    const declared = resolveMoveIntents(this.root, originalEntries, targets, moves, (source, path) => sourceAllowed(source)
+      && (view === null || viewIncludes(view, path))
+      && !layers.has(path) && !isIgnored(path, rules) && !isProtectedWorktreePath(this.root, path, true));
+    const reserved = new Set([...declared.values()]);
+    // Build this optional pool once, only when an identity actually needs inference.
+    let inferenceEntries: IndexEntry[] | undefined;
+    const inferred = new Map<FileId, MoveCandidate>();
+    const publish: Array<() => void> = [];
+    const prepare: Array<(file: ObjectFile) => void> = [];
+    let snapshot: ObjectFile | undefined;
+    let snapshotBytes = 0;
+    let bufferedBytes = 0;
     const changed: string[] = [];
     for (const path of targets) {
       if (layers.has(path) && paths.length > 0) throw new ObjectStoreError("layer_excluded", "Private overlay paths cannot be staged; remove the layer first.");
@@ -723,7 +747,8 @@ export class Repository {
         );
       }
       // Store I/O faults must escape staging, never masquerade as working-file deletion.
-      const previous = index.get(path);
+      const explicit = declared.get(path);
+      const previous = explicit ?? index.get(path);
       const isLink = previous !== undefined && this.objects.hasType(previous.id, "link");
       let content: Buffer;
       let executable: boolean;
@@ -734,12 +759,13 @@ export class Repository {
         const observed = readWorkingStat(this.root, path);
         const existing = index.get(path);
         const observedMode = observed.executable ? "100755" : "100644";
-        if (existing?.fileId !== undefined && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
+        if (!declared.has(path) && existing?.fileId !== undefined && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
         regular = !observed.symbolicLink;
         chunked = regular && observed.stat.size >= BigInt(CDC_STAGING_THRESHOLD) && !isRecordPath(path, this.config) && !isLink;
         if (chunked) { content = Buffer.alloc(0); executable = observed.executable; stat = observed.stat; }
         else ({ content, executable, stat } = read(this.root, path));
-      } catch {
+      } catch (error) {
+        if (declared.has(path)) throw error;
         // A sparse entry's path is intentionally absent: its file was never in
         // this working tree's view, so the miss is not a staged deletion.
         // Deleting it here would drop out-of-view content from the next commit
@@ -752,25 +778,26 @@ export class Repository {
       const retainedId = regular && previous !== undefined && !isLink && !isRecordPath(path, this.config) && (this.objects.hasType(previous.id, "blob")
         ? chunked && blobFileContentId(absolute) === previous.id
         : this.objects.hasType(previous.id, "manifest") && matchesFragmentedFile(this.objects, previous.id, absolute)) ? previous.id : undefined;
-      const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : isLink ? hashObject("link", encodeLink(decodeLink(content)))
-        : isRecordPath(path, this.config) ? hashObject("record", encodeRecord(this.workingRecord(path, content))) : hashObject("blob", content));
+      const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : this.stagingContentId(path, content, isLink));
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
-      let fileId = existing === undefined ? undefined : existing.fileId ?? migratedFileId(existing);
-      let copiedFrom = existing?.copiedFrom;
-      let conflictSource = existing;
+      const identitySource = explicit ?? existing;
+      let fileId = identitySource === undefined ? undefined : identitySource.fileId ?? migratedFileId(identitySource);
+      let copiedFrom = identitySource?.copiedFrom;
+      let conflictSource = identitySource;
+      if (explicit !== undefined && explicit.path !== path && index.delete(explicit.path)) changed.push(explicit.path);
       if (fileId === undefined) {
-        const identityMatches = stat === undefined ? [] : originalEntries.filter((entry) => entry.path !== path
-          && !denied.some(/** Erased identities cannot be inferred from a recycled filesystem inode. */ (denial) => denial.tombstone.fileId === entry.fileId)
-          && entry.stat?.dev === stat.dev && entry.stat.ino === stat.ino);
-        const contentMatches = originalEntries.filter((entry) => entry.path !== path && !denied.some(/** A matching denied address is refused at publication, never adopted as a new live identity. */ (denial) => denial.tombstone.fileId === entry.fileId) && entry.id === id
-          && entry.mode === mode);
-        const matches = identityMatches.length === 1 ? identityMatches : contentMatches;
-        if (matches.length === 1) {
-          const source = matches[0];
+        inferenceEntries ??= originalEntries.filter(entry => !reserved.has(entry) && sourceAllowed(entry));
+        const identityStat = stat;
+        const identityMatches = identityStat === undefined ? [] : inferenceEntries.filter(entry => entry.path !== path
+          && entry.stat?.dev === identityStat.dev && entry.stat.ino === identityStat.ino);
+        const contentMatches = inferenceEntries.filter(entry => entry.path !== path && entry.id === id && entry.mode === mode);
+        const matches = identityMatches.length > 0 ? identityMatches : contentMatches;
+        const source = inferMoveSource(this.root, path, matches, inferred);
+        if (source !== undefined) {
           conflictSource = source;
           const sourceFileId = source.fileId ?? migratedFileId(source);
-          if (!existsSync(join(this.root, ...source.path.split("/")))) {
+          if (lstatSync(join(this.root, source.path), { throwIfNoEntry: false }) === undefined) {
             fileId = sourceFileId;
             copiedFrom = source.copiedFrom;
             if (index.delete(source.path)) changed.push(source.path);
@@ -788,22 +815,81 @@ export class Repository {
       const output = outputs.get(path);
       if (output?.complete === true && outputBirth(lstatSync(absolute, { bigint: true })) === output.birth
         && (chunked ? blobFileContentId(absolute) : hashObject("blob", content)) === output.id) sources.push(...output.objects);
-      this.objects.withDerivation(sources, () => {
+      const buffered = content.length + bufferedBytes <= STAGING_BUFFER_LIMIT ? content : undefined;
+      if (buffered !== undefined) bufferedBytes += buffered.length;
+      // Release an over-budget snapshot before visiting another working file.
+      content = Buffer.alloc(0);
+      let payloadOffset: number;
+      let payloadLength: number;
+      if (buffered === undefined && !chunked && retainedId === undefined) {
+        prepare.push(file => {
+          const current = read(this.root, path);
+          if (current.executable !== executable || this.stagingContentId(path, current.content, isLink) !== id) {
+            throw new ObjectStoreError("source_changed", "Working file changed after staging identity planning; retry add.");
+          }
+          payloadOffset = snapshotBytes; payloadLength = current.content.length;
+          writeFileSync(file.fd, current.content); snapshotBytes += payloadLength;
+          stat = current.stat;
+        });
+      }
+      publish.push(() => this.objects.withDerivation(sources, () => {
         if (chunked || retainedId !== undefined) {
           const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
           if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
             throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
           }
-        } else if (isLink) this.objects.write("link", encodeLink(decodeLink(content)), fileId);
-        else this.stageContent(path, content, fileId);
+        } else {
+          const payload = buffered ?? this.readStagingSnapshot(snapshot!.fd, payloadOffset, payloadLength);
+          if (isLink) this.objects.write("link", encodeLink(decodeLink(payload)), fileId);
+          else this.stageContent(path, payload, fileId);
+        }
+      }));
+      publish.push(() => {
+        const conflicts = conflictSource === undefined ? undefined : carryConflicts(this.objects, conflictSource.conflicts, conflictSource.id, id, fileId);
+        index.set(path, { path, id, mode, fileId, ...(conflicts === undefined ? {} : { conflicts }), ...(copiedFrom === undefined ? {} : { copiedFrom }),
+          ...(stat === undefined ? {} : { stat }) });
       });
-      const conflicts = conflictSource === undefined ? undefined : carryConflicts(this.objects, conflictSource.conflicts, conflictSource.id, id, fileId);
-      index.set(path, { path, id, mode, fileId, ...(conflicts === undefined ? {} : { conflicts }), ...(copiedFrom === undefined ? {} : { copiedFrom }),
-        ...(stat === undefined ? {} : { stat }) });
       if (!existing || existing.id !== id || existing.mode !== mode || existing.fileId !== fileId) changed.push(path);
     }
-    this.writeIndex([...index.values()]);
+    // Unlink the private snapshot before writing bytes: process death then closes its
+    // only descriptor. A crash before unlink leaves only an empty, supported owner temporary.
+    let temporary: string | undefined;
+    try {
+      if (prepare.length > 0) {
+        temporary = join(this.controlDirectory, `objects.lock.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+        snapshot = objectFiles.open(temporary, "wx+", 0o600);
+        if (!durability.discardUnpublished(temporary, snapshot.fd, fstatSync(snapshot.fd, { bigint: true })).released) {
+          throw new ObjectStoreError("worktree_path_changed", "Private staging snapshot ownership could not be released before capture.");
+        }
+        for (const capture of prepare) capture(snapshot);
+      }
+      for (const write of publish) write();
+      this.writeIndex([...index.values()]);
+    } finally {
+      if (snapshot !== undefined) {
+        try { durability.discardUnpublished(temporary!, snapshot.fd, fstatSync(snapshot.fd, { bigint: true })); }
+        finally { snapshot.close(); }
+      }
+    }
     return changed.sort(compareByteOrder);
+  }
+
+  /** Read one complete private snapshot at its explicit offset without moving the shared descriptor cursor. */
+  private readStagingSnapshot(fd: number, position: number, length: number): Buffer {
+    const bytes = Buffer.alloc(length); let offset = 0;
+    while (offset < length) {
+      const count = readSync(fd, bytes, offset, length - offset, position + offset);
+      if (count === 0) throw new ObjectStoreError("source_changed", "Private staging snapshot was truncated; retry add.");
+      offset += count;
+    }
+    return bytes;
+  }
+
+  /** Hash the exact canonical bytes used by both identity planning and deferred staging reads. */
+  private stagingContentId(path: string, content: Buffer, isLink: boolean): ObjectId {
+    if (isLink) return hashObject("link", encodeLink(decodeLink(content)));
+    if (isRecordPath(path, this.config)) return hashObject("record", encodeRecord(this.workingRecord(path, content)));
+    return hashObject("blob", content);
   }
 
   /**
