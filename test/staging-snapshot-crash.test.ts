@@ -1,8 +1,8 @@
 import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, existsSync, openSync, readFileSync, readdirSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { Repository } from "../engine/repo.ts";
 import { objectFiles } from "../engine/object-files.ts";
@@ -93,4 +93,32 @@ test("deferred refusal closes its anonymous snapshot without publishing payloads
     repo.stage(paths); assert.equal(repo.readIndex().length, paths.length);
     assert.equal(objectFiles.active.size, handles);
   } finally { scope.cleanup(); }
+});
+
+
+for (const scenario of ["absent", "replacement"]) test(`snapshot capture refuses ${scenario} ownership without changing staged state`, () => {
+  const scope = makeTempDir(); const opened = objectFiles.opened;
+  try {
+    const repo = Repository.init(join(scope.root, "repo"));
+    const paths = Array.from({ length: 10 }, (_, i) => `payload-${i}`);
+    for (const path of paths) writeFileSync(join(repo.root, path), Buffer.alloc(512 * 1024, 65));
+    const before = readFileSync(join(repo.controlDirectory, "index")); const inventory = repo.objects.inventory().map(entry => entry.id);
+    const handles = objectFiles.active.size; let snapshot: string | undefined;
+    objectFiles.opened = (file, path) => {
+      opened(file, path);
+      if (dirname(path) === repo.controlDirectory && /^objects\.lock\.[0-9]+\.[0-9a-f]{12}\.tmp$/.test(path.split(/[\\/]/).at(-1)!)
+        && objectFiles.storageOwners.has(repo.controlDirectory)) {
+        snapshot = path;
+        if (scenario === "absent") unlinkSync(path);
+        else { renameSync(path, `${path}.held`); writeFileSync(path, "foreign owner"); }
+      }
+    };
+    assert.throws(() => repo.stage(paths), { code: "worktree_path_changed" });
+    assert.ok(snapshot); assert.deepEqual(readFileSync(join(repo.controlDirectory, "index")), before);
+    assert.deepEqual(repo.objects.inventory().map(entry => entry.id), inventory); assert.equal(objectFiles.active.size, handles);
+    if (scenario === "replacement") {
+      assert.equal(readFileSync(snapshot, "utf8"), "foreign owner");
+      assert.equal(readFileSync(`${snapshot}.held`).length, 0, "unreleased snapshots must receive no payload bytes");
+    }
+  } finally { objectFiles.opened = opened; scope.cleanup(); }
 });

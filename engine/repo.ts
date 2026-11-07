@@ -22,7 +22,7 @@ import { inspectClosure, type ClosureReport } from "./closure.ts";
 // Second, every ref move is recorded in the operation log with its before value,
 // so `undo` never has to reconstruct one.
 
-import { closeSync, fstatSync, existsSync, mkdirSync, unlinkSync, readSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, existsSync, mkdirSync, readSync, openSync, readFileSync, readdirSync, realpathSync, lstatSync, statSync, writeFileSync } from "node:fs";
 import { randomBytes, type KeyObject } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -853,8 +853,9 @@ export class Repository {
       if (prepare.length > 0) {
         temporary = join(this.controlDirectory, `objects.lock.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
         snapshot = objectFiles.open(temporary, "wx+", 0o600);
-        unlinkSync(temporary);
-        durability.directory(this.controlDirectory);
+        if (!durability.discardUnpublished(temporary, snapshot.fd, fstatSync(snapshot.fd, { bigint: true })).released) {
+          throw new ObjectStoreError("worktree_path_changed", "Private staging snapshot ownership could not be released before capture.");
+        }
         for (const capture of prepare) capture(snapshot);
       }
       for (const write of publish) write();

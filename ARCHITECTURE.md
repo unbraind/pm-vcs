@@ -351,7 +351,8 @@ storing payloads or publishing the index. Small-file snapshots retained by the
 plan are capped at four MiB; excess snapshots are released and reread with
 canonical-content and mode validation into one private anonymous disk snapshot
 before any payload or provenance publication. Its mode is 0600, and its name is
-unlinked and its parent namespace flushed before the first payload byte is
+verified and unlinked through the durability policy, with positive release
+confirmed and the parent namespace flushed before the first payload byte is
 written, so process death releases the
 held bytes without leaving control directories that block erasure. Before unlink,
 only an empty supported owner temporary can remain. A deferred-read refusal
