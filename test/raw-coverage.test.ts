@@ -15,7 +15,7 @@ const author = { name: "Fixture", email: "fixture@example.invalid", timestamp: 1
 
 test("production coverage contains no ignore directives", /** Check every production file without narrowing the configured inventory. */ () => {
   const sources = globSync(["*.ts", "src/**/*.ts", "engine/**/*.ts", "scripts/**/*.ts"], { cwd: packageRoot });
-  assert.equal(sources.length, 99, "the measured production inventory must be updated explicitly when source files change");
+  assert.equal(sources.length, 101, "the measured production inventory must be updated explicitly when source files change");
   assert.ok(sources.includes("scripts/verify-pack-privacy.ts"), "the packed-artifact verifier must remain in the measured inventory");
   assert.ok(sources.includes("engine/tracker-admission.ts"));
   assert.ok(sources.includes("engine/tracker-source.ts"));
