@@ -22,6 +22,9 @@ export class AmbiguousMoveError extends ObjectStoreError {
   }
 }
 
+/** Intentional absence outside a sparse view cannot establish a physical move or copy. */
+export function isMoveSource(entry: IndexEntry): boolean { return entry.sparse !== true; }
+
 /** Resolve every declaration before staging writes, preserving retry and erasure boundaries. */
 export function resolveMoveIntents(root: string, entries: readonly IndexEntry[], targets: readonly string[], intents: readonly MoveIntent[], allowed: (entry: IndexEntry, path: string) => boolean): Map<string, IndexEntry> {
   const resolved = new Map<string, IndexEntry>();
@@ -32,7 +35,7 @@ export function resolveMoveIntents(root: string, entries: readonly IndexEntry[],
     const source = sources[0];
     const destination = entries.find(entry => entry.path === path);
     if (!isFileId(intent.fileId) || sources.length !== 1 || identities.has(intent.fileId) || resolved.has(path)
-      || !targets.includes(path) || !allowed(source, path) || source.sparse === true
+      || !targets.includes(path) || !allowed(source, path) || !isMoveSource(source)
       || (destination !== undefined && destination !== source)
       || (source.path !== path && lstatSync(join(root, source.path), { throwIfNoEntry: false }) !== undefined)) {
       throw new ObjectStoreError("invalid_move_intent", "A move requires one live indexed FileId, an absent source and an allowed unoccupied destination; retry the already staged destination with the same FileId.");
@@ -46,6 +49,7 @@ export function resolveMoveIntents(root: string, entries: readonly IndexEntry[],
 
 /** Select inference only when it does not compete with a declaration or another move. */
 export function inferMoveSource(root: string, path: string, matches: readonly IndexEntry[], inferred: Map<FileId, MoveCandidate>): IndexEntry | undefined {
+  matches = matches.filter(isMoveSource);
   const absent = matches.filter(entry => lstatSync(join(root, entry.path), { throwIfNoEntry: false }) === undefined);
   if (matches.length > 1 && absent.length > 0) throw new AmbiguousMoveError(matches.map(entry => ({ path, source: entry.path, fileId: entry.fileId ?? migratedFileId(entry) })));
   if (matches.length !== 1) return undefined;

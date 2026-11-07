@@ -126,25 +126,32 @@ test("both edited sides merge and replay by explicit identity, and clone reprodu
 /** A fixed PRNG makes every generated move/edit sequence reproducible. */
 function random(seed: number): () => number { let state = seed; return () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state; }; }
 
-test("seeded move/edit/merge sequences agree with an independent identity-keyed oracle", () => {
+test("seeded move/edit/merge sequences agree with an independent identity-keyed oracle", (t) => {
   const repo = fresh(); const next = random(0x6d6f7665);
+  const coverage = { oursMoves: 0, theirsMoves: 0, stationary: 0, oursEdits: 0, theirsEdits: 0 };
   let model = Array.from({ length: 4 }, (_, i) => ({ fileId: String(i + 1).repeat(32), path: `file-${i}`, left: "first", right: "last" }));
   const tree = (rows: typeof model): string => buildTree(repo.objects, new Map(rows.map(row => [row.path, { fileId: row.fileId, mode: "100644" as const, id: repo.objects.write("blob", Buffer.from(`${row.left}\nanchor\n${row.right}\n`), row.fileId) }])));
   for (let turn = 0; turn < 18; turn++) {
     const base = tree(model); const ours = model.map(row => ({ ...row })); const theirs = model.map(row => ({ ...row }));
     const expected = model.map((row, index) => {
-      const mover = next() % 2 === 0 ? ours : theirs;
-      if (next() % 3 !== 0) mover[index].path = `moved-${turn}-${index}`;
-      if (next() % 3 !== 0) ours[index].left = `left-${turn}-${index}`;
-      if (next() % 3 !== 0) theirs[index].right = `right-${turn}-${index}`;
+      const mover = (next() >>> 16) % 2 === 0 ? ours : theirs;
+      if (next() % 3 !== 0) { mover[index].path = `moved-${turn}-${index}`; coverage[mover === ours ? "oursMoves" : "theirsMoves"]++; }
+      else coverage.stationary++;
+      if (next() % 3 !== 0) { ours[index].left = `left-${turn}-${index}`; coverage.oursEdits++; }
+      if (next() % 3 !== 0) { theirs[index].right = `right-${turn}-${index}`; coverage.theirsEdits++; }
       return { fileId: row.fileId, path: mover[index].path, left: ours[index].left, right: theirs[index].right };
     });
     const result = mergeTrees({ store: repo.objects, config: repo.config, committer: author }, base, tree(ours), tree(theirs));
     assert.deepEqual(result.conflicts, [], `seed 0x6d6f7665 turn ${turn}`);
     assert.deepEqual(projection(repo, result.tree), projection(repo, tree(expected)), `oracle turn ${turn}`);
     const reverse = mergeTrees({ store: repo.objects, config: repo.config, committer: author }, base, tree(theirs), tree(ours));
+    assert.deepEqual(reverse.conflicts, [], `reverse seed 0x6d6f7665 turn ${turn}`);
+    assert.deepEqual(projection(repo, reverse.tree), projection(repo, tree(expected)), `reverse oracle turn ${turn}`);
     assert.equal(reverse.tree, result.tree); model = expected;
   }
+  for (const [kind, count] of Object.entries(coverage)) assert.ok(count > 0, `seed must exercise ${kind}`);
+  assert.equal(coverage.oursMoves + coverage.theirsMoves + coverage.stationary, 72);
+  t.diagnostic(JSON.stringify(coverage));
 });
 
 /** Start an OS child and retain both readiness and termination before releasing its barrier. */

@@ -210,6 +210,11 @@ The declaration wins over inode/content inference and is saved atomically in the
 index, then in the commit's tree. Repeating the same declaration is safe. Copies
 retain separate identities; a live source cannot be claimed as a move.
 
+Move and copy inference uses only visible, stageable sources. Sparse entries are
+intentionally absent, so they supply neither identity nor copy provenance. Private
+layers, ignored paths and protected control paths are excluded before inode
+evidence takes precedence over matching content.
+
 Tied move evidence refuses with code `ambiguous_move`, candidate source paths,
 destinations and FileIds, plus the explicit staging remedy. No payload or index
 is published by a refused staging batch. Merge and rebase follow the recorded

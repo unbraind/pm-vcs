@@ -1,5 +1,5 @@
 import { objectFiles, type ObjectFile } from "./object-files.ts";
-import { inferMoveSource, resolveMoveIntents, type MoveIntent, type MoveCandidate } from "./moves.ts";
+import { inferMoveSource, isMoveSource, resolveMoveIntents, type MoveIntent, type MoveCandidate } from "./moves.ts";
 import { nativeOutputs, outputBirth } from "./native-outputs.ts";
 import type { BigIntStats } from "node:fs";
 import { durability } from "./durability.ts";
@@ -697,11 +697,17 @@ export class Repository {
     const outputs = new Map(nativeOutputs(this.controlDirectory).map(output => [output.path, output]));
     const denied = this.objects.denials();
     const view = this.view();
-    const declared = resolveMoveIntents(this.root, originalEntries, targets, moves, (source, path) =>
-      (view === null || viewIncludes(view, path))
-      && ![source.path, path].some(candidate => layers.has(candidate) || isIgnored(candidate, rules) || isProtectedWorktreePath(this.root, candidate, true))
-      && !denied.some(denial => denial.tombstone.fileId === (source.fileId ?? migratedFileId(source))));
+    /** Both explicit and inferred identities must belong to the caller's visible, stageable scope. */
+    const sourceAllowed = (source: IndexEntry): boolean => isMoveSource(source)
+      && (view === null || viewIncludes(view, source.path))
+      && !layers.has(source.path) && !isIgnored(source.path, rules) && !isProtectedWorktreePath(this.root, source.path, true)
+      && !denied.some(denial => denial.tombstone.fileId === (source.fileId ?? migratedFileId(source)));
+    const declared = resolveMoveIntents(this.root, originalEntries, targets, moves, (source, path) => sourceAllowed(source)
+      && (view === null || viewIncludes(view, path))
+      && !layers.has(path) && !isIgnored(path, rules) && !isProtectedWorktreePath(this.root, path, true));
     const reserved = new Set([...declared.values()]);
+    // Apply eligibility before choosing inode evidence over content evidence.
+    const inferenceEntries = originalEntries.filter(entry => !reserved.has(entry) && sourceAllowed(entry));
     const inferred = new Map<FileId, MoveCandidate>();
     const publish: Array<() => void> = [];
     const prepare: Array<(file: ObjectFile) => void> = [];
@@ -782,11 +788,9 @@ export class Repository {
       if (explicit !== undefined && explicit.path !== path && index.delete(explicit.path)) changed.push(explicit.path);
       if (fileId === undefined) {
         const identityStat = stat;
-        const identityMatches = identityStat === undefined ? [] : originalEntries.filter((entry) => !reserved.has(entry) && entry.path !== path
-          && !denied.some(/** Erased identities cannot be inferred from a recycled filesystem inode. */ (denial) => denial.tombstone.fileId === entry.fileId)
+        const identityMatches = identityStat === undefined ? [] : inferenceEntries.filter(entry => entry.path !== path
           && entry.stat?.dev === identityStat.dev && entry.stat.ino === identityStat.ino);
-        const contentMatches = originalEntries.filter((entry) => !reserved.has(entry) && entry.path !== path && !denied.some(/** A matching denied address is refused at publication, never adopted as a new live identity. */ (denial) => denial.tombstone.fileId === entry.fileId) && entry.id === id
-          && entry.mode === mode);
+        const contentMatches = inferenceEntries.filter(entry => entry.path !== path && entry.id === id && entry.mode === mode);
         const matches = identityMatches.length > 0 ? identityMatches : contentMatches;
         const source = inferMoveSource(this.root, path, matches, inferred);
         if (source !== undefined) {
