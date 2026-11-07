@@ -706,8 +706,8 @@ export class Repository {
       && (view === null || viewIncludes(view, path))
       && !layers.has(path) && !isIgnored(path, rules) && !isProtectedWorktreePath(this.root, path, true));
     const reserved = new Set([...declared.values()]);
-    // Apply eligibility before choosing inode evidence over content evidence.
-    const inferenceEntries = originalEntries.filter(entry => !reserved.has(entry) && sourceAllowed(entry));
+    // Build this optional pool once, only when an identity actually needs inference.
+    let inferenceEntries: IndexEntry[] | undefined;
     const inferred = new Map<FileId, MoveCandidate>();
     const publish: Array<() => void> = [];
     const prepare: Array<(file: ObjectFile) => void> = [];
@@ -787,6 +787,7 @@ export class Repository {
       let conflictSource = identitySource;
       if (explicit !== undefined && explicit.path !== path && index.delete(explicit.path)) changed.push(explicit.path);
       if (fileId === undefined) {
+        inferenceEntries ??= originalEntries.filter(entry => !reserved.has(entry) && sourceAllowed(entry));
         const identityStat = stat;
         const identityMatches = identityStat === undefined ? [] : inferenceEntries.filter(entry => entry.path !== path
           && entry.stat?.dev === identityStat.dev && entry.stat.ino === identityStat.ino);

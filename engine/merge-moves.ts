@@ -22,6 +22,7 @@ export function alignFileMoves(base: FlatTree, ours: FlatTree, theirs: FlatTree)
   const trees = [base, ours, theirs];
   const [bases, left, right] = trees.map(identityPaths);
   const conflicts: string[] = [];
+  const moves: Array<{ destination: string; sources: string[] }> = [];
   for (const [fileId, from] of bases) {
     const a = left.get(fileId); const b = right.get(fileId);
     if (from === null || a === undefined || a === null || b === undefined || b === null || (from === a && from === b)) continue;
@@ -31,10 +32,13 @@ export function alignFileMoves(base: FlatTree, ours: FlatTree, theirs: FlatTree)
       const occupant = tree.get(destination);
       return occupant !== undefined && occupant.fileId !== fileId;
     })) { conflicts.push(destination); continue; }
-    for (const [index, source] of [from, a, b].entries()) {
-      const tree = trees[index]; const entry = tree.get(source)!;
-      tree.delete(source); tree.set(destination, entry);
-    }
+    moves.push({ destination, sources: [from, a, b] });
+  }
+  // Every verdict uses the original occupancy, including paths vacated by an accepted move.
+  for (const { destination, sources } of moves) {
+    const entries = sources.map((source, index) => trees[index].get(source)!);
+    for (const [index, source] of sources.entries()) trees[index].delete(source);
+    for (const [index, entry] of entries.entries()) trees[index].set(destination, entry);
   }
   return [...new Set(conflicts)].sort(compareByteOrder);
 }

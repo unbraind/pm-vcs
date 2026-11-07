@@ -219,7 +219,9 @@ Tied move evidence refuses with code `ambiguous_move`, candidate source paths,
 destinations and FileIds, plus the explicit staging remedy. No payload or index
 is published by a refused staging batch. Merge and rebase follow the recorded
 FileId when one side moves and both sides edit. Conflicting moves or destination
-collisions remain conflicts. Bundles and clones retain the canonical tree bytes.
+collisions remain conflicts. Merge and replay judge destination occupancy against
+the original trees, so a rename chain through an occupied path consistently
+requires identity reconciliation. Bundles and clones retain the canonical tree bytes.
 
 ### Repository links, private layers and permanent erasure
 
