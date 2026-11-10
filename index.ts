@@ -322,7 +322,7 @@ const defineExtension = <TModule extends ExtensionModule>(module: TModule): TMod
 
 export default defineExtension({
   name: "pm-vcs",
-  version: "2026.11.8",
+  version: "2026.11.10",
 
   activate(api: ExtensionApi) {
     guardCredentialOutput();
