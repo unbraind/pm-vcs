@@ -1,0 +1,20 @@
+id: pm-vcs-toolchain-1110
+title: Adapt isolated telemetry fixture to the global settings owner
+description: "Adapt the SDK 2026.11.6 fixture for https://github.com/unbraind/pm-vcs/pull/194 while preserving real local collector assertions."
+type: Chore
+status: in_progress
+priority: 2
+tags[1]: "gh:unbraind/pm-vcs#194"
+created_at: "2026-11-10T12:34:10.025Z"
+updated_at: "2026-11-10T12:45:16.768Z"
+assignee: codex-toolchain-1110
+claim_principal: codex-toolchain-1110
+author: codex-toolchain-1110
+comments[2]{created_at,author,text}:
+  "2026-11-10T12:34:14.995Z",codex-toolchain-1110,"Installed CHANGELOG 2026.11.5 names GH-1660 (pm-gh1660): project telemetry was inert; consent and endpoint now belong solely to the global profile, and init omits telemetry from project settings. The fixture incorrectly copied a project settings object and mutated its absent telemetry block. Read the authoritative global settings through public readSettings, explicitly opt that isolated profile in, and route its endpoint to the real local HTTP collector before running labelled children. Keep the hard opt-out and assert zero telemetry/Sentry requests."
+  "2026-11-10T12:45:16.768Z",codex-toolchain-1110,"Focused real-collector regression passes 1/1 with zero failed/skipped tests; global fixture consent is explicitly enabled, while the hard test opt-out prevents both event and Sentry delivery. Auto-merge disabled before any push. Regenerate the staged self-host archive as required by AGENTS.md; release gates follow."
+files[1]{path,scope}:
+  test/test-environment.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind}}:
+  node --test --test-concurrency=2 --test-name-pattern='test children deliver no pm telemetry' test/test-environment.test.ts,project,codex-toolchain-1110,"2026-11-10T12:44:33.177Z",local_mutation
+body: ""
