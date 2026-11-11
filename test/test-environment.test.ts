@@ -9,6 +9,7 @@ import { join, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript5";
+import { readSettings } from "@unbrained/pm-cli/sdk/runtime";
 import { pmExecutable } from "../scripts/pm-environment.ts";
 import { testEnvironment, TEST_ENVIRONMENT_KEYS } from "./helpers/test-environment.ts";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -59,8 +60,11 @@ test("test children deliver no pm telemetry or Sentry report even when a fixture
     });
     assert.equal((await pm(["init", "--json"], false)).status, 0);
     // Route the event queue to the local collector before any command could deliver, so a regression stays local.
-    const settings = JSON.parse(readFileSync(join(project, ".agents", "pm", "settings.json"), "utf8")) as { telemetry: { endpoint: string } };
+    // GH-1660 makes the global profile the sole owner of telemetry settings.
+    const settings = await readSettings(profile);
     settings.telemetry.endpoint = endpoint;
+    settings.telemetry.enabled = true;
+    settings.telemetry.first_run_prompt_completed = true;
     writeFileSync(join(profile, "settings.json"), JSON.stringify(settings));
     assert.equal(JSON.parse((await pm(["ops", "telemetry", "status", "--json"], false)).stdout).status.endpoint, endpoint);
     const status = JSON.parse((await pm(["ops", "telemetry", "status", "--json"], true)).stdout).status;
