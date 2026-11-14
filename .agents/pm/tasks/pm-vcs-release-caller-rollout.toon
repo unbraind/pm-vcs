@@ -1,0 +1,23 @@
+id: pm-vcs-release-caller-rollout
+title: Adopt the released reusable Daily Release caller
+description: "Fleet rollout for unbraind/pm-ops#272 after the successful pm-jira cross-repository OIDC pilot. Replace copied release orchestration with the released SHA caller, matching validator, explicit empty changelog hooks and package-owned caller contracts. No merge, dispatch or publication."
+type: Task
+status: open
+priority: 2
+tags[2]: "area:release","gh:unbraind/pm-ops#272"
+created_at: "2026-11-14T22:26:50.942Z"
+updated_at: "2026-11-14T22:40:35.929Z"
+author: codex-ops272-1114
+comments[2]{created_at,author,text}:
+  "2026-11-14T22:27:00.144Z",codex-ops272-1114,"Orient and start the authorized fleet rollout. Verified released v2026.11.14 at 7687a35d7522482bd8361d60dbc2589e9afbc81c. Preserve this package approval, schedule, preparation and publication hooks through canonical inputs. The merged Jira pilot proves cross-repository npm identity acceptance; this package must still pass its own first-run preflight. Run caller contracts, installed attestation, strict YAML, actionlint and regenerated changelog checks. Shared-runner hold gates every push. No review-thread action, merge, dispatch or publication."
+  "2026-11-14T22:40:31.059Z",codex-ops272-1114,"Rolled the Jira pilot contract into this package: released workflow pin 7687a35d7522482bd8361d60dbc2589e9afbc81c (v2026.11.14), exact pm-ops 2026.11.14 validator, explicit include-empty changelog generation/check/notes hooks, and declared yaml for caller tests. Preserved package-owned approval, schedule and preparation inputs. Focused gates passed 70/70, zero failures/skips; linked caller test passed 6/6 in a scratch pm project to avoid tracker run artifacts. Reverting only release.yml to the old copy in a disposable fixture failed 5 of 6 contracts. Actionlint passed 1/1, strict workflow/Dependabot YAML parsing 2/2, installed publish-attestation passed 1/1. Regenerate changelog and check after this final tracker write. Full npm/Bun certification remains with CI; no full local pass is claimed. Cross-repository npm OIDC evidence is Jira run 43639146392, recorded on pm-ops#272; first package activation must still pass its preflight. This package has no npm trusted publisher: releases remain red at the OIDC step until the owner configures the publisher for this repository and release.yml. Every push waits on the shared-runner hold. No merge, dispatch, publication or review-thread action. Leave this item open and release only this author claim."
+files[4]{path,scope}:
+  .github/workflows/release.yml,project
+  package-lock.json,project
+  package.json,project
+  test/release-workflow.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 test/release-workflow.test.ts,project,codex-ops272-1114,"2026-11-14T22:40:11.964Z",local_mutation,codex/ops272-fleet-1114
+docs[1]{path,scope}:
+  docs/release-caller-rollout.md,project
+body: ""

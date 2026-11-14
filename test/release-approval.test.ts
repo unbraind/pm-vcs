@@ -194,13 +194,15 @@ function inspectWorkflow(source: string, filename: string): string[] {
     let writable = false;
     try { writable = writes(effective); }
     catch { issues.push(`${location}: invalid permissions`); }
-    const condition = typeof job.if === 'string' ? job.if : '';
+    const canonical = typeof job.uses === 'string' && /^unbraind\/pm-ops\/\.github\/workflows\/daily-release\.yml@[a-f0-9]{40}$/u.test(job.uses);
+    const enabled = canonical ? mapping(job.with)?.['release-enabled'] : job.if;
+    const condition = typeof enabled === 'string' ? enabled : '';
     const steps = Array.isArray(job.steps) ? job.steps : [];
     const commands = steps.flatMap(step => {
       const value = mapping(step)?.run;
       return typeof value === 'string' ? publications(value) : [];
     });
-    const reusablePublisher = typeof job.uses === 'string' && /\/(?:release|publish)[^/]*\.ya?ml@/u.test(job.uses);
+    const reusablePublisher = typeof job.uses === 'string' && /\/(?:daily-release|release|publish)[^/]*\.ya?ml@/u.test(job.uses);
     const publishes = commands.length > 0 || reusablePublisher;
     if ((writable || publishes) && !requiresAtom(condition, repositoryAtom)) issues.push(`${location}: exact repository guard required`);
     if (condition.includes('github.repository_owner')) issues.push(`${location}: repository_owner is not a repository guard`);
@@ -247,25 +249,20 @@ test('daily/manual release triggers and preparation gates remain enforced', () =
   const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
   const events = mapping(release.on);
   assert.ok(events && Object.hasOwn(events, 'workflow_dispatch'));
-  assert.deepEqual(events.schedule, [{ cron: '23 3 * * *' }]);
+  assert.deepEqual(events.schedule, [{ cron: '23 3 * * *' }, { cron: '41 * * * *' }]);
   const jobs = mapping(release.jobs);
   assert.ok(jobs?.release);
-  for (const name of ['prepare', 'release', 'resume_release']) {
-    const job = mapping(jobs[name]);
-    if (!job) continue;
-    assert.ok(typeof job.if === 'string');
-    for (const atom of [repositoryAtom, approvalAtom, mainAtom]) assert.ok(requiresAtom(job.if, atom), `${name} must require ${atom}`);
-  }
+  const job = mapping(jobs.release);
+  const enabled = mapping(job?.with)?.['release-enabled'];
+  assert.equal(typeof enabled, 'string');
+  for (const atom of [repositoryAtom, approvalAtom, mainAtom]) assert.ok(requiresAtom(String(enabled), atom), `release must require ${atom}`);
 });
 
-test('publishing installs an npm version supporting trusted publishing', () => {
+test('publishing delegates npm bootstrap to the SHA-pinned canonical workflow', () => {
   const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
-  const scripts = Object.values(mapping(release.jobs) ?? {}).flatMap(job => {
-    const steps = mapping(job)?.steps;
-    return Array.isArray(steps) ? steps.map(step => mapping(step)?.run).filter(value => typeof value === 'string') : [];
-  }).join('\n');
-  const version = scripts.match(/npm install -g npm@(\d+)\.(\d+)\.(\d+)/u)?.slice(1).map(Number);
-  assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)));
+  const job = mapping(mapping(release.jobs)?.release);
+  assert.match(String(job?.uses), /^unbraind\/pm-ops\/\.github\/workflows\/daily-release\.yml@[a-f0-9]{40}$/u);
+  assert.equal(job?.steps, undefined);
 });
 
 test('automatic release activation is absent and publishing documentation matches behaviour', () => {

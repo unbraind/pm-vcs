@@ -50,18 +50,19 @@
     "self-host:write": "node scripts/self-host.ts --write",
     "pack:dry-run": "npm pack --dry-run",
     "pack:check": "node scripts/verify-pack-privacy.ts",
-    "changelog:full": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999",
-    "changelog:check": "npm run changelog:full -- --check",
+    "changelog:full": "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999 --include-empty",
+    "changelog:check": "npm run changelog:full -- --check --include-empty",
     "release:check": "npm run typecheck && npm run build && npm run lint && npm run duplicates && npm run docstring && npm run coverage && npm run accept:native-toon && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run pack:check && npm run changelog:check && npm run verify:release-changelog-date && npm run verify:release-publish-attestation",
     "prepublishOnly": "npm run release:check",
-    "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999 --github-step-summary",
+    "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999 --github-step-summary --include-empty",
     "prepare": "node scripts/prepare-merge-driver.ts",
     "merge:install": "pm merge install",
     "benchmark:cdc": "node scripts/cdc-benchmark.ts",
     "benchmark:phase6": "node --input-type=module -e \"import { benchmarkPhase6 } from './scripts/phase6-benchmark.ts'; console.log(JSON.stringify(benchmarkPhase6('.agents/pm', 200_000_000), null, 2));\"",
     "coverage": "npm run build && npm run build:test && c8 --config=package.json --temp-directory=coverage/tmp --all --100 --per-file --reporter=text --reporter=lcov --reporter=json --reporter=json-summary --include='*.ts' --include='src/**/*.ts' --include='engine/**/*.ts' --include='scripts/**/*.ts' --exclude='test/**' node test/helpers/release-suite.ts",
     "verify:release-changelog-date": "node scripts/verify-release-changelog-date.ts",
-    "verify:release-publish-attestation": "node scripts/verify-release-publish-attestation.ts"
+    "verify:release-publish-attestation": "node scripts/verify-release-publish-attestation.ts",
+    "release:changelog": "npm run changelog:full && git add -- CHANGELOG.md manifest.json index.ts .agents/pm && (test ! -f .github/pm-release-candidate.json || git add -- .github/pm-release-candidate.json) && (if git ls-files --error-unmatch 'src/' >/dev/null 2>&1; then git add -- src; fi) && (if git ls-files --error-unmatch 'dist/' >/dev/null 2>&1; then git add -- dist; fi) && (if git ls-files --error-unmatch .gitattributes >/dev/null 2>&1; then git restore --source=HEAD --worktree -- .gitattributes; fi) && npm run self-host:write"
   },
   "keywords": [
     "pm-cli",
@@ -104,7 +105,7 @@
     "jiti": "2.7.0",
     "jscpd": "5.4.3",
     "pm-changelog": "2026.11.13",
-    "pm-ops": "2026.11.6",
+    "pm-ops": "2026.11.14",
     "typescript": "7.0.2",
     "typescript5": "npm:typescript@^5.9.3",
     "yaml": "2.9.1"
