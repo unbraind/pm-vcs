@@ -9,9 +9,17 @@ on:
 permissions:
   contents: read
 
+# Linux jobs run on the fleet's local, ephemeral runners (label pm-local) when the repository variable
+# PM_LOCAL_RUNNER is 'on'; fork pull requests always stay on GitHub-hosted runners. Unset or 'off': ubuntu-latest.
+# A new push to a pull request supersedes its earlier CI run: cancel it instead of letting both hold runners.
+# Pushes to main and manual runs get a group of their own, so they never wait for or cancel each other.
+concurrency:
+  group: ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (vars.PM_LOCAL_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","pm-local"]') || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
