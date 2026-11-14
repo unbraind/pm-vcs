@@ -1,0 +1,24 @@
+id: pm-vcs-toolchain-1114b
+title: Adopt current pm-cli linked artifact and option contracts
+description: ""
+type: Chore
+status: in_progress
+priority: 2
+tags[1]: "gh:unbraind/pm-vcs#197"
+created_at: "2026-11-14T05:09:11.151Z"
+updated_at: "2026-11-14T05:13:57.314Z"
+author: codex-toolchain-1114b
+comments[3]{created_at,author,text}:
+  "2026-11-14T05:09:37.129Z",codex-toolchain-1114b,"Failure -> cause -> fix: bisect-commands.ts TS2532 on read.linked.tests.length -> pm-cli 2026.11.7 GH-1663 makes individual linked groups optional for nested projections -> retain the explicit full:true read and assert the documented full-read tests group at this use. No runtime default of omitted to empty is introduced. Existing real-tracker bisect tests cover empty and populated linked tests. Reverting this type-only assertion reproduces typecheck failure. Install exact pm-cli and pm-changelog 2026.11.13; regenerate changelog and text self-host archive after tracker writes."
+  "2026-11-14T05:13:14.559Z",codex-toolchain-1114b,"Current typecheck passes after the type-only full-read assertion. Historical successful CI run 43492161862 measured test jobs at 94 and 177 minutes, exceeding the 45-minute local release budget; final npm/Bun release certification belongs to CI. Targeted real-tracker bisect checks, lint, duplication, docstrings, and self-host verification remain local evidence."
+  "2026-11-14T05:13:55.133Z",codex-toolchain-1114b,"Focused bisect checks pass 2/2: 64-change first-failure diagnosis with state restoration, and complete start/action refusal corpus including the empty linked-test group. Typecheck passes, and reverting the type-only assertion reproduces TS2532. No runtime branch is changed. Complete bisect and repository coverage will be certified by the unchanged CI gates; local full release jobs exceed the 45-minute budget."
+files[4]{path,scope}:
+  bisect-commands.ts,project
+  package-lock.json,project
+  package.json,project
+  selfhost.bundle,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  npm run typecheck,project,codex-toolchain-1114b,"2026-11-14T05:12:23.799Z",local_mutation,chore/adopt-pm-cli-option-contract
+docs[1]{path,scope}:
+  CHANGELOG.md,project
+body: ""

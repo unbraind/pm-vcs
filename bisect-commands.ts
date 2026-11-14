@@ -570,8 +570,8 @@ export function registerBisectCommands(api: ExtensionApi): void {
             throw new VcsError("missing_argument", "pm vcs bisect start needs the PM item whose linked test drives the walk.", "Pass --item <pm-item>.");
           }
           const read = await pmClient(context).get(item, { full: true });
-          // Full SDK reads include the linked arrays, even when no tests are recorded.
-          if (command === undefined && read.linked!.tests.length === 0) {
+          // Full SDK reads include every linked group (GH-1663), even when no tests are recorded.
+          if (command === undefined && read.linked!.tests!.length === 0) {
             throw new VcsError(
               "no_linked_test",
               `The item ${item} records no linked test.`,
