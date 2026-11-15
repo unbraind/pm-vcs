@@ -120,7 +120,11 @@ jobs:
           trap 'gate_status=$?; storage_report before-cleanup || true; rm -rf -- "${gate_tmp}"; if [ -n "${gate_memory}" ]; then rm -rf -- "${gate_memory}"; fi; df -Pk "${RUNNER_TEMP}" || true; df -Pi "${RUNNER_TEMP}" || true; exit "${gate_status}"' EXIT
           export TMPDIR="${gate_tmp}"
           storage_report before-gate || true
-          NPM_CONFIG_USERCONFIG=/dev/null ${{ matrix.package-manager }} run release:check
+          if [[ "${{ matrix.package-manager }}" == npm ]]; then
+            NPM_CONFIG_USERCONFIG=/dev/null npm run release:check
+          else
+            NPM_CONFIG_USERCONFIG=/dev/null bun run release:check
+          fi
 
       - name: Keep the coverage report when the gate fails
         if: failure()

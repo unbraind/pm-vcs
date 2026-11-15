@@ -104,3 +104,29 @@ remaining gaps in Task `pm-vcs-ci-disk-reserve` and the PR. Full-depth certifica
 belongs to ci-deep after merge; its runtime and the initial quick timeout bounds
 remain to be measured. Release workflows, pm-github workflows, verifier scripts,
 branch protection and repository variables are outside this change.
+
+
+## Documentation and tracker gate inputs
+
+The docs/tracker Linux path runs changelog checking, release changelog date
+verification, identity auditing, self-host acceptance and packed-file privacy.
+Self-host acceptance builds first and compares the committed bundle against the
+committed tree; verification never rewrites the bundle. A stale README or tracker
+snapshot therefore fails before merge.
+
+Gate-script audit: `self-host.ts` includes every tracked path except the three
+explicit `self-host.json` exclusions, including documentation and tracker data.
+`verify-release-changelog-date.ts` invokes the generator on `.agents/pm`.
+`verify-pack-privacy.ts` scans the real shipped README, changelog, architecture,
+lore and selected docs. `audit-git-identities.ts` reads the tracked public address
+allowlist and reachable Git identities, so documentation commits retain that gate.
+The existing unconditional tracker health check and cheap changelog check remain.
+
+Other release gates were inspected: typecheck/build, lint, duplication and
+docstrings target TypeScript/configuration; coverage runs the declared source
+and fixture suites; native TOON/stat-cache acceptance uses synthetic projects;
+production audit reads dependencies; publish-attestation verification reads
+package/workflow shell inputs. None consumes current documentation or tracker
+content. Pack dry-run has no additional documentation validation beyond the real
+archive already inspected by pack checking. Benchmark utilities can take explicit
+tracker inputs but are not release gates.

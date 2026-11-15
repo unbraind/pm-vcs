@@ -102,7 +102,14 @@ jobs:
 
       - name: Check documentation and tracker changes
         if: steps.changes.outputs.code != 'true'
-        run: npm run changelog:check
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run changelog:check
+          npm run verify:release-changelog-date
+          npm run audit:identities
+          npm run accept:self-host
+          npm run pack:check
 
       - name: Engines floor build and quick tests
         if: steps.changes.outputs.code == 'true' && matrix.node-version == 22

@@ -212,3 +212,13 @@ test("quick/deep workflows retain tier boundaries, timeouts and safe change dete
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// A stale archive or invalid shipped documentation must fail before merge.
+test("docs and tracker PRs retain every gate that consumes their committed inputs", () => {
+  const ci = parseDocument(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"), { uniqueKeys: true }).toJS();
+  const cheap = ci.jobs.test.steps.find((step: { name: string }) => step.name === "Check documentation and tracker changes");
+  assert.equal(cheap.if, "steps.changes.outputs.code != 'true'");
+  for (const gate of ["changelog:check", "verify:release-changelog-date", "audit:identities", "accept:self-host", "pack:check"]) {
+    assert.ok(cheap.run.split("\n").includes(`npm run ${gate}`), `cheap path must run ${gate}`);
+  }
+});
