@@ -119,7 +119,7 @@ explicit `self-host.json` exclusions, including documentation and tracker data.
 `verify-release-changelog-date.ts` invokes the generator on `.agents/pm`.
 `verify-pack-privacy.ts` scans the real shipped README, changelog, architecture,
 lore and selected docs. `audit-git-identities.ts` reads the tracked public address
-allowlist and reachable Git identities, so documentation commits retain that gate.
+allowlist and all physical Git object identities, so documentation commits retain that gate.
 The existing unconditional tracker health check and cheap changelog check remain.
 
 Other release gates were inspected: typecheck/build, lint, duplication and
