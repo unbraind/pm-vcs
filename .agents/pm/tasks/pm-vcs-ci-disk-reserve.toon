@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-15T20:39:51.179Z"
+updated_at: "2026-11-15T22:50:18.979Z"
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[16]{created_at,author,text}:
+comments[20]{created_at,author,text}:
   "2026-11-15T13:11:29.225Z",codex-sol,"Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
   "2026-11-15T13:18:12.191Z",codex-sol,"Latest successful main run 43609609072: test 22 execution 176m30s, test 26 93m03s; each ran npm and Bun gates. CLI combined-log download returned empty; direct jobs API log supplied evidence. Slowest lifecycle model 835s; large-history and exhaustive crash matrices also dominate. Added deterministic quick prefixes, propagated depth/time-scale through the child allowlist, scaled crash subprocess safety budgets and replaced the 512 TiB refusal speed assertion with a one-read bound. Existing annotation managed fixtures already await owned resources and retry removal (maxRetries 8); #151 is regression verification, not a newly reproduced fix. Coverage thresholds and all old gate contracts retained. Local quick coverage deferred because exhaustive matrices and historical runtime make the 20-minute budget implausible."
   "2026-11-15T13:19:19.949Z",codex-sol,"Strict YAML parsing with unique-key validation passed for all three tier workflows; actionlint is unavailable. Source typecheck, build, duplicates (0%), docstrings (616 declarations) and lint pass. Initial build:test ran before dist existed and failed on three pre-existing dist imports; source build has completed and the linked check is rerunning. Bounded focused quick tests and existing ENOTEMPTY lifecycle regressions are running."
@@ -26,23 +26,33 @@ comments[16]{created_at,author,text}:
   "2026-11-15T20:20:19.107Z",codex-sol-round-d,"Correction to the preceding receipt: the real obliterate-packed run enumerated 5488 native boundaries, not 832; it recovered 54 selected images out of 538 generated distinct images. All other pass counts and timings in that receipt are unchanged."
   "2026-11-15T20:34:51.791Z",codex-sol-round-d,"Additional native-helper verification exceeded its 600-second local budget after purge-journal and retired-instance scenarios passed (79 and 82 cuts respectively); interrupted-unpack was still running, and storage-file cases had not started. This is missing complete evidence, not a pass. A ten-percent crash prefix is still too large: quick crash recovery is now capped at the first 25 generated cuts per scenario (or all if fewer); seeded-property testDepth remains unchanged and deep/default still executes every cut. Enumeration, retained-data assertions, completion counters and original 100 percent coverage thresholds remain intact. Rerun the affected native checks with two-CPU affinity and a bounded 900-second command."
   "2026-11-15T20:39:51.178Z",codex-sol-round-d,"Final 25-cut native verification passed through pm test --run --progress with two-CPU affinity: 55/55 tests, zero failures/skips/cancellations, 240607.597 ms. Five real SIGKILL scenarios verified 25/788 purge-journal cuts, 25/818 retired-instance cuts, 25/1018 interrupted-unpack cuts, 9/9 scan-publication cuts, and 25/118 proof-denial cuts: 109 actual selected cuts total. All complete trace comparisons, retained-data/foreign-file assertions and completion guards passed. The stored test link remained at its existing 600-second bound because repeated --add is idempotent; the final applied runtime bound was 600 seconds, not the planned 900. Fresh typecheck, build:test and lint passed; final helper/fixture tests passed 11/11 in 9158 ms. Final 25-case prefix, integer rounding and before-spawn validation reverts fail and restore passes. The earlier ten-percent timeout remains recorded as incomplete evidence. No coverage source/threshold change, local coverage run or exact-head CI approval is claimed."
-files[15]{path,scope}:
+  "2026-11-15T22:24:26.966Z",codex-sol,"Round E: verified assigned review findings and current checks. Fix valid portability, gate-order and timeout regressions; preserve product deadlines, privacy/identity and self-host gates. Run targeted quick tests and required tooling checks before an explicit-path commit. Review threads remain untouched."
+  "2026-11-15T22:37:59.013Z",codex-sol,"Round E evidence: Both assigned checks hit the 30-minute job timeout. The Node 26 log measures 474 and 504 seconds for two benchmark tests: each redundantly runs both in-process and CLI benchmarks, resulting in four full executions. Retain one direct benchmark and one real CLI invocation from a checkout containing spaces. Keep every source and coverage threshold intact. Targeted benchmark/fixture validation is running."
+  "2026-11-15T22:45:21.314Z",codex-sol,"Round E direct targeted check: PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/cdc-benchmark.test.ts test/depth.test.ts test/fixture-lifetime.test.ts; running; final result will be checked before push. No package coverage sources were changed; no package coverage run was performed."
+  "2026-11-15T22:50:10.661Z",codex-sol,"Round E final verification: typecheck, lint (docstring gate where no lint script exists), touched regression tests, workflow/tooling tests, strict workflow YAML and changelog:check passed. Duplication gates passed where provided. Self-review retained docs/tracker privacy and identity checks, unscaled product deadlines, integer-rounded validated harness budgets, platform filename guards and generated-only quick thresholds. No package coverage sources were edited; no package coverage run. No review thread actions or merge. Shared-runner hold and SteveBot commit identity will be checked before push. Hosted CI is intentionally not awaited. Benchmark/depth/fixture batch passed 14/14 in 1217208 ms on the shared host; workflow/tooling batch passed 25/25. Regenerate selfhost.bundle from the staged source and verify the committed archive before push."
+files[21]{path,scope}:
   .github/workflows/ci-deep.yml,project
   .github/workflows/ci.yml,project
   .github/workflows/codeql.yml,project
+  selfhost.bundle,project
   test/annotate.test.ts,project
   test/bisect.test.ts,project
+  test/cdc-benchmark.test.ts,project
+  test/ci-routing.test.ts,project
   test/dependency-refresh-workflow.test.ts,project
+  test/depth.test.ts,project
   test/erasure-crash-matrix.test.ts,project
   test/erasure-storage.test.ts,project
   test/fixture-lifetime.test.ts,project
   test/helpers/journal-sequences.ts,project
   test/helpers/test-environment.ts,project
   test/journal-power-obliterate-packed.test.ts,project
+  test/lease-workflows.test.ts,project
+  test/quality-scripts.test.ts,project
   test/self-host.test.ts,project
   test/signatures.test.ts,project
   test/support/depth.ts,project
-tests[11]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[14]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   "npm run typecheck && npm run build:test && npm run lint",project,240,codex-sol,"2026-11-15T13:16:42.518Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/depth.test.ts test/dependency-refresh-workflow.test.ts test/diff.test.ts test/duplicate-events.test.ts test/review-findings.test.ts test/destruction.test.ts test/erasure-lifecycle.test.ts test/tracker-admission.test.ts test/derivation-provenance.test.ts test/test-environment.test.ts,project,1200,codex-sol,"2026-11-15T13:16:43.854Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   "PM_TEST_DEPTH=quick node --test --test-concurrency=2 --test-name-pattern=\"history reads selected|commit bisect reads|native signed changes\" test/annotate.test.ts test/bisect.test.ts test/signatures.test.ts",project,300,codex-sol,"2026-11-15T13:23:33.242Z",local_mutation,ci/quick-pr-tier-deep-local-tier
@@ -54,6 +64,9 @@ tests[11]{command,scope,timeout_seconds,provenance{author,created_at,source_kind
   PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/depth.test.ts test/dependency-refresh-workflow.test.ts test/fixture-lifetime.test.ts,project,600,codex-sol-round-d,"2026-11-15T20:07:59.113Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/depth.test.ts test/dependency-refresh-workflow.test.ts test/fixture-lifetime.test.ts test/journal-power-obliterate-packed.test.ts,project,600,codex-sol-round-d,"2026-11-15T20:12:31.870Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   "PM_TEST_DEPTH=quick PM_TEST_TIME_SCALE=3 node --test --test-concurrency=1 --test-name-pattern=\"SIGKILL at selected\" test/erasure-crash-matrix.test.ts test/erasure-storage.test.ts",project,600,codex-sol-round-d,"2026-11-15T20:22:11.642Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  "npm run typecheck && npm run lint --if-present && npm run build:test && PM_TEST_DEPTH=quick PM_TEST_TIME_SCALE=3 node --test --test-concurrency=2 test/ci-routing.test.ts test/depth.test.ts test/quality-scripts.test.ts test/dependency-refresh-workflow.test.ts test/lease-workflows.test.ts && node --input-type=module -e 'import {readFileSync,readdirSync,existsSync} from \"node:fs\"; import assert from \"node:assert/strict\"; import {parseDocument} from \"yaml\"; for(const dir of [\".github/workflows\",\"templates/backend/.github/workflows\"]) if(existsSync(dir)) for(const file of readdirSync(dir).filter(f=>/\\.ya?ml$/.test(f))) {const d=parseDocument(readFileSync(dir+\"/\"+file,\"utf8\"),{uniqueKeys:true,strict:true});assert.deepEqual(d.errors,[],file);assert.deepEqual(d.warnings,[],file);} console.log(\"Strict workflow YAML passed\");'",project,1200,codex-sol,"2026-11-15T22:36:35.900Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/cdc-benchmark.test.ts test/depth.test.ts test/fixture-lifetime.test.ts,project,2400,codex-sol,"2026-11-15T22:45:17.168Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  "npm run accept:self-host",project,600,codex-sol,"2026-11-15T22:50:16.415Z",local_mutation,ci/quick-pr-tier-deep-local-tier
 docs[1]{path,scope}:
   docs/ci-tiers.md,project
 body: ""

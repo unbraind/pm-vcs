@@ -43,7 +43,7 @@ jobs:
             while IFS= read -r -d '' path; do
               case "$path" in
                 .agents/pm/*.mjs|.agents/pm/*.cjs|.agents/pm/*.js|.agents/pm/*.ts) code=true ;;
-                .agents/pm/*|*.md|docs/*|CHANGELOG.md|LICENSE) ;;
+                .agents/pm/*.toon|.agents/pm/*.json|.agents/pm/*.jsonl|*.md|docs/*|CHANGELOG.md|LICENSE) ;;
                 *) code=true ;;
               esac
             done < "$RUNNER_TEMP/ci-changed-paths"
@@ -197,7 +197,7 @@ jobs:
             while IFS= read -r -d '' path; do
               case "$path" in
                 .agents/pm/*.mjs|.agents/pm/*.cjs|.agents/pm/*.js|.agents/pm/*.ts) code=true ;;
-                .agents/pm/*|*.md|docs/*|CHANGELOG.md|LICENSE) ;;
+                .agents/pm/*.toon|.agents/pm/*.json|.agents/pm/*.jsonl|*.md|docs/*|CHANGELOG.md|LICENSE) ;;
                 *) code=true ;;
               esac
             done < "$RUNNER_TEMP/ci-changed-paths"

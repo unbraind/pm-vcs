@@ -138,3 +138,9 @@ package/workflow shell inputs. None consumes current documentation or tracker
 content. Pack dry-run has no additional documentation validation beyond the real
 archive already inspected by pack checking. Benchmark utilities can take explicit
 tracker inputs but are not release gates.
+
+## Review round E
+
+Both assigned checks hit the 30-minute job timeout. The Node 26 log measures 474 and 504 seconds for two benchmark tests: each redundantly runs both in-process and CLI benchmarks, resulting in four full executions. Retain one direct benchmark and one real CLI invocation from a checkout containing spaces. Keep every source and coverage threshold intact. Targeted benchmark and fixture validation records are linked from the package tracker.
+
+The cheap tier excludes only inert tracker record formats; executable tracker changes keep product gates. `test/ci-routing.test.ts` executes each detector with inert and executable tracker paths. Product deadlines, full-depth cases and coverage thresholds are unchanged.
