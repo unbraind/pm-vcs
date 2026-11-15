@@ -1,5 +1,5 @@
-import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Immutable attribution through ordinary PM records, branch merges, renames and bounded histories. */
 import assert from "node:assert/strict";

@@ -1,5 +1,5 @@
-import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 /** Real SDK tracker tests for capture isolation, SDK normalization and native publication. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

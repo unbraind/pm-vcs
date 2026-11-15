@@ -1,5 +1,5 @@
-import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 

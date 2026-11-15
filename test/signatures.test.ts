@@ -1,5 +1,5 @@
-import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real native changes, adversarial signatures and atomic receiver policy enforcement. */
 import assert from "node:assert/strict";

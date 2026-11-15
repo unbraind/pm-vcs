@@ -1,5 +1,5 @@
-import { testTime } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
+import { testTime } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Native fixture cleanup waits for its owners and retries transient nonempty directories. */
 import assert from "node:assert/strict";

@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { testDepth, testTime } from "./support/depth.ts";

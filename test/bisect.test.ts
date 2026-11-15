@@ -1,5 +1,5 @@
-import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Linked-test-driven bisect sessions over real temporary repositories and trackers. */
 import assert from "node:assert/strict";

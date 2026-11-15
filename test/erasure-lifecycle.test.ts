@@ -1,5 +1,5 @@
-import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 import { assertCompleteCuts } from "./helpers/crash-matrix.ts";
 import { lifecycleSequence } from "./helpers/lifecycle-sequences.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";

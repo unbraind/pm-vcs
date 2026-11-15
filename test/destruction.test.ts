@@ -1,5 +1,5 @@
-import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 /** Exact-set intents on real filesystems survive every publication/deletion cut and preserve peer data. */
 import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
