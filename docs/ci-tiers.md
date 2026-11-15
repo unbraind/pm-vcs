@@ -69,9 +69,10 @@ and every deep job logs `bun --version`.
 Unset depth means full. Quick uses the deterministic prefix of each large
 seeded corpus: one tenth rounded up, at least 25 and capped by the original
 count (500 → 50, 512 → 52, 128/200 → 25). Seeds and per-case assertions stay
-identical. Lifecycle batch size stays 16 with a partial final batch. Full-depth
-large-history, memory-limit and exhaustive crash-cut contracts retain their
-original sizes in both tiers. No coverage threshold or source exclusion changes.
+identical. Lifecycle batch size stays 16 with a partial final batch. Large-history checks use 200 commits in quick and the original 2,000 in full,
+retaining exact one-read, no-unrelated-read, logarithmic-decision and signature
+verification assertions. Memory-limit and exhaustive crash-cut contracts retain
+their original sizes in both tiers. No coverage threshold or source exclusion changes.
 The launcher and child environment allowlist propagate both depth and time scale.
 Crash subprocess safety budgets scale for slow hardware; finite property corpora
 use operation counts instead of an elapsed-time timeout. The 512 TiB refusal

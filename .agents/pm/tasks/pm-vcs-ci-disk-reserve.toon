@@ -6,25 +6,33 @@ status: in_progress
 priority: 2
 tags[6]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-15T13:19:19.950Z"
+updated_at: "2026-11-15T13:27:58.228Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[3]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-11-15T13:11:29.225Z",codex-sol,"Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
   "2026-11-15T13:18:12.191Z",codex-sol,"Latest successful main run 43609609072: test 22 execution 176m30s, test 26 93m03s; each ran npm and Bun gates. CLI combined-log download returned empty; direct jobs API log supplied evidence. Slowest lifecycle model 835s; large-history and exhaustive crash matrices also dominate. Added deterministic quick prefixes, propagated depth/time-scale through the child allowlist, scaled crash subprocess safety budgets and replaced the 512 TiB refusal speed assertion with a one-read bound. Existing annotation managed fixtures already await owned resources and retry removal (maxRetries 8); #151 is regression verification, not a newly reproduced fix. Coverage thresholds and all old gate contracts retained. Local quick coverage deferred because exhaustive matrices and historical runtime make the 20-minute budget implausible."
   "2026-11-15T13:19:19.949Z",codex-sol,"Strict YAML parsing with unique-key validation passed for all three tier workflows; actionlint is unavailable. Source typecheck, build, duplicates (0%), docstrings (616 declarations) and lint pass. Initial build:test ran before dist existed and failed on three pre-existing dist imports; source build has completed and the linked check is rerunning. Bounded focused quick tests and existing ENOTEMPTY lifecycle regressions are running."
-files[6]{path,scope}:
+  "2026-11-15T13:23:30.820Z",codex-sol,"PR #209 initial head 8bc8865 is queued in CI run 43718573852 and CodeQL run 43718573874. Committed self-host verification passed. The main log shows annotation history alone cost 427s and bisect history 146s per gate. Quick histories now use a 200-commit deterministic prefix; full retains 2000. Exact read budgets, unrelated-payload refusal, zero additional bisect reads, logarithmic decisions and every signature verdict remain asserted; focused verification is running before a follow-up push."
+  "2026-11-15T13:27:56.853Z",codex-sol,"Follow-up validation: quick history read-budget and signature tests pass 3/3 through pm test in 197.04s; full defaults retain 2000 commits and original bounds. Workflow/depth tests pass 11/11 in 20.88s, including actual Bash classification, docs/tracker data, executable tracker code, source deletion accompanying a docs rename and unusual filenames. All fixture lifecycle regressions pass 7/7 with PM_TEST_TIME_SCALE=3 in 11.44s, preserving transient retries and persistent failure reporting. Test compilation and lint pass again. Initial committed self-host acceptance passed. Broader touched quick tests remain under their 20-minute ceiling."
+files[10]{path,scope}:
   .github/workflows/ci-deep.yml,project
   .github/workflows/ci.yml,project
   .github/workflows/codeql.yml,project
+  test/annotate.test.ts,project
+  test/bisect.test.ts,project
   test/dependency-refresh-workflow.test.ts,project
+  test/fixture-lifetime.test.ts,project
   test/helpers/test-environment.ts,project
+  test/signatures.test.ts,project
   test/support/depth.ts,project
-tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[4]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   "npm run typecheck && npm run build:test && npm run lint",project,240,codex-sol,"2026-11-15T13:16:42.518Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/depth.test.ts test/dependency-refresh-workflow.test.ts test/diff.test.ts test/duplicate-events.test.ts test/review-findings.test.ts test/destruction.test.ts test/erasure-lifecycle.test.ts test/tracker-admission.test.ts test/derivation-provenance.test.ts test/test-environment.test.ts,project,1200,codex-sol,"2026-11-15T13:16:43.854Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  "PM_TEST_DEPTH=quick node --test --test-concurrency=2 --test-name-pattern=\"history reads selected|commit bisect reads|native signed changes\" test/annotate.test.ts test/bisect.test.ts test/signatures.test.ts",project,300,codex-sol,"2026-11-15T13:23:33.242Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  PM_TEST_TIME_SCALE=3 node --test test/fixture-lifetime.test.ts,project,120,codex-sol,"2026-11-15T13:25:31.934Z",local_mutation,ci/quick-pr-tier-deep-local-tier
 docs[1]{path,scope}:
   docs/ci-tiers.md,project
 body: ""

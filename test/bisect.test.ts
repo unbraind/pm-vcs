@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Linked-test-driven bisect sessions over real temporary repositories and trackers. */
@@ -1416,27 +1417,28 @@ test("reset clears local state before a missing linked item can reject its miles
   assert.equal((await fixture.bisect(["start", good, bad], { item: replacement })).errorMessage, undefined);
 });
 
-test("2000-commit bisect reads each commit once and performs zero additional commit reads per decision step", async (context) => {
+test(`${testDepth(2000)}-commit bisect reads each commit once and performs zero additional commit reads per decision step`, async (context) => {
+  const size = testDepth(2000); const good = size / 5 - 1; const bad = size * 3 / 5;
   const fixture = await setup();
   const store = fixture.repository.objects;
   const tree = buildTree(store, new Map());
   const history: string[] = [];
-  for (let index = 0; index < 2000; index++) {
+  for (let index = 0; index < size; index++) {
     history.push(writeCommit(store, { tree, parents: history.slice(-1), author, committer: author, message: `commit ${index}` }));
   }
   const reads = new Map<string, number>();
   const originalRead = store.read.bind(store);
   let count = 0;
-  let limit = 2000;
+  let limit = size;
   store.read = (id) => {
     assert.ok(++count <= limit, `commit read bound exceeded: ${count} > ${limit}`);
     reads.set(id, (reads.get(id) ?? 0) + 1);
     return originalRead(id);
   };
   try {
-    const candidates = bisectCandidates(store, history[399], history[1999]);
-    assert.equal(candidates.length, 1600);
-    assert.equal([...reads.values()].reduce((total, count) => total + count, 0), 2000);
+    const candidates = bisectCandidates(store, history[good], history[size - 1]);
+    assert.equal(candidates.length, size * 4 / 5);
+    assert.equal([...reads.values()].reduce((total, count) => total + count, 0), size);
     assert.ok([...reads.values()].every((count) => count === 1));
     reads.clear();
     count = 0;
@@ -1448,16 +1450,16 @@ test("2000-commit bisect reads each commit once and performs zero additional com
       const remaining = bisectRemaining(store, candidates, verdicts);
       const selected = selectBisectCandidate(store, candidates, remaining);
       if (selected === null) {
-        assert.equal(bisectVerdict(store, candidates, verdicts).commit, history[1200]);
+        assert.equal(bisectVerdict(store, candidates, verdicts).commit, history[bad]);
         break;
       }
-      steps.push({ ...selected, outcome: history.indexOf(selected.commit) >= 1200 ? "bad" : "good", by: "boundary", at: "2000-01-01T00:00:00Z", author: "fixture" });
+      steps.push({ ...selected, outcome: history.indexOf(selected.commit) >= bad ? "bad" : "good", by: "boundary", at: "2000-01-01T00:00:00Z", author: "fixture" });
       decisions++;
       assert.equal(reads.size, 0, `decision ${decisions} reread commit metadata`);
     }
-    assert.ok(decisions <= 11, `expected at most 11 decisions, got ${decisions}`);
+    assert.ok(decisions <= Math.ceil(Math.log2(size)), `logarithmic decision bound exceeded: ${decisions}`);
     assert.equal(reads.size, 0);
-    context.diagnostic(`2000 total commits, 1600 candidates: 2000 setup reads, ${decisions} decisions, 0 commit reads per decision and final verdict`);
+    context.diagnostic(`${size} total commits, ${size * 4 / 5} candidates: ${size} setup reads, ${decisions} decisions, 0 commit reads per decision and final verdict`);
   } finally { store.read = originalRead; }
 });
 

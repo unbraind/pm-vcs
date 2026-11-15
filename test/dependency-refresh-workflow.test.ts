@@ -178,3 +178,37 @@ test("Bun witness skips when either optional tool is unavailable", () => {
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("quick/deep workflows retain tier boundaries, timeouts and safe change detection", () => {
+  const workflows = Object.fromEntries(["ci.yml", "ci-deep.yml", "codeql.yml"].map(file => {
+    const document = parseDocument(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"), { uniqueKeys: true });
+    assert.deepEqual(document.errors, []);
+    return [file, document.toJS()];
+  }));
+  const ci = workflows["ci.yml"]; const deep = workflows["ci-deep.yml"];
+  assert.deepEqual(Object.keys(ci.on).sort(), ["pull_request", "workflow_dispatch"]);
+  assert.deepEqual(deep.jobs.deep.strategy.matrix, { "node-version": [22, 26], "package-manager": ["npm", "bun"] });
+  assert.equal(deep.jobs.deep.env.PM_TEST_DEPTH, "full"); assert.equal(deep.jobs.deep.env.PM_TEST_TIME_SCALE, 3);
+  assert.equal(deep.jobs.deep["timeout-minutes"], 120);
+  for (const job of Object.values(ci.jobs) as { env: { PM_TEST_DEPTH: string }; "timeout-minutes": number }[]) {
+    assert.equal(job.env.PM_TEST_DEPTH, "quick"); assert.ok(job["timeout-minutes"] <= 30);
+  }
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-tier-classifier-"));
+  try {
+    const script = ci.jobs.test.steps.find((step: { name: string }) => step.name === "Detect code changes").run as string;
+    assert.equal(script, ci.jobs["windows-acceptance-launcher"].steps.find((step: { name: string }) => step.name === "Detect code changes").run);
+    const pathsFile = join(root, "paths"); const output = join(root, "output");
+    for (const [paths, code] of [
+      [["README.md", ".agents/pm/tasks/fixture.toon", "docs/guide.md", "LICENSE"], false],
+      [["engine/source.ts", "docs/moved.md"], true],
+      [[".agents/pm/nested/extension.ts"], true], [[".agents/pm/hook.mjs"], true],
+      [["test/unusual\nname.test.ts"], true], [["selfhost.bundle"], true],
+    ] as [string[], boolean][]) {
+      writeFileSync(pathsFile, paths.join("\0") + "\0"); writeFileSync(output, "");
+      const result = spawnSync("bash", ["-c", 'git() { [[ "$*" == *"--no-renames -z"* ]] || return 19; cat "$PATHS_FILE"; };\n' + script], {
+        env: testEnvironment({ GITHUB_EVENT_NAME: "pull_request", BASE_SHA: "base", HEAD_SHA: "head", RUNNER_TEMP: root, GITHUB_OUTPUT: output, PATHS_FILE: pathsFile }), encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr); assert.equal(readFileSync(output, "utf8"), `code=${code}\n`);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

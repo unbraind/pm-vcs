@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Immutable attribution through ordinary PM records, branch merges, renames and bounded histories. */
@@ -196,12 +197,13 @@ test("native PM snapshots supply item links and recorded harness/model provenanc
   assert.notEqual(readFileSync(join(root, path), "utf8"), before);
 });
 
-test("2000-change history reads selected ancestry metadata once and never reads unrelated payloads or refs", () => {
+test(`${testDepth(2000)}-change history reads selected ancestry metadata once and never reads unrelated payloads or refs`, () => {
+  const size = testDepth(2000);
   const repo = Repository.init(temp());
   const first = edit(repo, "selected.txt", "one\ntwo\n");
   const selected = flattenTree(repo.objects, readCommit(repo.objects, first).tree).get("selected.txt")!;
   let tip = first; const unrelatedPayloads = new Set<ObjectId>(); const ancestors = new Set<ObjectId>([first]);
-  for (let index = 1; index < 2000; index++) {
+  for (let index = 1; index < size; index++) {
     const payload = repo.objects.write("blob", Buffer.from(`unrelated ${index}`)); unrelatedPayloads.add(payload);
     const tree = buildTree(repo.objects, new Map([["selected.txt", selected], ["unrelated.txt", { id: payload, mode: "100644", fileId: "e".repeat(32) }]]));
     tip = writeCommit(repo.objects, { tree, parents: [tip], author, committer: author, message: `unrelated ${index}` }); ancestors.add(tip);
@@ -214,9 +216,9 @@ test("2000-change history reads selected ancestry metadata once and never reads 
   const rows = annotatePath(repo.objects, tip, "selected.txt");
   assert.equal(rows.length, 1); assert.equal(rows[0].changeId, expectedChange);
   assert.equal(reads.has(other), false); for (const id of unrelatedPayloads) assert.equal(reads.has(id), false);
-  assert.equal([...ancestors].reduce((sum, id) => sum + (reads.get(id) ?? 0), 0), 2000);
+  assert.equal([...ancestors].reduce((sum, id) => sum + (reads.get(id) ?? 0), 0), size);
   assert.ok([...reads.values()].every((count) => count === 1));
-  assert.ok(reads.size <= 4001, `metadata and one file payload only: ${reads.size}`);
+  assert.ok(reads.size <= size * 2 + 1, `metadata and one file payload only: ${reads.size}`);
   // A late file's unavailable alternatives must not walk history before its birth.
   repo.objects.read = original;
   const fileId = "c".repeat(32);

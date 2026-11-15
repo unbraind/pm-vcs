@@ -1,3 +1,4 @@
+import { testTime } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Native fixture cleanup waits for its owners and retries transient nonempty directories. */
@@ -55,7 +56,7 @@ test("fixture teardown surfaces task failures after closing all other owners and
 test("fixture cleanup actively stops a registered live child before removing its root", async () => {
   const fixture = makeManagedTempDir(); const child = fixture.child(spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { env: testEnvironment(), stdio: "ignore" }));
   const cleanup = fixture.cleanup(); let timer: ReturnType<typeof setTimeout> | undefined;
-  try { const completed = await Promise.race([cleanup.then(() => true), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 1500); })]); assert.equal(completed, true, "Cleanup must stop its live child"); assert.equal(existsSync(fixture.root), false); }
+  try { const completed = await Promise.race([cleanup.then(() => true), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), testTime(1500)); })]); assert.equal(completed, true, "Cleanup must stop its live child"); assert.equal(existsSync(fixture.root), false); }
   finally { clearTimeout(timer); if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await cleanup; }
 });
 
