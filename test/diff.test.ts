@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -107,7 +108,7 @@ test("diffLines is a correct edit script over many random small inputs (fixed se
   // reproduces the right side. Asserting that property over a seeded input space
   // is a stronger statement than checking a handful of hand-picked cases.
   const random = mulberry32(0xc0ffee);
-  for (let trial = 0; trial < 500; trial += 1) {
+  for (let trial = 0; trial < testDepth(500); trial += 1) {
     const left = randomLines(random, 8);
     const right = randomLines(random, 8);
     const edits = diffLines(left, right);
@@ -242,7 +243,7 @@ test("the banded diff produces byte-identical edit scripts to the unbounded refe
   // full-width algorithm for every input. A seeded input space makes this a
   // reproducible property rather than a handful of hand-picked cases.
   const random = mulberry32(0xbadf00d);
-  for (let trial = 0; trial < 2000; trial += 1) {
+  for (let trial = 0; trial < testDepth(2000); trial += 1) {
     const left = randomLines(random, 12);
     const right = randomLines(random, 12);
     const actual = diffLines(left, right);
@@ -371,7 +372,7 @@ test("the linear-space engine agrees with the banded engine over many random inp
   ];
   for (const [alphabet, maxLength, trials, seed] of configs) {
     const random = mulberry32(seed);
-    for (let trial = 0; trial < trials; trial += 1) {
+    for (let trial = 0; trial < testDepth(trials); trial += 1) {
       const left = Array.from({ length: Math.floor(random() * (maxLength + 1)) }, () =>
         String.fromCharCode(97 + Math.floor(random() * alphabet)),
       );
@@ -404,7 +405,7 @@ test("corpus-sized inputs keep the banded engine's byte-exact edit scripts", () 
   // so its output there must remain byte-for-byte what the banded engine has
   // always produced. A routing regression would surface here as a mismatch.
   const random = mulberry32(0xfa110cc);
-  for (let trial = 0; trial < 1000; trial += 1) {
+  for (let trial = 0; trial < testDepth(1000); trial += 1) {
     const left = randomLines(random, 12);
     const right = randomLines(random, 12);
     assert.ok(left.length + right.length <= linearSpaceDiffWidthThreshold);

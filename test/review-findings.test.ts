@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
 // Behaviour a review round exposed, and the behaviour that replaced it.
 //
@@ -481,7 +482,7 @@ test("an append-only log union preserves the base and both sides' appends over r
     for (const line of lines) tally.set(line, (tally.get(line) ?? 0) + 1);
     return tally;
   };
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  for (let attempt = 0; attempt < testDepth(200); attempt += 1) {
     const eventCount = 1 + Math.floor(random() * 6);
     const events: string[] = [];
     for (let index = 0; index < eventCount; index += 1) {

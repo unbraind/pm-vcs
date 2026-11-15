@@ -6,8 +6,23 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
+import { parseDocument } from "yaml";
 import { fileURLToPath } from "node:url";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
+
+/** Read the real gate scripts in both tiers, expanding the deep package-manager matrix. */
+function gateScripts(): string[] {
+  const step = (file: string, name: string): string => {
+    const workflow = parseDocument(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"), { uniqueKeys: true });
+    assert.deepEqual(workflow.errors, []);
+    const steps = workflow.toJS().jobs[file === "ci.yml" ? "test" : "deep"].steps as { name: string; run?: string }[];
+    const script = steps.find(step => step.name === name)?.run;
+    assert.ok(script, `missing ${name}`);
+    return script;
+  };
+  const deep = step("ci-deep.yml", "Full release gate");
+  return [step("ci.yml", "Quick npm release gate"), ...["npm", "bun"].map(manager => deep.replaceAll("${{ matrix.package-manager }}", manager))];
+}
 
 /** Check optional witness tools without making them prerequisites for Node tests. */
 function commandAvailable(command: string): boolean {
@@ -95,11 +110,9 @@ test("dependency refresh provisions the CI-pinned Bun runtime before release che
 test("Bun CI gate executes tracker lens tests in the Bun runtime", {
   skip: !commandAvailable("bash") || !commandAvailable("bun"),
 }, () => {
-  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const tail = ci.slice(ci.indexOf("      - name: Full Bun release gate"));
-  const step = tail.slice(0, tail.indexOf("\n\n"));
-  const script = step.slice(step.indexOf("        run: |\n") + "        run: |\n".length)
-    .split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
+  const workflow = parseDocument(readFileSync(new URL("../.github/workflows/ci-deep.yml", import.meta.url), "utf8")).toJS();
+  const native = workflow.jobs.deep.steps.find((step: { name: string }) => step.name === "Native Bun contract tests").run as string;
+  const script = "bun run release:check\n" + native;
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-bun-workflow-"));
   try {
     mkdirSync(join(root, "test"));
@@ -109,6 +122,7 @@ import { writeFileSync } from "node:fs";
 import { test } from "node:test";
 test("runtime witness", () => { assert.ok(process.versions.bun); writeFileSync("bun-ran", process.versions.bun); });
 `);
+    writeFileSync(join(root, "test/change-bundles.test.ts"), "");
     const result = spawnSync("bash", ["-e", "-c", script], { env: testEnvironment({ RUNNER_TEMP: root }), cwd: root, encoding: "utf8", timeout: 120_000 });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(join(root, "gate-ran"), "utf8"), "yes");
@@ -118,12 +132,11 @@ test("runtime witness", () => { assert.ok(process.versions.bun); writeFileSync("
 
 test("release gates retire only their own scratch receipts after success and failure", () => {
   const root=mkdtempSync(join(tmpdir(),"pm-vcs-gate-scratch-"));const runner=join(root,"runner");const outside=join(root,"outside");mkdirSync(runner);mkdirSync(outside);writeFileSync(join(runner,"foreign"),"unrelated runner file");writeFileSync(join(outside,"foreign"),"unrelated audit file");
-  const ci=readFileSync(new URL("../.github/workflows/ci.yml",import.meta.url),"utf8");
   const allocations=join(root,"allocations.json");
   const probe=`import assert from 'node:assert/strict';import {mkdtempSync,readdirSync,writeFileSync} from 'node:fs';import {tmpdir} from 'node:os';import {join,sep} from 'node:path';import {ObjectStore} from ${JSON.stringify(new URL("../engine/objects.ts",import.meta.url).href)};assert.ok(tmpdir().startsWith(process.env.RUNNER_TEMP+sep));const root=mkdtempSync(join(tmpdir(),'native-store-'));new ObjectStore(join(root,'objects')).write('blob',Buffer.from('fixture'));assert.ok(readdirSync(tmpdir()).some(name=>name.startsWith('pm-vcs-namespace-')));writeFileSync(join(tmpdir(),'owned-receipt'),'fixture');writeFileSync(process.env.GATE_ALLOCATIONS,JSON.stringify({disk:tmpdir(),memory:process.env.PM_VCS_CRASH_TMPDIR}));process.exit(Number(process.env.GATE_FAILURE));`;
   try {
-    for(const gate of ["npm","Bun"])for(const status of [0,7])for(const metrics of [true,false]){
-      const tail=ci.slice(ci.indexOf(`      - name: Full ${gate} release gate`));const step=tail.slice(0,tail.indexOf("\n\n"));const marker="        run: |\n";const script=step.includes(marker)?step.slice(step.indexOf(marker)+marker.length).split("\n").filter(line=>line.startsWith("          ")).map(line=>line.slice(10)).join("\n"):step.match(/run: ([^\n]+)/u)![1]!;
+    for(const script of gateScripts())for(const status of [0,7])for(const metrics of [true,false]){
+
       const command=(metrics?'':'df() { if [[ "$2" == "/" ]]; then command df "$@"; else return 99; fi; }; du() { return 98; };\n')+'npm() { "$GATE_NODE" --input-type=module -e "$GATE_PROBE"; }; bun() { npm; };\n'+script;
       const result=spawnSync("bash",["-c",command],{env:testEnvironment({RUNNER_TEMP:runner,TMPDIR:outside,PM_VCS_CRASH_TMPDIR:outside,GATE_ALLOCATIONS:allocations,GATE_NODE:process.execPath,GATE_PROBE:probe,GATE_FAILURE:String(status)}),encoding:"utf8",timeout:60_000});
       assert.equal(result.status,status,result.stderr);assert.match(result.stdout,/gate storage before-gate/u);assert.match(result.stdout,/gate storage before-cleanup/u);if(metrics)assert.match(result.stdout,/Inodes/u);assert.deepEqual(readdirSync(runner),["foreign"]);assert.equal(readFileSync(join(runner,"foreign"),"utf8"),"unrelated runner file");assert.deepEqual(readdirSync(outside),["foreign"]);assert.equal(readFileSync(join(outside,"foreign"),"utf8"),"unrelated audit file");
@@ -134,9 +147,8 @@ test("release gates retire only their own scratch receipts after success and fai
 
 test("release gate free-space guards reject a missing KiB and accept exactly twenty GiB", () => {
   const root=mkdtempSync(join(tmpdir(),"pm-vcs-gate-space-"));const runner=join(root,"runner");mkdirSync(runner);const witness=join(root,"ran");
-  const ci=readFileSync(new URL("../.github/workflows/ci.yml",import.meta.url),"utf8");
-  try{for(const gate of["npm","Bun"])for(const free of[20_971_519,20_971_520]){
-    rmSync(witness,{force:true});const tail=ci.slice(ci.indexOf(`      - name: Full ${gate} release gate`));const step=tail.slice(0,tail.indexOf("\n\n"));const marker="        run: |\n";const script=step.slice(step.indexOf(marker)+marker.length).split("\n").filter(line=>line.startsWith("          ")).map(line=>line.slice(10)).join("\n");
+  try{for(const script of gateScripts())for(const free of[20_971_519,20_971_520]){
+    rmSync(witness,{force:true});
     const commands='df() { if [[ "$2" == "/" ]]; then if [[ "$1" == "-Pk" ]]; then printf "Filesystem 1024-blocks Used Available Capacity Mounted\\nfixture 99999999 1 %s 1%% /\\n" "$GATE_FREE_KIB"; else printf "root space fixture\\n"; fi; else return 99; fi; }; npm() { printf "ran\\n" >> "$GATE_WITNESS"; }; bun() { npm; };\n';
     const result=spawnSync("bash",["-c",commands+script],{env:testEnvironment({RUNNER_TEMP:runner,GATE_FREE_KIB:String(free),GATE_WITNESS:witness}),encoding:"utf8",timeout:60_000});
     assert.equal(result.status,free<20_971_520?1:0,result.stderr);assert.equal(existsSync(witness),free>=20_971_520);if(free<20_971_520)assert.match(result.stderr,/fewer than 20 GiB free/u);assert.deepEqual(readdirSync(runner),[]);

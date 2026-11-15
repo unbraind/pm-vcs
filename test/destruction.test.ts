@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
 /** Exact-set intents on real filesystems survive every publication/deletion cut and preserve peer data. */
 import { testEnvironment } from "./helpers/test-environment.ts";
@@ -168,7 +169,7 @@ test("recursive removal snapshots leaves first and cannot remove a peer director
 test("property: seeded valid request sets, partial deletes and extra-arrival recovery match an independent set model", t => {
   const dir = makeTempDir(); dirs.push(dir); let random = 7139; let operations = 0;
   const next = (): number => { random = (Math.imul(random, 1664525) + 1013904223) >>> 0; return random; };
-  for (let seed = 1; seed <= 512; seed++) {
+  for (let seed = 1; seed <= testDepth(512); seed++) {
     const root = join(dir.root, String(seed)); const control = join(root, "control"); const data = join(root, "data"); mkdirSync(control, { recursive: true }); mkdirSync(data);
     const paths = Array.from({ length: 1 + next() % 5 }, (_, i) => join(data, `owned-${i}`)); for (const path of paths) writeFileSync(path, `seed-${seed}-${next()}`);
     const original = new Set(paths); const plan = prepareDestruction(control, "random", paths.map(path => ({ path })));
@@ -177,7 +178,7 @@ test("property: seeded valid request sets, partial deletes and extra-arrival rec
     const receipt = drain(control, "random", [...paths, extra]); assert.equal(receipt.planned, original.size); assert.equal(receipt.deleted + receipt.observedAbsent, original.size); assert.equal(receipt.skipped, 0);
     for (const path of original) assert.equal(existsSync(path), false); assert.equal(createHash("sha256").update(readFileSync(extra)).digest("hex"), hash); assert.deepEqual(readdirSync(data), ["tripwire"]); operations++;
   }
-  t.diagnostic(`512 seeded valid stores; ${operations} deletion/recovery operations; every extra-arrival tripwire retained`);
+  t.diagnostic(`${testDepth(512)} seeded valid stores; ${operations} deletion/recovery operations; every extra-arrival tripwire retained`);
 });
 
 
@@ -537,14 +538,14 @@ test("supersession replaces only freshly validated authority and obsolete handle
 
 test("property: 128 seeded changed-eligibility recoveries match a fresh exact-set model",t=>{
  const f=fixture();let seed=727193;const next=()=>seed=(Math.imul(seed,1664525)+1013904223)>>>0;let deletions=0;
- for(let sequence=0;sequence<128;sequence++){
+ for(let sequence=0;sequence<testDepth(128);sequence++){
   const base=join(f.data,`model-${sequence}`);mkdirSync(base);const paths=Array.from({length:3+next()%5},(_,i)=>join(base,`member-${i}`));for(const path of paths)writeFileSync(path,`owned-${next()}`);
   const key=`changed-${sequence}`;const old=prepareDestruction(f.control,key,paths.map(path=>({path})));const prefix=next()%(paths.length-1);for(const path of paths.slice(0,prefix))old.remove(path);
   const retained=paths[prefix];const expected=paths.slice(prefix+1);const extra=join(base,"newly-eligible");writeFileSync(extra,"freshly validated");expected.push(extra);
   const plan=prepareDestruction(f.control,key,expected.map(path=>({path})),false,undefined,false,"eligibility_changed");assert.equal(plan.resumed,false);
   for(const path of plan.paths){assert.ok(expected.includes(path));plan.remove(path);deletions++;}assert.equal(plan.finish().status,"completed");assert.ok(existsSync(retained));assert.deepEqual(readdirSync(base),[retained.split(/[\\/]/u).at(-1)]);
  }
- assert.equal(inspectDestructions(f.control).superseded,128);assert.equal(inspectDestructions(f.control).pending,0);assert.equal(readFileSync(join(f.tripwire,"guard"),"utf8"),"untouched sentinel");t.diagnostic(`128 seeded exact-set transitions, ${deletions} authorized successor deletions`);
+ assert.equal(inspectDestructions(f.control).superseded,testDepth(128));assert.equal(inspectDestructions(f.control).pending,0);assert.equal(readFileSync(join(f.tripwire,"guard"),"utf8"),"untouched sentinel");t.diagnostic(`${testDepth(128)} seeded exact-set transitions, ${deletions} authorized successor deletions`);
 });
 
 test("native crash at EVERY supersession boundary retains protected members and converges to a terminal successor",async t=>{

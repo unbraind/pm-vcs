@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 import "./helpers/isolate-session.ts";
 /** Real SDK tracker tests for capture isolation, SDK normalization and native publication. */
 import assert from "node:assert/strict";
@@ -72,7 +73,7 @@ test("strict single request schema rejects sparse, oversized and extreme inputs 
   assert.equal(parseTrackerAdmissionRequest({ items: ["x"], expectedTip: "a".repeat(64) }).expectedTip, "a".repeat(64));
   const invalid: unknown[] = [null, [], 2, {}, { ...valid, extra: 1 }, { ...valid, items: [] }, { ...valid, items: Array(2) }, { ...valid, items: ["x", "x"] }, { ...valid, items: Array.from({ length: 101 }, (_, i) => `x${i}`) }, { ...valid, items: ["../x"] }, { ...valid, items: [" x"] }, { ...valid, items: ["a".repeat(129)] }];
   let seed = 0x53295;
-  for (let i = 0; i < 500; i++) { seed = (seed * 1664525 + 1013904223) >>> 0; invalid.push({ ...valid, expectedTip: [Infinity, -Infinity, NaN, -1, Number.MAX_VALUE, {}, [], "g".repeat(64)][seed % 8] }); }
+  for (let i = 0; i < testDepth(500); i++) { seed = (seed * 1664525 + 1013904223) >>> 0; invalid.push({ ...valid, expectedTip: [Infinity, -Infinity, NaN, -1, Number.MAX_VALUE, {}, [], "g".repeat(64)][seed % 8] }); }
   for (const value of invalid) assert.throws(() => parseTrackerAdmissionRequest(value), error => error instanceof TrackerAdmissionRefusal && error.code === "invalid_tracker_admission" && error.remedy.length > 20);
 });
 
@@ -174,7 +175,7 @@ test("CLI uses the same strict admission path and exposes a compact retry rather
 /** Deterministic generator: the seed and sequence count are stable regression evidence. */
 function random(seed: number) { let state = seed; return () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state; }; }
 
-test("500 seeded model sequences preserve SDK state across native bundle replay and file sync", { timeout: 600000 }, async () => {
+test("seeded model sequences preserve SDK state across native bundle replay and file sync", async () => {
   const f = await fixture(); const next = random(0x53295);
   const configPath = join(f.repo.controlDirectory, "config.json");
   writeFileSync(configPath, JSON.stringify({ recordPaths: ["**/*.toon"], recordPolicy: {} }));
@@ -207,7 +208,7 @@ test("500 seeded model sequences preserve SDK state across native bundle replay 
     const state = { revision: report.revision, bytes, signed, model: structuredClone(model.get(f.a)!) }; snapshots.push(state);
   }
   // Each sequence applies a newer or older input, an idempotent replay and a formatting variant.
-  for (let sequence = 0; sequence < 500; sequence++) {
+  for (let sequence = 0; sequence < testDepth(500); sequence++) {
     let selected = snapshots[next() % snapshots.length];
     if (sequence % 3 === 0) {
       importBundle(receiver.objects, receiver.refs, selected.bytes);

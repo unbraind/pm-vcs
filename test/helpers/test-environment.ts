@@ -5,7 +5,7 @@ export const TEST_ENVIRONMENT_KEYS = [
   "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CEILING_DIRECTORIES",
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
   "npm_execpath", "npm_node_execpath", "npm_config_cache", "npm_config_userconfig", "NPM_CONFIG_USERCONFIG", "npm_config_registry", "NPM_CONFIG_REGISTRY",
-  "BUN_INSTALL", "BUN_BE_BUN", "PM_VCS_CRASH_TMPDIR",
+  "BUN_INSTALL", "BUN_BE_BUN", "PM_VCS_CRASH_TMPDIR", "PM_TEST_DEPTH", "PM_TEST_TIME_SCALE",
 ] as const;
 
 /**

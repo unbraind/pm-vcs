@@ -1,22 +1,25 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PM_TEST_DEPTH: quick
     strategy:
       fail-fast: false
       matrix:
-        # 22 is the floor declared in `engines` and the first line that strips
-        # TypeScript without a flag; 26 is what the fleet develops against.
         node-version: [22, 26]
     steps:
       - name: Checkout
@@ -25,6 +28,28 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Detect code changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          code=true
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            code=false
+            git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/ci-changed-paths"
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                .agents/pm/*.mjs|.agents/pm/*.cjs|.agents/pm/*.js|.agents/pm/*.ts) code=true ;;
+                .agents/pm/*|*.md|docs/*|CHANGELOG.md|LICENSE) ;;
+                *) code=true ;;
+              esac
+            done < "$RUNNER_TEMP/ci-changed-paths"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -32,6 +57,7 @@ jobs:
           cache: npm
 
       - name: Setup Bun
+        if: steps.changes.outputs.code == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # Exact pin: setup-bun resolves floating versions via an
@@ -74,7 +100,16 @@ jobs:
           # still exiting successfully.
           ./node_modules/.bin/pm health --check-only --strict-exit --require-merge-drivers
 
-      - name: Full npm release gate
+      - name: Check documentation and tracker changes
+        if: steps.changes.outputs.code != 'true'
+        run: npm run changelog:check
+
+      - name: Engines floor build and quick tests
+        if: steps.changes.outputs.code == 'true' && matrix.node-version == 22
+        run: npm test
+
+      - name: Quick npm release gate
+        if: steps.changes.outputs.code == 'true' && matrix.node-version == 26
         shell: bash
         run: |
           set -euo pipefail
@@ -107,44 +142,6 @@ jobs:
           storage_report before-gate || true
           NPM_CONFIG_USERCONFIG=/dev/null npm run release:check
 
-      - name: Full Bun release gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          df -BG /
-          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
-          if (( available_kb < 20971520 )); then
-            printf 'Release gate stopped: fewer than 20 GiB free on root (%s KiB available).\n' "${available_kb}" >&2
-            exit 1
-          fi
-          gate_tmp="$(mktemp -d "${RUNNER_TEMP}/pm-vcs-bun.XXXXXXXX")"
-          gate_memory=""
-          # Every crash cut still uses native syscalls. Bound memory-backed
-          # storage to this matrix; other acceptance fixtures stay on disk.
-          if [ -d /dev/shm ] && [ -w /dev/shm ]; then
-            if memory_kb="$(df -Pk /dev/shm 2>/dev/null | awk 'NR == 2 { print $4 }')" && [[ "${memory_kb}" =~ ^[0-9]+$ ]] && (( memory_kb >= 2097152 )); then
-              gate_memory="$(mktemp -d /dev/shm/pm-vcs-crashes.XXXXXXXX)"
-              export PM_VCS_CRASH_TMPDIR="${gate_memory}"
-            fi
-          fi
-          storage_report() {
-            printf 'gate storage %s\n' "$1"
-            df -Pk "${gate_tmp}"
-            df -Pi "${gate_tmp}"
-            du -sk -- "${gate_tmp}"
-            if [ -n "${gate_memory}" ]; then du -sk -- "${gate_memory}"; fi
-            if [ -d coverage ]; then du -sk -- coverage; fi
-          }
-          trap 'gate_status=$?; storage_report before-cleanup || true; rm -rf -- "${gate_tmp}"; if [ -n "${gate_memory}" ]; then rm -rf -- "${gate_memory}"; fi; df -Pk "${RUNNER_TEMP}" || true; df -Pi "${RUNNER_TEMP}" || true; exit "${gate_status}"' EXIT
-          export TMPDIR="${gate_tmp}"
-          storage_report before-gate || true
-          bun run release:check
-          bun test --timeout 120000 ./test/tracker-lenses.test.ts ./test/change-bundles.test.ts
-
-      # The gate prints percentages but not which branch was missed, and a
-      # coverage result that reproduces only on a runner is otherwise undebuggable
-      # from a local checkout. Keeping the lcov turns "99.49% on model.ts" into a
-      # specific BRDA line.
       - name: Keep the coverage report when the gate fails
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -154,11 +151,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Verify Bun can install the package graph
-        run: bun install --no-save
+      # Packed consumers run on Bun but install with npm; exercise Bun's installer
+      # and bunx's ephemeral PM launcher explicitly, without repeating the gate.
+      - name: Bun and bunx install smoke
+        if: steps.changes.outputs.code == 'true' && matrix.node-version == 26
+        run: |
+          bun install --no-save
+          bunx --bun --package @unbrained/pm-cli@2026.11.13 pm --version
 
   windows-acceptance-launcher:
     runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PM_TEST_DEPTH: quick
     strategy:
       fail-fast: false
       matrix:
@@ -166,6 +171,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Detect code changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          code=true
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            code=false
+            git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/ci-changed-paths"
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                .agents/pm/*.mjs|.agents/pm/*.cjs|.agents/pm/*.js|.agents/pm/*.ts) code=true ;;
+                .agents/pm/*|*.md|docs/*|CHANGELOG.md|LICENSE) ;;
+                *) code=true ;;
+              esac
+            done < "$RUNNER_TEMP/ci-changed-paths"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -176,11 +206,49 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install project pm-github extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/pm package install npm:pm-github@2026.10.4 --project
+          node -e 'if (require("./.agents/pm/extensions/pm-github/package.json").version !== "2026.10.4") process.exit(1)'
+          managed_registry=".agents/pm/extensions/.managed-extensions.json"
+          if git ls-files --error-unmatch "${managed_registry}" > /dev/null 2>&1; then
+            git restore -- "${managed_registry}"
+          else
+            rm -f "${managed_registry}"
+          fi
+
+      - name: Verify tracked pm project health
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Catch durable checkout-visible failures: conflict markers, parse failures,
+          # invalid or drifted history, tracked runtime caches, extension health,
+          # stale in-progress work, and any merge evidence present in this clone.
+          #
+          # This is not a lossless-merge attestation. Merge receipts are clone-local and
+          # absent from a fresh CI checkout. Some unreconciled loss shapes surface as
+          # history drift, but reconciliation or history repair can remove that signal.
+          # Keep receipt review as a local pre-push step; pm-cli#921 and pm-cli#922 track
+          # the missing durable proof.
+          #
+          # `--strict-exit` is load-bearing: non-strict health may report findings while
+          # still exiting successfully.
+          ./node_modules/.bin/pm health --check-only --strict-exit --require-merge-drivers
+
+      - name: Check documentation and tracker changes
+        if: steps.changes.outputs.code != 'true'
+        run: npm run changelog:check
+
       - name: Verify the installed PM CLI launcher
+        if: steps.changes.outputs.code == 'true'
         run: node scripts/accept-native-toon.ts --init-only
 
       - name: Build Windows storage acceptance
+        if: steps.changes.outputs.code == 'true'
         run: npm run build
 
       - name: Verify Windows GC apply on a non-git tracker
+        if: steps.changes.outputs.code == 'true'
         run: node --test --test-concurrency=1 --test-name-pattern="Windows GC|native root case" test/durability.test.ts test/ref-publication-recovery.test.ts

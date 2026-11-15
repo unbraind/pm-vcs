@@ -3,12 +3,24 @@ name: CodeQL
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - ".agents/pm/**"
+      - "**/*.md"
+      - "docs/**"
+      - "package-lock.json"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - ".agents/pm/**"
+      - "**/*.md"
+      - "docs/**"
+      - "package-lock.json"
   schedule:
     # Weekly CodeQL scan. The minute/hour slot is unique to this repository so
     # the pm fleet does not fire every scan against the API in the same minute.
     - cron: "17 6 * * 1"
+
+permissions: {}
 
 concurrency:
   group: codeql-${{ github.workflow }}-${{ github.ref }}
@@ -22,6 +34,7 @@ jobs:
       actions: read
       contents: read
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

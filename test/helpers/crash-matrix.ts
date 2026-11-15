@@ -1,3 +1,4 @@
+import { testTime } from "../support/depth.ts";
 /** Complete ordinal enumeration is an assertion, independent of scheduling and cut execution. */
 import { mkdirSync } from "node:fs";
 import assert from "node:assert/strict";
@@ -42,10 +43,10 @@ export interface CrashEntry { entry: string; preloads: string[] }
 /** Bundle preloads too: fatal children need no TypeScript loader or repeated compilation. */
 export function prepareCrashEntry(root: string, source: string): CrashEntry {
   const entry = join(root, "publication.mjs");
-  const bundle = spawnSync("bun", ["build", `./${source}`, "--target=node", "--format=esm", "--minify", "--keep-names", `--outfile=${entry}`], { cwd: packageRoot, env: testEnvironment({ NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: 30_000 });
+  const bundle = spawnSync("bun", ["build", `./${source}`, "--target=node", "--format=esm", "--minify", "--keep-names", `--outfile=${entry}`], { cwd: packageRoot, env: testEnvironment({ NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: testTime(30_000) });
   if ((bundle.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return { entry: join(packageRoot, source), preloads: ["forbid-git.ts", "crash-child.ts"].map(name => pathToFileURL(join(packageRoot, "test/helpers", name)).href) };
   assert.equal(bundle.status, 0, `prepare the shared publication entry point: ${bundle.stderr}`);
-  const preloads = spawnSync("bun", ["build", "./test/helpers/forbid-git.ts", "./test/helpers/crash-child.ts", "--target=node", "--format=esm", "--entry-naming=[name].mjs", `--outdir=${root}`], { cwd: packageRoot, env: testEnvironment({ NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: 30_000 });
+  const preloads = spawnSync("bun", ["build", "./test/helpers/forbid-git.ts", "./test/helpers/crash-child.ts", "--target=node", "--format=esm", "--entry-naming=[name].mjs", `--outdir=${root}`], { cwd: packageRoot, env: testEnvironment({ NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: testTime(30_000) });
   assert.equal(preloads.status, 0, `prepare shared publication preloads: ${preloads.stderr}`);
   return { entry, preloads: ["forbid-git.mjs", "crash-child.mjs"].map(name => pathToFileURL(join(root, name)).href) };
 }

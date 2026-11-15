@@ -1,3 +1,4 @@
+import { testTime } from "../support/depth.ts";
 /** Bounded fatal children with synchronous, isolated native preparation and recovery in the covered parent. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -22,7 +23,7 @@ function inNamespace<T>(root: string, run: () => T): T {
 /** Resolve only after close, so cleanup cannot race a still-running native child. */
 function runChild(entry: string, preloads: string[], args: readonly string[], root: string, cache: string): Promise<ChildResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [...preloads.flatMap(path => ["--import", path]), entry, ...args], { env: { ...testEnvironment(), ...discardChildCoverage(), TMPDIR: root, TMP: root, TEMP: root, CRASH_COMPILE_CACHE: cache, CRASH_TIMING: "1", GIT_CEILING_DIRECTORIES: root }, stdio: ["ignore", "pipe", "pipe", "pipe"], timeout: 30_000 });
+    const child = spawn(process.execPath, [...preloads.flatMap(path => ["--import", path]), entry, ...args], { env: { ...testEnvironment(), ...discardChildCoverage(), TMPDIR: root, TMP: root, TEMP: root, CRASH_COMPILE_CACHE: cache, CRASH_TIMING: "1", GIT_CEILING_DIRECTORIES: root }, stdio: ["ignore", "pipe", "pipe", "pipe"], timeout: testTime(30_000) });
     let stdout = ""; let stderr = ""; let trace = ""; let failure: Error | undefined;
     child.stdout?.on("data", value => { stdout += String(value); }); child.stderr?.on("data", value => { stderr += String(value); });
     (child.stdio[3] as Readable | null)?.on("data", value => { trace += String(value); });
