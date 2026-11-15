@@ -10,9 +10,14 @@ export function testDepth(full: number): number {
 /** Scale subprocess safety budgets on slower hardware, without changing product assertions. */
 export function testTime(milliseconds: number, factor = process.env.PM_TEST_TIME_SCALE): number {
   const scale = factor === undefined ? 1 : Number(factor);
-  const result = milliseconds * scale;
-  if (!Number.isFinite(scale) || scale <= 0 || !Number.isSafeInteger(result) || result > 2_147_483_647) {
+  const result = Math.ceil(milliseconds * scale);
+  if (!Number.isFinite(scale) || scale <= 0 || !Number.isSafeInteger(result) || result < 1 || result > 2_147_483_647) {
     throw new Error("PM_TEST_TIME_SCALE must produce a positive finite timer budget");
   }
   return result;
+}
+
+/** Bound quick crash recovery to 25 generated cases; full depth retains every enumerated cut. */
+export function testPrefix<T>(cases: readonly T[]): T[] {
+  return cases.slice(0, process.env.PM_TEST_DEPTH === "quick" ? Math.min(cases.length, 25) : cases.length);
 }

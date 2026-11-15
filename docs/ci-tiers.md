@@ -11,17 +11,17 @@ Windows jobs at 15 minutes. These are initial bounds pending PR measurements.
 | --- | --- | --- | --- | --- |
 | npm ci, merge-driver preparation, pinned project extension | yes | yes | all four required jobs | every job |
 | Strict tracker health, required merge drivers | yes | yes | all four required jobs | every job |
-| Build and test compilation | yes | yes, in release gate | — | full release gate |
+| Build and test compilation | yes | yes, in release gate | Linux build for self-host acceptance | full release gate |
 | Test suite, seeded properties, crash/recovery matrices, packed Node/Bun consumers | quick | quick, via coverage | — | full release gate |
 | Typecheck, lint, duplication and docstring gates | — | yes | — | full release gate |
 | Per-file coverage, unchanged 100% thresholds and source scope | — | quick | — | full |
 | Native TOON installed CLI acceptance | — | yes | — | full release gate |
 | Stat-cache installed CLI acceptance | — | yes | — | full release gate |
-| Committed self-host bundle hash/import/source equality | — | yes | — | full release gate |
-| Production dependency audit and Git identity audit | — | yes | — | full release gate |
-| Pack dry-run and pack privacy check | — | yes | — | full release gate |
+| Committed self-host bundle hash/import/source equality | — | yes | Linux | full release gate |
+| Production dependency audit and Git identity audit | — | yes | identity audit on Linux | full release gate |
+| Pack dry-run and pack privacy check | — | yes | privacy check on Linux | full release gate |
 | Changelog consistency | — | yes | all four required jobs | full release gate |
-| Release changelog date and publish attestation | — | yes | — | full release gate |
+| Release changelog date and publish attestation | — | yes | date check on Linux | full release gate |
 | Bun graph installation and bunx ephemeral PM launcher | — | yes | — | graph install every job; bunx smoke in PR tier |
 | Native Bun tracker-lenses and change-bundles tests | — | — | — | both Bun jobs |
 | Windows installed PM launcher and native GC/root-case storage tests | separate Windows 22 job | separate Windows 26 job | cheap gates in both Windows jobs | retained in PR tier |
@@ -29,6 +29,8 @@ Windows jobs at 15 minutes. These are initial bounds pending PR measurements.
 | CodeQL analysis | separate workflow for matching paths | separate workflow for matching paths | path-filtered | weekly scan also covers ignored paths |
 
 The cheap path runs dependency setup, strict health and changelog consistency.
+Linux additionally checks release changelog dates, Git identities, the committed
+self-host bundle and packed-file privacy.
 The existing pinned pm-github extension install is prerequisite setup for strict
 health in a fresh checkout. Detection compares actual PR base/head endpoints with
 NUL-delimited paths and rename folding disabled. Tracker data, Markdown, docs and
@@ -71,8 +73,14 @@ seeded corpus: one tenth rounded up, at least 25 and capped by the original
 count (500 → 50, 512 → 52, 128/200 → 25). Seeds and per-case assertions stay
 identical. Lifecycle batch size stays 16 with a partial final batch. Large-history checks use 200 commits in quick and the original 2,000 in full,
 retaining exact one-read, no-unrelated-read, logarithmic-decision and signature
-verification assertions. Memory-limit and exhaustive crash-cut contracts retain
-their original sizes in both tiers. No coverage threshold or source exclusion changes.
+verification assertions. Memory-limit fixtures retain their original sizes in both tiers. Crash matrices
+still enumerate and compare the complete native trace in both tiers; quick
+executes the first 25 generated cut ordinals (or every cut when there are fewer
+than 25), while deep and unset depth recover every original cut. Crash traces
+are a separate corpus from seeded properties: a ten-percent cut prefix still
+ran 79–82 cuts in the measured native lifecycle cases and exceeded a ten-minute
+focused local budget. The fixed quick prefix preserves the 25-case floor. Completion counts
+and timing averages use only the selected cuts. No coverage threshold or source exclusion changes.
 The launcher and child environment allowlist propagate both depth and time scale.
 Crash subprocess safety budgets scale for slow hardware; finite property corpora
 use operation counts instead of an elapsed-time timeout. The 512 TiB refusal

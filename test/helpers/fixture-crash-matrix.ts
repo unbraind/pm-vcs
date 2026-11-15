@@ -1,4 +1,4 @@
-import { testTime } from "../support/depth.ts";
+import { testTime, testPrefix } from "../support/depth.ts";
 /** Bounded fatal children with synchronous, isolated native preparation and recovery in the covered parent. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -33,8 +33,8 @@ function runChild(entry: string, preloads: string[], args: readonly string[], ro
 }
 /** Every original payload and assertion runs; only completed initialization and child compilation are shared. */
 export async function fixtureCrashMatrix<T extends Fixture>(options: { steps: readonly string[]; source: string; prepare(): Promise<T>; args(fixture: T): string[]; verify(fixture: T): void }): Promise<{ count: number; workers: number; milliseconds: number; averages: Record<string, number>; guard: string }> {
-  const start = performance.now(); const cuts = options.steps.map((_, index) => index + 1); const completed: number[] = []; const errors: unknown[] = []; const totals: Record<string, number> = {};
-  assert.ok(cuts.length > 0); assertCompleteCuts(options.steps, cuts); assert.throws(() => assertCompleteCuts(options.steps, cuts.slice(1)), /enumerated cuts must equal/);
+  const start = performance.now(); const allCuts = options.steps.map((_, index) => index + 1); const cuts = testPrefix(allCuts); const completed: number[] = []; const errors: unknown[] = []; const totals: Record<string, number> = {};
+  assert.ok(cuts.length > 0); assertCompleteCuts(options.steps, allCuts); assert.throws(() => assertCompleteCuts(options.steps, allCuts.slice(1)), /enumerated cuts must equal/);
   const scope = makeTempDir(process.env.PM_VCS_CRASH_TMPDIR);
   try {
     const { entry, preloads } = prepareCrashEntry(scope.root, options.source); const cache = join(scope.root, "cache");
@@ -64,8 +64,8 @@ export async function fixtureCrashMatrix<T extends Fixture>(options: { steps: re
       }
     }));
     for (const result of lanes) if (result.status === "rejected") errors.push(result.reason);
-    try { assertCompleteCuts(options.steps, completed.sort((a, b) => a - b)); } catch (error) { errors.push(error); }
+    try { assert.deepEqual(completed.sort((a, b) => a - b), cuts, "every selected native cut must be verified"); } catch (error) { errors.push(error); }
     if (errors.length > 0) throw new AggregateError(errors, "Native crash matrix failed");
-    return { count: cuts.length, workers, milliseconds: performance.now() - start, guard: `${cuts.length - 1}/${cuts.length} removed-cut enumeration rejected; ${completed.length}/${cuts.length} cuts verified`, averages: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value / cuts.length])) };
+    return { count: cuts.length, workers, milliseconds: performance.now() - start, guard: `${allCuts.length - 1}/${allCuts.length} removed-cut enumeration rejected; ${completed.length}/${cuts.length} selected cuts verified`, averages: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value / cuts.length])) };
   } finally { rmSync(scope.root, { recursive: true, force: true }); }
 }
