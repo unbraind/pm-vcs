@@ -19,6 +19,7 @@ test("quick and coverage matrices retain all files and unchanged deep gates",()=
   assert.deepEqual(jobs.test.needs,["changes","quick-shard","release-gate","coverage-merge"]);
   assert.equal(jobs.test.if,"${{ always() }}");
   for(const job of Object.values(jobs) as {"timeout-minutes":number}[]) assert.ok(job["timeout-minutes"]<=22);
+  for(const name of ["quick-shard","coverage-shard"]) assert.equal(jobs[name].steps.find((step:{name:string})=>step.name==="Expose local test commands").run,'echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"');
   const manifest=JSON.parse(readFileSync("package.json","utf8"));
   assert.ok(manifest.scripts["release:check"].includes("npm run coverage"));
   const release=jobs["release-gate"].steps.find((s:{name:string})=>s.name==="Non-coverage release gates").run;

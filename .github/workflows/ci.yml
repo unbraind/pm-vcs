@@ -85,6 +85,8 @@ jobs:
           bun-version: 1.3.14
       - name: Install dependencies
         run: npm ci
+      - name: Expose local test commands
+        run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Build shard
         run: |-
           npm run build
@@ -136,6 +138,8 @@ jobs:
           bun-version: 1.3.14
       - name: Install dependencies
         run: npm ci
+      - name: Expose local test commands
+        run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Build coverage shard
         run: |-
           npm run build

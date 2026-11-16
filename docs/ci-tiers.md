@@ -218,3 +218,8 @@ those measured file totals to ten sorted shards projects a 1,038-second maximum,
 which exceeds the target. Fourteen shards reduce the known maximum to 692 seconds;
 setup and uncompleted tail files remain additional costs requiring CI confirmation.
 The 22-minute hard cap stays unchanged.
+
+Direct shard commands publish the package's `node_modules/.bin` through
+`GITHUB_PATH` after installation, preserving the npm script environment.
+PM CLI integration tests must run rather than skip because `pm` is unavailable.
+The workflow contract checks this setup in both shard matrices.
