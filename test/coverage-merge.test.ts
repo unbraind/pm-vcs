@@ -3,7 +3,7 @@ import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import childProcess, { spawnSync } from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -11,7 +11,7 @@ import { runCoverageShard, mergeCoverage } from "../scripts/coverage-gate.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 
 test("merged shard hits equal unsharded c8 including exclusive branches and functions", t => {
-  const root=mkdtempSync(join(tmpdir(),"c8 union-")); t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const root=realpathSync(mkdtempSync(join(tmpdir(),"c8 union-"))); t.after(()=>rmSync(root,{recursive:true,force:true}));
   mkdirSync(join(root,"test/helpers"),{recursive:true});
   mkdirSync(join(root,"src"));
   const manifest=JSON.parse(readFileSync("package.json","utf8")); writeFileSync(join(root,"package.json"),JSON.stringify({type:"module",scripts:{coverage:manifest.scripts.coverage}}));
