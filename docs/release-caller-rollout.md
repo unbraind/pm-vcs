@@ -12,7 +12,8 @@ are retained, with canonical hourly reconciliation where scheduled releases exis
 Cross-repository npm OIDC was proven by the merged pm-jira pilot in
 [run 43639146392](https://github.com/unbraind/pm-jira/actions/runs/43639146392),
 as recorded on [pm-ops #272](https://github.com/unbraind/pm-ops/issues/272#issuecomment-6884325024).
-The npm trusted publisher names this package repository and its own release.yml.
+The owner must configure an npm trusted publisher for this package repository and
+its own release.yml; none is configured yet, so releases remain blocked at the OIDC step.
 The first release run must still pass Verify npm will accept this workflow's OIDC identity.
 Only the orchestrator merges, dispatches and verifies publication.
 
