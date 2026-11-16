@@ -26,10 +26,10 @@ test('CodeQL filters inert data and re-includes every executable tracker extensi
 });
 
 
-test('the engines floor uses the same complete batched suite as coverage', () => {
+test('the engines floor shards the complete test inventory', () => {
   const workflow = parseDocument(readFileSync('.github/workflows/ci.yml', 'utf8'), { strict: true, uniqueKeys: true }).toJS();
-  const step = workflow.jobs.test.steps.find((step: { name: string }) => step.name === 'Engines floor build and quick tests');
-  assert.deepEqual(step.run.trim().split('\n'), ['npm run build', 'npm run build:test', 'node test/helpers/release-suite.ts']);
+  const steps = workflow.jobs['quick-shard'].steps as {name:string;run?:string}[];
+  assert.equal(steps.find(step=>step.name==='Run quick shard')?.run, 'node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/10 test/*.test.ts');
   assert.match(readFileSync('test/helpers/release-suite.ts', 'utf8'), /every test file must run exactly once/);
 });
 

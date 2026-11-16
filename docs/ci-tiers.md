@@ -4,7 +4,7 @@ PRs and manual dispatch run the quick tier. Required check names remain
 `test (22)`, `test (26)`, `windows-acceptance-launcher (22)` and
 `windows-acceptance-launcher (26)`. Linux checks use GitHub-hosted Ubuntu;
 the Windows checks retain Windows because they verify native launcher, GC and
-root-case contracts. Superseded PR runs cancel. Linux jobs time out at 30 minutes;
+root-case contracts. Superseded PR runs cancel. Linux shard and release jobs time out at 22 minutes;
 Windows jobs at 15 minutes. These are initial bounds pending PR measurements.
 
 | Check or contract | Code PR Node 22 | Code PR Node 26 | Docs/tracker-only PR | Deep Node 22/26 × npm/Bun |
@@ -38,9 +38,8 @@ LICENSE are cheap; executable JS/TS tracker files select code CI. Manual dispatc
 always selects code CI. `selfhost.bundle` is a code path: documentation changes
 that also regenerate the archive receive the code checks.
 
-Only Node 26 runs `npm run release:check` in PR CI, with `PM_TEST_DEPTH=quick`.
-Node 22 runs `npm test` (build, test compilation and tests), with no separate
-coverage, changelog or packing step. Some tests themselves pack consumers; those
+Node 26 runs all release-gate components in parallel at `PM_TEST_DEPTH=quick`: non-coverage commands and exactly merged coverage shards.
+Node 22 runs build, test compilation and quick test shards, with no separate coverage, changelog or packing step. Some tests themselves pack consumers; those
 assertions remain. Deep packed acceptance runs native Bun consumers but installs
 archives using npm and the PM CLI; it does **not** prove Bun installer or bunx
 installation paths. An explicit `bun install --no-save` and pinned bunx PM version
@@ -179,3 +178,37 @@ boundary in quick and returns every original ordinal in full.
 No source scope, coverage percentage, job timeout or product deadline changes.
 The separate benchmark boundary fixtures remain in both depths. Deep retains
 all deferred runtime, packaging and real-host combinations.
+
+## Round G file shards and coverage union
+
+Required `test (22)` and `test (26)` checks are always-run aggregates. The former
+requires every Node 22 quick shard; the latter requires the parallel non-coverage
+release gates and the coverage merge, which depends on every Node 26 shard.
+Failures, cancellations and skipped prerequisites fail the code aggregate.
+Docs/tracker changes still run their original health, privacy and changelog
+checks, with no suite build unless a documentation-input gate requires it.
+
+There are 10 shards per Node line. Shards use the complete sorted test-file
+inventory at quick depth, with concurrency one and a 22-minute hard limit.
+The target remains at most 15 minutes per job (12 minutes for Node 22).
+Ten shards distribute the formerly cancelled 1,785-second partial suite.
+The partial log is a lower bound, so these projections require confirmation
+from the new hosted run; a dominant single file may still need splitting.
+The Windows acceptance launcher jobs are byte-for-byte unchanged.
+
+Each coverage artifact contains repository-relative per-file line, branch and
+function hits plus original V8 offset ranges. Merge uses the same runtime merger
+as the original gate, before calculating percentages. Merging percentages or
+line-only branch keys is invalid: dynamically emitted branch ranges may differ
+between shards. A real two-file fixture covers a branch and a function exclusively
+in each shard and compares the merged totals and hits with an unsharded run.
+Missing/duplicate shards and differing Node versions fail closed. Thresholds,
+source scope, `npm run coverage`, `npm run release:check` and ci-deep stay unchanged.
+
+The VCS merge invokes c8 report with the original scope, `--all --100 --per-file`,
+so every source file and all four original dimensions remain mandatory.
+
+The non-coverage job runs every other original release command, plus the existing
+Bun/bunx smoke. Setup, download/merge and required aggregates have their own
+bounded jobs. Actual hosted wall times and merged coverage belong in the tracker
+and PR body; a projection is not a completed timing or coverage certificate.

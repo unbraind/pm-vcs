@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-16T03:07:39.312Z"
+updated_at: "2026-11-16T04:38:22.099Z"
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[30]{created_at,author,text}:
+comments[32]{created_at,author,text}:
   "2026-11-15T13:11:29.225Z",codex-sol,"Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
   "2026-11-15T13:18:12.191Z",codex-sol,"Latest successful main run 43609609072: test 22 execution 176m30s, test 26 93m03s; each ran npm and Bun gates. CLI combined-log download returned empty; direct jobs API log supplied evidence. Slowest lifecycle model 835s; large-history and exhaustive crash matrices also dominate. Added deterministic quick prefixes, propagated depth/time-scale through the child allowlist, scaled crash subprocess safety budgets and replaced the 512 TiB refusal speed assertion with a one-read bound. Existing annotation managed fixtures already await owned resources and retry removal (maxRetries 8); #151 is regression verification, not a newly reproduced fix. Coverage thresholds and all old gate contracts retained. Local quick coverage deferred because exhaustive matrices and historical runtime make the 20-minute budget implausible."
   "2026-11-15T13:19:19.949Z",codex-sol,"Strict YAML parsing with unique-key validation passed for all three tier workflows; actionlint is unavailable. Source typecheck, build, duplicates (0%), docstrings (616 declarations) and lint pass. Initial build:test ran before dist existed and failed on three pre-existing dist imports; source build has completed and the linked check is rerunning. Bounded focused quick tests and existing ENOTEMPTY lifecycle regressions are running."
@@ -40,18 +40,23 @@ comments[30]{created_at,author,text}:
   "2026-11-16T02:38:32.634Z",codex-sol,"Additional ranked Node 22 hotspot: packed move-source consumers took 92.889s before this change. Quick now retains the Node SDK path with every source-eligibility and snapshot-ownership scenario; all Node/Bun × SDK/JSON/TOON combinations remain deep. The direct real-host conflict and composition representatives remain quick. Frozen before/after extra-consumer runs are started. The strengthened 26-schedule reader test passes in 149.401s under heavy shared load, including actual injection coverage assertions."
   "2026-11-16T02:41:21.876Z",codex-sol,"Expanded consumer selection passes test compilation, focused lint and the full entrypoint/embedded-worker isolation audit (1/1, 36.648s); allowlist instrumentation checks pass 2/2. Quick snapshot packed Node SDK consumer passes all 3 ownership scenarios in 59.624s. The unchanged complete benchmark reached its local 600s harness watchdog under load above 50, so the touched suite has a known local timeout; a PM-runner retry uses existing PM_TEST_TIME_SCALE=3 only for the harness. Product timing contracts and CI job ceilings are unchanged. Superseded bundle verification was stopped after additional tracked inputs changed; the final committed bundle will be regenerated and independently verified."
   "2026-11-16T03:07:35.338Z",codex-sol,"Bounded final quick-fit snapshot for code head 4464c11: the 15-minute target is NOT met. Linux jobs remain running after more than 20 minutes; Windows succeeds in 76s and 98s created-to-completed. Completed steps and running-step lower bounds are recorded below. Local quick paired results: composition consumers 1875.103s -> 758.688s (both pass); lifecycle 52 -> 25 seeds 982.711s -> 632.793s (both pass, all 8 crash kinds and 4 payload pairs); move consumer 332.659s watchdog -> 137.713s pass; snapshot consumer 332.624s watchdog -> 59.624s pass. New raw-value CLI path passes in 401.994s; reader resolution passes in 113.600s and pinned retirement in 444.993s. The full touched-file run stops with 48 passes, one unchanged benchmark watchdog failure and 3 cancelled files. Its scale-3 benchmark retry passes 1/1 through the PM runner in 1335.744s. Typecheck, test compilation, lint, workflow YAML, 4 depth tests and environment audits pass. Source bundle at code head 4464c11 independently verified byte-identical; the receipt bundle will be regenerated and verified after committing these final inputs. Coverage preservation and complete CI remain unverified. Remaining work includes named-kind selection for the 25-cut lifecycle/fixture/journal helper prefixes, plus prior-log generated histories 102.111s, root spellings 70.303s, large-history metadata 68.900s, large logical descriptors 68.322s, JSON header repair 58.555s and other packed conflict-format consumers. Exact new-run ranking needs completed logs. Detailed commands and timings: docs/ci-quick-fit-measurements.md. Release the claim, keep in_progress, never close.\n\n# Quick-fit measurements: pm-vcs\n\nCode head: `4464c113add64c3aa48e4724dd5d72759d46bf2e`. [CI run 43794135980](https://github.com/unbraind/pm-vcs/actions/runs/43794135980).\nJobs API snapshot: 2026-11-16T03:06:25+00:00. All local timing commands use `PM_TEST_DEPTH=quick`; unset/full depth is not run locally.\n\n| Job | Result at snapshot | Created to completion | Queue | Started to completion |\n| --- | --- | --- | --- | --- |\n| test (26) | in_progress | unfinished | 1s | >= 1219s running |\n| test (22) | in_progress | unfinished | 1s | >= 1219s running |\n| windows-acceptance-launcher (22) | success | 76s | 1s | 75s |\n| windows-acceptance-launcher (26) | success | 98s | 2s | 96s |\n\nStep times are completed wall times from `started_at` to `completed_at`; running values are lower bounds, not completed durations.\n\n| Step | test (26) | test (22) | windows-acceptance-launcher (22) | windows-acceptance-launcher (26) |\n| --- | --- | --- | --- | --- |\n| Set up job | 3s success | 1s success | 1s success | 1s success |\n| Checkout | 17s success | 14s success | 19s success | 21s success |\n| Detect code changes | 0s success | 0s success | 0s success | 0s success |\n| Setup Node.js | 4s success | 1s success | 7s success | 12s success |\n| Setup Bun | 0s success | 1s success | — | — |\n| Install dependencies | 4s success | 4s success | 16s success | 14s success |\n| Install project pm-github extension | 0s success | 1s success | 2s success | 6s success |\n| Verify tracked pm project health | 1s success | 1s success | 2s success | 2s success |\n| Check documentation and tracker changes | skipped | skipped | skipped | skipped |\n| Engines floor build and quick tests | skipped | >= 1195s running | — | — |\n| Quick npm release gate | >= 1189s running | pending | — | — |\n| Keep the coverage report when the gate fails | pending | pending | — | — |\n| Bun and bunx install smoke | pending | pending | — | — |\n| Post Setup Bun | pending | pending | — | — |\n| Post Setup Node.js | pending | pending | 1s success | 1s success |\n| Post Checkout | pending | pending | 2s success | 2s success |\n| Verify the installed PM CLI launcher | — | — | 2s success | 1s success |\n| Build Windows storage acceptance | — | — | 1s success | 1s success |\n| Verify Windows GC apply on a non-git tracker | — | — | 20s success | 34s success |\n| Complete job | — | — | 0s success | 0s success |"
-files[32]{path,scope}:
+  "2026-11-16T04:23:33.740Z",codex-sol,"Resuming the interrupted round G under the requested handoff. Reviewed the pending tracker changes. Implementing separate Node 22 shards, Node 26 coverage shards and exact hit union, plus non-coverage gates with required success aggregates. CI will provide timing and merged coverage evidence; thresholds and deep gates stay unchanged."
+  "2026-11-16T04:38:20.819Z",codex-sol,"Implementation ready for hosted measurement: ten Node 22 quick shards, ten Node 26 coverage shards, a parallel non-coverage release gate, offset-aware c8 coverage merge and required test (22/26) aggregates. The Windows acceptance launcher job block is byte-for-byte unchanged. V8 raw offset merging is required: the fixture caught an extra branch when converting to Istanbul before merging; merging through the original c8 reporter matches unsharded totals and boolean hit maps. Source hashes and runtime versions bind artifacts; missing/duplicate/mismatched shards fail closed. Existing --all --100 --per-file source scope and all four thresholds stay unchanged. Workflow/routing/merge tests passed 7/7 via pm test; source inventory and original c8 command controls passed 2/2. Typecheck, build:test, lint, zero-duplication gate, docstrings and changelog check passed. Focused coverage of the new gate is 100% lines/branches/functions/statements; Node 26 fixture passed. This is not full-suite coverage. Hosted times and merged full-suite coverage remain pending. Regenerating the self-host bundle from staged source and tracker inputs before commit; verification will read the committed result."
+files[36]{path,scope}:
   .github/workflows/ci-deep.yml,project
   .github/workflows/ci.yml,project
   .github/workflows/codeql.yml,project
   docs/ci-tiers.md,project
+  scripts/coverage-gate.ts,project
   selfhost.bundle,project
   test/annotate.test.ts,project
   test/bisect.test.ts,project
   test/cdc-benchmark.test.ts,project
   test/ci-codeql.test.ts,project
   test/ci-routing.test.ts,project
+  test/ci-shards.test.ts,project
   test/composition-consumer.test.ts,project
+  test/coverage-merge.test.ts,project
   test/dependency-refresh-workflow.test.ts,project
   test/depth.test.ts,project
   test/erasure-crash-matrix.test.ts,project
@@ -67,13 +72,14 @@ files[32]{path,scope}:
   test/object-read-protocol.test.ts,project
   test/packs.test.ts,project
   test/quality-scripts.test.ts,project
+  test/raw-coverage.test.ts,project
   test/ref-publication-recovery.test.ts,project
   test/self-host.test.ts,project
   test/signatures.test.ts,project
   test/snapshot-durability-consumer.test.ts,project
   test/sparse-move-consumer.test.ts,project
   test/support/depth.ts,project
-tests[21]:
+tests[22]:
   - command: "npm run typecheck && npm run build:test && npm run lint"
     scope: project
     timeout_seconds: 240
@@ -239,6 +245,14 @@ tests[21]:
     provenance:
       author: codex-sol
       created_at: "2026-11-16T02:39:15.182Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: PM_TEST_DEPTH=quick node --test test/ci-codeql.test.ts test/ci-routing.test.ts test/ci-shards.test.ts test/coverage-merge.test.ts
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-16T04:35:50.783Z"
       source_kind: local_mutation
       source_ref: ci/quick-pr-tier-deep-local-tier
 docs[2]{path,scope}:
