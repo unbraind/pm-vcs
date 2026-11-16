@@ -15,13 +15,16 @@ function gateScripts(): string[] {
   const step = (file: string, name: string): string => {
     const workflow = parseDocument(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"), { uniqueKeys: true });
     assert.deepEqual(workflow.errors, []);
-    const steps = workflow.toJS().jobs[file === "ci.yml" ? "test" : "deep"].steps as { name: string; run?: string }[];
+    const steps = workflow.toJS().jobs[file === "ci.yml" ? "release-gate" : "deep"].steps as { name: string; run?: string }[];
     const script = steps.find(step => step.name === name)?.run;
     assert.ok(script, `missing ${name}`);
     return script;
   };
   const deep = step("ci-deep.yml", "Full release gate");
-  return [step("ci.yml", "Quick npm release gate"), ...["npm", "bun"].map(manager => deep.replaceAll("${{ matrix.package-manager }}", manager))];
+  const coverage = parseDocument(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")).toJS().jobs["coverage-shard"].steps.find((entry: {name:string}) => entry.name === "Collect coverage shard").run as string;
+  // Substitute only the invocation: exercise each real guard, allocation and cleanup wrapper once.
+  const invocation = (script: string) => script.replace(/^.*NPM_CONFIG_USERCONFIG=.*$/m, "NPM_CONFIG_USERCONFIG=/dev/null npm run release:check");
+  return [invocation(step("ci.yml", "Non-coverage release gates")), invocation(coverage), ...["npm", "bun"].map(manager => deep.replaceAll("${{ matrix.package-manager }}", manager))];
 }
 
 /** Check optional witness tools without making them prerequisites for Node tests. */
@@ -88,22 +91,22 @@ test("manual CI dispatch preserves all four required check names", () => {
   const refresh = readFileSync(new URL("../.github/workflows/dependency-refresh.yml", import.meta.url), "utf8");
   assert.match(ci.slice(0, ci.indexOf("jobs:")), /^  workflow_dispatch:/mu);
   assert.match(refresh.slice(0, refresh.indexOf("concurrency:")), /^  actions: write$/mu);
-  const jobs = ci.slice(ci.indexOf("jobs:\n") + "jobs:\n".length);
-  const names = [...jobs.matchAll(/^  ([\w-]+):\n[\s\S]*?node-version: \[([^\]]+)\]/gmu)]
-    .flatMap((match) => match[2]!.split(",").map((version) => `${match[1]} (${version.trim()})`));
+  const jobs = parseDocument(ci).toJS().jobs;
+  const names = ["test", "windows-acceptance-launcher"].flatMap(name => jobs[name].strategy.matrix["node-version"].map((version:number) => `${name} (${version})`));
   assert.deepEqual(names, ["test (22)", "test (26)", "windows-acceptance-launcher (22)", "windows-acceptance-launcher (26)"]);
 });
 
 test("dependency refresh provisions the CI-pinned Bun runtime before release checks", () => {
   const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const refresh = readFileSync(new URL("../.github/workflows/dependency-refresh.yml", import.meta.url), "utf8");
-  const pin = ci.match(/uses: (oven-sh\/setup-bun@[a-f0-9]{40} #[^\n]+)[\s\S]*?bun-version: "([^"]+)"/u);
-  assert.ok(pin, "CI must declare an immutable Bun action and runtime version");
-  const setup = refresh.indexOf(`uses: ${pin[1]}`);
-  assert.ok(setup >= 0, "refresh must use the same pinned Bun action as CI");
+  const setupStep = parseDocument(ci).toJS().jobs["release-gate"].steps.find((step:{uses?:string})=>step.uses?.startsWith("oven-sh/setup-bun@"));
+  assert.match(setupStep.uses, /^oven-sh\/setup-bun@[a-f0-9]{40}$/);
+  const refreshSteps = parseDocument(refresh).toJS().jobs.refresh.steps as {uses?:string;name:string;with?:Record<string,string>}[];
+  const setup = refreshSteps.findIndex(step=>step.uses === setupStep.uses);
   const gate = refresh.indexOf("      - name: Run release checks");
-  assert.ok(setup < gate, "Bun must be provisioned before the release gate");
-  assert.match(refresh.slice(setup, gate), new RegExp(`bun-version: "${pin[2]!.replaceAll(".", "\\.")}"`, "u"));
+  assert.ok(setup >= 0, "refresh must use the same pinned Bun action as CI");
+  assert.equal(refreshSteps[setup].with?.["bun-version"], setupStep.with["bun-version"]);
+  assert.ok(refreshSteps.findIndex(step=>step.name === "Run release checks") > setup, "Bun must be provisioned before the release gate");
   assert.match(refresh.slice(gate), /run: npm run release:check/u);
 });
 
@@ -191,11 +194,11 @@ test("quick/deep workflows retain tier boundaries, timeouts and safe change dete
   assert.equal(deep.jobs.deep.env.PM_TEST_DEPTH, "full"); assert.equal(deep.jobs.deep.env.PM_TEST_TIME_SCALE, 3);
   assert.equal(deep.jobs.deep["timeout-minutes"], 120);
   for (const job of Object.values(ci.jobs) as { env: { PM_TEST_DEPTH: string }; "timeout-minutes": number }[]) {
-    assert.equal(job.env.PM_TEST_DEPTH, "quick"); assert.ok(job["timeout-minutes"] <= 30);
+    if (job.env) assert.equal(job.env.PM_TEST_DEPTH, "quick"); assert.ok(job["timeout-minutes"] <= 22);
   }
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-tier-classifier-"));
   try {
-    const script = ci.jobs.test.steps.find((step: { name: string }) => step.name === "Detect code changes").run as string;
+    const script = ci.jobs.changes.steps.find((step: { name: string }) => step.name === "Detect code changes").run as string;
     assert.equal(script, ci.jobs["windows-acceptance-launcher"].steps.find((step: { name: string }) => step.name === "Detect code changes").run);
     const pathsFile = join(root, "paths"); const output = join(root, "output");
     for (const [paths, code] of [
@@ -217,7 +220,7 @@ test("quick/deep workflows retain tier boundaries, timeouts and safe change dete
 test("docs and tracker PRs retain every gate that consumes their committed inputs", () => {
   const ci = parseDocument(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"), { uniqueKeys: true }).toJS();
   const cheap = ci.jobs.test.steps.find((step: { name: string }) => step.name === "Check documentation and tracker changes");
-  assert.equal(cheap.if, "steps.changes.outputs.code != 'true'");
+  assert.equal(cheap.if, "needs.changes.result == 'success' && needs.changes.outputs.code != 'true'");
   for (const gate of ["changelog:check", "verify:release-changelog-date", "audit:identities", "accept:self-host", "pack:check"]) {
     assert.ok(cheap.run.split("\n").includes(`npm run ${gate}`), `cheap path must run ${gate}`);
   }

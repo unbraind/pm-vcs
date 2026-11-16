@@ -1,8 +1,9 @@
+import { durability } from "../engine/durability.ts";
 import { createHash } from "node:crypto";
 /** Shard the existing c8 gate and merge location-keyed raw hits before enforcing its unchanged per-file thresholds. */
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { globSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { globSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
@@ -39,7 +40,7 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
     console.log("Merged coverage:", readFileSync(join(root, "coverage/coverage-summary.json"), "utf8"));
     return status;
   } finally {
-    rmSync(scratch, {recursive:true,force:true});
+    durability.discardTemporary(scratch);
   }
 }
 
