@@ -200,17 +200,24 @@ including a conservative two-minute setup reserve.
 Sizing uses complete [run 43808985868](https://github.com/unbraind/pm-vcs/actions/runs/43808985868)
 at `c342e00`. Coverage collection took 4,145 seconds across the 14 shards;
 Node 22 tests took 3,457 seconds. `test/ci-shard-times.json` records seconds per
-file, taking the larger Node 22/26 cost. Costs sum top-level test durations only
+file, taking the larger Node 22/26 cost. The weights also retain the slower
+observed costs from the first eight-shard run described below. Costs sum top-level test durations only
 (no nested-subtest double counting), with each matrix's remaining collection
 and process-startup time spread across its 148 files. This gives a conservative
-4,278.148-second combined inventory. Seven perfectly balanced shards already
-project to 731.2 seconds with setup, exceeding 720. Eight largest-first shards
-project to at most 654.960 seconds (10.92 minutes). Six or fewer cannot fit
+initial 4,278.148-second combined inventory. After the measured outlier and
+conflict-suite split below, the inventory is 4,650.216 seconds across 149 files.
+Seven perfectly balanced shards already project to 784.317 seconds with setup,
+exceeding 720. Eight largest-first shards project to at most 701.639 seconds
+(11.69 minutes). Six or fewer cannot fit
 either, so eight is the smallest projected fit under this reserve.
 
 Plain sorted round-robin assignment at eight is imbalanced. The shared measured
-allocator avoids that clustering without splitting a file: the largest file is
-about 260 seconds, well below the per-shard collection budget. Workflow tests
+allocator avoids that clustering. The first eight-shard run showed a slower
+Node 22 conflict suite; its 35 unchanged cases are now registered through shared
+fixtures by two entrypoints: 28 core cases and 7 real CLI/transfer consumers.
+Their observed case totals are 222.742 and 176.107 seconds. No case, seed or
+assertion was removed. The largest remaining file is about 260 seconds, below
+the per-shard collection budget. Workflow tests
 prove complete, unique discovery, consistent matrix/merge counts, deterministic
 assignment and the seven/eight budget boundary. These are projections; queueing,
 WAN setup variance and future file growth require new hosted measurements.
@@ -253,3 +260,19 @@ Direct shard commands publish the package's `node_modules/.bin` through
 `GITHUB_PATH` after installation, preserving the npm script environment.
 PM CLI integration tests must run rather than skip because `pm` is unavailable.
 The workflow contract checks this setup in both shard matrices.
+
+## Eight-shard measured correction
+
+[Run 43813269377](https://github.com/unbraind/pm-vcs/actions/runs/43813269377),
+code head `5660350ce41c1ecaed123c39c73b468f89d278cf`, passed all 23 jobs and
+the full merged 100/100/100/100 gate across 102 measured files. It used 140.35
+summed execution runner-minutes; run creation to final job completion was
+979 seconds (16m19s). Quick shard 4 spent 560 seconds queued. Quick shard 8
+executed for 925 seconds, missing the sizing target despite passing.
+
+That completed log measures 398.849 seconds in the conflict suite, compared
+with its old 132.605-second estimate, plus higher signature/reader costs.
+The core/consumer split and refreshed conservative costs above correct this
+observed imbalance. The first run certifies coverage and the test inventory;
+it does not certify the revised placement or prove every shard meets twelve
+minutes. Fresh hosted timings are recorded in the tracker and PR body.
