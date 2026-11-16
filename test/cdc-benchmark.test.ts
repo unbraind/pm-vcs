@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { cpSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { testTime } from "./support/depth.ts";
+import { testTime, testDepth } from "./support/depth.ts";
 import { test } from "node:test";
 import { countObjects, measureReuse, measureReuseByObjects, seededBytes } from "../scripts/cdc-benchmark.ts";
 import { ObjectStore } from "../engine/objects.ts";
@@ -38,7 +38,7 @@ test("benchmark empty stores, directory noise and invocation identity are measur
 });
 
 
-test("the benchmark test runs from a checkout path containing spaces", () => {
+test("the benchmark test runs from a checkout path containing spaces", {skip: testDepth(2, 1) === 1 && "deep retains the second complete CLI benchmark"}, () => {
   const fixture = makeTempDir();
   try {
     const alias = join(fixture.root, "checkout with spaces");

@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { testKinds } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Differential mixed-storage, crash recovery and multi-process interleaving on real non-git trackers. */
 import assert from "node:assert/strict";
@@ -92,7 +93,7 @@ for (const action of ["compact", "unpack", "gc"] as const) {
     const steps: string[] = []; packBoundary.visit = (step) => steps.push(step);
     if (action === "compact") baseline.objects.compact(); else if (action === "unpack") baseline.objects.unpack(); else collectGarbage(baseline, true);
     packBoundary.visit = () => {}; assert.ok(steps.length > 0);
-    for (let boundary = 1; boundary <= steps.length; boundary++) {
+    for (const {boundary} of testKinds(steps.map((kind,index)=>({kind,boundary:index+1})), row=>row.kind)) {
       const repo = await fresh(); const { entries, garbage } = seed(repo);
       if (action !== "compact") repo.objects.compact();
       const crashed = worker(action, repo, boundary); assert.equal(crashed.signal, "SIGKILL", `${action} ${boundary}: ${crashed.stderr}`);
@@ -456,14 +457,14 @@ test("compaction preserves a peer replacement of either a duplicate or newly pac
 for (const action of ["compact", "unpack", "gc"] as const) test(`relative-root SIGKILL at EVERY ${action} boundary preserves namespace and resumes to a completed receipt`,async t=>{
  const baseline=await fresh();seed(baseline);if(action!=="compact")baseline.objects.compact();const steps:string[]=[];packBoundary.visit=step=>steps.push(step);
  if(action==="compact")baseline.objects.compact();else if(action==="unpack")baseline.objects.unpack();else collectGarbage(baseline,true);packBoundary.visit=()=>{};
- for(let boundary=1;boundary<=steps.length;boundary++){
+ for(const {boundary} of testKinds(steps.map((kind,index)=>({kind,boundary:index+1})),row=>row.kind)){
   const repo=await fresh();const {entries,garbage}=seed(repo);if(action!=="compact")repo.objects.compact();const shadow=join(repo.root,"cwd-shadow");mkdirSync(shadow);writeFileSync(join(shadow,"guard"),"foreign namespace sentinel");
   const crashed=worker(`relative-${action}`,repo,boundary);assert.equal(crashed.signal,"SIGKILL",`${boundary}/${steps[boundary-1]}: ${crashed.stderr}`);repo.objects.recoverWriterLock();equalReads(repo,entries);
   for(let retry=0;retry<2;retry++){const resumed=worker(`relative-${action}`,repo);assert.equal(resumed.status,0,resumed.stderr);assert.equal((JSON.parse(resumed.stdout) as {status:string}).status,"completed");equalReads(repo,entries);}
   if(action==="gc")assert.equal(repo.objects.has(garbage),false);else assert.deepEqual(repo.objects.readTyped(garbage,"blob"),Buffer.from("unreachable-garbage-payload"));
   assert.deepEqual(readdirSync(shadow),["guard"]);assert.equal(readFileSync(join(shadow,"guard"),"utf8"),"foreign namespace sentinel");const ids=[...repo.objects.walkInventory()].map(entry=>entry.id);assert.equal(new Set(ids).size,ids.length);
  }
- assert.ok(steps.length>0);t.diagnostic(`${steps.length} native ${action} SIGKILL cuts with relative construction and cwd changes at every publication boundary; two successful replays per cut`);
+ assert.ok(steps.length>0);t.diagnostic(`${testKinds(steps, kind=>kind).length} native ${action} SIGKILL cuts with relative construction and cwd changes at every publication boundary; two successful replays per cut`);
 });
 
 test("owned publication aliases settle before a new compaction or unpack deletion snapshot",async()=>{

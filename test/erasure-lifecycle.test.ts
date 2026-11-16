@@ -99,7 +99,7 @@ test("a competing process at both retirement boundaries is excluded until the ow
 
 test("lifecycle generator explores every instance and payload pair across 512 reproducible histories", () => {
  const pairs = new Set<number>();
- for (let seed = 1; seed <= testDepth(512); seed++) for (const { op, index, noise } of lifecycleSequence(seed)) if (op === 6) pairs.add(index * 2 + noise! % 2);
+ for (let seed = 1; seed <= testDepth(512, 25); seed++) for (const { op, index, noise } of lifecycleSequence(seed)) if (op === 6) pairs.add(index * 2 + noise! % 2);
  assert.deepEqual([...pairs].sort(), [0, 1, 2, 3]);
 });
 
@@ -151,7 +151,7 @@ test("512 seeded lifecycle sequences always match an independent accountability 
     finally { accountabilityBoundary.visit = () => {}; erasureScanBoundary.visit = () => {}; }
     assert.equal(actual, verdict, `model verdict at operation ${operations}: ${JSON.stringify({ purge, slots: slots.map(({state,present,epoch})=>({state,present,epoch})), files: [...files].map(([path,file])=>({name:relative(repo.root,path), ...file, planned:plans.get(path)})) })}`); verdicts++;
   };
-  for (let seed = 1; seed <= testDepth(512); seed++) {
+  for (let seed = 1; seed <= testDepth(512, 25); seed++) {
     if ((seed - 1) % 16 === 0) {
       const root = join(f.dir.root, `model-${(seed - 1) / 16}`); mkdirSync(root); cpSync(join(f.repo.root, ".pmvcs"), join(root, ".pmvcs"), { recursive: true }); cpSync(join(f.repo.root, "second"), join(root, "second")); repo = Repository.open(root);
     }
@@ -171,6 +171,6 @@ test("512 seeded lifecycle sequences always match an independent accountability 
     assert.equal(repo.objects.denials().find(entry => entry.tombstone.fileId === f.id)!.pending, false);
   }
   assert.equal(injectedPairs.size, 4, "All instance/payload pairs must occur independently");
-  assert.equal(cutSteps.size, crashSteps.length); assert.ok(cuts >= testDepth(512)); assert.equal(repo.operations.read().filter(entry => entry.command === "obliterate").length, 1);
-  t.diagnostic(`${testDepth(512)} seeds (1..${testDepth(512)}), ${operations} model operations, ${verdicts} checked verdicts, ${cuts} crashes across all ${cutSteps.size} publication boundaries, ${blockedLinks} refused payload-materializing links while erasure was pending; every sequence ends with a successful clean-store retry`);
+  assert.equal(cutSteps.size, crashSteps.length); assert.ok(cuts >= testDepth(512, 25)); assert.equal(repo.operations.read().filter(entry => entry.command === "obliterate").length, 1);
+  t.diagnostic(`${testDepth(512, 25)} seeds (1..${testDepth(512, 25)}), ${operations} model operations, ${verdicts} checked verdicts, ${cuts} crashes across all ${cutSteps.size} publication boundaries, ${blockedLinks} refused payload-materializing links while erasure was pending; every sequence ends with a successful clean-store retry`);
 });

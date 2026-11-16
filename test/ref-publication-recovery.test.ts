@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 /** Pending publication is a mutation and a retention root, including after real process death. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -59,7 +60,7 @@ function graph(repo: Repository, text: string): { leaf: string; tree: string; ro
 }
 test("seeded pending-root model preserves every native root format through loose and packed GC and releases ended authority", async t => {
  const base=await fixture();let cases=0;
- for(let seed=1;seed<=8;seed++) for(const format of ["ref","HEAD","index","MERGE_STATE","pins","denials"] as const) for(const packed of [false,true]) {
+ for(let seed=1;seed<=testDepth(8, 1);seed++) for(const format of ["ref","HEAD","index","MERGE_STATE","pins","denials"] as const) for(const packed of [false,true]) {
   const repo=Repository.init(join(base.root,`model-${cases++}`));const a=graph(repo,`original ${seed}`);const b=graph(repo,createHash("sha256").update(`payload ${seed}`).digest("hex"));repo.refs.compareAndSwap("refs/metadata/anchor",null,a.root);
   let destination:string;let bytes:string;let selected=b.root;let restore:()=>void;
   if(format==="ref"){const name=["refs/heads/main","refs/tags/fixture","refs/remotes/demo/main","refs/metadata/fixture"][seed%4]!;repo.refs.compareAndSwap(name,null,a.root);destination=join(repo.controlDirectory,name);bytes=`${b.root}\n`;restore=()=>repo.refs.compareAndSwap(name,b.root,a.root);}

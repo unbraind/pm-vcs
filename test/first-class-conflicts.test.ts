@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Recorded disagreements remain live data through ordinary work, transfer, bounded history and explicit resolution. */
 import assert from "node:assert/strict";
@@ -401,7 +402,7 @@ test("packed CLI resolves literal empty strings, spaces and EOF newlines through
   }
   repo.stage([]); repo.commit({ message: "install resolution consumer", author }, now);
   const head = repo.resolve("HEAD");
-  for (const [path, value, expected] of rawResolutionCases) {
+  for (const [path, value, expected] of rawResolutionCases.slice(0, testDepth(rawResolutionCases.length, 1))) {
     repo.reset(head, "hard", now);
     const result = JSON.parse(execFileSync(process.execPath, [pmExecutable, "--json", "vcs", "resolve", path, "--value", value], {
       cwd: repo.root, env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "consumer-agent" },

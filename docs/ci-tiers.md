@@ -12,7 +12,7 @@ Windows jobs at 15 minutes. These are initial bounds pending PR measurements.
 | npm ci, merge-driver preparation, pinned project extension | yes | yes | all four required jobs | every job |
 | Strict tracker health, required merge drivers | yes | yes | all four required jobs | every job |
 | Build and test compilation | yes | yes, in release gate | Linux build for self-host acceptance | full release gate |
-| Test suite, seeded properties, crash/recovery matrices, packed Node/Bun consumers | quick | quick, via coverage | — | full release gate |
+| Test suite, seeded properties, crash/recovery matrices, representative packed Node consumers | quick | quick, via coverage | — | full release gate |
 | Typecheck, lint, duplication and docstring gates | — | yes | — | full release gate |
 | Per-file coverage, unchanged 100% thresholds and source scope | — | quick | — | full |
 | Native TOON installed CLI acceptance | — | yes | — | full release gate |
@@ -41,7 +41,7 @@ that also regenerate the archive receive the code checks.
 Only Node 26 runs `npm run release:check` in PR CI, with `PM_TEST_DEPTH=quick`.
 Node 22 runs `npm test` (build, test compilation and tests), with no separate
 coverage, changelog or packing step. Some tests themselves pack consumers; those
-assertions remain. Packed acceptance runs native Bun consumers but installs
+assertions remain. Deep packed acceptance runs native Bun consumers but installs
 archives using npm and the PM CLI; it does **not** prove Bun installer or bunx
 installation paths. An explicit `bun install --no-save` and pinned bunx PM version
 smoke cover those paths without another release gate.
@@ -70,7 +70,7 @@ and every deep job logs `bun --version`.
 
 Unset depth means full. Quick uses the deterministic prefix of each large
 seeded corpus: one tenth rounded up, at least 25 and capped by the original
-count (500 → 50, 512 → 52, 128/200 → 25). Seeds and per-case assertions stay
+count (500 → 50, lifecycle 512 → 25, 128/200 → 25). Seeds and per-case assertions stay
 identical. Lifecycle batch size stays 16 with a partial final batch. Large-history checks use 200 commits in quick and the original 2,000 in full,
 retaining exact one-read, no-unrelated-read, logarithmic-decision and signature
 verification assertions. Memory-limit fixtures retain their original sizes in both tiers. Crash matrices
@@ -157,3 +157,24 @@ exact-gates. Their omitted executions explain the broad coverage shortfalls.
 The runner now completes both batches and preserves a nonzero result. The
 complete benchmark runs the real CLI with runner-owned instrumentation, covering
 the real entry guard. The separate spaced-checkout fixture stays unchanged.
+
+## Quick-fit finite matrices
+
+Explicit finite budgets use `testDepth(full, quick)`; seeded corpora keep their
+25-case minimum. `testKinds` selects the first ordinal of every observed named
+boundary in quick and returns every original ordinal in full.
+
+| Contract | Quick | Deep / unset |
+| --- | --- | --- |
+| Reader resolution interruptions | 26 schedules (25 diagonal plus an explicit inventory injection): every reader, all 4 transitions and all 7 resolution boundaries, with live/erased checks | all 700 reader/transition/boundary schedules |
+| Pinned-reader external retirement | every reader and loose/packed representation; first occurrence of each native I/O boundary kind | every observed ordinal |
+| Absolute and relative SIGKILL pack/unpack/GC sweeps | first occurrence of every named boundary for each operation, preserving relative-root recovery and replay assertions | every native ordinal |
+| Pending-root publication model | 1 deterministic seed × all 6 root formats × loose/packed = 12 stores | 8 seeds, 96 stores |
+| Lifecycle accountability model | first 25 seeds, all crash kinds and instance/payload pairs asserted | all 512 seeds |
+| Composition packed consumer | Node project-installed CLI path (also executes SDK composition and denied merges); prerequisite refusals retained | all 5 built/packed Node/Bun/project-CLI paths |
+| Packed conflict resolution | one real-host EOF-newline path; direct SDK tests retain all 11 opaque value cases | all 11 packed real-host values |
+| Complete CDC benchmark | one instrumented real CLI execution | same plus separate checkout-with-spaces invocation |
+
+No source scope, coverage percentage, job timeout or product deadline changes.
+The separate benchmark boundary fixtures remain in both depths. Deep retains
+all deferred runtime, packaging and real-host combinations.

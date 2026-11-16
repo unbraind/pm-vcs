@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Built and npm-packed acceptance against real SDK trackers under Node and Bun. */
 import assert from "node:assert/strict";
@@ -441,7 +442,7 @@ test("built and npm-packed SDK10 Node/native Bun consumers and project-installed
     assert.equal(existsSync(join(project, "node-project-cli")), false);
     const bunAvailable = spawnSync("bun", ["--version"], { env: testEnvironment(), stdio: "ignore" }).status === 0;
     for (const [runtime, script, scenario] of [[process.execPath, "built.mjs", "node-built"], [process.execPath, "packed.mjs", "node-packed"], ["bun", "built.mjs", "bun-built"], ["bun", "packed.mjs", "bun-packed"], [process.execPath, "packed.mjs", "node-project-cli"]]) {
-      const skip = runtime === "bun" && !bunAvailable ? "Bun is unavailable (bun --version failed)" : false;
+      const skip = testDepth(5, 1) === 1 && scenario !== "node-project-cli" ? "deep retains built, packed SDK and native Bun combinations" : runtime === "bun" && !bunAvailable ? "Bun is unavailable (bun --version failed)" : false;
       await t.test(scenario, { skip }, () => {
         // The installed CLI scenario runs multiple real CLI and package-install processes serially.
         const result = spawnSync(runtime, [script, scenario, archive, pmExecutable], { cwd: project, env: environment, encoding: "utf8", timeout: 900_000 });
