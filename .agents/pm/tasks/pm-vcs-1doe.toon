@@ -6,10 +6,20 @@ status: in_progress
 priority: 2
 tags[1]: "gh:unbraind/pm-vcs#208"
 created_at: "2026-11-16T08:59:58.350Z"
-updated_at: "2026-11-16T09:03:59.357Z"
+updated_at: "2026-11-16T09:10:45.097Z"
 assignee: pi-glm
 claim_principal: pi-glm
 author: pi-glm
 comments[1]{created_at,author,text}:
   "2026-11-16T09:03:59.357Z",pi-glm,"PR checks test (22)/test (26) both fail at test/exact-gates.test.ts:183 'operational entry points enforce real audits through direct CLI processes': the self-host gate reports the committed selfhost.bundle is not byte-identical to the committed source for .github/workflows/pm-github-sync.yml and pm-github-closeout.yml because the bundle still contains the old pm-github caller shape (2026.11.04 pin plus pm-github-version input). Fix: regenerate the bundle with self-host:write and commit it alongside the workflow pin. Both open review threads (Greptile on the sync caller, CodeRabbit on the closeout caller) flag exactly this and are valid."
+files[3]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  .github/workflows/pm-github-sync.yml,project
+  selfhost.bundle,project
+tests[5]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "npm run accept:self-host",project,pi-glm,"2026-11-16T09:10:08.252Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
+  npm run typecheck,project,pi-glm,"2026-11-16T09:10:13.684Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
+  npm run lint,project,pi-glm,"2026-11-16T09:10:17.958Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
+  "npm run changelog:check",project,pi-glm,"2026-11-16T09:10:21.380Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
+  node --test test/self-host.test.ts,project,pi-glm,"2026-11-16T09:10:23.884Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
 body: ""
