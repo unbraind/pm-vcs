@@ -6,25 +6,30 @@ status: in_progress
 priority: 2
 tags[1]: "gh:unbraind/pm-ops#284"
 created_at: "2026-11-16T14:39:25.582Z"
-updated_at: "2026-11-16T16:48:02.785Z"
+updated_at: "2026-11-16T19:28:38.454Z"
 author: pi-glm
 acceptance_criteria: "The release workflow installs the pinned npm with --prefix into a job-local directory and prepends that prefix bin to the job path; The workflow keeps the exact-version assertion on the effective npm; A workflow-contract test fails if any workflow replaces the global npm; Gates pass: typecheck, lint, tests, changelog:check"
-comments[6]{created_at,author,text}:
+comments[8]{created_at,author,text}:
   "2026-11-16T15:18:05.935Z",codex-sol,"Continuation: verified the existing worktree and remote branch state, preserved the earlier changes, and reused this item. Rerunning required gates to completion under the continuation author before committing results."
   "2026-11-16T15:28:55.474Z",codex-sol,"Root cause confirmed in the workflow source: global installation of the pinned npm replaces the same Node installation used by parallel jobs on a shared toolcache. Replaced each bootstrap with a job-local prefix, published only its bin directory to the job PATH, and retained exact-pin checks including a separate subsequent-step assertion. Workflow contracts reject global npm replacement across all workflow files. No runner settings or shared tool installations were modified."
   "2026-11-16T15:42:42.194Z",codex-sol,The first combined gate command hit its 20-minute timeout during shared-host disk contention and is not pass evidence. Retrying all gates to completion using memory-backed temporary fixtures and the existing harness deadline scale. Assertions and test selection are unchanged.
   "2026-11-16T15:59:12.342Z",codex-sol,"Gate results before publication: typecheck and lint completed successfully; node --test test/release-approval.test.ts and changelog:check passed together. The first npm test command timed out during disk contention; the full replacement run is active and remains pending evidence. Regenerated the required self-host bundle using the repository writer. Publishing a draft for exact-head CI validation."
   "2026-11-16T16:09:19.061Z",codex-sol,"Implementation commit 139bd057e9477e86251542deaf86e18a64f31be9 installs and verifies the release npm privately to each job. Typecheck, lint, workflow contracts and changelog checks passed. The first broad npm test attempt timed out; the full replacement remains active. Releasing the claim for orchestrator verification and exact-head CI."
   "2026-11-16T16:47:57.335Z",codex-sol,"The broad local npm test retry reached its 60-minute command limit during the release suite and is not pass evidence. Typecheck, lint, workflow contracts, changelog:check and the committed self-host verification passed separately. Full release-suite and hosted Windows acceptance remain pending CI. Tracking PR: https://github.com/unbraind/pm-vcs/pull/213. The PR remains open for orchestrator verification; exact-head CI is queued or running."
-files[6]{path,scope}:
+  "2026-11-16T19:23:57.341Z",codex-sol,"Review round P: replace the workflow-wide regex with a dependency-free shell command parser and regression fixtures. Parse run scripts with existing yaml where available; preserve allowed prefix-local installs. Verify typecheck, lint or docstring, focused guard/workflow contracts and changelog checks before pushing. No review-thread actions."
+  "2026-11-16T19:28:37.078Z",codex-sol,"Review round P addresses PRRT_kwDOToJT7M64FalA: shared-npm replacement guard now tokenizes shell commands and uses existing yaml for run scripts. Added 38 fixtures covering npm aliases, flag placement/location, package specs, continuations, quotes/paths, separators and allowed installs. npm run typecheck, npm run build:test, npm run lint and npm run changelog:check PASS. The new linked guard and workflow contracts passed through pm test --run --only-last --progress: 71 pass, 0 fail/cancel/skip/todo. Full-suite certification is left to CI; review threads remain untouched. Stage the new files and final tracker pair before self-host:write; accept:self-host must pass at committed HEAD before push."
+files[8]{path,scope}:
   .github/workflows/release.yml,project
   selfhost.bundle,project
+  test/global-npm-guard.test.ts,project
+  test/global-npm-guard.ts,project
   test/release-approval.test.ts,project
   test/release-preparation.test.ts,project
   test/verify-release-changelog-date.test.ts,project
   test/verify-release-publish-attestation.test.ts,project
-tests[3]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[4]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   "npm run typecheck && npm run lint && npm test && node --test test/release-approval.test.ts && npm run changelog:check",project,1200,codex-sol,"2026-11-16T15:20:46.990Z",local_mutation,fix/job-local-npm
   "npm run typecheck && npm run lint && npm test && node --test test/release-approval.test.ts && npm run changelog:check && git diff --check",project,3600,codex-sol,"2026-11-16T15:42:58.727Z",local_mutation,fix/job-local-npm
   "node --test test/release-approval.test.ts && npm run changelog:check",project,900,codex-sol,"2026-11-16T15:53:24.754Z",local_mutation,fix/job-local-npm
+  node --test test/global-npm-guard.test.ts test/release-approval.test.ts test/release-preparation.test.ts,project,1200,codex-sol,"2026-11-16T19:26:27.150Z",local_mutation,fix/job-local-npm
 body: ""
