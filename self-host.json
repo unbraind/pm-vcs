@@ -2,6 +2,7 @@
   "bundle": "selfhost.bundle",
   "ref": "refs/heads/self-host",
   "exclude": [
+    ".github/pm-release-candidate.json",
     "selfhost.bundle",
     "package.json",
     "package-lock.json"

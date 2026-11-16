@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Contracts owned by callers while the released workflow owns release execution. */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
