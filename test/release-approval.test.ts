@@ -3,7 +3,7 @@ import "./helpers/isolate-session.ts";
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseDocument, stringify } from 'yaml';
@@ -264,8 +264,21 @@ test('publishing installs an npm version supporting trusted publishing', () => {
     const steps = mapping(job)?.steps;
     return Array.isArray(steps) ? steps.map(step => mapping(step)?.run).filter(value => typeof value === 'string') : [];
   }).join('\n');
-  const version = scripts.match(/npm install -g npm@(\d+)\.(\d+)\.(\d+)/u)?.slice(1).map(Number);
+  const version = scripts.match(/npm install --prefix "\$RUNNER_TEMP\/npm-(\d+)\.(\d+)\.(\d+)" npm@\1\.\2\.\3/u)?.slice(1).map(Number);
   assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)));
+});
+
+test('no workflow replaces the shared global npm installation', () => {
+  // A global npm install replaces the npm inside the runner's shared Node
+  // installation. Parallel jobs on one host share that installation, so one
+  // job's global install corrupts a sibling's npm mid-install (ENOTEMPTY, or
+  // `npm: command not found`). Every pinned npm install must be prefix-local.
+  const replacers = /npm\s+(?=[^\n]*\b(?:install|i)\b)(?=[^\n]*(?:\s-g\b|--global\b))[^\n]*\bnpm@/u;
+  for (const path of workflowFiles(fileURLToPath(workflowRoot))) {
+    const source = readFileSync(path, 'utf8');
+    assert.doesNotMatch(source, replacers, `${basename(path)} must not replace the global npm`);
+  }
+  assert.match(fixture({ steps: [{ run: 'npm install -g npm@11.19.0' }] }), replacers, 'the audit must still detect a global npm install');
 });
 
 test('automatic release activation is absent and publishing documentation matches behaviour', () => {
