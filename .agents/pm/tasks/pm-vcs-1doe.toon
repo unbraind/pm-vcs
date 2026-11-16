@@ -1,0 +1,15 @@
+id: pm-vcs-1doe
+title: "Finish the pm-github 2026.11.15 pin PR: regenerate the self-host bundle"
+description: ""
+type: Task
+status: in_progress
+priority: 2
+tags[1]: "gh:unbraind/pm-vcs#208"
+created_at: "2026-11-16T08:59:58.350Z"
+updated_at: "2026-11-16T09:03:59.357Z"
+assignee: pi-glm
+claim_principal: pi-glm
+author: pi-glm
+comments[1]{created_at,author,text}:
+  "2026-11-16T09:03:59.357Z",pi-glm,"PR checks test (22)/test (26) both fail at test/exact-gates.test.ts:183 'operational entry points enforce real audits through direct CLI processes': the self-host gate reports the committed selfhost.bundle is not byte-identical to the committed source for .github/workflows/pm-github-sync.yml and pm-github-closeout.yml because the bundle still contains the old pm-github caller shape (2026.11.04 pin plus pm-github-version input). Fix: regenerate the bundle with self-host:write and commit it alongside the workflow pin. Both open review threads (Greptile on the sync caller, CodeRabbit on the closeout caller) flag exactly this and are valid."
+body: ""
