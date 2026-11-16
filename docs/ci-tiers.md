@@ -188,13 +188,33 @@ Failures, cancellations and skipped prerequisites fail the code aggregate.
 Docs/tracker changes still run their original health, privacy and changelog
 checks, with no suite build unless a documentation-input gate requires it.
 
-There are 14 shards per Node line. Shards use the complete sorted test-file
-inventory at quick depth, with concurrency one and a 22-minute hard limit.
-The target remains at most 15 minutes per job (12 minutes for Node 22).
-Fourteen shards distribute the formerly cancelled 1,785-second partial suite.
-The partial log is a lower bound, so these projections require confirmation
-from the new hosted run; a dominant single file may still need splitting.
-The Windows acceptance launcher jobs are byte-for-byte unchanged.
+There are **8 shards per Node line**, reducing a code CI run from 35 to 23 jobs.
+Both matrices call the same deterministic file allocator in
+`test/helpers/ci-shards.ts`. It discovers every `test/*.test.ts` at runtime,
+then assigns the largest measured files to the least-loaded shard. Timing
+entries affect placement only: new files receive a 60-second estimate and still
+run, while removed files are never selected. No test file is omitted. The
+22-minute hard cap stays unchanged; the projection target is at most 12 minutes,
+including a conservative two-minute setup reserve.
+
+Sizing uses complete [run 43808985868](https://github.com/unbraind/pm-vcs/actions/runs/43808985868)
+at `c342e00`. Coverage collection took 4,145 seconds across the 14 shards;
+Node 22 tests took 3,457 seconds. `test/ci-shard-times.json` records seconds per
+file, taking the larger Node 22/26 cost. Costs sum top-level test durations only
+(no nested-subtest double counting), with each matrix's remaining collection
+and process-startup time spread across its 148 files. This gives a conservative
+4,278.148-second combined inventory. Seven perfectly balanced shards already
+project to 731.2 seconds with setup, exceeding 720. Eight largest-first shards
+project to at most 654.960 seconds (10.92 minutes). Six or fewer cannot fit
+either, so eight is the smallest projected fit under this reserve.
+
+Plain sorted round-robin assignment at eight is imbalanced. The shared measured
+allocator avoids that clustering without splitting a file: the largest file is
+about 260 seconds, well below the per-shard collection budget. Workflow tests
+prove complete, unique discovery, consistent matrix/merge counts, deterministic
+assignment and the seven/eight budget boundary. These are projections; queueing,
+WAN setup variance and future file growth require new hosted measurements.
+The Windows acceptance launcher jobs are unchanged.
 
 Each coverage artifact contains repository-relative per-file line, branch and
 function hits plus original V8 offset ranges. Merge uses the same runtime merger
@@ -213,11 +233,21 @@ Bun/bunx smoke. Setup, download/merge and required aggregates have their own
 bounded jobs. Actual hosted wall times and merged coverage belong in the tracker
 and PR body; a projection is not a completed timing or coverage certificate.
 
-The completed tests in the prior Node 26 log cover 81 of 148 files. Assigning
-those measured file totals to ten sorted shards projects a 1,038-second maximum,
-which exceeds the target. Fourteen shards reduce the known maximum to 692 seconds;
-setup and uncompleted tail files remain additional costs requiring CI confirmation.
-The 22-minute hard cap stays unchanged.
+The earlier partial-log fourteen-shard estimate is superseded by the complete
+run and eight-shard sizing above. The baseline used 147 runner-minutes and 13.6
+minutes wall time, but failed merged branch coverage (99.54% in `engine/refs.ts`).
+The single uncovered branch was line 299, `if (failure !== undefined) throw failure`:
+all fourteen per-shard reports record zero hits at that location. This is a test
+gap, not a union-key defect. A focused c8 experiment combining the original raw
+refs ranges with the new test reaches 100% in all four dimensions for refs; the
+throw-failure location records one hit. That experiment mixes the hosted
+26.13.1 collection with a local 26.13.0 witness and is diagnostic evidence only;
+full-suite, matching-runtime certification still belongs to the new hosted run. The existing cleanup-failure test throws during
+validation, before a completed transaction can report a release failure. A new
+depth-independent deterministic test completes two ref updates, injects failures
+only when their leases release, and asserts that the first error propagates,
+both refs are published, every lock is removed and every descriptor closes.
+Thresholds and merger identities stay unchanged.
 
 Direct shard commands publish the package's `node_modules/.bin` through
 `GITHUB_PATH` after installation, preserving the npm script environment.

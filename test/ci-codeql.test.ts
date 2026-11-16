@@ -29,7 +29,7 @@ test('CodeQL filters inert data and re-includes every executable tracker extensi
 test('the engines floor shards the complete test inventory', () => {
   const workflow = parseDocument(readFileSync('.github/workflows/ci.yml', 'utf8'), { strict: true, uniqueKeys: true }).toJS();
   const steps = workflow.jobs['quick-shard'].steps as {name:string;run?:string}[];
-  assert.equal(steps.find(step=>step.name==='Run quick shard')?.run, 'node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/14 test/*.test.ts');
+  assert.equal(steps.find(step=>step.name==='Run quick shard')?.run, 'node test/helpers/ci-shards.ts ${{ matrix.shard }}/8');
   assert.match(readFileSync('test/helpers/release-suite.ts', 'utf8'), /every test file must run exactly once/);
 });
 

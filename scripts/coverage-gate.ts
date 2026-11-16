@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { globSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { shardTestFiles } from "../test/helpers/ci-shards.ts";
 
 /** Run a c8 command with independent output and no inherited test-runner context. */
 function c8(root: string, args: string[]): number {
@@ -48,7 +49,7 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
 export function runCoverageShard(root: string, shard: string, output: string): number {
   if (!/^[1-9]\d*\/[1-9]\d*$/.test(shard) || Number(shard.split("/")[0]) > Number(shard.split("/")[1])) throw new Error("coverage-gate: invalid shard");
   const flags = coverageFlags(root).filter(flag => flag !== "--100" && !flag.startsWith("--temp-directory=") && !flag.startsWith("--reporter="));
-  const status = c8(root, [...flags, "--check-coverage=false", `--temp-directory=${output}/tmp`, `--reports-dir=${output}`, "--reporter=json", "--reporter=json-summary", "node", "--expose-gc", "--no-concurrent-array-buffer-sweeping", "--test", "--test-concurrency=1", `--test-shard=${shard}`, ...globSync("test/*.test.ts", { cwd: root }).sort()]);
+  const status = c8(root, [...flags, "--check-coverage=false", `--temp-directory=${output}/tmp`, `--reports-dir=${output}`, "--reporter=json", "--reporter=json-summary", "node", "--expose-gc", "--no-concurrent-array-buffer-sweeping", "--test", "--test-concurrency=1", ...shardTestFiles(root, shard)]);
   if (status !== 0) return status;
   const raw = JSON.parse(readFileSync(resolve(root, output, "coverage-final.json"), "utf8"));
   const hits = Object.fromEntries(Object.entries(raw).map(([file, data]) => [relative(root, file).replaceAll("\\", "/"), { ...(data as object), path: relative(root, file).replaceAll("\\", "/") }]));

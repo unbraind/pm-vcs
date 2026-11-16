@@ -62,12 +62,6 @@ jobs:
           - 6
           - 7
           - 8
-          - 9
-          - 10
-          - 11
-          - 12
-          - 13
-          - 14
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -92,7 +86,7 @@ jobs:
           npm run build
           npm run build:test
       - name: Run quick shard
-        run: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/14 test/*.test.ts
+        run: node test/helpers/ci-shards.ts ${{ matrix.shard }}/8
   coverage-shard:
     needs:
       - changes
@@ -115,12 +109,6 @@ jobs:
           - 6
           - 7
           - 8
-          - 9
-          - 10
-          - 11
-          - 12
-          - 13
-          - 14
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -174,7 +162,7 @@ jobs:
           trap 'gate_status=$?; storage_report before-cleanup || true; rm -rf -- "${gate_tmp}"; if [ -n "${gate_memory}" ]; then rm -rf -- "${gate_memory}"; fi; df -Pk "${RUNNER_TEMP}" || true; df -Pi "${RUNNER_TEMP}" || true; exit "${gate_status}"' EXIT
           export TMPDIR="${gate_tmp}"
           storage_report before-gate || true
-          NPM_CONFIG_USERCONFIG=/dev/null node scripts/coverage-gate.ts --shard ${{ matrix.shard }}/14 --output coverage/shard-${{ matrix.shard }}
+          NPM_CONFIG_USERCONFIG=/dev/null node scripts/coverage-gate.ts --shard ${{ matrix.shard }}/8 --output coverage/shard-${{ matrix.shard }}
       - name: Upload raw hits
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -300,7 +288,7 @@ jobs:
           pattern: coverage-shard-*
           path: coverage/shards
       - name: Merge exact hits and enforce thresholds
-        run: node scripts/coverage-gate.ts --merge 14 coverage/shards/coverage-shard-*/hits.json
+        run: node scripts/coverage-gate.ts --merge 8 coverage/shards/coverage-shard-*/hits.json
       - name: Keep merged coverage
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
