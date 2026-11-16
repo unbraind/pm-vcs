@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 /** Verify the same ownership barrier through packed SDK and CLI entrypoints in real non-git trackers. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -34,7 +35,7 @@ objectFiles.opened = (file, path) => {
 };\`;
 
 let cells = 0;
-for (const entrypoint of ["sdk", "json", "toon"]) for (const scenario of ["owned", "absent", "replacement"]) {
+for (const entrypoint of ${JSON.stringify(["sdk", "json", "toon"].slice(0, testDepth(3, 1)))}) for (const scenario of ["owned", "absent", "replacement"]) {
  const root = join(process.cwd(), runtime + "-" + entrypoint + "-" + scenario); fs.mkdirSync(root);
  await new PmClient({ cwd: root, pmRoot: join(root, ".agents/pm"), noExtensions: true }).init("snapshot-policy", { defaults: true, author: "fixture" });
  const repo = Repository.init(root); const paths = Array.from({ length: 10 }, (_, i) => "payload-" + i);
@@ -95,11 +96,11 @@ test("packed npm and Bun SDK/CLI JSON/TOON consumers require positive snapshot r
     assert.equal(installed.status, 0, installed.stderr);
     symlinkSync(join(packageRoot, "node_modules/@unbrained"), join(root, "node_modules/@unbrained"), "junction");
     writeFileSync(join(root, "consumer.mjs"), program);
-    for (const runtime of [process.execPath, "bun"]) {
+    for (const runtime of [process.execPath, "bun"].slice(0, testDepth(2, 1))) {
       const result = spawnSync(runtime, [join(root, "consumer.mjs"), runtime === "bun" ? "bun" : "node", archive, pmExecutable, process.execPath], { cwd: root, env: environment, encoding: "utf8", timeout: 300_000 });
       assert.equal(result.status, 0, result.stderr + result.stdout);
       const receipt = JSON.parse(result.stdout.trim()) as { runtime: string; cells: number };
-      assert.equal(receipt.cells, 9); t.diagnostic(JSON.stringify(receipt));
+      assert.equal(receipt.cells, 3 * testDepth(3, 1)); t.diagnostic(JSON.stringify(receipt));
     }
   } finally { scope.cleanup(); }
 });

@@ -173,6 +173,7 @@ boundary in quick and returns every original ordinal in full.
 | Lifecycle accountability model | first 25 seeds, all crash kinds and instance/payload pairs asserted | all 512 seeds |
 | Composition packed consumer | Node project-installed CLI path (also executes SDK composition and denied merges); prerequisite refusals retained | all 5 built/packed Node/Bun/project-CLI paths |
 | Packed conflict resolution | one real-host EOF-newline path; direct SDK tests retain all 11 opaque value cases | all 11 packed real-host values |
+| Packed move-source and snapshot-release consumers | Node SDK entrypoint with all 7 source and all 3 ownership kinds | Node/Bun × SDK/JSON/TOON × every scenario |
 | Complete CDC benchmark | one instrumented real CLI execution | same plus separate checkout-with-spaces invocation |
 
 No source scope, coverage percentage, job timeout or product deadline changes.
