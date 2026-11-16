@@ -2,13 +2,18 @@ id: pm-vcs-tracker-admission
 title: Admit coherent tracker pairs into native revisions
 description: "Certify selected canonical item documents and history heads before native capture, including SDK-certifiable transaction membership."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[1]: "gh:unbraind/pm-vcs#180"
 created_at: "2026-11-04T21:41:27.622Z"
-updated_at: "2026-11-05T18:16:43.112Z"
+updated_at: "2026-11-16T20:40:13.340Z"
+closed_at: "2026-11-16T20:40:13.275Z"
+completed_at: "2026-11-16T20:40:13.275Z"
 author: codex-agent
 acceptance_criteria: "Concurrent writers yield a verified coherent snapshot or typed retry; custom folders and formats use SDK resolution; mismatched pairs never publish a native tip; resume checks only affected records; typed SDK plus CLI, compact TOON/JSON, strict bounded schemas, docs, seeded model and interleaving tests, public non-git real-data evidence."
+resolution: Implemented and merged in #180 (eff24a0).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #180 as eff24a0; checks successful at head ce90f26: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 comments[44]{created_at,author,text}:
   "2026-11-04T21:41:38.414Z",codex-agent,"Overlap rechecked: core public SDK provides locateItem/readLocatedItem, readHistorySnapshot/verifyHistoryEntries, item transaction journals and canonical codecs. Core workspace/item transactions commit tracker changes but do not version arbitrary source and tracker artifacts together. pm-vcs checkpoints check assurance scope after capture; pm-evidence and pm-context consume evidence/context rather than admit native tips. This feature owns selected tracker capture admission only, without a distributed transaction or a new history codec. No duplicate item or upstream capture feature found."
   "2026-11-04T21:49:37.628Z",codex-agent,"Implemented SDK TrackerCapture plus vcs commit-tracker over one strict bounded selection schema. Capture retains SDK-verified exact bytes; native publication checks expected parent and modifies the latest index under the existing store lease. Retry sessions are explicitly process-local: only affected records are re-resolved, settings changes invalidate retained proofs, and successful sessions cannot publish twice. Committed SDK journal result membership is required for item-transaction markers; missing or partial evidence produces a payload-free retry coordinate. No status-name decisions, tracker mutations, distributed-transaction claim or durable replay journal were added."
@@ -91,4 +96,5 @@ tests[8]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
 docs[2]{path,scope}:
   docs/tracker-admission-example.json,project
   README.md,project
+close_reason: "Delivered by #180 \"Commit coherent tracker snapshots with typed retries\" (merged as eff24a0). Checks successful at the PR head ce90f26: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""

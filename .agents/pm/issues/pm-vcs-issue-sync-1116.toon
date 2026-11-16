@@ -3,15 +3,20 @@ title: Repair scheduled GitHub issue sync failure
 description: "Investigate the failing scheduled issue sync on current main, retain existing work and prove the applicable fix."
 type: Issue
 pm_format_version: 2
-status: in_progress
+status: closed
 priority: 1
 tags[2]: ci,issue-sync
 created_at: "2026-11-16T10:42:21.939Z"
-updated_at: "2026-11-16T11:02:36.916Z"
+updated_at: "2026-11-16T20:40:49.163Z"
 deadline: "2026-11-17T00:00:00.000Z"
+closed_at: "2026-11-16T20:40:49.118Z"
+completed_at: "2026-11-16T20:40:49.118Z"
 author: codex-sol
 estimated_minutes: 90
 acceptance_criteria: Record the exact failed command and verify the current fix or upstream blocker without weakening tracker governance.
+resolution: Implemented and merged in #208 (38f8f1e).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #208 as 38f8f1e; checks successful at head e4a8429: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 comments[2]{created_at,author,text}:
   "2026-11-16T10:46:53.041Z",codex-sol,"Run 43827565812 failed the pm-github 2026.11.4 idempotency gate: one shared provenance tag and one conflicting target. The shared #150 reference belongs to distinct pack-storage and crash-matrix tasks, so neither is a duplicate. pm-github 2026.11.15 separates references from explicit import ownership. Reuse open PR #208 and its caller pin; retain current main and verify the pinned dry-run. No item is closed."
   "2026-11-16T11:02:01.561Z",codex-sol,"Initial review receipt: the failed workflow log and current pin are documented in docs/issue-sync-2026-11-16.md. Seeded tracker validation passes through pm test --run --progress. Typecheck and lint pass. The quick package suite remains running under shared-host load; no complete passing suite is claimed.   Publish review evidence with pending gates explicit; no scheduled success is claimed."
@@ -40,4 +45,5 @@ tests[2]:
       source_ref: fix/issue-sync-duplicate-provenance
 docs[1]{path,scope}:
   docs/issue-sync-2026-11-16.md,project
+close_reason: "Delivered by #208 \"Pin pm-github 2026.11.15 to fix issue ownership planning and bound CI dispatch\" (merged as 38f8f1e). Checks successful at the PR head e4a8429: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""

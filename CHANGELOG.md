@@ -4,6 +4,8 @@
 
 ### Added
 
+- Preserve explicit FileId intent for ambiguous edited moves ([pm-vcs-phase6moves](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6moves.toon))
+- Admit coherent tracker pairs into native revisions ([pm-vcs-tracker-admission](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-tracker-admission.toon))
 - Compact loose chunks into indexed pack storage ([pm-vcs-phase6packs](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-phase6packs.toon))
 - Export signed native history with an explicit replay capability and omission manifest ([pm-vcs-change-bundles](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-change-bundles.toon))
 - Retain validation checkpoints only while native semantic scope is unchanged ([pm-vcs-semantic-checkpoints](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/features/pm-vcs-semantic-checkpoints.toon))
@@ -63,6 +65,9 @@
 
 ### Fixed
 
+- Repair scheduled GitHub issue sync failure ([pm-vcs-issue-sync-1116](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-issue-sync-1116.toon))
+- Keep test children from delivering pm telemetry and Sentry reports ([pm-vcs-rd82](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-rd82.toon))
+- Stop concurrent test packs from rewriting the shared build ([pm-vcs-v5bg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-v5bg.toon))
 - Isolate test children and provenance from ambient agent sessions ([pm-vcs-testenv](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-testenv.toon))
 - Settle annotation fixture owners before retry-bounded teardown ([pm-vcs-annotationteardown](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-annotationteardown.toon))
 - Refresh the committed archive after the toolchain launcher update ([pm-vcs-toolchain137](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-toolchain137.toon))
@@ -114,11 +119,15 @@
 
 ### Security
 
+- Refuse tracker capture symlink replacement races ([pm-vcs-capture-race](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-capture-race.toon))
 - Remove vulnerable optional glob dependencies from the fleet duplication gate ([pm-vcs-qfku](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-qfku.toon))
 - Consume the canonical attestation gate instead of carrying a copy of it ([pm-vcs-5m22](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-5m22.toon))
 
 ### Other
 
+- Finish the pm-github 2026.11.15 pin PR: regenerate the self-host bundle ([pm-vcs-1doe](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-1doe.toon))
+- Adapt isolated telemetry fixture to the global settings owner ([pm-vcs-toolchain-1110](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-toolchain-1110.toon))
+- Refresh the November toolchain and synchronize concurrency fixtures ([pm-vcs-toolchain-1104](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-toolchain-1104.toon))
 - Refresh the self-host snapshot after Dependabot changelog updates ([pm-vcs-hgu2](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-hgu2.toon))
 - Fit the complete crash-cut matrix within CI runtime ([pm-vcs-crash-matrix-ci](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-crash-matrix-ci.toon))
 - Release readiness behind PM_RELEASE_APPROVED ([pm-vcs-release-gate](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-release-gate.toon))
