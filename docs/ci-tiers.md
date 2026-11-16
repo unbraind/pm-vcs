@@ -188,10 +188,10 @@ Failures, cancellations and skipped prerequisites fail the code aggregate.
 Docs/tracker changes still run their original health, privacy and changelog
 checks, with no suite build unless a documentation-input gate requires it.
 
-There are 10 shards per Node line. Shards use the complete sorted test-file
+There are 14 shards per Node line. Shards use the complete sorted test-file
 inventory at quick depth, with concurrency one and a 22-minute hard limit.
 The target remains at most 15 minutes per job (12 minutes for Node 22).
-Ten shards distribute the formerly cancelled 1,785-second partial suite.
+Fourteen shards distribute the formerly cancelled 1,785-second partial suite.
 The partial log is a lower bound, so these projections require confirmation
 from the new hosted run; a dominant single file may still need splitting.
 The Windows acceptance launcher jobs are byte-for-byte unchanged.
@@ -212,3 +212,9 @@ The non-coverage job runs every other original release command, plus the existin
 Bun/bunx smoke. Setup, download/merge and required aggregates have their own
 bounded jobs. Actual hosted wall times and merged coverage belong in the tracker
 and PR body; a projection is not a completed timing or coverage certificate.
+
+The completed tests in the prior Node 26 log cover 81 of 148 files. Assigning
+those measured file totals to ten sorted shards projects a 1,038-second maximum,
+which exceeds the target. Fourteen shards reduce the known maximum to 692 seconds;
+setup and uncompleted tail files remain additional costs requiring CI confirmation.
+The 22-minute hard cap stays unchanged.

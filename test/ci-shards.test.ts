@@ -11,8 +11,8 @@ const document=parseDocument(readFileSync(".github/workflows/ci.yml","utf8"),{st
 assert.deepEqual(document.errors,[]);
 const jobs=document.toJS().jobs;
 test("quick and coverage matrices retain all files and unchanged deep gates",()=>{
-  assert.deepEqual(jobs["quick-shard"].strategy.matrix,{"node-version":[22],shard:Array.from({length:10},(_,i)=>i+1)});
-  assert.deepEqual(jobs["coverage-shard"].strategy.matrix,{"node-version":[26],shard:Array.from({length:10},(_,i)=>i+1)});
+  assert.deepEqual(jobs["quick-shard"].strategy.matrix,{"node-version":[22],shard:Array.from({length:14},(_,i)=>i+1)});
+  assert.deepEqual(jobs["coverage-shard"].strategy.matrix,{"node-version":[26],shard:Array.from({length:14},(_,i)=>i+1)});
   assert.match(jobs["quick-shard"].steps.at(-1).run,/--test-shard=.*test\/\*\.test\.ts/);
   assert.match(jobs["coverage-shard"].steps.find((s:{name:string})=>s.name==="Collect coverage shard").run,/scripts\/coverage-gate.ts --shard/);
   assert.deepEqual(jobs["coverage-merge"].needs,["changes","coverage-shard"]);
