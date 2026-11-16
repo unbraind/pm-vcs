@@ -11,25 +11,32 @@ import { runCoverageShard, mergeCoverage } from "../scripts/coverage-gate.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 
 test("merged shard hits equal unsharded c8 including exclusive branches and functions", t => {
-  const root=mkdtempSync(join(tmpdir(),"c8-union-")); t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const root=mkdtempSync(join(tmpdir(),"c8 union-")); t.after(()=>rmSync(root,{recursive:true,force:true}));
   mkdirSync(join(root,"test/helpers"),{recursive:true});
+  mkdirSync(join(root,"src"));
   const manifest=JSON.parse(readFileSync("package.json","utf8")); writeFileSync(join(root,"package.json"),JSON.stringify({type:"module",scripts:{coverage:manifest.scripts.coverage}}));
   writeFileSync(join(root,"test/helpers/release-suite.ts"),readFileSync("test/helpers/release-suite.ts","utf8"));
   writeFileSync(join(root,"test/helpers/test-environment.ts"),readFileSync("test/helpers/test-environment.ts","utf8"));
-  writeFileSync(join(root,"value.ts"),`export function classify(value: number) {
+  writeFileSync(join(root,"src/value.ts"),`export function classify(value: number) {
   if (value > 0) return positive();
   return negative();
 }
 export function positive() { return "positive"; }
 export function negative() { return "negative"; }
 `);
-  for (const [name,value,expected] of [["a",1,"positive"],["b",-1,"negative"]] as const) writeFileSync(join(root,`test/${name}.test.ts`), `import test from 'node:test'; import assert from 'node:assert/strict'; import {classify} from '../value.ts'; test('${name}',()=>assert.equal(classify(${value}), '${expected}'));`);
+  for (const [name,value,expected] of [["a",1,"positive"],["b",-1,"negative"]] as const) writeFileSync(join(root,`test/${name}.test.ts`), `import test from 'node:test'; import assert from 'node:assert/strict'; import {classify} from '../src/value.ts'; test('${name}',()=>assert.equal(classify(${value}), '${expected}'));`);
   const args=manifest.scripts.coverage.split(" && ").at(-1).slice(3).replaceAll("'", "").split(" ");
   const whole=spawnSync(process.execPath,[createRequire(import.meta.url).resolve("c8/bin/c8.js"),...args],{cwd:root,env:testEnvironment(),encoding:"utf8"}); assert.equal(whole.status,0,whole.stdout+whole.stderr);
   const originalHits=JSON.parse(readFileSync(join(root,"coverage/coverage-final.json"),"utf8"));
   const original=JSON.parse(readFileSync(join(root,"coverage/coverage-summary.json"),"utf8"));
   for (const [shard,output] of [["1/2","first"],["2/2","second"]]) assert.equal(runCoverageShard(root,shard!,output!),0);
   const paths=["first/hits.json","second/hits.json"];
+  for (const path of paths) {
+    const artifact=JSON.parse(readFileSync(join(root,path),"utf8"));
+    assert.deepEqual(Object.keys(artifact.hits),["src/value.ts"]);
+    assert.ok(artifact.raw.length > 0);
+    assert.ok(artifact.raw.every((script: {url:string})=>script.url === "src/value.ts"));
+  }
   for(const path of paths) {const hits=Object.values(JSON.parse(readFileSync(join(root,path),"utf8")).hits) as {f:Record<string,number>;b:Record<string,number[]>}[];assert.ok(hits.some(file=>Object.values(file.f).some(count=>count===0)));assert.ok(hits.some(file=>Object.values(file.b).flat().some(count=>count===0)));}
   assert.equal(mergeCoverage(root,paths,2),0);
   const {createCoverageMap}=createRequire(import.meta.url)("istanbul-lib-coverage");
@@ -45,7 +52,7 @@ export function negative() { return "negative"; }
   const change=(mutate:(artifact: {shard:string;node:string;digest:string;raw:{url:string}[]})=>void) => {const artifact=JSON.parse(saved);mutate(artifact);writeFileSync(join(root,paths[0]!),JSON.stringify(artifact));};
   change(artifact=>{artifact.shard="3/2"});assert.throws(()=>mergeCoverage(root,paths,2),/incomplete shard/);
   change(artifact=>{artifact.raw[0].url="../outside.ts"});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
-  change(artifact=>{artifact.raw[0].url=resolve(root,"value.ts")});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
+  change(artifact=>{artifact.raw[0].url=resolve(root,"src/value.ts")});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
   change(artifact=>{artifact.node="0.0.0"});assert.throws(()=>mergeCoverage(root,paths,2),/runtime mismatch/);
   change(artifact=>{artifact.digest="wrong"});assert.throws(()=>mergeCoverage(root,paths,2),/source mismatch/);
   writeFileSync(join(root,paths[0]!),saved);
