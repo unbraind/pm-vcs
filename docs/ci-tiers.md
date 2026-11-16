@@ -144,3 +144,16 @@ tracker inputs but are not release gates.
 Both assigned checks hit the 30-minute job timeout. The Node 26 log measures 474 and 504 seconds for two benchmark tests: each redundantly runs both in-process and CLI benchmarks, resulting in four full executions. Retain one direct benchmark and one real CLI invocation from a checkout containing spaces. Keep every source and coverage threshold intact. Targeted benchmark and fixture validation records are linked from the package tracker.
 
 The cheap tier excludes only inert tracker record formats; executable tracker changes keep product gates. `test/ci-routing.test.ts` executes each detector with inert and executable tracker paths. Product deadlines, full-depth cases and coverage thresholds are unchanged.
+
+Round F: every new test entrypoint imports session isolation first and child
+launches use explicit fixture environments. Executable tracker files retain
+PR-time CodeQL analysis. Node 22 now uses the same complete batched suite as
+coverage: ordinary files overlap on at most four workers, while the three
+core-owning matrices stay serial. No file is removed from either tier.
+
+Run 43771863859 failed its ordinary batch on the routing isolation audit, so
+the old runner never reached erasure-storage, erasure-crash-matrix or
+exact-gates. Their omitted executions explain the broad coverage shortfalls.
+The runner now completes both batches and preserves a nonzero result. The
+complete benchmark runs the real CLI with runner-owned instrumentation, covering
+the real entry guard. The separate spaced-checkout fixture stays unchanged.

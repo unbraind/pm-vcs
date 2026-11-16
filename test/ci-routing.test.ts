@@ -1,3 +1,4 @@
+import "./helpers/isolate-session.ts";
 /** Execute every quick-tier detector against inert records and tracker programs. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -6,9 +7,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { parseDocument } from 'yaml';
+import { testEnvironment } from './helpers/test-environment.ts';
 
 test('quick routing excludes only inert tracker formats and gates executable tracker files', { skip: process.platform === 'win32' && 'The workflow detector runs in Ubuntu Bash' }, t => {
-  const bash = spawnSync('bash', ['--version'], { encoding: 'utf8', timeout: 30000 });
+  const bash = spawnSync('bash', ['--version'], { encoding: 'utf8', timeout: 30000, env: testEnvironment() });
   if ((bash.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' && !process.env.CI) {
     t.skip('bash is unavailable on PATH');
     return;
@@ -31,8 +33,8 @@ test('quick routing excludes only inert tracker formats and gates executable tra
     const input = join(root, 'input'); const output = join(root, 'output');
     writeFileSync(input, path + '\0'); writeFileSync(output, '');
     const child = spawnSync('bash', ['--noprofile', '--norc', '-c', 'git() { cat "$CI_PATH_INPUT"; };\n' + script], {
-      encoding: 'utf8', timeout: 30000, env: { ...process.env, GITHUB_EVENT_NAME: 'pull_request',
-        BASE_SHA: 'base', HEAD_SHA: 'head', RUNNER_TEMP: root, CI_PATH_INPUT: input, GITHUB_OUTPUT: output },
+      encoding: 'utf8', timeout: 30000, env: testEnvironment({ GITHUB_EVENT_NAME: 'pull_request',
+        BASE_SHA: 'base', HEAD_SHA: 'head', RUNNER_TEMP: root, CI_PATH_INPUT: input, GITHUB_OUTPUT: output }),
     });
     assert.equal(child.status, 0, child.stderr);
     assert.equal(readFileSync(output, 'utf8').trim(), `code=${code}`, path);

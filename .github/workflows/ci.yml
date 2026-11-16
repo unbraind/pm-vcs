@@ -113,7 +113,10 @@ jobs:
 
       - name: Engines floor build and quick tests
         if: steps.changes.outputs.code == 'true' && matrix.node-version == 22
-        run: npm test
+        run: |
+          npm run build
+          npm run build:test
+          node test/helpers/release-suite.ts
 
       - name: Quick npm release gate
         if: steps.changes.outputs.code == 'true' && matrix.node-version == 26

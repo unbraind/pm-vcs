@@ -3,18 +3,28 @@ name: CodeQL
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - ".agents/pm/**"
-      - "**/*.md"
-      - "docs/**"
-      - "package-lock.json"
+    paths:
+      - '**'
+      - '!.agents/pm/**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '!package-lock.json'
+      - '.agents/pm/**/*.mjs'
+      - '.agents/pm/**/*.cjs'
+      - '.agents/pm/**/*.js'
+      - '.agents/pm/**/*.ts'
   pull_request:
     branches: [main]
-    paths-ignore:
-      - ".agents/pm/**"
-      - "**/*.md"
-      - "docs/**"
-      - "package-lock.json"
+    paths:
+      - '**'
+      - '!.agents/pm/**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '!package-lock.json'
+      - '.agents/pm/**/*.mjs'
+      - '.agents/pm/**/*.cjs'
+      - '.agents/pm/**/*.js'
+      - '.agents/pm/**/*.ts'
   schedule:
     # Weekly CodeQL scan. The minute/hour slot is unique to this repository so
     # the pm fleet does not fire every scan against the API in the same minute.

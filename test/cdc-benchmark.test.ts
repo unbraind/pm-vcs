@@ -7,15 +7,17 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { testTime } from "./support/depth.ts";
 import { test } from "node:test";
-import { countObjects, main, measureReuse, measureReuseByObjects, seededBytes } from "../scripts/cdc-benchmark.ts";
+import { countObjects, measureReuse, measureReuseByObjects, seededBytes } from "../scripts/cdc-benchmark.ts";
 import { ObjectStore } from "../engine/objects.ts";
 import { writeFragmented } from "../engine/fragments.ts";
 import { isMainInvocation } from "../scripts/pm-environment.ts";
 import { execFileSync } from "node:child_process";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
 
-test("the complete benchmark measures real CDC and fixed-size stores", () => {
-  main();
+test("the complete benchmark CLI measures real CDC and fixed-size stores", () => {
+  const entry = fileURLToPath(new URL("../scripts/cdc-benchmark.ts", import.meta.url));
+  const output = execFileSync(process.execPath, [entry], {env: testEnvironment(), encoding: "utf8", timeout: testTime(600_000)});
+  assert.match(output, /Measured fixed-size reuse/);
 });
 test("benchmark empty stores, directory noise and invocation identity are measured", () => {
   const fixture = makeTempDir();

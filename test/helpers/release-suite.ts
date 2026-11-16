@@ -11,10 +11,13 @@ const serialNames = new Set(["erasure-crash-matrix.test.ts", "erasure-storage.te
 const ordinary = files.filter(name => !serialNames.has(name)).sort((a, b) => Number(b.startsWith("journal-power-")) - Number(a.startsWith("journal-power-")) || a.localeCompare(b)); const serial = files.filter(name => serialNames.has(name));
 assert.ok(files.length > 0, "the release suite must discover tests");
 assert.deepEqual([...ordinary, ...serial].sort(), files, "every test file must run exactly once");
+let status = 0;
 for (const [batch, concurrency] of [[ordinary, Math.min(4, availableParallelism())], [serial, 1]] as const) {
   if (batch.length === 0) continue;
   console.log(JSON.stringify({ releaseTestFiles: batch.length, concurrency }));
   const result = spawnSync(process.execPath, ["--expose-gc", "--no-concurrent-array-buffer-sweeping", "--test", `--test-concurrency=${concurrency}`, ...batch.map(name => join("test", name))], { cwd: packageRoot, env: testEnvironment(), stdio: "inherit" });
   if (result.error !== undefined) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  if (result.status !== 0) status = result.status ?? 1;
 }
+
+process.exitCode = status;
