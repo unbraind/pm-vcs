@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-17T09:31:18.063Z"
+updated_at: "2026-11-17T11:32:35.138Z"
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[61]:
+comments[63]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -194,6 +194,12 @@ comments[61]:
   - created_at: "2026-11-17T09:31:14.129Z"
     author: codex-sol
     text: "Round AO final local receipt: the expanded quick/reference run completed 139/140 tests, zero skipped/cancelled/todo; its sole failure was the exact-gates 60-second self-host child timeout. All 35 registered first-class conflict cases, including all harness and ten-kind real CLI checks, passed. The direct durability plus coverage-merge run passed 7/7. Typecheck, build, build:test, lint, duplicates, changelog:check and diff checks passed. A second complete exact-gates retry after other targeted tests completed passed self-host verification and then refused one unrelated unreachable physical identity (5/6 passed); live graph inspection confirmed zero rejected reachable objects and zero rejected candidate ancestors. Reused pm-vcs-identity-isolation and created pm-vcs-selfhost-audit-budget as open follow-ups. Every test file found by the recursive touched-path/basename grep was executed. Release now and repeat the tracker commit, build, self-host writer and archive commit, then verify accept:self-host at final HEAD and the complete exact-gates file in a fresh reachable-only checkout. These final checks remain pending in this receipt and will be reported externally with the pushed head; make no further tracker writes."
+  - created_at: "2026-11-17T11:22:38.119Z"
+    author: codex-sol
+    text: "Round AT: merged origin/main in 0e62ac4 with a separate merge commit. Regenerated CHANGELOG.md after fetching release tags; no origin/main published bullet is missing and every history line from both parents is retained. Review fixes remove documentation and tracker routing exclusions because the composition consumer reads shipped docs, the pack benchmark reads the real tracker, and self-host acceptance reads committed paths. Keep the eight-shard upper budget; document the seven-shard lower bound as historical evidence. Aggregate regression now varies CHANGES, QUICK, RELEASE and COVERAGE through success/failure/cancelled/skipped on Node 22 and 26, plus CODE=false. Targeted validation is underway; typecheck, build:test, lint and duplicates passed. All remaining tracker evidence and release will precede final changelog generation, source commit, build, bundle commit and committed self-host acceptance."
+  - created_at: "2026-11-17T11:32:33.748Z"
+    author: codex-sol
+    text: "Round AT evidence: PRRT_kwDOToJT7M64ZJrh removes all broad inert exclusions in both workflow detectors; the real tracker pack benchmark and committed self-host source audit consume tracker data, so no tracker data format qualifies as unread. README-only and docs-only paths select quick CI; the empty-diff regression retains CODE=false. PRRT_kwDOToJT7M64ZJrp removes only the seven-shard lower-bound assertion, keeps the eight-shard maximum plus setup reserve, and documents the historical sizing reason in docs/ci-tiers.md. PRRT_kwDOToJT7M64ZJrx covers all four result states for CHANGES/QUICK/RELEASE/COVERAGE on both aggregate node selectors, including Node 22 ignoring release/coverage, Node 26 ignoring quick, and CODE=false. Final routing/environment/privacy command: 36 passed, zero failed/skipped/cancelled. Broader durability, public-tracker packs, real packed composition consumer, workflow/release, quality-script and self-host tests: 187 passed, zero failed/cancelled, four composition combinations explicitly deferred by quick depth. Typecheck, build:test, lint, duplicates and diff checks passed on Node 24.19.0. Changed-path and basename audit identifies exact-gates as the remaining reference suite: run it at final HEAD in a fresh reachable-only checkout to avoid unrelated unreachable physical identities tracked by pm-vcs-identity-isolation; the pre-existing subprocess budget risk remains tracked by pm-vcs-selfhost-audit-budget. Release ownership now, regenerate/check changelog after fetching tags, commit code/tracker/changelog, build, regenerate and separately commit the archive, then run accept:self-host and exact-gates at that final HEAD. Those final results are pending this receipt and must be reported externally without further tracker writes. No full coverage or hosted CI certification is claimed. No review thread actions, closure, publication or workflow dispatch."
 files[42]:
   - path: .github/workflows/ci-deep.yml
     scope: project
@@ -281,7 +287,7 @@ files[42]:
     scope: project
   - path: test/support/depth.ts
     scope: project
-tests[35]:
+tests[38]:
   - command: "npm run typecheck && npm run build:test && npm run lint"
     scope: project
     timeout_seconds: 240
@@ -552,6 +558,27 @@ tests[35]:
     provenance:
       author: codex-sol
       created_at: "2026-11-17T09:08:01.054Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: PM_TEST_DEPTH=quick node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=2 test/ci-shards.test.ts test/ci-routing.test.ts test/dependency-refresh-workflow.test.ts test/test-environment.test.ts test/fixture-lifetime.test.ts test/verify-pack-privacy.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T11:25:11.424Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: PM_TEST_DEPTH=quick node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=2 test/durability.test.ts test/packs.test.ts test/composition-consumer.test.ts test/ci-codeql.test.ts test/quality-scripts.test.ts test/release-approval.test.ts test/release-preparation.test.ts test/verify-release-changelog-date.test.ts test/verify-release-publish-attestation.test.ts test/self-host.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T11:25:14.652Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: PM_TEST_DEPTH=quick node --expose-gc --no-concurrent-array-buffer-sweeping --test test/exact-gates.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T11:25:16.607Z"
       source_kind: local_mutation
       source_ref: ci/quick-pr-tier-deep-local-tier
 docs[4]{path,scope}:

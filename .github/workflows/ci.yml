@@ -32,11 +32,9 @@ jobs:
             code=false
             git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/ci-changed-paths"
             while IFS= read -r -d '' path; do
-              case "$path" in
-                .agents/pm/*.mjs|.agents/pm/*.cjs|.agents/pm/*.js|.agents/pm/*.ts) code=true ;;
-                .agents/pm/*.toon|.agents/pm/*.json|.agents/pm/*.jsonl|*.md|docs/*|CHANGELOG.md|LICENSE) ;;
-                *) code=true ;;
-              esac
+              # Docs and tracker data are test inputs; the self-host gate
+              # also consumes every committed path. No inert exclusions.
+              code=true
             done < "$RUNNER_TEMP/ci-changed-paths"
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
@@ -416,11 +414,9 @@ jobs:
             code=false
             git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/ci-changed-paths"
             while IFS= read -r -d '' path; do
-              case "$path" in
-                .agents/pm/*.mjs|.agents/pm/*.cjs|.agents/pm/*.js|.agents/pm/*.ts) code=true ;;
-                .agents/pm/*.toon|.agents/pm/*.json|.agents/pm/*.jsonl|*.md|docs/*|CHANGELOG.md|LICENSE) ;;
-                *) code=true ;;
-              esac
+              # Docs and tracker data are test inputs; the self-host gate
+              # also consumes every committed path. No inert exclusions.
+              code=true
             done < "$RUNNER_TEMP/ci-changed-paths"
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"

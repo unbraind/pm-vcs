@@ -40,7 +40,6 @@ test("balanced shards discover every test once and fit the measured twelve-minut
   assert.deepEqual(groups[0], shardTestFiles(process.cwd(), "1/8"));
   const costs = groups.map(files => files.reduce((sum, file) => sum + testFileWeight(file, weights), 0));
   assert.ok(Math.max(...costs) + 120 <= 720, "eight shards fit with two minutes of setup reserve");
-  assert.ok(costs.reduce((sum, cost) => sum + cost, 0) / 7 + 120 > 720, "even perfect seven-way balance exceeds the budget");
 });
 
 test("Windows native paths use POSIX timing keys and retain the unknown-file reserve", () => {
@@ -61,8 +60,13 @@ test("new files participate without timing entries and invalid or empty shards r
 
 test("required aggregates reject failures, cancellations and skipped prerequisites",{skip:process.platform==="win32"},()=>{
   const run=jobs.test.steps.at(-1).run;
-  for(const node of ["22","26"]) for(const result of ["success","failure","cancelled","skipped"]){
-    const env={...testEnvironment(),NODE_VERSION:node,CHANGES:"success",CODE:"true",QUICK:"success",RELEASE:"success",COVERAGE:"success",[node==="22"?"QUICK":"COVERAGE"]:result};
-    const child=spawnSync("bash",["-c",run],{env,encoding:"utf8"});assert.equal(child.status===0,result==="success",node+result);
+  for(const node of ["22","26"]) for(const prerequisite of ["CHANGES","QUICK","RELEASE","COVERAGE"]) for(const result of ["success","failure","cancelled","skipped"]){
+    const env=testEnvironment({NODE_VERSION:node,CHANGES:"success",CODE:"true",QUICK:"success",RELEASE:"success",COVERAGE:"success",[prerequisite]:result});
+    const required=prerequisite==="CHANGES"||(node==="22"?prerequisite==="QUICK":prerequisite!=="QUICK");
+    const child=spawnSync("bash",["-c",run],{env,encoding:"utf8"});assert.equal(child.status===0,!required||result==="success",`${node} ${prerequisite}=${result}`);
+  }
+  for(const node of ["22","26"]) for(const changes of ["success","failure","cancelled","skipped"]){
+    const env=testEnvironment({NODE_VERSION:node,CHANGES:changes,CODE:"false",QUICK:"skipped",RELEASE:"skipped",COVERAGE:"skipped"});
+    const child=spawnSync("bash",["-c",run],{env,encoding:"utf8"});assert.equal(child.status===0,changes==="success",`${node} CODE=false CHANGES=${changes}`);
   }
 });

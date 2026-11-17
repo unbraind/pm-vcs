@@ -1,5 +1,5 @@
 import "./helpers/isolate-session.ts";
-/** Execute every quick-tier detector against inert records and tracker programs. */
+/** Execute every quick-tier detector against documentation, tracker data and programs. */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -9,7 +9,7 @@ import test from 'node:test';
 import { parseDocument } from 'yaml';
 import { testEnvironment } from './helpers/test-environment.ts';
 
-test('quick routing excludes only inert tracker formats and gates executable tracker files', { skip: process.platform === 'win32' && 'The workflow detector runs in Ubuntu Bash' }, t => {
+test('quick routing gates documentation and tracker inputs as well as programs', { skip: process.platform === 'win32' && 'The workflow detector runs in Ubuntu Bash' }, t => {
   const bash = spawnSync('bash', ['--version'], { encoding: 'utf8', timeout: 30000, env: testEnvironment() });
   if ((bash.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' && !process.env.CI) {
     t.skip('bash is unavailable on PATH');
@@ -25,8 +25,11 @@ test('quick routing excludes only inert tracker formats and gates executable tra
   const root = mkdtempSync(join(tmpdir(), 'ci-routing-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const script of scripts) for (const [path, code] of [
-    ['.agents/pm/tasks/a.toon', false], ['.agents/pm/history/a.jsonl', false],
-    ['.agents/pm/settings.json', false], ['README.md', false],
+    ['.agents/pm/tasks/a.toon', true], ['.agents/pm/history/a.jsonl', true],
+    ['.agents/pm/settings.json', true], ['.agents/pm/schema/types.json', true],
+    ['README.md', true], ['docs/links-layers-obliteration.md', true],
+    ['docs/checkpoint-example.json', true], ['ARCHITECTURE.md', true],
+    ['CHANGELOG.md', true], ['LICENSE', true],
     ['.agents/pm/scripts/check.ts', true], ['.agents/pm/scripts/check.sh', true],
     ['.agents/pm/scripts/check.py', true], ['src/index.ts', true],
   ] as const) {

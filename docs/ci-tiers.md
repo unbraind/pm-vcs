@@ -7,36 +7,37 @@ the Windows checks retain Windows because they verify native launcher, GC and
 root-case contracts. Superseded PR runs cancel. Linux shard and release jobs time out at 22 minutes;
 Windows jobs at 15 minutes. These are initial bounds pending PR measurements.
 
-| Check or contract | Code PR Node 22 | Code PR Node 26 | Docs/tracker-only PR | Deep Node 22/26 × npm/Bun |
-| --- | --- | --- | --- | --- |
-| npm ci, merge-driver preparation, pinned project extension | yes | yes | all four required jobs | every job |
-| Strict tracker health, required merge drivers | yes | yes | all four required jobs | every job |
-| Build and test compilation | yes | yes, in release gate | Linux build for self-host acceptance | full release gate |
-| Test suite, seeded properties, crash/recovery matrices, representative packed Node consumers | quick | quick, via coverage | — | full release gate |
-| Typecheck, lint, duplication and docstring gates | — | yes | — | full release gate |
-| Per-file coverage, unchanged 100% thresholds and source scope | — | quick | — | full |
-| Native TOON installed CLI acceptance | — | yes | — | full release gate |
-| Stat-cache installed CLI acceptance | — | yes | — | full release gate |
-| Committed self-host bundle hash/import/source equality | — | yes | Linux | full release gate |
-| Production dependency audit and Git identity audit | — | yes | identity audit on Linux | full release gate |
-| Pack dry-run and pack privacy check | — | yes | privacy check on Linux | full release gate |
-| Changelog consistency | — | yes | all four required jobs | full release gate |
-| Release changelog date and publish attestation | — | yes | date check on Linux | full release gate |
-| Bun graph installation and bunx ephemeral PM launcher | — | yes | — | graph install every job; bunx smoke in PR tier |
-| Native Bun tracker-lenses and change-bundles tests | — | — | — | both Bun jobs |
-| Windows installed PM launcher and native GC/root-case storage tests | separate Windows 22 job | separate Windows 26 job | cheap gates in both Windows jobs | retained in PR tier |
-| Failure coverage artifact, seven-day retention | on failure | on failure | — | on failure, unique matrix names |
-| CodeQL analysis | separate workflow for matching paths | separate workflow for matching paths | path-filtered | weekly scan also covers ignored paths |
+| Check or contract | PR Node 22 | PR Node 26 | Deep Node 22/26 × npm/Bun |
+| --- | --- | --- | --- |
+| npm ci, merge-driver preparation, pinned project extension | yes | yes | every job |
+| Strict tracker health, required merge drivers | yes | yes | every job |
+| Build and test compilation | yes | yes, in release gate | full release gate |
+| Test suite, seeded properties, crash/recovery matrices, representative packed Node consumers | quick | quick, via coverage | full release gate |
+| Typecheck, lint, duplication and docstring gates | — | yes | full release gate |
+| Per-file coverage, unchanged 100% thresholds and source scope | — | quick | full |
+| Native TOON installed CLI acceptance | — | yes | full release gate |
+| Stat-cache installed CLI acceptance | — | yes | full release gate |
+| Committed self-host bundle hash/import/source equality | — | yes | full release gate |
+| Production dependency audit and Git identity audit | — | yes | full release gate |
+| Pack dry-run and pack privacy check | — | yes | full release gate |
+| Changelog consistency | — | yes | full release gate |
+| Release changelog date and publish attestation | — | yes | full release gate |
+| Bun graph installation and bunx ephemeral PM launcher | — | yes | graph install every job; bunx smoke in PR tier |
+| Native Bun tracker-lenses and change-bundles tests | — | — | both Bun jobs |
+| Windows installed PM launcher and native GC/root-case storage tests | separate Windows 22 job | separate Windows 26 job | retained in PR tier |
+| Failure coverage artifact, seven-day retention | on failure | on failure | on failure, unique matrix names |
+| CodeQL analysis | separate workflow for matching paths | separate workflow for matching paths | weekly scan also covers ignored paths |
 
-The cheap path runs dependency setup, strict health and changelog consistency.
-Linux additionally checks release changelog dates, Git identities, the committed
-self-host bundle and packed-file privacy.
-The existing pinned pm-github extension install is prerequisite setup for strict
-health in a fresh checkout. Detection compares actual PR base/head endpoints with
-NUL-delimited paths and rename folding disabled. Tracker data, Markdown, docs and
-LICENSE are cheap; executable JS/TS tracker files select code CI. Manual dispatch
-always selects code CI. `selfhost.bundle` is a code path: documentation changes
-that also regenerate the archive receive the code checks.
+Every changed path selects code CI, including README-only, docs-only and
+tracker-only changes. `test/composition-consumer.test.ts` reads the shipped docs;
+`test/packs.test.ts` benchmarks the real tracker, including its data files.
+The self-host gate consumes every committed path except its explicit manifest
+exclusions. There are therefore no inert data exclusions. Both Linux and Windows
+detectors compare actual PR base/head endpoints with NUL-delimited paths and
+rename folding disabled. Manual dispatch always selects code CI. Only an empty
+PR diff retains the fallback dependency setup, health, changelog and Linux
+source-input gates. The pinned pm-github install remains prerequisite setup for
+strict health in a fresh checkout.
 
 Node 26 runs all release-gate components in parallel at `PM_TEST_DEPTH=quick`: non-coverage commands and exactly merged coverage shards.
 Node 22 runs build, test compilation and quick test shards, with no separate coverage, changelog or packing step. Some tests themselves pack consumers; those
@@ -115,8 +116,9 @@ branch protection and repository variables are outside this change.
 
 ## Documentation and tracker gate inputs
 
-The docs/tracker Linux path runs changelog checking, release changelog date
-verification, identity auditing, self-host acceptance and packed-file privacy.
+Docs/tracker PRs run the complete quick tier, including changelog checking,
+release changelog date verification, identity auditing, self-host acceptance and
+packed-file privacy.
 Self-host acceptance builds first and compares the committed bundle against the
 committed tree; verification never rewrites the bundle. A stale README or tracker
 snapshot therefore fails before merge.
@@ -133,16 +135,19 @@ Other release gates were inspected: typecheck/build, lint, duplication and
 docstrings target TypeScript/configuration; coverage runs the declared source
 and fixture suites; native TOON/stat-cache acceptance uses synthetic projects;
 production audit reads dependencies; publish-attestation verification reads
-package/workflow shell inputs. None consumes current documentation or tracker
-content. Pack dry-run has no additional documentation validation beyond the real
-archive already inspected by pack checking. Benchmark utilities can take explicit
-tracker inputs but are not release gates.
+package/workflow shell inputs. The composition consumer tests read current
+shipped documentation, and the pack benchmark reads the package tracker; both
+belong to the quick suite. Pack dry-run adds no documentation validation beyond
+the real archive already inspected by pack checking.
 
 ## Review round E
 
 Both assigned checks hit the 30-minute job timeout. The Node 26 log measures 474 and 504 seconds for two benchmark tests: each redundantly runs both in-process and CLI benchmarks, resulting in four full executions. Retain one direct benchmark and one real CLI invocation from a checkout containing spaces. Keep every source and coverage threshold intact. Targeted benchmark and fixture validation records are linked from the package tracker.
 
-The cheap tier excludes only inert tracker record formats; executable tracker changes keep product gates. `test/ci-routing.test.ts` executes each detector with inert and executable tracker paths. Product deadlines, full-depth cases and coverage thresholds are unchanged.
+The initial cheap tier excluded tracker record formats. Round AT removes those
+exclusions because the pack benchmark reads the actual tracker.
+`test/ci-routing.test.ts` executes both detectors with documentation, tracker data
+and executable paths. Product deadlines, full-depth cases and coverage thresholds are unchanged.
 
 Round F: every new test entrypoint imports session isolation first and child
 launches use explicit fixture environments. Executable tracker files retain
@@ -185,8 +190,8 @@ Required `test (22)` and `test (26)` checks are always-run aggregates. The forme
 requires every Node 22 quick shard; the latter requires the parallel non-coverage
 release gates and the coverage merge, which depends on every Node 26 shard.
 Failures, cancellations and skipped prerequisites fail the code aggregate.
-Docs/tracker changes still run their original health, privacy and changelog
-checks, with no suite build unless a documentation-input gate requires it.
+Docs/tracker changes select the same quick shards and release gates as other
+source changes because their contents are test inputs.
 
 There are **8 shards per Node line**, reducing a code CI run from 35 to 23 jobs.
 Both matrices call the same deterministic file allocator in
@@ -219,7 +224,10 @@ Their observed case totals are 222.742 and 176.107 seconds. No case, seed or
 assertion was removed. The largest remaining file is about 260 seconds, below
 the per-shard collection budget. Workflow tests
 prove complete, unique discovery, consistent matrix/merge counts, deterministic
-assignment and the seven/eight budget boundary. These are projections; queueing,
+assignment and the eight-shard upper budget. The seven-shard lower bound is
+historical sizing evidence only: a speed-up must not fail the contract. Eight
+shards were selected from the observed inventory and setup reserve above; the
+live test constrains only the maximum eight-shard projection. These are projections; queueing,
 WAN setup variance and future file growth require new hosted measurements.
 The Windows acceptance launcher jobs are unchanged.
 

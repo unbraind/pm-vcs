@@ -202,12 +202,13 @@ test("quick/deep workflows retain tier boundaries, timeouts and safe change dete
     assert.equal(script, ci.jobs["windows-acceptance-launcher"].steps.find((step: { name: string }) => step.name === "Detect code changes").run);
     const pathsFile = join(root, "paths"); const output = join(root, "output");
     for (const [paths, code] of [
-      [["README.md", ".agents/pm/tasks/fixture.toon", "docs/guide.md", "LICENSE"], false],
+      [[], false],
+      [["README.md", ".agents/pm/tasks/fixture.toon", "docs/guide.md", "LICENSE"], true],
       [["engine/source.ts", "docs/moved.md"], true],
       [[".agents/pm/nested/extension.ts"], true], [[".agents/pm/hook.mjs"], true],
       [["test/unusual\nname.test.ts"], true], [["selfhost.bundle"], true],
     ] as [string[], boolean][]) {
-      writeFileSync(pathsFile, paths.join("\0") + "\0"); writeFileSync(output, "");
+      writeFileSync(pathsFile, paths.map(path => path + "\0").join("")); writeFileSync(output, "");
       const result = spawnSync("bash", ["-c", 'git() { [[ "$*" == *"--no-renames -z"* ]] || return 19; cat "$PATHS_FILE"; };\n' + script], {
         env: testEnvironment({ GITHUB_EVENT_NAME: "pull_request", BASE_SHA: "base", HEAD_SHA: "head", RUNNER_TEMP: root, GITHUB_OUTPUT: output, PATHS_FILE: pathsFile }), encoding: "utf8",
       });
