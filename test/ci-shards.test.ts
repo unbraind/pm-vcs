@@ -8,7 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { parseDocument } from "yaml";
 import { testEnvironment } from "./helpers/test-environment.ts";
-import { shardTestFiles } from "./helpers/ci-shards.ts";
+import { shardTestFiles, testFileWeight } from "./helpers/ci-shards.ts";
 
 const document=parseDocument(readFileSync(".github/workflows/ci.yml","utf8"),{strict:true,uniqueKeys:true});
 assert.deepEqual(document.errors,[]);
@@ -38,9 +38,16 @@ test("balanced shards discover every test once and fit the measured twelve-minut
   const groups = Array.from({ length: 8 }, (_, index) => shardTestFiles(process.cwd(), `${index + 1}/8`));
   assert.deepEqual(groups.flat().sort(), globSync("test/*.test.ts").sort());
   assert.deepEqual(groups[0], shardTestFiles(process.cwd(), "1/8"));
-  const costs = groups.map(files => files.reduce((sum, file) => sum + (weights[file] ?? 60), 0));
+  const costs = groups.map(files => files.reduce((sum, file) => sum + testFileWeight(file, weights), 0));
   assert.ok(Math.max(...costs) + 120 <= 720, "eight shards fit with two minutes of setup reserve");
   assert.ok(costs.reduce((sum, cost) => sum + cost, 0) / 7 + 120 > 720, "even perfect seven-way balance exceeds the budget");
+});
+
+test("Windows native paths use POSIX timing keys and retain the unknown-file reserve", () => {
+  const weights = { "test/known.test.ts": 137 };
+  assert.equal(testFileWeight("test\\known.test.ts", weights), 137);
+  assert.equal(testFileWeight("test/known.test.ts", weights), 137);
+  assert.equal(testFileWeight("test\\new.test.ts", weights), 60);
 });
 
 test("new files participate without timing entries and invalid or empty shards refuse", t => {

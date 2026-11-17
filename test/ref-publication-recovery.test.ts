@@ -60,18 +60,21 @@ function graph(repo: Repository, text: string): { leaf: string; tree: string; ro
 }
 test("seeded pending-root model preserves every native root format through loose and packed GC and releases ended authority", async t => {
  const base=await fixture();let cases=0;
- for(let seed=1;seed<=testDepth(8, 1);seed++) for(const format of ["ref","HEAD","index","MERGE_STATE","pins","denials"] as const) for(const packed of [false,true]) {
+ const refNamespaces = ["refs/heads/main","refs/tags/fixture","refs/remotes/demo/main","refs/metadata/fixture"];
+ const exercisedNamespaces = new Set<string>();
+ for(let seed=1;seed<=testDepth(8, 1);seed++) for(const format of ["ref","HEAD","index","MERGE_STATE","pins","denials"] as const) for(const packed of [false,true]) for(const name of format === "ref" ? refNamespaces : [""]) {
   const repo=Repository.init(join(base.root,`model-${cases++}`));const a=graph(repo,`original ${seed}`);const b=graph(repo,createHash("sha256").update(`payload ${seed}`).digest("hex"));repo.refs.compareAndSwap("refs/metadata/anchor",null,a.root);
   let destination:string;let bytes:string;let selected=b.root;let restore:()=>void;
-  if(format==="ref"){const name=["refs/heads/main","refs/tags/fixture","refs/remotes/demo/main","refs/metadata/fixture"][seed%4]!;repo.refs.compareAndSwap(name,null,a.root);destination=join(repo.controlDirectory,name);bytes=`${b.root}\n`;restore=()=>repo.refs.compareAndSwap(name,b.root,a.root);}
+  if(format==="ref"){exercisedNamespaces.add(name);repo.refs.compareAndSwap(name,null,a.root);destination=join(repo.controlDirectory,name);bytes=`${b.root}\n`;restore=()=>repo.refs.compareAndSwap(name,b.root,a.root);}
   else if(format==="HEAD"){repo.refs.setHeadDetached(a.root);destination=join(repo.controlDirectory,"HEAD");bytes=`${b.root}\n`;restore=()=>repo.refs.setHeadDetached(a.root);}
   else if(format==="index"){repo.writeIndex([{path:"asset",id:a.leaf,mode:"100644"}]);destination=join(repo.controlDirectory,"index");bytes=encodeIndex([{path:"asset",id:b.leaf,mode:"100644"}]);selected=b.leaf;restore=()=>repo.writeIndex([{path:"asset",id:a.leaf,mode:"100644"}]);}
   else if(format==="MERGE_STATE"){const state={ours:a.root,theirs:a.root,bases:[],revision:"fixture",merged:[],conflicts:[],message:"fixture",author:signature,committer:signature};destination=join(repo.controlDirectory,"MERGE_STATE");writePrivateJson(destination,state);bytes=JSON.stringify({...state,theirs:b.root});restore=()=>writePrivateJson(destination,state);}
   else if(format==="pins"){destination=join(repo.controlDirectory,"upload-roots.json");writePrivateJson(destination,[]);bytes=JSON.stringify([b.root,b.tree,b.leaf]);restore=()=>writePrivateJson(destination,[]);}
   else{const gone=hashObject("blob",Buffer.from(`already absent ${seed}`));const tombstone={version:1 as const,fileId:seed.toString(16).padStart(32,"0"),roots:[gone],objects:[gone],payloads:[createHash("sha256").update(`absent ${seed}`).digest("hex")],principal:"fixture",timestamp:new Date(1).toISOString(),reason:"fixture"};selected=repo.objects.write("tombstone",encodeTombstone(tombstone));destination=join(repo.controlDirectory,"denials.json");writePrivateJson(destination,[]);bytes=JSON.stringify([{id:selected,tombstone,pending:false}]);restore=()=>{};}
   const source=prepared(repo,destination,bytes);if(packed)repo.objects.compact();const before=readFileSync(destination,"utf8");const preview=collectGarbage(repo);assert.ok(!preview.candidates.includes(selected));assert.ok(preview.publications!.pending>=1);assert.equal(readFileSync(destination,"utf8"),before);collectGarbage(repo,true);assert.ok(repo.objects.has(selected));
-  durability.recoverPublication(destination);assert.equal(readFileSync(destination,"utf8"),bytes);assert.equal(existsSync(source),false);assert.ok(repo.objects.has(selected));restore();collectGarbage(repo,true);assert.equal(repo.objects.has(selected),format==="denials");assert.equal(inspectDestructions(repo.controlDirectory).pending,0);if(cases%12===0)process.stderr.write(`pending-root model: ${cases}/96 stores verified\n`);
+  durability.recoverPublication(destination);assert.equal(readFileSync(destination,"utf8"),bytes);assert.equal(existsSync(source),false);assert.ok(repo.objects.has(selected));restore();collectGarbage(repo,true);assert.equal(repo.objects.has(selected),format==="denials");assert.equal(inspectDestructions(repo.controlDirectory).pending,0);if(cases%12===0)process.stderr.write(`pending-root model: ${cases} stores verified\n`);
  }
+ assert.deepEqual([...exercisedNamespaces].sort(),[...refNamespaces].sort());
  t.diagnostic(`${cases} seeded format/representation stores, complete pending roots and descendants, read-only preview and ended-authority collection`);
 });
 
