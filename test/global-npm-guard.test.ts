@@ -5,6 +5,11 @@ import { test } from 'node:test';
 import { globalNpmInstalls, workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 
 const rejected = [
+  // Round AN: quoted hashes must not split a continued global install.
+  'npm install --cache "$RUNNER_TEMP/npm #cache" \\\n  -g npm@11.19.0',
+  "npm install --cache '$RUNNER_TEMP/a #b' \\\n  -g npm",
+  'npm install npm@11 --cache "$RUNNER_TEMP/cache #1" \\\n  -g',
+  'npm --user-agent "ci # bootstrap" install \\\n  -g npm@11.21.0',
   // Round AM: punctuation, comment boundaries, operandless installs and persistent setters.
   "npm install npm@11.19.0 -g;",
   "npm install>/dev/null -g npm",
@@ -285,14 +290,27 @@ test('attached shell punctuation never hides command words or global markers', (
   }
 });
 
-test('comment backslashes preserve physical newlines for LF and CRLF input', () => {
+test('comment backslashes retain physical findings in the union for LF and CRLF input', () => {
   for (const newline of ['\n', '\r\n']) {
     for (const comment of ['# bootstrap', '  # bootstrap', 'echo safe # bootstrap']) {
       const findings = globalNpmInstalls(`${comment} \\${newline}npm install -g npm`);
-      assert.deepEqual(findings, [['npm', 'install', '-g', 'npm']]);
+      assert.ok(findings.some(finding => JSON.stringify(finding) === JSON.stringify(['npm', 'install', '-g', 'npm'])));
     }
-    assert.equal(globalNpmInstalls(`npm install --prefix "$RUNNER_TEMP/npm-local" npm@11.19.0 # bootstrap \\${newline}npm install -g npm@11.19.0`).length, 1);
+    assert.ok(globalNpmInstalls(`npm install --prefix "$RUNNER_TEMP/npm-local" npm@11.19.0 # bootstrap \\${newline}npm install -g npm@11.19.0`).length > 0);
   }
+});
+
+test('continuation union keeps bootstrap exemptions local to each form', () => {
+  for (const newline of ['\n', '\r\n']) {
+    // Joining produces an approved bootstrap, but its physical install is unsafe.
+    const continued = `npm install -g npm \\${newline}--prefix "$RUNNER_TEMP/npm-local"`;
+    assert.deepEqual(globalNpmInstalls(continued), [['npm', 'install', '-g', 'npm', '\\']]);
+    assert.deepEqual(globalNpmInstalls('npm install -g npm --prefix "$RUNNER_TEMP/npm-local"'), []);
+    // The quoted hash needs joining to expose the global marker.
+    assert.ok(globalNpmInstalls(`npm install --cache "$RUNNER_TEMP/npm #cache" \\${newline}  -g npm@11.19.0`).length > 0);
+  }
+  // A single-line violation appears in both forms but is reported only once.
+  assert.deepEqual(globalNpmInstalls('npm install -g npm'), [['npm', 'install', '-g', 'npm']]);
 });
 
 test('no approved bootstrap shape tolerates trailing comments', () => {

@@ -94,17 +94,23 @@ const approvedBootstrapShapes: RegExp[] = [
 ];
 
 /**
- * Scan logical lines fail-closed: join backslash continuations, then split on
- * newlines only. Comment and here-document text is scanned like any other
- * text — false positives there are acceptable. A global install line with an
- * npm operand (or no operand) is a violation unless it matches an approved bootstrap shape,
- * and writing npm configuration for later steps rejects the writing step.
+ * Scan both unconditionally joined backslash continuations and physical lines,
+ * taking the union of findings. Quoted hashes need joining; comment backslashes
+ * need physical boundaries. No shell parsing chooses between those forms.
+ * An exact approved bootstrap is exempt only in the form where it is exact.
+ * Comment and here-document text is scanned like any other text; false positives
+ * are acceptable. Persistent npm configuration rejects the writing step.
  */
 export function globalNpmInstalls(script: string, env?: Record<string, string>): string[][] {
-  // A comment ends at the physical newline, even when its last character is
-  // a backslash. Conservatively preserve any line containing a comment start.
-  const run = script.replace(/[^\n]*\n/gu, line =>
-    line.includes(' #') || line.trimStart().startsWith('#') ? line : line.replace(/\\\r?\n$/u, ''));
+  const findings = [
+    ...scanNpmLines(script.replace(/\\\r?\n/gu, ''), env),
+    ...scanNpmLines(script, env),
+  ];
+  return [...new Map(findings.map(finding => [JSON.stringify(finding), finding])).values()];
+}
+
+/** Evaluate one line form with its own exact bootstrap exemptions. */
+function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
   const lines = run.split('\n').map(line => line.trim()).filter(Boolean);
   const findings: string[][] = [];
   // A global npm_config_* exported through GITHUB_ENV reaches every later
