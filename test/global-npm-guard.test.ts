@@ -5,6 +5,20 @@ import { test } from 'node:test';
 import { globalNpmInstalls, workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 
 const rejected = [
+  'npm install -g some-tool --ignore-scripts npm@11.19.0',
+  'npm install --global npm@11.19.0 typescript',
+  'npm install -g --ignore-scripts npm@11.19.0 typescript',
+  'npm install -g --ignore-scripts npm typescript',
+  'npm install -g --ignore-scripts npm@11.21.0 typescript',
+  'npm install --global --ignore-scripts npm@11.21.0 typescript',
+  'npm install -g --ignore-scripts npm@11.21.0 semver@7.8.6',
+  'npm install -g --ignore-scripts "npm@latest" some-tool',
+  'npm install -g --ignore-scripts ../npm some-tool',
+  'npm install -g --ignore-scripts npm-11.21.0.tgz some-tool',
+  'npm install -g --ignore-scripts https://registry.example.invalid/npm/-/npm-11.21.0.tgz some-tool',
+  'npm --user-agent ci install -g',
+  'npm install -g --ignore-scripts some-tool',
+  'npm install -g> install.log',
   'custom-writer .npmrc @{global=true}',
   'custom-writer .npmrc {location:global}',
   String.raw`Set-Item -Path Env:\NPM_CONFIG_GLOBAL -Value true` + '\nnpm install npm@11.21.0',
@@ -207,6 +221,8 @@ const rejected = [
 ];
 const accepted = [
   'npm install -g --loglevel=warn some-tool@1',
+  'npm install -g --loglevel warn some-tool@1',
+  'npm --user-agent ci install -g some-tool@1',
   String.raw`Set-Item -Path Env:\UNRELATED -Value true` + '\nnpm install npm@11.21.0',
   `Set-Content -Path "$HOME/.npmrc" -Value 'registry=https://registry.example.invalid'`,
   // Inline option values cannot consume the following package operand.
@@ -292,6 +308,38 @@ test('npmrc settings reject the writing step for every writer', () => {
     assert.ok(workflowGlobalNpmInstalls(source).some(finding => finding[0] === 'npm configuration written to an npmrc file'), writer);
   }
   assert.deepEqual(globalNpmInstalls('npm config get globalconfig\ncat .npmrc'), []);
+});
+
+test('writes to custom npm config paths reject the writing step', () => {
+  const cases = [
+    String.raw`printf 'global=true\n' >> "$NPM_CONFIG_USERCONFIG"`,
+    "printf 'location=global\\n' >> \"${npm_config_globalconfig}\"",
+    `Set-Content -Path "$env:NpM_CoNfIg_GlObAlCoNfIg" -Value 'global=true'`,
+    `printf 'global=true' >> "/synthetic/npm-config"`,
+  ];
+  const prefix = 'jobs:\n  audit:\n    env:\n      NPM_CONFIG_USERCONFIG: /synthetic/npm-config\n    steps:\n';
+  for (const writer of cases) {
+    const source = prefix + `      - run: |\n          ${writer}\n      - run: npm install npm@11.19.0\n`;
+    assert.deepEqual(workflowGlobalNpmInstalls(source), [['npm configuration written to an npmrc file', writer]]);
+  }
+  for (const script of [
+    `export npm_config_userconfig="/synthetic/npm config"\nprintf 'global=true' >> "/synthetic/npm config"`,
+    `$env:NPM_CONFIG_GLOBALCONFIG = './custom-config'\nSet-Content -Path './custom-config' -Value 'location=global'`,
+  ]) assert.ok(globalNpmInstalls(script).some(finding => finding[0] === 'npm configuration written to an npmrc file'), script);
+  assert.deepEqual(globalNpmInstalls('cat "$NPM_CONFIG_USERCONFIG"\nnpm config get global\nnpm config get globalconfig'), []);
+  assert.deepEqual(globalNpmInstalls('Get-Content "$env:npm_config_globalconfig"\nnpm config get location'), []);
+});
+
+test('escaped line breaks expose npmrc keys written before a later install', () => {
+  for (const writer of [
+    String.raw`printf 'audit=false\nglobal=true\n' >> "$HOME/.npmrc"`,
+    String.raw`echo -e 'audit=false\rlocation=global' > "$HOME/.npmrc"`,
+    String.raw`echo $'audit=false\nglobal=true' > "$HOME/.npmrc"`,
+    String.raw`printf 'audit=false\\nglobal=true\\n' >> "$NPM_CONFIG_USERCONFIG"`,
+  ]) {
+    const source = workflow(`run: |\n          ${writer}`) + '      - run: npm install npm@11.19.0\n';
+    assert.deepEqual(workflowGlobalNpmInstalls(source), [['npm configuration written to an npmrc file', writer]]);
+  }
 });
 
 test('every env-key mention must be a recognized safe assignment', () => {
@@ -394,6 +442,24 @@ test('computed location values reject installs at every effective env scope', ()
       `jobs:\n  audit:\n    env:\n      ${entry}\n    steps:\n      - run: npm install npm@11.21.0\n`,
       workflow(`env:\n          ${entry}\n        run: npm install npm@11.21.0`),
     ]) assert.equal(workflowGlobalNpmInstalls(source).length, 1, source);
+  }
+});
+
+test('scope merging preserves forcing values under differently cased env names', () => {
+  const command = 'npm install npm@11.21.0';
+  for (const [key, variant, value] of [
+    ['NPM_CONFIG_GLOBAL', 'npm_config_global', 'true'],
+    ['npm_config_global', 'NPM_CONFIG_GLOBAL', 'true'],
+    ['NpM_cOnFiG_LoCaTiOn', 'npm_config_location', 'global'],
+  ]) {
+    assert.equal(workflowGlobalNpmInstalls(`env:\n  ${key}: "${value}"\n` +
+      workflow(`env:\n          ${variant}: ""\n        run: ${command}`)).length, 1);
+    assert.equal(workflowGlobalNpmInstalls(workflow(`env:\n          ${key}: "${value}"\n          ${variant}: ""\n        run: ${command}`)).length, 1);
+    const safe = value === 'true' ? 'false' : 'project';
+    assert.deepEqual(workflowGlobalNpmInstalls(`env:\n  ${key}: "${value}"\n` +
+      workflow(`env:\n          ${key}: "${safe}"\n        run: ${command}`)), []);
+    assert.equal(workflowGlobalNpmInstalls(`env:\n  ${key}: "${value}"\n` +
+      workflow(`env:\n          ${variant}: "${safe}"\n        run: ${command}`)).length, 1);
   }
 });
 
@@ -642,9 +708,10 @@ test('aliases and merge keys cannot supply hidden executable fields', () => {
 
 
 test('step env overrides service, container, workflow and job defaults', () => {
-  const source = 'env: {NPM_CONFIG_GLOBAL: "true"}\njobs:\n  audit:\n    env: {NPM_CONFIG_GLOBAL: "true"}\n    container:\n      image: node:26\n      env: {NPM_CONFIG_GLOBAL: "true"}\n    services:\n      helper:\n        env: {NPM_CONFIG_GLOBAL: "true"}\n    steps:\n      - env: {npm_config_global: "false"}\n        run: npm install npm\n';
+  const source = 'env: {NPM_CONFIG_GLOBAL: "true"}\njobs:\n  audit:\n    env: {NPM_CONFIG_GLOBAL: "true"}\n    container:\n      image: node:26\n      env: {NPM_CONFIG_GLOBAL: "true"}\n    services:\n      helper:\n        env: {NPM_CONFIG_GLOBAL: "true"}\n    steps:\n      - env: {NPM_CONFIG_GLOBAL: "false"}\n        run: npm install npm\n';
   assert.deepEqual(workflowGlobalNpmInstalls(source), []);
-  assert.ok(workflowGlobalNpmInstalls(source.replace('npm_config_global: "false"', 'UNRELATED: "false"')).length > 0);
+  assert.ok(workflowGlobalNpmInstalls(source.replace('NPM_CONFIG_GLOBAL: "false"', 'UNRELATED: "false"')).length > 0);
+  assert.ok(workflowGlobalNpmInstalls(source.replace('NPM_CONFIG_GLOBAL: "false"', 'npm_config_global: "false"')).length > 0);
 });
 
 

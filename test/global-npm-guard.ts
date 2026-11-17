@@ -67,27 +67,55 @@ function globalMarker(tokens: string[]): boolean {
 function safeGlobalOperands(line: string, implicitGlobalLink: boolean): boolean {
   // Keep quoted words together, but preserve punctuation, backticks and quote
   // fragments for the allowlist to reject. This remains a line-based scan.
-  const words = (line.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+|["']/gu) ?? []).map(unquote);
+  const rawWords = line.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+|["']/gu) ?? [];
+  // Shell syntax can make a following word a redirect target, comment or
+  // separate command. It cannot provide evidence of a package operand.
+  if (rawWords.some(word => /[;&|<>()`#\\]/u.test(word.replace(/"[^"]*"|'[^']*'/gu, '')))) return false;
+  const words = rawWords.map(unquote);
   // Link options can consume an apparent registry operand, leaving a bare
-  // global link. Without parsing npm's option schema, accept only inline
-  // option values and known boolean global flags; ambiguous options reject.
-  if (implicitGlobalLink && words.some((word, index) => {
-    const name = /^--([a-z]+)$/iu.exec(word)?.[1]?.toLowerCase();
-    const globalBoolean = word === '-g' || name !== undefined && 'global'.startsWith(name);
-    return word.startsWith('-') && (/[;&|<>()`]/u.test(word) || word.endsWith('=') ||
-      globalBoolean && /^(?:true|false|0|1)$/iu.test(words[index + 1] ?? '') ||
-      !word.includes('=') && !globalBoolean);
-  })) return false;
-  const installIndex = words.findIndex(word => familyCommand(word, installFamily));
-  if (installIndex === -1) return false;
-  // A separated long-option value is ambiguous, never a definite package.
-  // Inline --option=value leaves the following package unambiguous.
-  const operands = words.slice(installIndex + 1).filter((word, offset) =>
-    !word.startsWith('-') && !/^--[^=]+$/u.test(words[installIndex + offset]));
+  // global link. Require inline option values, apart from the -g shorthand.
+  if (implicitGlobalLink && words.some((word, index) => word.startsWith('-') &&
+    (word.endsWith('=') || (word === '-g' ? /^(?:true|false|0|1)$/iu.test(words[index + 1] ?? '') : !word.includes('='))))) return false;
   const registrySpec = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(@[A-Za-z0-9.^~<>=*|+_ -]+)?$/u;
-  return operands.length > 0 && operands.every(word => registrySpec.test(word) && !/npm/iu.test(word) &&
-    // Bare archive names are file operands too, even without a ./ prefix.
-    !['.tgz', '.tar.gz', '.tar'].some(suffix => word.endsWith(suffix)));
+  // A command word after a valueless option may be its value. Check every
+  // possible command, so an earlier option value cannot supply an operand to
+  // what is really a bare install.
+  const commands = words.flatMap((word, index) => familyCommand(word, installFamily) ? [index] : []);
+  return commands.length > 0 && commands.every(index => {
+    const args = words.slice(index + 1);
+    const optionEnd = args.indexOf('--');
+    const possibleOperands = args.flatMap((word, offset) => {
+      const afterOptions = optionEnd !== -1 && offset > optionEnd;
+      if (word.startsWith('-') && !afterOptions) return [];
+      return [{word, definite: afterOptions || !/^--[^=]+$/u.test(args[offset - 1] ?? '')}];
+    });
+    // Check npm identity even in ambiguous values. Only definite safe
+    // operands can rule out installing or linking the current directory.
+    return possibleOperands.every(({word}) => !/npm/iu.test(word) && registrySpec.test(word) &&
+      !/\.(?:tgz|tar(?:\.gz)?)$/iu.test(word)) && possibleOperands.some(({definite}) => definite);
+  });
+}
+
+/** Collect config paths from effective workflow env and assignments in this run. */
+function npmConfigPaths(run: string, env: Record<string, string>): Set<string> {
+  const paths = new Set(Object.entries(env).filter(([key, value]) =>
+    value !== '' && /^npm_config_(?:userconfig|globalconfig)$/iu.test(key)).map(([, value]) => value));
+  for (const [, value] of run.matchAll(/\bnpm_config_(?:userconfig|globalconfig)[ \t]*=[ \t]*("[^"\r\n]*"|'[^'\r\n]*'|[^\s"';&|<>]+)/giu)) {
+    const path = unquote(value);
+    if (path) paths.add(path);
+  }
+  return paths;
+}
+
+/** Recognize standard npmrc names, config variables and their assigned paths. */
+function targetsNpmrc(line: string, paths: Set<string>): boolean {
+  // Plain inspection does not persist settings. Output and command separators
+  // leave the line eligible for a write, including cat with a here-document.
+  if (/^(?:cat|type|Get-Content|npm[ \t]+config[ \t]+get)\b/iu.test(line) &&
+    !/[>;&|]/u.test(line.replace(/"[^"]*"|'[^']*'/gu, ''))) return false;
+  if (/npmrc|\$(?:\{npm_config_(?:userconfig|globalconfig)\}|(?:env:)?npm_config_(?:userconfig|globalconfig)\b)/iu.test(line)) return true;
+  const words = line.match(/(?:[^\s"';&|<>()]+|"[^"]*"|'[^']*')+/gu) ?? [];
+  return words.some(word => paths.has(unquote(word)));
 }
 
 /** Persistent global/location setters affect later steps even without an install in this run. */
@@ -150,14 +178,14 @@ function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
   // Release workflows inspect globalconfig and scrub auth from npmrc files.
   // Comment-only descriptions and path fragments (such as global.npmrc) do
   // not set keys. Keep standalone setting words, including heredoc bodies.
-  const npmrcSettings = lines.filter(line => !line.startsWith('#')).join('\n');
+  // printf, echo -e and ANSI-C quoting can put setting keys after escaped
+  // line breaks. Collapse any number of escape backslashes for this scan.
+  const npmrcSettings = lines.filter(line => !line.startsWith('#')).join('\n').replace(/\\+[nr]/gu, '\n');
   const setsNpmrcKey = /(?:^|[^\w./\\-])(?:global|location)(?=$|[^\w./\\-])/imu.test(npmrcSettings);
+  const configPaths = setsNpmrcKey ? npmConfigPaths(run, env ?? {}) : new Set<string>();
   for (const line of lines) {
     if (setsGlobalConfig(line)) findings.push(['npm configuration persisted by set', line]);
-    // Any writer may persist npmrc settings. Exact key words keep read-only
-    // `npm config get globalconfig` plus npmrc inspection from matching:
-    // globalconfig names a path, not a global/location setting.
-    if (/npmrc/iu.test(line) && setsNpmrcKey)
+    if (setsNpmrcKey && targetsNpmrc(line, configPaths))
       findings.push(['npm configuration written to an npmrc file', line]);
   }
   // Only a set token configures: the release workflow's read-only
@@ -208,10 +236,10 @@ function envEntries(node: unknown): Record<string, string> | undefined {
   for (const pair of node.items) {
     if (!isScalar(pair.key) || typeof pair.key.value !== 'string' || pair.key.value === '<<' ||
       !isScalar(pair.value) || !['string', 'number', 'boolean'].includes(typeof pair.value.value) || pair.value.anchor) return undefined;
-    // npm's env keys ignore case, including when a later scope overrides one.
+    // Merge workflow scopes by exact name before checking npm's case-insensitive keys.
     // YAML numeric/boolean env entries (for example PM_TEST_TIME_SCALE: 3)
     // are scalar strings at the runner boundary, not executable structures.
-    entries[pair.key.value.toLowerCase()] = String(pair.value.value);
+    entries[pair.key.value] = String(pair.value.value);
   }
   return entries;
 }
