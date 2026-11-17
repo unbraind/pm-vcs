@@ -5,6 +5,8 @@
  * obfuscation is out of scope: an npm command held in a variable, `eval`,
  * shell aliases, and scripts outside the workflow YAML would not pass review.
  */
+import { isMap, isScalar, isSeq, parseDocument } from 'yaml';
+
 /** Family words from npm 11.21.0 commands and aliases, without expanded abbreviations. */
 const installFamily = ['install', 'install-test', 'install-ci-test', 'ci', 'clean-install', 'clean-install-test',
   'isntall', 'add', 'it', 'cit', 'ic', 'install-clean', 'isntall-clean', 'sit',
@@ -29,14 +31,13 @@ function envForcesGlobal(env: Record<string, string>): boolean {
       !['false', '0', ''].includes(value) : !['project', 'user'].includes(value)));
 }
 
-/** Inspect assignments anywhere, including export, env and declare -x forms. */
+/** Every mention must be a recognized safe assignment; unknown shell writers fail closed. */
 function runForcesGlobal(script: string): boolean {
-  return [...script.matchAll(/\bnpm_config_(global|location)\s*=\s*("[^"]*"|'[^']*'|[^\s;&|]*)/giu)]
-    .some(match => envForcesGlobal({ [`npm_config_${match[1]}`]: unquote(match[2]) }));
+  return [...script.matchAll(/\bnpm_config_(global|location)\b/giu)].some(mention => {
+    const assignment = /^npm_config_(global|location)\s*=\s*("[^"]*"|'[^']*'|[^\s;&|]*)/iu.exec(script.slice(mention.index));
+    return !assignment || envForcesGlobal({ [`npm_config_${assignment[1]}`]: unquote(assignment[2]) });
+  });
 }
-
-/** An env scope the parser refuses to interpret forces every install to be checked as global. */
-const unreadableEnvScope = (): Record<string, string> => ({ npm_config_global: '${{ unreadable env scope }}' });
 
 /** Remove one surrounding pair of single or double quotes, if the token has one. */
 function unquote(word: string): string {
@@ -79,7 +80,10 @@ function safeGlobalOperands(line: string, implicitGlobalLink: boolean): boolean 
   })) return false;
   const installIndex = words.findIndex(word => familyCommand(word, installFamily));
   if (installIndex === -1) return false;
-  const operands = words.slice(installIndex + 1).filter(word => !word.startsWith('-'));
+  // A separated long-option value is ambiguous, never a definite package.
+  // Inline --option=value leaves the following package unambiguous.
+  const operands = words.slice(installIndex + 1).filter((word, offset) =>
+    !word.startsWith('-') && !/^--[^=]+$/u.test(words[installIndex + offset]));
   const registrySpec = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(@[A-Za-z0-9.^~<>=*|+_ -]+)?$/u;
   return operands.length > 0 && operands.every(word => registrySpec.test(word) && !/npm/iu.test(word) &&
     // Bare archive names are file operands too, even without a ./ prefix.
@@ -143,13 +147,17 @@ function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
   // writing step itself instead of tracking state across steps.
   if (/github_env/iu.test(run) && /npm_config_(?:global|location|prefix)/iu.test(run))
     findings.push(['npm configuration written to GITHUB_ENV']);
+  // Release workflows inspect globalconfig and scrub auth from npmrc files.
+  // Comment-only descriptions and path fragments (such as global.npmrc) do
+  // not set keys. Keep standalone setting words, including heredoc bodies.
+  const npmrcSettings = lines.filter(line => !line.startsWith('#')).join('\n');
+  const setsNpmrcKey = /(?:^|[^\w./\\-])(?:global|location)(?=$|[^\w./\\-])/imu.test(npmrcSettings);
   for (const line of lines) {
     if (setsGlobalConfig(line)) findings.push(['npm configuration persisted by set', line]);
-    // Match the npmrc write on a physical/joined line, but inspect the whole
-    // run for global/location settings, including here-document bodies. Reject
-    // the writing step itself because later steps may read the persisted file.
-    if (/npmrc/iu.test(line) && (line.includes('>') || /\btee\b/iu.test(line) || /config\s+set/u.test(line)) &&
-      /global|location/iu.test(run))
+    // Any writer may persist npmrc settings. Exact key words keep read-only
+    // `npm config get globalconfig` plus npmrc inspection from matching:
+    // globalconfig names a path, not a global/location setting.
+    if (/npmrc/iu.test(line) && setsNpmrcKey)
       findings.push(['npm configuration written to an npmrc file', line]);
   }
   // Only a set token configures: the release workflow's read-only
@@ -181,236 +189,89 @@ function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
 function unreadableRun(): string[][] {
   return [['unextractable step run']];
 }
-/** Decode one quoted YAML scalar, rejecting unsupported or malformed values. */
-function quotedScalar(value: string): string | undefined {
-  const single = /^'((?:[^']|'')*)'(?:\s+#.*)?$/u.exec(value);
-  if (single) return single[1].replace(/''/gu, "'");
-  const double = /^"((?:[^"\\]|\\.)*)"(?:\s+#.*)?$/u.exec(value);
-  if (!double) return undefined;
-  const escapes: Record<string, string> = { '0': '\0', a: '\x07', b: '\b', t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', e: '\x1b', ' ': ' ', '"': '"', '/': '/', '\\': '\\', N: '\u0085', _: '\u00a0', L: '\u2028', P: '\u2029' };
-  let valid = true;
-  const decoded = double[1].replace(/\\(x[\da-fA-F]{2}|u[\da-fA-F]{4}|U[\da-fA-F]{8}|.)/gu, (_match, escape: string) => {
-    if (escape in escapes) return escapes[escape];
-    if (/^[xuU][\da-fA-F]+$/u.test(escape)) {
-      const point = Number.parseInt(escape.slice(1), 16);
-      if (point <= 0x10ffff) return String.fromCodePoint(point);
-    }
-    valid = false;
-    return '';
-  });
-  return valid ? decoded : undefined;
+/** Merge keys and aliases must never supply hidden executable fields. */
+function hasMerge(node: unknown): boolean {
+  return isMap(node) && node.items.some(pair => !isScalar(pair.key) || pair.key.value === '<<');
 }
 
-/** Apply YAML folding: ordinary line breaks fold, empty/more-indented lines do not. */
-function blockScalar(lines: string[], indent: number, folded: boolean, chomp: string): string {
-  const content = lines.map(line => line.trim() ? line.slice(indent) : '');
-  let value = '';
-  for (let index = 0; index < content.length; index++) {
-    const line = content[index];
-    const next = content[index + 1];
-    value += line;
-    if (!folded || next === undefined || /^\s/u.test(line) || /^\s/u.test(next)) value += '\n';
-    else if (line && next) value += ' ';
-    else if (!line) value += '\n';
-  }
-  if (chomp === '-') return value.replace(/\n+$/u, '');
-  if (chomp === '+') return value;
-  return value.replace(/\n*$/u, '\n');
+/** Read a mapping entry without resolving aliases or YAML merge keys. */
+function entry(node: unknown, key: string): unknown {
+  return isMap(node) ? node.get(key, true) : undefined;
 }
 
-/** One composed npm-readable env scope; unreadable scopes fail closed. */
-interface EnvScope { entries: Record<string, string>; unknown: boolean }
-const emptyEnvScope = (): EnvScope => ({ entries: {}, unknown: false });
-
-/** Decode one env entry scalar; undefined means the value is not a confident string. */
-function envScalar(value: string): string | undefined {
-  if (/^["']/u.test(value)) return quotedScalar(value);
-  if (/^[#|>&*![{]/u.test(value)) return undefined;
-  return value.replace(/\s+#.*$/u, '');
-}
-
-/** Decode a single-line YAML flow mapping of env entries; undefined means the mapping is unsupported. */
-function flowEnvEntries(value: string): Record<string, string> | undefined {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('{')) return undefined;
+/** Decode only plain env maps with scalar values; null scopes remain empty. */
+function envEntries(node: unknown): Record<string, string> | undefined {
+  // Existing workflows/fixtures use a null env scope to mean no overrides.
+  if (node === undefined || isScalar(node) && node.value === null) return {};
+  if (!isMap(node) || node.anchor) return undefined;
   const entries: Record<string, string> = {};
-  let index = 1;
-  for (;;) {
-    while (index < trimmed.length && /[\s,]/u.test(trimmed[index])) index++;
-    if (index >= trimmed.length) return undefined;
-    if (trimmed[index] === '}') { index++; break; }
-    const keyStart = index;
-    if (/["']/u.test(trimmed[index])) {
-      const keyQuoted = trimmed[index] === '"' ? /^"(?:[^"\\]|\\.)*"/u.exec(trimmed.slice(index)) : /^'(?:[^']|'')*'/u.exec(trimmed.slice(index));
-      if (!keyQuoted) return undefined;
-      index += keyQuoted[0].length;
-    } else {
-      while (index < trimmed.length && /[\w-]/u.test(trimmed[index])) index++;
-    }
-    const rawKey = trimmed.slice(keyStart, index);
-    while (index < trimmed.length && /\s/u.test(trimmed[index])) index++;
-    if (!rawKey || index >= trimmed.length || trimmed[index] !== ':') return undefined;
-    index++;
-    while (index < trimmed.length && /\s/u.test(trimmed[index])) index++;
-    let rawValue = '';
-    if (index < trimmed.length && /["']/u.test(trimmed[index])) {
-      const valueQuoted = trimmed[index] === '"' ? /^"(?:[^"\\]|\\.)*"/u.exec(trimmed.slice(index)) : /^'(?:[^']|'')*'/u.exec(trimmed.slice(index));
-      if (!valueQuoted) return undefined;
-      rawValue = valueQuoted[0];
-      index += rawValue.length;
-    } else {
-      rawValue = /^[^,}]*/u.exec(trimmed.slice(index))![0].trim();
-      index += /^[^,}]*/u.exec(trimmed.slice(index))![0].length;
-    }
-    const key = /^["']/u.test(rawKey) ? quotedScalar(rawKey) : rawKey;
-    const decoded = /^["']/u.test(rawValue) ? quotedScalar(rawValue) :
-      rawValue && !/^[#|>&*![{]/u.test(rawValue) ? rawValue.replace(/\s+#.*$/u, '') : rawValue ? undefined : '';
-    if (key === undefined) return undefined;
-    if (decoded !== undefined) entries[key] = decoded;
-    else if (relevantEnvKey(key)) entries[key] = '${{ unreadable env entry }}';
+  for (const pair of node.items) {
+    if (!isScalar(pair.key) || typeof pair.key.value !== 'string' || pair.key.value === '<<' ||
+      !isScalar(pair.value) || !['string', 'number', 'boolean'].includes(typeof pair.value.value) || pair.value.anchor) return undefined;
+    // npm's env keys ignore case, including when a later scope overrides one.
+    // YAML numeric/boolean env entries (for example PM_TEST_TIME_SCALE: 3)
+    // are scalar strings at the runner boundary, not executable structures.
+    entries[pair.key.value.toLowerCase()] = String(pair.value.value);
   }
-  return /^[\s]*(?:#.*)?$/u.test(trimmed.slice(index)) ? entries : undefined;
+  return entries;
 }
 
 /**
- * No direct YAML dependency: extract the block mapping/sequence layout used by
- * this repository. Unsupported executable layouts or run scalars fail closed.
- * Metadata scalars and nested env.run keys never become shell input.
+ * Parse with the declared yaml@2.9.1 package dependency.
+ * Walk only jobs.*.steps[*].run and real env scopes; matrix.env is metadata.
+ * Parse errors, aliases, merges and non-string executable values fail closed.
+ * Retain rejection of flow executable layouts from the original guard contract.
  */
 export function workflowGlobalNpmInstalls(source: string): string[][] {
-  const lines = source.replace(/\r\n/gu, '\n').split('\n');
-  const parents: { indent: number; path: string[] }[] = [];
+  const document = parseDocument(source);
+  if (document.errors.length || !isMap(document.contents) || document.contents.flow || document.contents.anchor || hasMerge(document.contents)) return unreadableRun();
+  const root = document.contents;
+  const workflowEnv = envEntries(entry(root, 'env'));
+  if (!workflowEnv) return unreadableRun();
+  const jobs = entry(root, 'jobs');
+  if (jobs === undefined) return [];
+  if (!isMap(jobs) || jobs.flow || jobs.anchor || hasMerge(jobs)) return unreadableRun();
   const findings: string[][] = [];
-  const workflowEnv = emptyEnvScope();
-  const jobEnvs: Record<string, EnvScope> = {};
-  const containerEnvs: Record<string, EnvScope> = {};
-  const serviceEnvs: Record<string, EnvScope> = {};
-  const stepEnvs: Record<string, EnvScope> = {};
-  // Runs are buffered until every env scope is known: env may follow run in the step.
-  const runs: { job: string; step: number; script: string }[] = [];
-  let jobKey = '';
-  let stepIndex = -1;
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    if (!line.trim() || /^\s*#/u.test(line)) continue;
-    if (/^ *\t/u.test(line)) return unreadableRun();
-    const indent = /^ */u.exec(line)![0].length;
-    while (parents.length && parents[parents.length - 1].indent >= indent) {
-      const last = parents[parents.length - 1];
-      // YAML permits an indentationless sequence under any job key.
-      if (last.indent === indent && last.path.length === 3 && last.path[0] === 'jobs' && line.slice(indent).startsWith('- ')) break;
-      parents.pop();
-    }
-    let parent = parents[parents.length - 1]?.path ?? [];
-    let text = line.slice(indent);
-    let keyIndent = indent;
-    let sequence = false;
-    if (text.startsWith('- ')) {
-      if (parent.length === 3 && parent[0] === 'jobs' && parent[2] === 'steps') {
-        parent = [...parent, '*'];
-        parents.push({ indent, path: parent });
-        stepIndex += 1;
-      }
-      text = text.slice(2);
-      keyIndent += 2;
-      sequence = true;
-    }
-    const entry = /^(?:([\w-]+)|'([^']+)'|"([^"\\]+)")\s*:\s*(.*)$/u.exec(text);
-    // Sequence items outside steps (a job's needs list, for example) are
-    // inert metadata: only steps[*].run is executable, so consume them.
-    if (sequence && !entry && parent.length === 3 && parent[0] === 'jobs' && parent[2] !== 'steps') continue;
-    if (!entry) {
-      // Unsupported env entries cannot silently erase effective npm settings.
-      if (parent[0] === 'env' ||
-        (parent[0] === 'jobs' && (parent[2] === 'env' || parent[4] === 'env' ||
-          (parent[2] === 'container' && parent[3] === 'env')))) return unreadableRun();
-      if ((!parent.length && !['---', '...'].includes(text)) ||
-        (parent[0] === 'jobs' && (parent.length <= 3 || (parent.length === 4 && parent[3] === '*')))) return unreadableRun();
-      continue;
-    }
-    const key = entry[1] ?? entry[2] ?? entry[3];
-    const path = [...parent, key];
-    if (path.length === 2 && path[0] === 'jobs') { jobKey = key; stepIndex = -1; }
-    const value = entry[4].trim();
-    parents.push({ indent: keyIndent, path });
-    const run = path.length === 5 && path[0] === 'jobs' && path[2] === 'steps' && path[3] === '*' && key === 'run';
-    const container = path[0] === 'jobs' && (path.length <= 2 || (path.length === 3 && key === 'steps'));
-    if (container && value && !value.startsWith('#')) return unreadableRun();
-    // Inline/computed container objects may carry env we cannot extract.
-    if (path[0] === 'jobs' && path.length === 3 && key === 'container' &&
-      (value.startsWith('{') || /^[&*!]/u.test(value) || value.includes('${{')))
-      (containerEnvs[path[1]] ??= emptyEnvScope()).unknown = true;
-    if (path[0] === 'jobs' && ((path.length === 3 && key === 'services') ||
-      (path.length === 4 && path[2] === 'services')) && value && !value.startsWith('#'))
-      (serviceEnvs[`${path[1]}\u0000${path[3] ?? ''}`] ??= emptyEnvScope()).unknown = true;
-    const containerEnv = path[0] === 'jobs' && path[2] === 'container' && path[3] === 'env';
-    const serviceEnv = path[0] === 'jobs' && path[2] === 'services' && path[4] === 'env';
-    // Compose container, workflow, job and step env scopes; the step scope wins. npm reads
-    // the keys case-insensitively, and an unreadable scope fails closed.
-    const envContainer = (containerEnv && path.length === 4) || (serviceEnv && path.length === 5) ||
-      (path.length === 1 && path[0] === 'env') ||
-      (path.length === 3 && path[0] === 'jobs' && path[2] === 'env') ||
-      (path.length === 5 && path[0] === 'jobs' && path[2] === 'steps' && path[3] === '*' && path[4] === 'env');
-    const envEntry = (containerEnv && path.length === 5) || (serviceEnv && path.length === 6) ||
-      (path.length === 2 && path[0] === 'env') ||
-      (path.length === 4 && path[0] === 'jobs' && path[2] === 'env') ||
-      (path.length === 6 && path[0] === 'jobs' && path[2] === 'steps' && path[3] === '*' && path[4] === 'env');
-    if (envContainer || envEntry) {
-      const scope = containerEnv ? (containerEnvs[path[1]] ??= emptyEnvScope()) :
-        serviceEnv ? (serviceEnvs[`${path[1]}\u0000${path[3]}`] ??= emptyEnvScope()) : path.length <= 2 ? workflowEnv : path.length <= 4 ?
-        (jobEnvs[path[1]] ??= emptyEnvScope()) : (stepEnvs[`${path[1]}\u0000${stepIndex}`] ??= emptyEnvScope());
-      if (envContainer) {
-        if (!value || value.startsWith('#') || /^(?:null|~)$/u.test(value)) {
-          // Block-style env mapping: the entries follow as separate lines.
-        } else if (value.startsWith('{')) {
-          const flow = flowEnvEntries(value);
-          if (flow === undefined) scope.unknown = true; else Object.assign(scope.entries, flow);
-        } else scope.unknown = true;
-      } else if (!value || value.startsWith('#')) {
-        // An empty entry value is null or a nested mapping; only the latter is unreadable.
-        const nested = lines.slice(index + 1).find(part => part.trim() && !/^\s*#/u.test(part));
-        if (nested && /^ */u.exec(nested)![0].length > keyIndent) {
-          if (relevantEnvKey(key)) scope.unknown = true;
-        } else scope.entries[key] = '';
-      } else {
-        const decoded = envScalar(value);
-        if (decoded === undefined) { if (relevantEnvKey(key)) scope.unknown = true; }
-        else scope.entries[key] = decoded;
+  for (const pair of jobs.items) {
+    const job = pair.value;
+    if (!isMap(job) || job.flow || job.anchor || hasMerge(job)) return unreadableRun();
+    const jobEnv = envEntries(entry(job, 'env'));
+    const container = entry(job, 'container');
+    const containerEnv = envEntries(entry(container, 'env'));
+    if (!jobEnv || !containerEnv || container !== undefined &&
+      (!isMap(container) && (!isScalar(container) || typeof container.value !== 'string' || container.value.includes('${{')) ||
+        isMap(container) && (container.flow || container.anchor || hasMerge(container)))) return unreadableRun();
+    const services = entry(job, 'services');
+    if (services !== undefined && (!isMap(services) || hasMerge(services))) return unreadableRun();
+    // Services run separately: no service's safe value may mask another's
+    // unsafe setting. Keep the existing conservative service-scope rule.
+    const serviceEnv: Record<string, string> = {};
+    if (isMap(services)) for (const service of services.items) {
+      if (!isMap(service.value) || hasMerge(service.value)) return unreadableRun();
+      const env = envEntries(entry(service.value, 'env'));
+      if (!env) return unreadableRun();
+      for (const [key, value] of Object.entries(env)) {
+        if (!(key in serviceEnv) || envForcesGlobal({ [key]: value })) serviceEnv[key] = value;
       }
     }
-    // Consume all block scalars, including names/metadata, before structural scanning.
-    const block = /^([|>])([-+]?)(?:\s+#.*)?$/u.exec(value);
-    if (block) {
-      const body: string[] = [];
-      while (index + 1 < lines.length && (!lines[index + 1].trim() || /^ */u.exec(lines[index + 1])![0].length > keyIndent)) body.push(lines[++index]);
-      if (run) {
-        const first = body.find(part => part.trim());
-        if (!first) return unreadableRun();
-        const contentIndent = /^ */u.exec(first)![0].length;
-        if (body.some(part => part.trim() && /^ */u.exec(part)![0].length < contentIndent)) return unreadableRun();
-        runs.push({ job: jobKey, step: stepIndex, script: blockScalar(body, contentIndent, block[1] === '>', block[2]) });
-      }
-      continue;
+    const steps = entry(job, 'steps');
+    if (steps === undefined) continue; // Reusable workflow jobs have no steps.
+    if (!isSeq(steps) || steps.flow || steps.anchor) return unreadableRun();
+    for (const step of steps.items) {
+      if (!isMap(step) || step.flow || step.anchor || hasMerge(step)) return unreadableRun();
+      const stepEnv = envEntries(entry(step, 'env'));
+      if (!stepEnv) return unreadableRun();
+      const run = entry(step, 'run');
+      if (run === undefined) continue;
+      if (!isScalar(run) || typeof run.value !== 'string' || run.anchor) return unreadableRun();
+      const shell = entry(step, 'shell');
+      if (shell !== undefined && (!isScalar(shell) || typeof shell.value !== 'string')) return unreadableRun();
+      // Retain the shell with the collected script. All continuation forms
+      // are scanned conservatively even for custom/unspecified shells.
+      const collected = { script: run.value, shell: isScalar(shell) ? shell.value : undefined };
+      const effective = { ...serviceEnv, ...containerEnv, ...workflowEnv, ...jobEnv, ...stepEnv };
+      findings.push(...globalNpmInstalls(collected.script, effective));
     }
-    if (!run) continue;
-    const next = lines.slice(index + 1).find(part => part.trim() && !/^\s*#/u.test(part));
-    if (next && /^ */u.exec(next)![0].length > keyIndent) return unreadableRun();
-    const scalar = /^["']/u.test(value) ? quotedScalar(value) :
-      !value || /^[#|>&*![{]/u.test(value) || /^(?:null|true|false|~|\d+)$/u.test(value) ? undefined : value.replace(/\s+#.*$/u, '');
-    if (scalar === undefined) return unreadableRun();
-    runs.push({ job: jobKey, step: stepIndex, script: scalar });
-  }
-  for (const run of runs) {
-    const containerScope = containerEnvs[run.job] ?? emptyEnvScope();
-    const jobScope = jobEnvs[run.job] ?? emptyEnvScope();
-    const stepScope = stepEnvs[`${run.job}\u0000${run.step}`] ?? emptyEnvScope();
-    // Service containers have separate processes; conservatively reject their
-    // global settings too, without letting another service's safe values mask them.
-    const unsafeService = Object.entries(serviceEnvs).some(([key, scope]) =>
-      key.startsWith(`${run.job}\u0000`) && (scope.unknown || envForcesGlobal(scope.entries)));
-    const effective = containerScope.unknown || workflowEnv.unknown || jobScope.unknown || stepScope.unknown || unsafeService ? unreadableEnvScope() :
-      { ...containerScope.entries, ...workflowEnv.entries, ...jobScope.entries, ...stepScope.entries };
-    findings.push(...globalNpmInstalls(run.script, effective));
   }
   return findings;
 }
