@@ -3,16 +3,21 @@ title: Repair scheduled GitHub issue sync failure
 description: "Investigate the failing scheduled issue sync on current main, retain existing work and prove the applicable fix."
 type: Issue
 pm_format_version: 2
-status: in_progress
+status: closed
 priority: 1
 tags[3]: ci,"gh:unbraind/pm-vcs#208",issue-sync
 created_at: "2026-11-16T10:42:21.939Z"
-updated_at: "2026-11-17T05:30:06.846Z"
+updated_at: "2026-11-17T09:42:53.191Z"
 deadline: "2026-11-17T00:00:00.000Z"
+closed_at: "2026-11-17T09:42:52.807Z"
+completed_at: "2026-11-17T09:42:52.807Z"
 author: codex-sol
 estimated_minutes: 90
 acceptance_criteria: Record the exact failed command and verify the current fix or upstream blocker without weakening tracker governance.
-actual_result: "Merged in #208 as 38f8f1e; checks successful at head e4a8429: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26). Review round AC acceptance dry-run (the item's registered command, run on the closeout worktree at current main) failed with exit code 1: the import gate reports the plan is not idempotent - 1 duplicate provenance tag in the existing corpus, 0 new entries without a provenance tag, 1 conflicting target; no item was written. An ungated dry run of the same import plans 6 imports, 5 updates and 0 skips."
+repro_steps: "Let the scheduled 'Sync GitHub issues into pm' workflow run on main with the pm-github pin before 2026.11.15; the 11-14, 11-15 and 11-16 scheduled runs failed."
+resolution: "Fixed by pinning pm-github 2026.11.15 (#208); proven by scheduled run https://github.com/unbraind/pm-vcs/actions/runs/44053423017."
+expected_result: "The scheduled sync on main passes the gated import, the repeat-import no-op check, the tracker and changelog gate and strict pm health."
+actual_result: "Merged in #208 as 38f8f1e (pm-github 2026.11.15 pin). The first scheduled run on that pin, https://github.com/unbraind/pm-vcs/actions/runs/44053423017 (2026-11-17, main at bfe6297), succeeded at every gated-sync step: gated GitHub to pm import, verify repeat import is a no-op, gate tracker and regenerated changelog, verify strict pm health. Round AC's earlier failure came from a local dry run, not from the scheduled workflow."
 comments[6]{created_at,author,text}:
   "2026-11-16T10:46:53.041Z",codex-sol,"Run 43827565812 failed the pm-github 2026.11.4 idempotency gate: one shared provenance tag and one conflicting target. The shared #150 reference belongs to distinct pack-storage and crash-matrix tasks, so neither is a duplicate. pm-github 2026.11.15 separates references from explicit import ownership. Reuse open PR #208 and its caller pin; retain current main and verify the pinned dry-run. No item is closed."
   "2026-11-16T11:02:01.561Z",codex-sol,"Initial review receipt: the failed workflow log and current pin are documented in docs/issue-sync-2026-11-16.md. Seeded tracker validation passes through pm test --run --progress. Typecheck and lint pass. The quick package suite remains running under shared-host load; no complete passing suite is claimed.   Publish review evidence with pending gates explicit; no scheduled success is claimed."
@@ -60,4 +65,5 @@ tests[4]:
       source_ref: chore/close-merged-items-2026-11-16
 docs[1]{path,scope}:
   docs/issue-sync-2026-11-16.md,project
+close_reason: "Verified by the orchestrator: the first scheduled pm-github-sync run on the 2026.11.15 pin (https://github.com/unbraind/pm-vcs/actions/runs/44053423017, main bfe6297) succeeded at every gated-sync step, including the gated import, the repeat-import no-op check and strict pm health. The local dry-run failure that reopened this item is superseded by that scheduled run."
 body: ""
