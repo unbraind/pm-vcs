@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-17T02:39:56.710Z"
+updated_at: "2026-11-17T02:43:40.490Z"
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[54]:
+comments[55]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -173,6 +173,9 @@ comments[54]:
   - created_at: "2026-11-17T02:39:51.573Z"
     author: codex-sol
     text: "AB implementation complete for PRRT_kwDOToJT7M64Gkgx, PRRT_kwDOToJT7M64Gkg4 and PRRT_kwDOToJT7M64Mbso. Portable timing lookup leaves native discovery/comparison paths intact and passes a backslash regression. Every quick reader row now chooses an observed reachable boundary and must inject; full rows record reachability and assert injection where reachable. The model independently iterates all four ref namespaces and asserts their presence at quick depth. Four focused linked regressions pass; typecheck, build:test, lint, changelog:check and diff checks pass. Broader touched-file tests remain running. Next: commit source and tracker, build, regenerate and commit the self-host bundle, then accept at HEAD."
+  - created_at: "2026-11-17T02:43:40.487Z"
+    author: codex-sol
+    text: "Committed source 2ca4942 and regenerated archive 6c1a336. npm run build, npm run self-host:write, and npm run accept:self-host passed at committed HEAD 6c1a336. Focused PM-linked regressions pass 4/4; the revised quick resolution matrix injects all 26 rows and the pending-root model passes all 18 stores while asserting heads/tags/remotes/metadata coverage. Broader touched-file results are recorded in the final review report. This receipt changes tracker bytes, so it will be committed and followed by a fresh build, archive regeneration/commit and acceptance at final HEAD before pushing."
 files[41]{path,scope}:
   .github/workflows/ci-deep.yml,project
   .github/workflows/ci.yml,project
