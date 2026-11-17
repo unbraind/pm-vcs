@@ -173,10 +173,10 @@ boundary in quick and returns every original ordinal in full.
 | Reader resolution interruptions | 26 schedules (25 diagonal plus an explicit inventory injection): every reader, all 4 transitions and all 7 resolution boundaries, with live/erased checks | all 700 reader/transition/boundary schedules |
 | Pinned-reader external retirement | every reader and loose/packed representation; first occurrence of each native I/O boundary kind | every observed ordinal |
 | Absolute and relative SIGKILL pack/unpack/GC sweeps | first occurrence of every named boundary for each operation, preserving relative-root recovery and replay assertions | every native ordinal |
-| Pending-root publication model | 1 deterministic seed × all 6 root formats × loose/packed = 12 stores | 8 seeds, 96 stores |
+| Pending-root publication model | 1 deterministic seed × (`ref` in all 4 ref namespaces + 5 other root formats) × loose/packed = 18 stores; all 4 namespaces asserted | 8 seeds, 144 stores |
 | Lifecycle accountability model | first 25 seeds, all crash kinds and instance/payload pairs asserted | all 512 seeds |
 | Composition packed consumer | Node project-installed CLI path (also executes SDK composition and denied merges); prerequisite refusals retained | all 5 built/packed Node/Bun/project-CLI paths |
-| Packed conflict resolution | one real-host EOF-newline path; direct SDK tests retain all 11 opaque value cases | all 11 packed real-host values |
+| Packed conflict resolution | one real-host case for each of the 10 kinds `testKinds` selects (field: boolean, empty, null, number, raw, whitespace; text: empty, json-string, raw, whitespace); direct SDK tests retain all 11 opaque value cases | all 11 packed real-host values |
 | Packed move-source and snapshot-release consumers | Node SDK entrypoint with all 7 source and all 3 ownership kinds | Node/Bun × SDK/JSON/TOON × every scenario |
 | Complete CDC benchmark | one instrumented real CLI execution | same plus separate checkout-with-spaces invocation |
 
