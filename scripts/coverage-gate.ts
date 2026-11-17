@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 /** Shard the existing c8 gate and merge location-keyed raw hits before enforcing its unchanged per-file thresholds. */
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { globSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
+import { globSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { shardTestFiles } from "../test/helpers/ci-shards.ts";
@@ -39,8 +39,8 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
     for (let i = 1; i <= total; i++) if (!ordinals.has(`${i}/${total}`)) throw new Error("coverage-gate: incomplete shard set");
     const finalPath = join(root, "coverage/coverage-final.json");
     const summaryPath = join(root, "coverage/coverage-summary.json");
-    rmSync(finalPath, { force: true });
-    rmSync(summaryPath, { force: true });
+    durability.discardTemporary(finalPath);
+    durability.discardTemporary(summaryPath);
     const status = c8(root, ["report", ...flags, `--temp-directory=${scratch}`]);
     if (status !== 0 && !(existsSync(finalPath) && existsSync(summaryPath))) return status;
     const merged = JSON.parse(readFileSync(finalPath, "utf8"));

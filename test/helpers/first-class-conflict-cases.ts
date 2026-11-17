@@ -1,5 +1,5 @@
 import "./isolate-session.ts";
-import { testDepth } from "../support/depth.ts";
+import { testKinds } from "../support/depth.ts";
 import { testEnvironment } from "./test-environment.ts";
 /** Recorded disagreements remain live data through ordinary work, transfer, bounded history and explicit resolution. */
 import assert from "node:assert/strict";
@@ -90,10 +90,10 @@ async function resolutionFixture() {
 }
 
 const rawResolutionCases = [
-  ["text.txt", "line\n", "line\n"], ["text.txt", "", ""], ["text.txt", "  chosen  ", "  chosen  "],
-  ["text.txt", " \n\t ", " \n\t "], ["text.txt", '"quoted\\n"', "quoted\n"],
-  ["item.toon", "  chosen  ", "  chosen  "], ["item.toon", "", ""], ["item.toon", " \t ", " \t "],
-  ["item.toon", "false", false], ["item.toon", "null", null], ["item.toon", "42", 42],
+  ["text.txt", "line\n", "line\n", "text:raw"], ["text.txt", "", "", "text:empty"], ["text.txt", "  chosen  ", "  chosen  ", "text:raw"],
+  ["text.txt", " \n\t ", " \n\t ", "text:whitespace"], ["text.txt", '"quoted\\n"', "quoted\n", "text:json-string"],
+  ["item.toon", "  chosen  ", "  chosen  ", "field:raw"], ["item.toon", "", "", "field:empty"], ["item.toon", " \t ", " \t ", "field:whitespace"],
+  ["item.toon", "false", false, "field:boolean"], ["item.toon", "null", null, "field:null"], ["item.toon", "42", 42, "field:number"],
 ] as const;
 
 /** Register disjoint core or real-consumer cases without reducing either depth. */
@@ -187,7 +187,12 @@ test("packed CLI resolves literal empty strings, spaces and EOF newlines through
   }
   repo.stage([]); repo.commit({ message: "install resolution consumer", author }, now);
   const head = repo.resolve("HEAD");
-  for (const [path, value, expected] of rawResolutionCases.slice(0, testDepth(rawResolutionCases.length, 1))) {
+  const cases = testKinds(rawResolutionCases, entry => entry[3]);
+  assert.deepEqual([...new Set(cases.map(entry => entry[3]))].sort(), [
+    "field:boolean", "field:empty", "field:null", "field:number", "field:raw", "field:whitespace",
+    "text:empty", "text:json-string", "text:raw", "text:whitespace",
+  ]);
+  for (const [path, value, expected] of cases) {
     repo.reset(head, "hard", now);
     const result = JSON.parse(execFileSync(process.execPath, [pmExecutable, "--json", "vcs", "resolve", path, "--value", value], {
       cwd: repo.root, env: { ...testEnvironment(), ...discardChildCoverage(), PM_AUTHOR: "consumer-agent" },
