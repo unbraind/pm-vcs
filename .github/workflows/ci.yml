@@ -229,6 +229,8 @@ jobs:
           ./node_modules/.bin/pm health --check-only --strict-exit --require-merge-drivers
       - name: Non-coverage release gates
         shell: bash
+        env:
+          NPM_CONFIG_USERCONFIG: /dev/null
         run: |
           set -euo pipefail
           df -BG /
@@ -258,7 +260,7 @@ jobs:
           trap 'gate_status=$?; storage_report before-cleanup || true; rm -rf -- "${gate_tmp}"; if [ -n "${gate_memory}" ]; then rm -rf -- "${gate_memory}"; fi; df -Pk "${RUNNER_TEMP}" || true; df -Pi "${RUNNER_TEMP}" || true; exit "${gate_status}"' EXIT
           export TMPDIR="${gate_tmp}"
           storage_report before-gate || true
-          NPM_CONFIG_USERCONFIG=/dev/null npm run typecheck && npm run build && npm run lint && npm run duplicates && npm run docstring && npm run accept:native-toon && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run pack:check && npm run changelog:check && npm run verify:release-changelog-date && npm run verify:release-publish-attestation
+          npm run typecheck && npm run build && npm run lint && npm run duplicates && npm run docstring && npm run accept:native-toon && npm run accept:stat-cache && npm run accept:self-host && npm run audit:prod && npm run audit:identities && npm run pack:dry-run && npm run pack:check && npm run changelog:check && npm run verify:release-changelog-date && npm run verify:release-publish-attestation
       - name: Bun and bunx install smoke
         run: |
           bun install --no-save
