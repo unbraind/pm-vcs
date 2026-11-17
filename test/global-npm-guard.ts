@@ -21,17 +21,17 @@ function relevantEnvKey(key: string): boolean {
   return key.toLowerCase() === 'npm_config_global' || key.toLowerCase() === 'npm_config_location';
 }
 
-/** Computed values of either key can select global installation. */
+/** Only exact safe values opt out; npm env keys, but not values, ignore case. */
 function envForcesGlobal(env: Record<string, string>): boolean {
   return Object.entries(env).some(([key, value]) => relevantEnvKey(key) &&
-    (value.includes('$') || (key.toLowerCase() === 'npm_config_global' ?
-      !['false', '0', ''].includes(value.trim().toLowerCase()) : value.trim().toLowerCase() === 'global')));
+    (key.toLowerCase() === 'npm_config_global' ?
+      !['false', '0', ''].includes(value) : !['project', 'user'].includes(value)));
 }
 
 /** Inspect assignments anywhere, including export, env and declare -x forms. */
 function runForcesGlobal(script: string): boolean {
   return [...script.matchAll(/\bnpm_config_(global|location)\s*=\s*("[^"]*"|'[^']*'|[^\s;&|]*)/giu)]
-    .some(match => envForcesGlobal({ [`npm_config_${match[1]}`]: match[2].replace(/^["']|["']$/gu, '') }));
+    .some(match => envForcesGlobal({ [`npm_config_${match[1]}`]: unquote(match[2]) }));
 }
 
 /** An env scope the parser refuses to interpret forces every install to be checked as global. */
@@ -51,19 +51,28 @@ function lineTokens(line: string): string[] {
 /** One of the tokens marks this line as installing globally. */
 function globalMarker(tokens: string[]): boolean {
   return tokens.some((word, index) => {
-    if (/^-[a-z]*g[a-z]*$/iu.test(word)) return true; // -g, -fg, -gpld
+    const option = unquote(word).split('=', 1)[0];
+    if (/^-[a-z]*g[a-z]*$/iu.test(option)) return true; // -g, -fg, -gpld
     if (word.toLowerCase().includes('global')) return true; // --global, --location=global, -L=global
-    if (/^-L$/iu.test(word)) return index + 1 < tokens.length; // -L followed by any value
-    if (/^-L=/iu.test(word)) return true; // -L=<any value>
-    const name = /^--([a-z]+)(?:=.*)?$/iu.exec(word)?.[1]?.toLowerCase(); // --gl, --glob, --loc, --location
+    if (/^-L$/iu.test(option)) return word.includes('=') || index + 1 < tokens.length; // -L=<value> or -L <value>
+    const name = /^--([a-z]+)$/iu.exec(option)?.[1]?.toLowerCase(); // --gl, --glob, --loc, --location
     return name !== undefined && name.length >= 2 &&
       ('global'.startsWith(name) || 'location'.startsWith(name));
   });
 }
 
-/** An operand names npm when it contains npm anywhere or is computed. */
-function namesNpm(tokens: string[]): boolean {
-  return tokens.some(word => !word.startsWith('-') && (/npm/iu.test(word) || word.startsWith('$')));
+/** Only plain registry name-specs with known non-npm identities are safe. */
+function safeGlobalOperands(line: string): boolean {
+  // Keep quoted words together, but preserve punctuation, backticks and quote
+  // fragments for the allowlist to reject. This remains a line-based scan.
+  const words = (line.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+|["']/gu) ?? []).map(unquote);
+  const installIndex = words.findIndex(word => installFamily.has(word));
+  if (installIndex === -1) return false;
+  const operands = words.slice(installIndex + 1).filter(word => !word.startsWith('-'));
+  const registrySpec = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(@[A-Za-z0-9.^~<>=*|+_ -]+)?$/u;
+  return operands.length > 0 && operands.every(word => registrySpec.test(word) && !/npm/iu.test(word) &&
+    // Bare archive names are file operands too, even without a ./ prefix.
+    !['.tgz', '.tar.gz', '.tar'].some(suffix => word.endsWith(suffix)));
 }
 
 /** Persistent global/location setters affect later steps even without an install in this run. */
@@ -145,10 +154,7 @@ function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
     // Option values, redirect targets and comments can look like packages;
     // rejecting updates of unrelated packages is an accepted false positive.
     // Only install-family lines retain operand classification.
-    if (!tokens.some(word => updateFamily.has(word))) {
-      const operands = tokens.slice(installIndex + 1);
-      if (!namesNpm(operands) && operands.some(word => !word.startsWith('-'))) continue;
-    }
+    if (!tokens.some(word => updateFamily.has(word)) && safeGlobalOperands(line)) continue;
     if (approvedBootstrapShapes.some(shape => shape.test(line))) continue;
     findings.push(tokens);
   }

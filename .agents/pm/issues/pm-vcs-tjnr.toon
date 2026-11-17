@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[2]: "gh:unbraind/pm-ops#284","gh:unbraind/pm-vcs#213"
 created_at: "2026-11-16T14:39:25.582Z"
-updated_at: "2026-11-17T09:04:44.705Z"
+updated_at: "2026-11-17T10:26:08.463Z"
 author: pi-glm
 acceptance_criteria: "The release workflow installs the pinned npm with --prefix into a job-local directory and prepends that prefix bin to the job path; The workflow keeps the exact-version assertion on the effective npm; A workflow-contract test fails if any workflow replaces the global npm; Gates pass: typecheck, lint, tests, changelog:check"
-comments[18]{created_at,author,text}:
+comments[20]{created_at,author,text}:
   "2026-11-16T15:18:05.935Z",codex-sol,"Continuation: verified the existing worktree and remote branch state, preserved the earlier changes, and reused this item. Rerunning required gates to completion under the continuation author before committing results."
   "2026-11-16T15:28:55.474Z",codex-sol,"Root cause confirmed in the workflow source: global installation of the pinned npm replaces the same Node installation used by parallel jobs on a shared toolcache. Replaced each bootstrap with a job-local prefix, published only its bin directory to the job PATH, and retained exact-pin checks including a separate subsequent-step assertion. Workflow contracts reject global npm replacement across all workflow files. No runner settings or shared tool installations were modified."
   "2026-11-16T15:42:42.194Z",codex-sol,The first combined gate command hit its 20-minute timeout during shared-host disk contention and is not pass evidence. Retrying all gates to completion using memory-backed temporary fixtures and the existing harness deadline scale. Assertions and test selection are unchanged.
@@ -28,6 +28,8 @@ comments[18]{created_at,author,text}:
   "2026-11-17T08:51:28.590Z",codex-sol,"Self-host evidence: source and tracker committed as cb175a99bb3a1374eff5ec669171e2fe704a5bb0; npm run build and npm run self-host:write passed; bundle committed as 4ac4d4e7e62fa01f9b40fc83d4b2153a34379027. npm run accept:self-host passed at that HEAD, verifying committed bundle/source byte equality. The final receipt requires another archive refresh; stage the PM pair, regenerate the bundle, commit them together, and repeat acceptance at the final HEAD. All seven real workflows were also scanned directly with zero violations."
   "2026-11-17T09:02:32.767Z",codex-sol,"Round AP: reject every global update/up/upgrade/udpate line regardless of operands; option values, redirect targets and comment words cannot hide an update. Install-family operand handling stays unchanged. Preserve all prior fixtures, add the five requested rejections and alias/global-environment coverage, then run the Round AN gates directly. All five PRs remain open. No review-thread mutations."
   "2026-11-17T09:04:43.408Z",codex-sol,"Round AP verification: node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/test-environment.test.ts => PASS; npm run typecheck => PASS; npm run lint => PASS; npm run duplicates => PASS; npm run changelog:check => PASS; git diff --check => PASS. Focused suite: ℹ tests 201, ℹ pass 201, ℹ fail 0, ℹ cancelled 0, ℹ skipped 0, ℹ todo 0. Every real workflow still passes; all prior fixtures retained. Guard md5 e882f7b9396d4a810ccf85250dc05a04. All tracker writes finish before the source commit; build, self-host:write, bundle commit and accept:self-host at final HEAD follow without further tracker writes."
+  "2026-11-17T10:20:57.845Z",codex-sol,"Round AR: reproduced assignment-valued short-flag, renamed-archive, quoted-expression and uppercase Boolean bypasses against the unchanged shared guard. Preserve dual line scans and all fixtures; replace global operand inference with a registry-spec allowlist, normalize option names before marker tests and compare env values exactly. Run the round AN gates and regenerate changelog after all tracker writes. Leave this item open."
+  "2026-11-17T10:26:07.094Z",codex-sol,"Round AR implementation and validation: No unresolved review threads; synchronize all four Round AR fixes.. Global install operands now require the plain registry name-spec allowlist and exclude npm identities; archive, path, URL, git, alias, computed and quote-fragment operands reject. Option names are unquoted and split before assignment-valued marker tests. Env keys ignore case but safe global/location values compare exactly, including run assignments. Both physical and joined scans and bootstrap exemptions remain. Preserved all prior fixtures; focused guard: 202/202; round AN contract gate: 239/239; typecheck passed. All real workflows pass the guard. Guard md5: 1b36b35bf3ce5df79ae313b939f17971. Lint and duplication gates passed with zero clones. Final tracker writes precede tag refresh and changelog regeneration/check; keep the item in_progress and release the claim. No review thread mutations or workflow dispatches. After the code/tracker commit: build, write and commit the bundle, then accept:self-host at final HEAD. No tracker mutation follows that acceptance gate."
 files[8]{path,scope}:
   .github/workflows/release.yml,project
   selfhost.bundle,project
@@ -147,4 +149,7 @@ tests[15]:
       created_at: "2026-11-17T09:02:46.336Z"
       source_kind: local_mutation
       source_ref: fix/job-local-npm
+docs[2]{path,scope}:
+  CHANGELOG.md,project
+  test/global-npm-guard.ts,project
 body: ""

@@ -5,6 +5,34 @@ import { test } from 'node:test';
 import { globalNpmInstalls, workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 
 const rejected = [
+  // Round AR: normalize flags and allow only known non-npm registry operands.
+  'npm install -g=true npm@11.19.0',
+  'npm install -gd=1 npm@11.19.0',
+  'npm install --glob=yes npm@11.19.0',
+  'npm install "-g" npm@11.19.0',
+  'npm install -g ./cli.tgz',
+  'npm install -g cli.tgz',
+  'npm install -g ../dist/package',
+  'npm install -g /dist/package',
+  'npm install -g ~/dist/package',
+  'npm install -g git+https://github.com/npm/cli.git',
+  'npm install -g https://example.invalid/cli.tgz',
+  'npm install -g github:example/cli',
+  'npm install -g x@npm:some-tool',
+  'npm install -g "${{ inputs.package }}"',
+  'npm install -g "$PKG"',
+  'npm install -g some-$PKG',
+  'npm install -g `echo`',
+  'npm install -g "`echo`"',
+  'npm install -g "n""pm"',
+  'npm install -g "some-tool',
+  'npm install -g some-tool"',
+  'NPM_CONFIG_GLOBAL=FALSE npm install npm@11.19.0',
+  'NPM_CONFIG_GLOBAL="False" npm install npm@11.19.0',
+  'NPM_CONFIG_GLOBAL=" false" npm install npm@11.19.0',
+  'NPM_CONFIG_LOCATION=Global npm install npm@11.19.0',
+  'NPM_CONFIG_LOCATION=PROJECT npm install npm@11.19.0',
+  'NPM_CONFIG_LOCATION= npm install npm@11.19.0',
   // Round AP: every global update rejects, regardless of apparent operands.
   'npm update -g --cache /tmp/x',
   'npm update -g > update.log',
@@ -134,6 +162,16 @@ const rejected = [
   'printf "location=global\\n" | tee -a .npmrc >/dev/null',
 ];
 const accepted = [
+  // Round AR: plain non-npm registry specs remain safe in global installs.
+  'npm install -g some-tool@1',
+  'npm install -g "some-tool@^1"',
+  "npm install -g '@scope/some-tool@~1.2'",
+  'npm install -g "some-tool@>=1 <2"',
+  'npm install -g some-tool@latest @scope/other-tool@1',
+  'npm install -g=true some-tool@1',
+  'npm install -gd=1 some-tool@1',
+  'npm install --glob=yes some-tool@1',
+  'npm install "-g" some-tool@1',
   'npm install -g npm "--prefix" "$RUNNER_TEMP/npm-local"',
   'env NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-local" NPM_CONFIG_GLOBAL=true npm install npm',
   'NPM_CONFIG_LOCATION=project; npm install npm',
@@ -360,5 +398,42 @@ test('update aliases reject every operand in global lines and configured runs', 
       assert.ok(globalNpmInstalls(`npm ${alias} ${operands}`, { NPM_CONFIG_LOCATION: 'global' }).length > 0);
     }
     assert.deepEqual(globalNpmInstalls(`npm ${alias} some-package`), []);
+  }
+});
+
+
+test('global operand allowlist also applies to every install in global-configured runs', () => {
+  const environments: Record<string, string>[] = [{ NPM_CONFIG_GLOBAL: 'true' }, { NPM_CONFIG_LOCATION: 'global' }];
+  for (const env of environments) {
+    for (const operand of ['./cli.tgz', '../dist/package', 'git+https://github.com/npm/cli.git', '"${{ inputs.package }}"', '"$PKG"', '`echo`', '"n""pm"']) {
+      assert.ok(globalNpmInstalls(`npm install ${operand}`, env).length > 0, operand);
+      assert.ok(globalNpmInstalls(`export NPM_CONFIG_LOCATION=global\nnpm install ${operand}`).length > 0, operand);
+    }
+    assert.deepEqual(globalNpmInstalls('npm install some-tool@1', env), []);
+  }
+});
+
+test('npm env keys ignore case but safe values are exact at every scope and in assignments', () => {
+  for (const [key, safe, unsafe] of [
+    ['npm_config_global', ['false', '0', ''], ['FALSE', 'False', ' false', 'false ', ' true', '1']],
+    ['npm_config_location', ['project', 'user'], ['Global', 'PROJECT', 'User', ' project', 'user ', '', 'other']],
+  ] as const) {
+    for (const envKey of [key, key.toUpperCase(), key.replace('config', 'CONFIG')]) {
+      for (const [values, rejected] of [[safe, false], [unsafe, true]] as const) {
+        for (const value of values) {
+          const entry = `${envKey}: ${JSON.stringify(value)}`;
+          for (const source of [
+            `env:\n  ${entry}\n${workflow('run: npm install npm@11.19.0')}`,
+            `jobs:\n  audit:\n    env:\n      ${entry}\n    steps:\n      - run: npm install npm@11.19.0\n`,
+            workflow(`env:\n          ${entry}\n        run: npm install npm@11.19.0`),
+            workflow(`env: {${entry}}\n        run: npm install npm@11.19.0`),
+          ]) assert.equal(workflowGlobalNpmInstalls(source).length > 0, rejected, source);
+          // Separate lines keep the existing conservative marker rule from
+          // treating the assignment's key itself as a same-line marker.
+          const script = `${envKey}=${JSON.stringify(value)}\nnpm install npm@11.19.0`;
+          assert.equal(globalNpmInstalls(script).length > 0, rejected, script);
+        }
+      }
+    }
   }
 });
