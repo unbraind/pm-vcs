@@ -6,9 +6,7 @@ status: in_progress
 priority: 2
 tags[3]: "area:release","gh:unbraind/pm-ops#272","gh:unbraind/pm-vcs#207"
 created_at: "2026-11-14T22:26:50.942Z"
-updated_at: "2026-11-17T07:58:44.634Z"
-assignee: pi-glm
-claim_principal: pi-glm
+updated_at: "2026-11-17T08:00:57.059Z"
 author: codex-ops272-1114
 comments[12]{created_at,author,text}:
   "2026-11-14T22:27:00.144Z",codex-ops272-1114,"Orient and start the authorized fleet rollout. Verified released v2026.11.14 at 7687a35d7522482bd8361d60dbc2589e9afbc81c. Preserve this package approval, schedule, preparation and publication hooks through canonical inputs. The merged Jira pilot proves cross-repository npm identity acceptance; this package must still pass its own first-run preflight. Run caller contracts, installed attestation, strict YAML, actionlint and regenerated changelog checks. Shared-runner hold gates every push. No review-thread action, merge, dispatch or publication."
