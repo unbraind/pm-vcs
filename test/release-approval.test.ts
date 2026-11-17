@@ -259,23 +259,47 @@ test('daily/manual release triggers and preparation gates remain enforced', () =
   }
 });
 
-test('publishing installs an npm version supporting trusted publishing', () => {
-  const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
-  const scripts = Object.values(mapping(release.jobs) ?? {}).flatMap(job => {
-    const steps = mapping(job)?.steps;
-    return Array.isArray(steps) ? steps.map(step => mapping(step)?.run).filter(value => typeof value === 'string') : [];
-  }).join('\n');
-  const version = scripts.match(/npm install --prefix "\$RUNNER_TEMP\/npm-(\d+)\.(\d+)\.(\d+)" npm@\1\.\2\.\3/u)?.slice(1).map(Number);
+const npmBootstrapStep = 'Use npm with trusted publishing support';
+const npmVerifyStep = 'Verify job-local npm version';
+
+/** Audit the bootstrap and version check in the order a single job runs them. */
+function assertJobLocalNpm(steps: readonly unknown[]): void {
+  const bootstrapIndex = steps.findIndex(step => mapping(step)?.name === npmBootstrapStep);
+  const verifyIndex = steps.findIndex(step => mapping(step)?.name === npmVerifyStep);
+  const bootstrap = mapping(steps[bootstrapIndex])?.run;
+  const verify = mapping(steps[verifyIndex])?.run;
+  assert.ok(typeof bootstrap === 'string', 'the named bootstrap step must install npm');
+  assert.ok(typeof verify === 'string', 'the named verify step must check the npm version');
+  assert.ok(verifyIndex > bootstrapIndex, 'the verify step must run after the bootstrap');
+
+  const version = bootstrap.match(/npm install --prefix "\$RUNNER_TEMP\/npm-(\d+)\.(\d+)\.(\d+)" npm@\1\.\2\.\3/u)?.slice(1).map(Number);
   assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)));
-  // The bootstrap installs the pinned npm into a job-local prefix; later
-  // steps reach it only through the bin directory appended to $GITHUB_PATH,
-  // and the verify step must expect exactly the installed version, not merely
-  // any newer one.
-  const pin = version!.join('.');
-  assert.ok(scripts.includes(`echo "$RUNNER_TEMP/npm-${pin}/node_modules/.bin" >> "$GITHUB_PATH"`),
-    'the bootstrap step must append the same prefix bin directory to $GITHUB_PATH');
-  assert.ok(scripts.includes(`test "$(npm --version)" = "${pin}"`),
+  const pin = version.join('.');
+  assert.ok(bootstrap.includes(`echo "$RUNNER_TEMP/npm-${pin}/node_modules/.bin" >> "$GITHUB_PATH"`),
+    'the bootstrap step must append its prefix bin directory to $GITHUB_PATH');
+  assert.ok(verify.includes(`test "$(npm --version)" = "${pin}"`),
     'the verify step must expect exactly the installed version');
+}
+
+/** Read the ordered steps of the actual release job. */
+function releaseSteps(): unknown[] {
+  const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
+  const steps = mapping(mapping(release.jobs)?.release)?.steps;
+  assert.ok(Array.isArray(steps), 'the release job must have steps');
+  return steps;
+}
+
+test('publishing installs an npm version supporting trusted publishing', () => {
+  assertJobLocalNpm(releaseSteps());
+});
+
+test('the bootstrap check cannot substitute for separate post-bootstrap verification', () => {
+  const steps = releaseSteps();
+  const verifyIndex = steps.findIndex(step => mapping(step)?.name === npmVerifyStep);
+  assert.ok(verifyIndex >= 0);
+  const withoutVerify = steps.filter((_step, index) => index !== verifyIndex);
+  assert.throws(() => assertJobLocalNpm(withoutVerify), /named verify step/u);
+  assert.throws(() => assertJobLocalNpm([steps[verifyIndex], ...withoutVerify]), /after the bootstrap/u);
 });
 
 test('no workflow replaces the shared global npm installation', () => {
