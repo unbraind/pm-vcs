@@ -106,17 +106,20 @@ const approvedBootstrapShapes: RegExp[] = [
 ];
 
 /**
- * Scan both unconditionally joined backslash continuations and physical lines,
+ * Scan unconditionally joined backslash and backtick continuations and physical lines,
  * taking the union of findings. Quoted hashes need joining; comment backslashes
- * need physical boundaries. No shell parsing chooses between those forms.
+ * need physical boundaries. PowerShell needs backtick joining. No shell parsing
+ * chooses between those forms.
  * An exact approved bootstrap is exempt only in the form where it is exact.
  * Comment and here-document text is scanned like any other text; false positives
  * are acceptable. Persistent npm configuration rejects the writing step.
  */
 export function globalNpmInstalls(script: string, env?: Record<string, string>): string[][] {
+  const physical = script.split('\n').map(line => line.replace(/\r$/u, '')).join('\n');
   const findings = [
-    ...scanNpmLines(script.replace(/\\\r?\n/gu, ''), env),
-    ...scanNpmLines(script, env),
+    ...scanNpmLines(physical.replace(/\\\n/gu, ''), env),
+    ...scanNpmLines(physical.replace(/`\n/gu, ''), env),
+    ...scanNpmLines(physical, env),
   ];
   return [...new Map(findings.map(finding => [JSON.stringify(finding), finding])).values()];
 }
@@ -267,6 +270,8 @@ export function workflowGlobalNpmInstalls(source: string): string[][] {
   const findings: string[][] = [];
   const workflowEnv = emptyEnvScope();
   const jobEnvs: Record<string, EnvScope> = {};
+  const containerEnvs: Record<string, EnvScope> = {};
+  const serviceEnvs: Record<string, EnvScope> = {};
   const stepEnvs: Record<string, EnvScope> = {};
   // Runs are buffered until every env scope is known: env may follow run in the step.
   const runs: { job: string; step: number; script: string }[] = [];
@@ -304,7 +309,8 @@ export function workflowGlobalNpmInstalls(source: string): string[][] {
     if (!entry) {
       // Unsupported env entries cannot silently erase effective npm settings.
       if (parent[0] === 'env' ||
-        (parent[0] === 'jobs' && (parent[2] === 'env' || parent[4] === 'env'))) return unreadableRun();
+        (parent[0] === 'jobs' && (parent[2] === 'env' || parent[4] === 'env' ||
+          (parent[2] === 'container' && parent[3] === 'env')))) return unreadableRun();
       if ((!parent.length && !['---', '...'].includes(text)) ||
         (parent[0] === 'jobs' && (parent.length <= 3 || (parent.length === 4 && parent[3] === '*')))) return unreadableRun();
       continue;
@@ -317,16 +323,28 @@ export function workflowGlobalNpmInstalls(source: string): string[][] {
     const run = path.length === 5 && path[0] === 'jobs' && path[2] === 'steps' && path[3] === '*' && key === 'run';
     const container = path[0] === 'jobs' && (path.length <= 2 || (path.length === 3 && key === 'steps'));
     if (container && value && !value.startsWith('#')) return unreadableRun();
-    // Compose workflow, job and step env scopes; the step scope wins. npm reads
+    // Inline/computed container objects may carry env we cannot extract.
+    if (path[0] === 'jobs' && path.length === 3 && key === 'container' &&
+      (value.startsWith('{') || /^[&*!]/u.test(value) || value.includes('${{')))
+      (containerEnvs[path[1]] ??= emptyEnvScope()).unknown = true;
+    if (path[0] === 'jobs' && ((path.length === 3 && key === 'services') ||
+      (path.length === 4 && path[2] === 'services')) && value && !value.startsWith('#'))
+      (serviceEnvs[`${path[1]}\u0000${path[3] ?? ''}`] ??= emptyEnvScope()).unknown = true;
+    const containerEnv = path[0] === 'jobs' && path[2] === 'container' && path[3] === 'env';
+    const serviceEnv = path[0] === 'jobs' && path[2] === 'services' && path[4] === 'env';
+    // Compose container, workflow, job and step env scopes; the step scope wins. npm reads
     // the keys case-insensitively, and an unreadable scope fails closed.
-    const envContainer = (path.length === 1 && path[0] === 'env') ||
+    const envContainer = (containerEnv && path.length === 4) || (serviceEnv && path.length === 5) ||
+      (path.length === 1 && path[0] === 'env') ||
       (path.length === 3 && path[0] === 'jobs' && path[2] === 'env') ||
       (path.length === 5 && path[0] === 'jobs' && path[2] === 'steps' && path[3] === '*' && path[4] === 'env');
-    const envEntry = (path.length === 2 && path[0] === 'env') ||
+    const envEntry = (containerEnv && path.length === 5) || (serviceEnv && path.length === 6) ||
+      (path.length === 2 && path[0] === 'env') ||
       (path.length === 4 && path[0] === 'jobs' && path[2] === 'env') ||
       (path.length === 6 && path[0] === 'jobs' && path[2] === 'steps' && path[3] === '*' && path[4] === 'env');
     if (envContainer || envEntry) {
-      const scope = path.length <= 2 ? workflowEnv : path.length <= 4 ?
+      const scope = containerEnv ? (containerEnvs[path[1]] ??= emptyEnvScope()) :
+        serviceEnv ? (serviceEnvs[`${path[1]}\u0000${path[3]}`] ??= emptyEnvScope()) : path.length <= 2 ? workflowEnv : path.length <= 4 ?
         (jobEnvs[path[1]] ??= emptyEnvScope()) : (stepEnvs[`${path[1]}\u0000${stepIndex}`] ??= emptyEnvScope());
       if (envContainer) {
         if (!value || value.startsWith('#') || /^(?:null|~)$/u.test(value)) {
@@ -370,10 +388,15 @@ export function workflowGlobalNpmInstalls(source: string): string[][] {
     runs.push({ job: jobKey, step: stepIndex, script: scalar });
   }
   for (const run of runs) {
+    const containerScope = containerEnvs[run.job] ?? emptyEnvScope();
     const jobScope = jobEnvs[run.job] ?? emptyEnvScope();
     const stepScope = stepEnvs[`${run.job}\u0000${run.step}`] ?? emptyEnvScope();
-    const effective = workflowEnv.unknown || jobScope.unknown || stepScope.unknown ? unreadableEnvScope() :
-      { ...workflowEnv.entries, ...jobScope.entries, ...stepScope.entries };
+    // Service containers have separate processes; conservatively reject their
+    // global settings too, without letting another service's safe values mask them.
+    const unsafeService = Object.entries(serviceEnvs).some(([key, scope]) =>
+      key.startsWith(`${run.job}\u0000`) && (scope.unknown || envForcesGlobal(scope.entries)));
+    const effective = containerScope.unknown || workflowEnv.unknown || jobScope.unknown || stepScope.unknown || unsafeService ? unreadableEnvScope() :
+      { ...containerScope.entries, ...workflowEnv.entries, ...jobScope.entries, ...stepScope.entries };
     findings.push(...globalNpmInstalls(run.script, effective));
   }
   return findings;

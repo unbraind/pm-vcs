@@ -437,3 +437,40 @@ test('npm env keys ignore case but safe values are exact at every scope and in a
     }
   }
 });
+
+
+/** Physical and both continuation forms are independent conservative scans. */
+test('PowerShell backtick continuations reject global installs with LF and CRLF', () => {
+  for (const newline of ['\n', '\r\n']) {
+    assert.ok(globalNpmInstalls('npm install `' + newline + '  -g npm@11.21.0').length > 0);
+    assert.ok(globalNpmInstalls('npm install `' + newline + '  --global `' + newline + '  npm@11.21.0').length > 0);
+    assert.ok(globalNpmInstalls('# bootstrap `' + newline + 'npm install -g npm').length > 0);
+    assert.deepEqual(globalNpmInstalls('npm install -g npm --prefix "$RUNNER_TEMP/npm-local"' + newline), []);
+    assert.deepEqual(globalNpmInstalls('npm install -g npm' + newline), [['npm', 'install', '-g', 'npm']]);
+  }
+});
+
+/** Container defaults reach steps; service scopes are checked conservatively too. */
+test('container and service env settings cannot hide global npm installs', () => {
+  for (const prefix of ['container:\n      image: node:26\n      ', 'services:\n      helper:\n        image: node:26\n        ']) {
+    const padding = prefix.startsWith('container') ? '        ' : '          ';
+    for (const env of ['env:\n' + padding + 'NPM_CONFIG_GLOBAL: "true"', 'env: {NPM_CONFIG_LOCATION: global}', 'env: ${{ matrix.env }}', 'env: {broken', 'env:\n' + padding + '? unsupported', 'env:\n' + padding + 'NPM_CONFIG_GLOBAL:\n' + padding + '  nested: true']) {
+      const source = `jobs:\n  audit:\n    ${prefix}${env}\n    steps:\n      - run: npm install npm@11.21.0\n`;
+      assert.ok(workflowGlobalNpmInstalls(source).length > 0, source);
+    }
+    for (const env of ['env: {NPM_CONFIG_GLOBAL: "false"}', 'env: {}', 'env: null']) {
+      assert.deepEqual(workflowGlobalNpmInstalls(`jobs:\n  audit:\n    ${prefix}${env}\n    steps:\n      - run: npm install npm@11.21.0\n`), []);
+    }
+  }
+  // Defaults may appear after steps, and must remain isolated to their job.
+  assert.ok(workflowGlobalNpmInstalls('jobs:\n  audit:\n    steps:\n      - run: npm install npm@11.21.0\n    container:\n      image: node:26\n      env: {NPM_CONFIG_GLOBAL: "true"}\n').length > 0);
+  assert.deepEqual(workflowGlobalNpmInstalls('jobs:\n  service:\n    container:\n      image: node:26\n      env: {NPM_CONFIG_GLOBAL: "true"}\n    steps:\n      - run: echo safe\n  audit:\n    steps:\n      - run: npm install npm@11.21.0\n'), []);
+  // Workflow/job/step env override container defaults, preserving the existing scope order.
+  for (const scope of ['env: {NPM_CONFIG_GLOBAL: "false"}\n    steps:\n      - run: npm install npm@11.21.0', 'steps:\n      - env: {NPM_CONFIG_GLOBAL: "false"}\n        run: npm install npm@11.21.0']) {
+    assert.deepEqual(workflowGlobalNpmInstalls(`jobs:\n  audit:\n    container:\n      image: node:26\n      env: {NPM_CONFIG_GLOBAL: "true"}\n    ${scope}\n`), []);
+  }
+  for (const container of ['{image: node:26, env: {NPM_CONFIG_GLOBAL: "true"}}', '${{ matrix.container }}']) {
+    assert.ok(workflowGlobalNpmInstalls(`jobs:\n  audit:\n    container: ${container}\n    steps:\n      - run: npm install npm@11.21.0\n`).length > 0);
+  }
+  assert.ok(workflowGlobalNpmInstalls('jobs:\n  audit:\n    services:\n      first:\n        env: {NPM_CONFIG_GLOBAL: "true"}\n      second:\n        env: {NPM_CONFIG_GLOBAL: "false"}\n    steps:\n      - run: npm install npm@11.21.0\n').length > 0);
+});
