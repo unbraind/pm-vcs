@@ -168,6 +168,14 @@ jobs:
           path: coverage/shard-${{ matrix.shard }}/hits.json
           if-no-files-found: error
           retention-days: 7
+      - name: Upload failed shard coverage output
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: coverage-shard-${{ matrix.shard }}-failure
+          path: coverage/shard-${{ matrix.shard }}/
+          if-no-files-found: warn
+          retention-days: 7
   release-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 22

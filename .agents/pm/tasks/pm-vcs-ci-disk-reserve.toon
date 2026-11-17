@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-17T14:18:27.267Z"
+updated_at: "2026-11-17T15:49:00.235Z"
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[64]:
+comments[65]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -203,6 +203,9 @@ comments[64]:
   - created_at: "2026-11-17T14:18:27.266Z"
     author: "harness:claude-code"
     text: "Orchestrator: corrected two rows in docs/ci-tiers.md for review threads PRRT_kwDOToJT7M64aPvE, PRRT_kwDOToJT7M64eKGG and PRRT_kwDOToJT7M64eKGh. The pending-root model runs 18 quick and 144 deep stores (ref x 4 namespaces + 5 formats, x loose/packed, per seed; test/ref-publication-recovery.test.ts). Packed conflict resolution runs one real-host case for each of the 10 kinds testKinds selects (test/helpers/first-class-conflict-cases.ts:190)."
+  - created_at: "2026-11-17T15:49:00.228Z"
+    author: "harness:claude-code"
+    text: "Orchestrator, for review thread PRRT_kwDOToJT7M64ga_t: added a failure-only 'Upload failed shard coverage output' step (if: failure(), artifact coverage-shard-N-failure, the whole coverage/shard-N directory, if-no-files-found: warn) after 'Upload raw hits' in .github/workflows/ci.yml. The success merge inputs are unchanged. The workflow tests (ci-shards, ci-routing, dependency-refresh-workflow, ci-codeql, release-approval) pass 49/49. Main merged in a310c19."
 files[42]:
   - path: .github/workflows/ci-deep.yml
     scope: project
