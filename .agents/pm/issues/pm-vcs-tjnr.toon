@@ -6,9 +6,7 @@ status: in_progress
 priority: 2
 tags[1]: "gh:unbraind/pm-ops#284"
 created_at: "2026-11-16T14:39:25.582Z"
-updated_at: "2026-11-17T07:53:55.262Z"
-assignee: pi-guard-1117aj
-claim_principal: pi-guard-1117aj
+updated_at: "2026-11-17T07:54:37.461Z"
 author: pi-glm
 acceptance_criteria: "The release workflow installs the pinned npm with --prefix into a job-local directory and prepends that prefix bin to the job path; The workflow keeps the exact-version assertion on the effective npm; A workflow-contract test fails if any workflow replaces the global npm; Gates pass: typecheck, lint, tests, changelog:check"
 comments[10]{created_at,author,text}:
