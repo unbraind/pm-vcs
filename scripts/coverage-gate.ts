@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 /** Shard the existing c8 gate and merge location-keyed raw hits before enforcing its unchanged per-file thresholds. */
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { globSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync } from "node:fs";
+import { globSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { shardTestFiles } from "../test/helpers/ci-shards.ts";
@@ -25,6 +25,8 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
     const ordinals = new Set<string>();
     for (const [index, path] of paths.entries()) {
       const artifact = JSON.parse(readFileSync(resolve(root, path), "utf8"));
+      if (!Array.isArray(artifact.raw)) throw new Error(`coverage-gate: ${path} has no raw hits array`);
+      if (typeof artifact.shard !== "string") throw new Error(`coverage-gate: ${path} has no shard ordinal`);
       if (artifact.node !== process.versions.node || ordinals.has(artifact.shard)) throw new Error("coverage-gate: duplicate shard or runtime mismatch");
       ordinals.add(artifact.shard);
       if (artifact.digest !== coverageDigest(root)) throw new Error("coverage-gate: source mismatch");
@@ -35,10 +37,15 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
       writeFileSync(join(scratch, `coverage-${index}.json`), JSON.stringify({result}));
     }
     for (let i = 1; i <= total; i++) if (!ordinals.has(`${i}/${total}`)) throw new Error("coverage-gate: incomplete shard set");
+    const finalPath = join(root, "coverage/coverage-final.json");
+    const summaryPath = join(root, "coverage/coverage-summary.json");
+    rmSync(finalPath, { force: true });
+    rmSync(summaryPath, { force: true });
     const status = c8(root, ["report", ...flags, `--temp-directory=${scratch}`]);
-    const merged = JSON.parse(readFileSync(join(root, "coverage/coverage-final.json"), "utf8"));
+    if (status !== 0 && !(existsSync(finalPath) && existsSync(summaryPath))) return status;
+    const merged = JSON.parse(readFileSync(finalPath, "utf8"));
     writeFileSync(join(root, "coverage/merged.json"), JSON.stringify(merged, null, 2));
-    console.log("Merged coverage:", readFileSync(join(root, "coverage/coverage-summary.json"), "utf8"));
+    console.log("Merged coverage:", readFileSync(summaryPath, "utf8"));
     return status;
   } finally {
     durability.discardTemporary(scratch);

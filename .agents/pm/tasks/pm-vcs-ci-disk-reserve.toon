@@ -6,10 +6,12 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-17T02:43:40.490Z"
+updated_at: "2026-11-17T07:51:33.848Z"
+assignee: pi-glm
+claim_principal: pi-glm
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[55]:
+comments[56]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -176,49 +178,94 @@ comments[55]:
   - created_at: "2026-11-17T02:43:40.487Z"
     author: codex-sol
     text: "Committed source 2ca4942 and regenerated archive 6c1a336. npm run build, npm run self-host:write, and npm run accept:self-host passed at committed HEAD 6c1a336. Focused PM-linked regressions pass 4/4; the revised quick resolution matrix injects all 26 rows and the pending-root model passes all 18 stores while asserting heads/tags/remotes/metadata coverage. Broader touched-file results are recorded in the final review report. This receipt changes tracker bytes, so it will be committed and followed by a fresh build, archive regeneration/commit and acceptance at final HEAD before pushing."
-files[41]{path,scope}:
-  .github/workflows/ci-deep.yml,project
-  .github/workflows/ci.yml,project
-  .github/workflows/codeql.yml,project
-  docs/ci-tiers.md,project
-  scripts/coverage-gate.ts,project
-  selfhost.bundle,project
-  test/annotate.test.ts,project
-  test/bisect.test.ts,project
-  test/cdc-benchmark.test.ts,project
-  test/ci-codeql.test.ts,project
-  test/ci-routing.test.ts,project
-  test/ci-shard-times.json,project
-  test/ci-shards.test.ts,project
-  test/composition-consumer.test.ts,project
-  test/coverage-merge.test.ts,project
-  test/dependency-refresh-workflow.test.ts,project
-  test/depth.test.ts,project
-  test/erasure-crash-matrix.test.ts,project
-  test/erasure-lifecycle.test.ts,project
-  test/erasure-storage.test.ts,project
-  test/first-class-conflicts-consumer.test.ts,project
-  test/first-class-conflicts.test.ts,project
-  test/fixture-lifetime.test.ts,project
-  test/helpers/ci-shards.ts,project
-  test/helpers/first-class-conflict-cases.ts,project
-  test/helpers/journal-sequences.ts,project
-  test/helpers/release-suite.ts,project
-  test/helpers/test-environment.ts,project
-  test/journal-power-obliterate-packed.test.ts,project
-  test/lease-workflows.test.ts,project
-  test/object-read-protocol.test.ts,project
-  test/packs.test.ts,project
-  test/quality-scripts.test.ts,project
-  test/raw-coverage.test.ts,project
-  test/ref-publication-recovery.test.ts,project
-  test/refs.test.ts,project
-  test/self-host.test.ts,project
-  test/signatures.test.ts,project
-  test/snapshot-durability-consumer.test.ts,project
-  test/sparse-move-consumer.test.ts,project
-  test/support/depth.ts,project
-tests[30]:
+  - created_at: "2026-11-17T07:51:30.984Z"
+    author: pi-glm
+    text: "Review round AK on the CI v2 PR branch: (1) coverage-gate merge now deletes stale coverage-final.json/coverage-summary.json before running c8 report, and when c8 report exits non-zero without producing fresh files it returns c8's status instead of throwing ENOENT or writing merged output; the threshold path is unchanged (a threshold failure that still writes reports keeps returning the non-zero status after reading the fresh files). (2) mergeCoverage throws a clear error naming the artifact path when its raw hits array is missing or its shard ordinal is missing, instead of a bare TypeError. (3) The object-read-protocol resolution-matrix finding is already fixed at the current head by the reachable-schedules commit: each row records injected/reachable, every reachable row asserts injection, quick rows must all inject, and readers that cannot reach their assigned boundary get a reached one; verified in the diff of that commit, no further change needed. Gates: node --test test/coverage-merge.test.ts 1/1 (includes new stale-report, failed-report status and artifact-shape regressions), typecheck clean, lint clean, changelog:check clean."
+files[41]:
+  - path: .github/workflows/ci-deep.yml
+    scope: project
+  - path: .github/workflows/ci.yml
+    scope: project
+  - path: .github/workflows/codeql.yml
+    scope: project
+  - path: docs/ci-tiers.md
+    scope: project
+  - path: scripts/coverage-gate.ts
+    scope: project
+    note: "Stale report deletion, status return and artifact-shape refusals"
+  - path: selfhost.bundle
+    scope: project
+  - path: test/annotate.test.ts
+    scope: project
+  - path: test/bisect.test.ts
+    scope: project
+  - path: test/cdc-benchmark.test.ts
+    scope: project
+  - path: test/ci-codeql.test.ts
+    scope: project
+  - path: test/ci-routing.test.ts
+    scope: project
+  - path: test/ci-shard-times.json
+    scope: project
+  - path: test/ci-shards.test.ts
+    scope: project
+  - path: test/composition-consumer.test.ts
+    scope: project
+  - path: test/coverage-merge.test.ts
+    scope: project
+  - path: test/dependency-refresh-workflow.test.ts
+    scope: project
+  - path: test/depth.test.ts
+    scope: project
+  - path: test/erasure-crash-matrix.test.ts
+    scope: project
+  - path: test/erasure-lifecycle.test.ts
+    scope: project
+  - path: test/erasure-storage.test.ts
+    scope: project
+  - path: test/first-class-conflicts-consumer.test.ts
+    scope: project
+  - path: test/first-class-conflicts.test.ts
+    scope: project
+  - path: test/fixture-lifetime.test.ts
+    scope: project
+  - path: test/helpers/ci-shards.ts
+    scope: project
+  - path: test/helpers/first-class-conflict-cases.ts
+    scope: project
+  - path: test/helpers/journal-sequences.ts
+    scope: project
+  - path: test/helpers/release-suite.ts
+    scope: project
+  - path: test/helpers/test-environment.ts
+    scope: project
+  - path: test/journal-power-obliterate-packed.test.ts
+    scope: project
+  - path: test/lease-workflows.test.ts
+    scope: project
+  - path: test/object-read-protocol.test.ts
+    scope: project
+  - path: test/packs.test.ts
+    scope: project
+  - path: test/quality-scripts.test.ts
+    scope: project
+  - path: test/raw-coverage.test.ts
+    scope: project
+  - path: test/ref-publication-recovery.test.ts
+    scope: project
+  - path: test/refs.test.ts
+    scope: project
+  - path: test/self-host.test.ts
+    scope: project
+  - path: test/signatures.test.ts
+    scope: project
+  - path: test/snapshot-durability-consumer.test.ts
+    scope: project
+  - path: test/sparse-move-consumer.test.ts
+    scope: project
+  - path: test/support/depth.ts
+    scope: project
+tests[31]:
   - command: "npm run typecheck && npm run build:test && npm run lint"
     scope: project
     timeout_seconds: 240
@@ -454,6 +501,13 @@ tests[30]:
     provenance:
       author: codex-sol
       created_at: "2026-11-17T02:39:46.899Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: node --test test/coverage-merge.test.ts
+    scope: project
+    provenance:
+      author: pi-glm
+      created_at: "2026-11-17T07:51:33.773Z"
       source_kind: local_mutation
       source_ref: ci/quick-pr-tier-deep-local-tier
 docs[4]{path,scope}:

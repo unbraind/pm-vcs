@@ -55,6 +55,8 @@ export function negative() { return "negative"; }
   change(artifact=>{artifact.raw[0].url=resolve(root,"src/value.ts")});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
   change(artifact=>{artifact.node="0.0.0"});assert.throws(()=>mergeCoverage(root,paths,2),/runtime mismatch/);
   change(artifact=>{artifact.digest="wrong"});assert.throws(()=>mergeCoverage(root,paths,2),/source mismatch/);
+  change(artifact=>{Reflect.deleteProperty(artifact,"raw");});assert.throws(()=>mergeCoverage(root,paths,2),/first\/hits\.json has no raw hits array/);
+  change(artifact=>{Reflect.deleteProperty(artifact,"shard")});assert.throws(()=>mergeCoverage(root,paths,2),/first\/hits\.json has no shard ordinal/);
   writeFileSync(join(root,paths[0]!),saved);
   assert.throws(()=>mergeCoverage(root,[],0),/missing shards/);
   for(const shard of ["0/2","3/2"]) assert.throws(()=>runCoverageShard(root,shard,"bad"),/invalid shard/);
@@ -72,4 +74,13 @@ export function negative() { return "negative"; }
   }
   assert.throws(()=>mergeCoverage(root,[paths[0]!],2),/missing shards/);
   assert.throws(()=>mergeCoverage(root,[paths[0]!,paths[0]!],2),/duplicate shard/);
+  // Stale reports from an earlier run must be deleted before c8 report, never feeding the merge.
+  writeFileSync(join(root,"coverage/coverage-final.json"),"stale"); writeFileSync(join(root,"coverage/coverage-summary.json"),"stale");
+  assert.equal(mergeCoverage(root,paths,2),0);
+  assert.notEqual(readFileSync(join(root,"coverage/coverage-final.json"),"utf8"),"stale");
+  assert.notEqual(readFileSync(join(root,"coverage/coverage-summary.json"),"utf8"),"stale");
+  const freshMerged=readFileSync(join(root,"coverage/merged.json"),"utf8");
+  const failedReport=t.mock.method(childProcess,"spawnSync",()=>({status:1}));syncBuiltinESMExports();
+  try { assert.equal(mergeCoverage(root,paths,2),1); } finally { failedReport.mock.restore();syncBuiltinESMExports(); }
+  assert.equal(readFileSync(join(root,"coverage/merged.json"),"utf8"),freshMerged);
 });
