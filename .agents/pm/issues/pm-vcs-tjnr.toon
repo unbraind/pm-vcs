@@ -6,12 +6,10 @@ status: in_progress
 priority: 2
 tags[2]: "gh:unbraind/pm-ops#284","gh:unbraind/pm-vcs#213"
 created_at: "2026-11-16T14:39:25.582Z"
-updated_at: "2026-11-17T20:34:31.662Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-11-17T20:38:34.414Z"
 author: pi-glm
 acceptance_criteria: "The release workflow installs the pinned npm with --prefix into a job-local directory and prepends that prefix bin to the job path; The workflow keeps the exact-version assertion on the effective npm; A workflow-contract test fails if any workflow replaces the global npm; Gates pass: typecheck, lint, tests, changelog:check"
-comments[36]{created_at,author,text}:
+comments[37]{created_at,author,text}:
   "2026-11-16T15:18:05.935Z",codex-sol,"Continuation: verified the existing worktree and remote branch state, preserved the earlier changes, and reused this item. Rerunning required gates to completion under the continuation author before committing results."
   "2026-11-16T15:28:55.474Z",codex-sol,"Root cause confirmed in the workflow source: global installation of the pinned npm replaces the same Node installation used by parallel jobs on a shared toolcache. Replaced each bootstrap with a job-local prefix, published only its bin directory to the job PATH, and retained exact-pin checks including a separate subsequent-step assertion. Workflow contracts reject global npm replacement across all workflow files. No runner settings or shared tool installations were modified."
   "2026-11-16T15:42:42.194Z",codex-sol,The first combined gate command hit its 20-minute timeout during shared-host disk contention and is not pass evidence. Retrying all gates to completion using memory-backed temporary fixtures and the existing harness deadline scale. Assertions and test selection are unchanged.
@@ -48,6 +46,7 @@ comments[36]{created_at,author,text}:
   "2026-11-17T19:18:42.663Z",codex-sol,"Review BG: tie npm version verification to the named post-bootstrap step and exercise its removal as a mutation control."
   "2026-11-17T19:22:10.048Z",codex-sol,The previous assertion passed after the named verification step was removed. The new mutation control rejects both removal and running it before the bootstrap. All five guard copies share the same checksum.
   "2026-11-17T19:25:39.248Z",codex-sol,Review BG maps PRRT_kwDOToJT7M64kbji to 2a6c4f8886f41643ca198b457a5ee24fe6c1cb73. The assertion reads the named verification step after bootstrap. Removing or moving that step fails the mutation test.
+  "2026-11-17T20:38:32.692Z",codex-sol,"Round BH. 0101c1f carries the shared guard and fixtures byte for byte at MD5 7a8164f2b5a5aadb3ca9dcdbbd1d2179. Built on the pushed round BG evidence at 10ad31e. Guard 288/288, seven checked workflow files, 74 release and workflow tests, typecheck, test compilation, lint and changelog check passed. The self-host snapshot is regenerated from the staged source and tracker evidence; acceptance is checked on the resulting commit."
 files[8]{path,scope}:
   .github/workflows/release.yml,project
   selfhost.bundle,project
