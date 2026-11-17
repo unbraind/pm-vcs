@@ -63,10 +63,20 @@ function globalMarker(tokens: string[]): boolean {
 }
 
 /** Only plain registry name-specs with known non-npm identities are safe. */
-function safeGlobalOperands(line: string): boolean {
+function safeGlobalOperands(line: string, implicitGlobalLink: boolean): boolean {
   // Keep quoted words together, but preserve punctuation, backticks and quote
   // fragments for the allowlist to reject. This remains a line-based scan.
   const words = (line.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+|["']/gu) ?? []).map(unquote);
+  // Link options can consume an apparent registry operand, leaving a bare
+  // global link. Without parsing npm's option schema, accept only inline
+  // option values and known boolean global flags; ambiguous options reject.
+  if (implicitGlobalLink && words.some((word, index) => {
+    const name = /^--([a-z]+)$/iu.exec(word)?.[1]?.toLowerCase();
+    const globalBoolean = word === '-g' || name !== undefined && 'global'.startsWith(name);
+    return word.startsWith('-') && (/[;&|<>()`]/u.test(word) || word.endsWith('=') ||
+      globalBoolean && /^(?:true|false|0|1)$/iu.test(words[index + 1] ?? '') ||
+      !word.includes('=') && !globalBoolean);
+  })) return false;
   const installIndex = words.findIndex(word => familyCommand(word, installFamily));
   if (installIndex === -1) return false;
   const operands = words.slice(installIndex + 1).filter(word => !word.startsWith('-'));
@@ -160,7 +170,7 @@ function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
     // Option values, redirect targets and comments can look like packages;
     // rejecting updates of unrelated packages is an accepted false positive.
     // Install, uninstall and link families retain operand classification.
-    if (!tokens.some(word => familyCommand(word, updateFamily)) && safeGlobalOperands(line)) continue;
+    if (!tokens.some(word => familyCommand(word, updateFamily)) && safeGlobalOperands(line, implicitGlobalLink)) continue;
     if (approvedBootstrapShapes.some(shape => shape.test(line))) continue;
     findings.push(tokens);
   }

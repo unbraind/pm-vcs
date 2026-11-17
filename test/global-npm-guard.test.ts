@@ -5,6 +5,20 @@ import { test } from 'node:test';
 import { globalNpmInstalls, workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 
 const rejected = [
+  "npm link -g false",
+  "npm link --global false",
+  "npm ln --g false",
+  "npm link --loglevel= warn",
+  "npm link --global= false",
+  "npm link --loglevel=warn; echo ready",
+  "npm link --loglevel=warn&&echo ready",
+  // Round AW review follow-up: option values must not disguise bare links.
+  "npm link --loglevel warn",
+  "npm ln --loglevel warn",
+  "npm --user-agent link link",
+  "npm link --loglevel=warn",
+  "npm link --loglevel warn some-tool",
+  "npm link --cache some-tool",
   // Round AW: independent joins, implicit links, --g and run-wide npmrc settings.
   "# Upgrade `npm`\nnpm update \\\n  -g",
   "npm link ./node_modules/npm",
@@ -182,6 +196,9 @@ const rejected = [
   'printf "location=global\\n" | tee -a .npmrc >/dev/null',
 ];
 const accepted = [
+  // Inline option values cannot consume the following package operand.
+  'npm link --loglevel=warn some-tool',
+  'npm ln --cache=cache-dir @scope/some-tool',
   // Round AW: independent joins, implicit links, --g and run-wide npmrc settings.
   "npm link some-tool",
   "npm ln @scope/some-tool@1",
