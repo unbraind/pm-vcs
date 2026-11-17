@@ -56,9 +56,9 @@ function globalMarker(tokens: string[]): boolean {
     if (/^-[a-z]*g[a-z]*$/iu.test(option)) return true; // -g, -fg, -gpld
     if (word.toLowerCase().includes('global')) return true; // --global, --location=global, -L=global
     if (/^-L$/iu.test(option)) return word.includes('=') || index + 1 < tokens.length; // -L=<value> or -L <value>
-    const name = /^--([a-z]+)$/iu.exec(option)?.[1]?.toLowerCase(); // --gl, --glob, --loc, --location
-    return name !== undefined && name.length >= 2 &&
-      ('global'.startsWith(name) || 'location'.startsWith(name));
+    const name = /^--([a-z]+)$/iu.exec(option)?.[1]?.toLowerCase(); // --g, --gl, --glob, --loc, --location
+    return name !== undefined && ('global'.startsWith(name) ||
+      name.length >= 2 && 'location'.startsWith(name));
   });
 }
 
@@ -107,18 +107,20 @@ const approvedBootstrapShapes: RegExp[] = [
 ];
 
 /**
- * Scan unconditionally joined backslash, backtick and Cmd caret continuations and physical lines,
- * taking the union of findings. Quoted hashes need joining; comment backslashes
- * need physical boundaries. Trailing blanks and CRLF do not hide continuations. No shell parsing
- * chooses between those forms.
+ * Scan physical lines and three separately joined forms: backslash, backtick
+ * and Cmd caret. Take the union of all four scans. Joining different markers
+ * together can swallow commands after comments; quoted hashes still need joining.
+ * Trailing blanks and CRLF do not hide continuations. No shell parsing chooses
+ * between those forms.
  * An exact approved bootstrap is exempt only in the form where it is exact.
  * Comment and here-document text is scanned like any other text; false positives
  * are acceptable. Persistent npm configuration rejects the writing step.
  */
 export function globalNpmInstalls(script: string, env?: Record<string, string>): string[][] {
   const physical = script.split('\n').map(line => line.replace(/\r$/u, '')).join('\n');
-  const joined = physical.replace(/[\\`^][\t ]*\n/gu, '');
-  const findings = [...scanNpmLines(joined, env), ...scanNpmLines(physical, env)];
+  const forms = [physical, ...[/\\[\t ]*\n/gu, /`[\t ]*\n/gu, /\^[\t ]*\n/gu]
+    .map(continuation => physical.replace(continuation, ''))];
+  const findings = forms.flatMap(form => scanNpmLines(form, env));
   return [...new Map(findings.map(finding => [JSON.stringify(finding), finding])).values()];
 }
 
@@ -133,10 +135,11 @@ function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
     findings.push(['npm configuration written to GITHUB_ENV']);
   for (const line of lines) {
     if (setsGlobalConfig(line)) findings.push(['npm configuration persisted by set', line]);
-    // A written npmrc line names its target path and a write operator; the
-    // value being global or location-selected is what makes it a replacement.
+    // Match the npmrc write on a physical/joined line, but inspect the whole
+    // run for global/location settings, including here-document bodies. Reject
+    // the writing step itself because later steps may read the persisted file.
     if (/npmrc/iu.test(line) && (line.includes('>') || /\btee\b/iu.test(line) || /config\s+set/u.test(line)) &&
-      /global|location/iu.test(line))
+      /global|location/iu.test(run))
       findings.push(['npm configuration written to an npmrc file', line]);
   }
   // Only a set token configures: the release workflow's read-only
@@ -150,7 +153,9 @@ function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
     if (!/\bnpm\b/iu.test(line) || setsGlobalConfig(line)) continue;
     const installIndex = tokens.findIndex(word => familyCommand(word, installFamily));
     if (installIndex === -1) continue;
-    if (!globalConfigured && !globalMarker(tokens)) continue;
+    // Link/ln may write to the global prefix even without a global flag.
+    const implicitGlobalLink = tokens.some(word => familyCommand(word, ['link', 'ln']));
+    if (!globalConfigured && !globalMarker(tokens) && !implicitGlobalLink) continue;
     // Every global update-family line is a violation, whatever its operands.
     // Option values, redirect targets and comments can look like packages;
     // rejecting updates of unrelated packages is an accepted false positive.

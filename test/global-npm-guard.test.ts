@@ -5,6 +5,26 @@ import { test } from 'node:test';
 import { globalNpmInstalls, workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 
 const rejected = [
+  // Round AW: independent joins, implicit links, --g and run-wide npmrc settings.
+  "# Upgrade `npm`\nnpm update \\\n  -g",
+  "npm link ./node_modules/npm",
+  "npm ln ../npm",
+  "npm link npm",
+  "npm link",
+  "npm ln",
+  "npm link ./some-tool",
+  "npm link \"$PACKAGE\"",
+  "npm link some-npm-helper",
+  "npm install --g npm@11.19.0",
+  "npm install --gl npm@11.19.0",
+  "npm install --glo npm@11.19.0",
+  "npm install --glob npm@11.19.0",
+  "npm install --globa npm@11.19.0",
+  "npm install --global npm@11.19.0",
+  "cat > \"$HOME/.npmrc\" <<'EOF'\nglobal=true\nEOF",
+  "cat >> .npmrc <<'EOF'\nlocation=global\nEOF",
+  "printf '%s\\n' \"$CONFIG\" | tee -a .npmrc\necho location",
+  "echo global\nprintf \"%s\" \"$CONFIG\" > .npmrc",
   // Round AR: normalize flags and allow only known non-npm registry operands.
   'npm install -g=true npm@11.19.0',
   'npm install -gd=1 npm@11.19.0',
@@ -162,6 +182,12 @@ const rejected = [
   'printf "location=global\\n" | tee -a .npmrc >/dev/null',
 ];
 const accepted = [
+  // Round AW: independent joins, implicit links, --g and run-wide npmrc settings.
+  "npm link some-tool",
+  "npm ln @scope/some-tool@1",
+  "cat > \"$HOME/.npmrc\" <<'EOF'\nregistry=https://registry.example.invalid\nEOF",
+  "printf \"audit=false\\n\" | tee -a .npmrc",
+  "echo \"fund=false\" >> .npmrc",
   // Round AR: plain non-npm registry specs remain safe in global installs.
   'npm install -g some-tool@1',
   'npm install -g "some-tool@^1"',
@@ -502,5 +528,31 @@ test('indentationless job metadata sequences preserve executable step extraction
     const source = `jobs:\n  audit:\n    ${key}:\n    - ubuntu-latest\n    - dependency\n    steps:\n    - run: npm test\n`;
     assert.deepEqual(workflowGlobalNpmInstalls(source), [], key);
     assert.ok(workflowGlobalNpmInstalls(source.replace('npm test', 'npm install -g npm')).length > 0, key);
+  }
+});
+
+/** A persistent setting is rejected where it is written, before any later step runs. */
+test('Round AW rejects a multiline npmrc write at its own step', () => {
+  for (const setting of ['global=true', 'location=global']) {
+    const script = `cat > "$HOME/.npmrc" <<'EOF'\n${setting}\nEOF`;
+    const findings = globalNpmInstalls(script);
+    assert.ok(findings.some(finding => finding[0] === 'npm configuration written to an npmrc file'));
+    const workflow = `jobs:\n  audit:\n    steps:\n      - run: |\n${script.split('\n').map(line => `          ${line}`).join('\n')}\n      - run: npm install npm@11.19.0\n`;
+    assert.deepEqual(workflowGlobalNpmInstalls(workflow), findings);
+    assert.deepEqual(globalNpmInstalls('npm install npm@11.19.0'), []);
+  }
+});
+
+/** Each continuation style has its own joined scan, independent of comment markers. */
+test('Round AW keeps continuation joins independent for LF and CRLF', () => {
+  for (const newline of ['\n', '\r\n']) {
+    for (const marker of ['\\', '`', '^']) {
+      for (const commentMarker of ['\\', '`', '^'].filter(other => other !== marker)) {
+        const script = `# Upgrade npm${commentMarker}${newline}npm update ${marker}${newline}  -g`;
+        assert.ok(globalNpmInstalls(script).length > 0, JSON.stringify(script));
+        const workflow = `jobs:\n  audit:\n    steps:\n      - run: |\n${script.split(newline).map(line => `          ${line}`).join(newline)}${newline}`;
+        assert.ok(workflowGlobalNpmInstalls(workflow).length > 0, JSON.stringify(script));
+      }
+    }
   }
 });
