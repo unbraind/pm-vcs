@@ -1,5 +1,5 @@
-import { workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 import "./helpers/isolate-session.ts";
+import { workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 /** Audit every workflow's effective permissions, publication approval and npm authentication. */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -267,6 +267,15 @@ test('publishing installs an npm version supporting trusted publishing', () => {
   }).join('\n');
   const version = scripts.match(/npm install --prefix "\$RUNNER_TEMP\/npm-(\d+)\.(\d+)\.(\d+)" npm@\1\.\2\.\3/u)?.slice(1).map(Number);
   assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)));
+  // The bootstrap installs the pinned npm into a job-local prefix; later
+  // steps reach it only through the bin directory appended to $GITHUB_PATH,
+  // and the verify step must expect exactly the installed version, not merely
+  // any newer one.
+  const pin = version!.join('.');
+  assert.ok(scripts.includes(`echo "$RUNNER_TEMP/npm-${pin}/node_modules/.bin" >> "$GITHUB_PATH"`),
+    'the bootstrap step must append the same prefix bin directory to $GITHUB_PATH');
+  assert.ok(scripts.includes(`test "$(npm --version)" = "${pin}"`),
+    'the verify step must expect exactly the installed version');
 });
 
 test('no workflow replaces the shared global npm installation', () => {
