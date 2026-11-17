@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-17T09:15:44.495Z"
+updated_at: "2026-11-17T09:31:18.063Z"
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[59]:
+comments[61]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -188,6 +188,12 @@ comments[59]:
   - created_at: "2026-11-17T09:15:42.605Z"
     author: codex-sol
     text: "Round AO evidence before archive freeze: node --test test/durability.test.ts test/coverage-merge.test.ts passed 7/7 with no failures or skips. Typecheck, build, build:test, lint, duplicates (zero clones), changelog:check and diff whitespace checks passed. All seven first-class consumer tests passed in quick mode, including the complete harness matrix and the explicitly asserted ten-kind real CLI matrix (1009.611 seconds on this shared host). Recursive grep across test files using touched paths and basenames selected coverage-merge, both conflict entrypoints, ci-shards, dependency-refresh-workflow, exact-gates, release-preparation and self-host; every selected file is in the direct run. The core suite and remaining reference files are still running. The preliminary exact-gates operational audit timed out at its unchanged 60-second budget; rerun its entire file at final HEAD using the supported scratch-directory option. Release now, commit source plus tracker together, then build, regenerate and commit the bundle, and verify committed self-host acceptance. No success is claimed here for the pending final-HEAD checks; report their actual outcomes externally without further tracker writes. The item remains in progress and open for orchestrator verification."
+  - created_at: "2026-11-17T09:21:37.626Z"
+    author: codex-sol
+    text: "Final-HEAD archive acceptance passed at b2908989db5c20bf3e8eae75c0626bc581618b67. The full exact-gates retry still timed out in the real self-host child at test/exact-gates.test.ts:188 (60546.789 ms; 5/6 passed; no skipped tests). Tracked this distinct fixed-budget/shared-host failure in pm-vcs-selfhost-audit-budget after duplicate checks. Keep assertions and timeouts unchanged in this round. This necessary tracker write invalidates the previous archive snapshot, so repeat the source/tracker commit, build, bundle regeneration and committed acceptance sequence after remaining results are recorded."
+  - created_at: "2026-11-17T09:31:14.129Z"
+    author: codex-sol
+    text: "Round AO final local receipt: the expanded quick/reference run completed 139/140 tests, zero skipped/cancelled/todo; its sole failure was the exact-gates 60-second self-host child timeout. All 35 registered first-class conflict cases, including all harness and ten-kind real CLI checks, passed. The direct durability plus coverage-merge run passed 7/7. Typecheck, build, build:test, lint, duplicates, changelog:check and diff checks passed. A second complete exact-gates retry after other targeted tests completed passed self-host verification and then refused one unrelated unreachable physical identity (5/6 passed); live graph inspection confirmed zero rejected reachable objects and zero rejected candidate ancestors. Reused pm-vcs-identity-isolation and created pm-vcs-selfhost-audit-budget as open follow-ups. Every test file found by the recursive touched-path/basename grep was executed. Release now and repeat the tracker commit, build, self-host writer and archive commit, then verify accept:self-host at final HEAD and the complete exact-gates file in a fresh reachable-only checkout. These final checks remain pending in this receipt and will be reported externally with the pushed head; make no further tracker writes."
 files[42]:
   - path: .github/workflows/ci-deep.yml
     scope: project
