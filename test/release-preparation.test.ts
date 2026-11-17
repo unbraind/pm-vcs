@@ -25,9 +25,8 @@ test('a release commit carries the archive generated from its staged metadata', 
     for (const path of paths) writeFileSync(join(root, path), 'old\n');
     execFileSync('git', ['add', '--', ...paths], { cwd: root, env });
     execFileSync('git', ['commit', '-qm', 'Fixture baseline'], { cwd: root, env });
-    writeFileSync(join(root, 'CHANGELOG.md'), 'new calendar release\n');
-    const expected = execFileSync('git', ['hash-object', 'CHANGELOG.md'], { cwd: root, env, encoding: 'utf8' });
-    writeFileSync(join(root, 'npm'), '#!/bin/bash\nset -euo pipefail\nif [[ "$*" == "run changelog:full" ]]; then exit 0; fi\n[[ "$*" == "run self-host:write" ]]\ngit rev-parse :CHANGELOG.md > selfhost.bundle\n', { mode: 0o755 });
+    const expected = execFileSync('git', ['hash-object', '--stdin'], { cwd: root, env, input: 'new calendar release\n', encoding: 'utf8' });
+    writeFileSync(join(root, 'npm'), '#!/bin/bash\nset -euo pipefail\nif [[ "$*" == "run changelog:full" ]]; then printf "new calendar release\\n" > CHANGELOG.md; exit 0; fi\n[[ "$*" == "run self-host:write" ]]\ngit rev-parse :CHANGELOG.md > selfhost.bundle\n', { mode: 0o755 });
     const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script], { cwd: root, env: { ...env, PATH: `${root}:${env.PATH}` }, encoding: 'utf8', timeout: 10000 });
     assert.equal(result.status, 0, result.stderr);
     // This is the generic shared commit boundary; writer integrity is exercised by accept:self-host.
