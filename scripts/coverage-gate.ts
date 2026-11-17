@@ -20,7 +20,9 @@ function c8(root: string, args: string[]): number {
 export function mergeCoverage(root: string, paths: readonly string[], total: number): number {
   const flags = coverageFlags(root).filter(flag => !flag.startsWith("--temp-directory="));
   if (paths.length !== total || total < 1) throw new Error("coverage-gate: missing shards");
-  const scratch = mkdtempSync(join(root, "coverage", "merged-raw-"));
+  const coverageDirectory = join(root, "coverage");
+  mkdirSync(coverageDirectory, { recursive: true });
+  const scratch = mkdtempSync(join(coverageDirectory, "merged-raw-"));
   try {
     const ordinals = new Set<string>();
     for (const [index, path] of paths.entries()) {

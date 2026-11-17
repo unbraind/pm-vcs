@@ -3,7 +3,7 @@ import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
 import childProcess, { spawnSync } from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -25,10 +25,6 @@ export function positive() { return "positive"; }
 export function negative() { return "negative"; }
 `);
   for (const [name,value,expected] of [["a",1,"positive"],["b",-1,"negative"]] as const) writeFileSync(join(root,`test/${name}.test.ts`), `import test from 'node:test'; import assert from 'node:assert/strict'; import {classify} from '../src/value.ts'; test('${name}',()=>assert.equal(classify(${value}), '${expected}'));`);
-  const args=manifest.scripts.coverage.split(" && ").at(-1).slice(3).replaceAll("'", "").split(" ");
-  const whole=spawnSync(process.execPath,[createRequire(import.meta.url).resolve("c8/bin/c8.js"),...args],{cwd:root,env:testEnvironment(),encoding:"utf8"}); assert.equal(whole.status,0,whole.stdout+whole.stderr);
-  const originalHits=JSON.parse(readFileSync(join(root,"coverage/coverage-final.json"),"utf8"));
-  const original=JSON.parse(readFileSync(join(root,"coverage/coverage-summary.json"),"utf8"));
   for (const [shard,output] of [["1/2","first"],["2/2","second"]]) assert.equal(runCoverageShard(root,shard!,output!),0);
   const paths=["first/hits.json","second/hits.json"];
   for (const path of paths) {
@@ -38,9 +34,14 @@ export function negative() { return "negative"; }
     assert.ok(artifact.raw.every((script: {url:string})=>script.url === "src/value.ts"));
   }
   for(const path of paths) {const hits=Object.values(JSON.parse(readFileSync(join(root,path),"utf8")).hits) as {f:Record<string,number>;b:Record<string,number[]>}[];assert.ok(hits.some(file=>Object.values(file.f).some(count=>count===0)));assert.ok(hits.some(file=>Object.values(file.b).flat().some(count=>count===0)));}
+  assert.equal(existsSync(join(root, "coverage")), false, "shards wrote only to their custom output directories");
   assert.equal(mergeCoverage(root,paths,2),0);
   const {createCoverageMap}=createRequire(import.meta.url)("istanbul-lib-coverage");
   const merged=createCoverageMap(JSON.parse(readFileSync(join(root,"coverage/merged.json"),"utf8")));
+  const args=manifest.scripts.coverage.split(" && ").at(-1).slice(3).replaceAll("'", "").split(" ");
+  const whole=spawnSync(process.execPath,[createRequire(import.meta.url).resolve("c8/bin/c8.js"),...args],{cwd:root,env:testEnvironment(),encoding:"utf8"}); assert.equal(whole.status,0,whole.stdout+whole.stderr);
+  const originalHits=JSON.parse(readFileSync(join(root,"coverage/coverage-final.json"),"utf8"));
+  const original=JSON.parse(readFileSync(join(root,"coverage/coverage-summary.json"),"utf8"));
   assert.deepEqual(merged.getCoverageSummary().toJSON(),original.total);
   const normalize=(data: {s:Record<string,number>;f:Record<string,number>;b:Record<string,number[]>}) => ({...data,s:Object.fromEntries(Object.entries(data.s).map(([id,n])=>[id,Number(Number(n)>0)])),f:Object.fromEntries(Object.entries(data.f).map(([id,n])=>[id,Number(Number(n)>0)])),b:Object.fromEntries(Object.entries(data.b).map(([id,n])=>[id,(n as number[]).map(count=>Number(count>0))]))});
   for(const file of merged.files()) assert.deepEqual(normalize(merged.fileCoverageFor(file).toJSON()),normalize(originalHits[file]));

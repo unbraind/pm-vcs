@@ -6,10 +6,12 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-17T15:49:00.235Z"
+updated_at: "2026-11-17T19:22:10.556Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[65]:
+comments[67]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -206,6 +208,12 @@ comments[65]:
   - created_at: "2026-11-17T15:49:00.228Z"
     author: "harness:claude-code"
     text: "Orchestrator, for review thread PRRT_kwDOToJT7M64ga_t: added a failure-only 'Upload failed shard coverage output' step (if: failure(), artifact coverage-shard-N-failure, the whole coverage/shard-N directory, if-no-files-found: warn) after 'Upload raw hits' in .github/workflows/ci.yml. The success merge inputs are unchanged. The workflow tests (ci-shards, ci-routing, dependency-refresh-workflow, ci-codeql, release-approval) pass 49/49. Main merged in a310c19."
+  - created_at: "2026-11-17T19:18:43.537Z"
+    author: codex-sol
+    text: "Review BG: exercise shard collection and merge in a checkout with no coverage directory, then refresh and verify the self-host bundle."
+  - created_at: "2026-11-17T19:22:10.556Z"
+    author: codex-sol
+    text: The clean fixture reproduced ENOENT before the fix and passed when the merge created its coverage directory. It still compares merged hits to an unsharded baseline.
 files[42]:
   - path: .github/workflows/ci-deep.yml
     scope: project
@@ -293,7 +301,7 @@ files[42]:
     scope: project
   - path: test/support/depth.ts
     scope: project
-tests[38]:
+tests[39]:
   - command: "npm run typecheck && npm run build:test && npm run lint"
     scope: project
     timeout_seconds: 240
@@ -585,6 +593,13 @@ tests[38]:
     provenance:
       author: codex-sol
       created_at: "2026-11-17T11:25:16.607Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: "npm run build && npm run build:test && PM_TEST_DEPTH=quick node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=2 test/ci-codeql.test.ts test/ci-routing.test.ts test/ci-shards.test.ts test/coverage-merge.test.ts test/dependency-refresh-workflow.test.ts test/exact-gates.test.ts test/quality-scripts.test.ts test/raw-coverage.test.ts test/release-approval.test.ts test/release-preparation.test.ts test/self-host.test.ts test/verify-release-changelog-date.test.ts test/verify-release-publish-attestation.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T19:22:09.303Z"
       source_kind: local_mutation
       source_ref: ci/quick-pr-tier-deep-local-tier
 docs[4]{path,scope}:
