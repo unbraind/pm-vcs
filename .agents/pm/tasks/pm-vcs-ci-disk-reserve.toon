@@ -6,12 +6,12 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-17T07:51:33.848Z"
+updated_at: "2026-11-17T07:54:02.003Z"
 assignee: pi-glm
 claim_principal: pi-glm
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[56]:
+comments[57]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -181,6 +181,9 @@ comments[56]:
   - created_at: "2026-11-17T07:51:30.984Z"
     author: pi-glm
     text: "Review round AK on the CI v2 PR branch: (1) coverage-gate merge now deletes stale coverage-final.json/coverage-summary.json before running c8 report, and when c8 report exits non-zero without producing fresh files it returns c8's status instead of throwing ENOENT or writing merged output; the threshold path is unchanged (a threshold failure that still writes reports keeps returning the non-zero status after reading the fresh files). (2) mergeCoverage throws a clear error naming the artifact path when its raw hits array is missing or its shard ordinal is missing, instead of a bare TypeError. (3) The object-read-protocol resolution-matrix finding is already fixed at the current head by the reachable-schedules commit: each row records injected/reachable, every reachable row asserts injection, quick rows must all inject, and readers that cannot reach their assigned boundary get a reached one; verified in the diff of that commit, no further change needed. Gates: node --test test/coverage-merge.test.ts 1/1 (includes new stale-report, failed-report status and artifact-shape regressions), typecheck clean, lint clean, changelog:check clean."
+  - created_at: "2026-11-17T07:54:02.000Z"
+    author: pi-glm
+    text: "Self-host gate for review round AK: committed the coverage-gate fix, npm run build clean, self-host:write regenerated the bundle, bundle committed, and accept:self-host at HEAD confirms the committed bundle's tip tree is byte-identical to the committed source. Pushed the branch; pushed head 1aada1b."
 files[41]:
   - path: .github/workflows/ci-deep.yml
     scope: project
