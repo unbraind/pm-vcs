@@ -2,18 +2,20 @@ id: pm-vcs-rd82
 title: Keep test children from delivering pm telemetry and Sentry reports
 description: "test/served-defects.test.ts labelled its installed-CLI children PM_TELEMETRY_SOURCE_CONTEXT=test (plus PM_TELEMETRY_INLINE_FLUSH=1) to avoid the detached flusher. Under pm-cli's documented policy a valid explicit source-context label permits intentional test delivery even under NODE_ENV=test, so the suite's expected vcs fetch/push/clone/remote refusals reached the production Sentry project as ExtensionCommandError (environment=test). CI runs on 2026-11-04 00:26-03:45Z created PM-CLI-3R, 3S, 3T, 3V, 3W and 3X, which blocked pm-cli's Auto Release Sentry gate for 2026.11.4 (pm-cli#1659). GitHub: unbraind/pm-vcs#176."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags[4]: ci,sentry,telemetry,testing
 created_at: "2026-11-04T09:51:28.097Z"
-updated_at: "2026-11-04T10:43:42.513Z"
-assignee: claude-hub
-claim_principal: claude-hub
+updated_at: "2026-11-16T20:40:06.529Z"
+closed_at: "2026-11-16T20:40:06.504Z"
+completed_at: "2026-11-16T20:40:06.504Z"
 author: claude-hub
 estimated_minutes: 90
 acceptance_criteria: "testEnvironment() adds the hard opt-out PM_TELEMETRY_DISABLED=1, which no source-context label or PM_TELEMETRY_SEND_TEST_EVENTS overrides; served-defects drops the label; a regression test routes the event endpoint and SENTRY_DSN to a local collector, proves the route before any delivery-capable command, and shows a labelled child reports telemetry disabled and sends zero requests, failing when the opt-out is removed."
 severity: high
-expected_result: No test child process delivers telemetry events or Sentry reports to production collectors.
+resolution: Implemented and merged in #179 (e8a7ade).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #179 as e8a7ade; checks successful at head 43a330a: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 component: test/helpers
 comments[1]{created_at,author,text}:
   "2026-11-04T10:43:42.513Z",claude-hub,"Verified 2026-11-04 on pm-cli 2026.10.30. The regression passes with the fix. With PM_TELEMETRY_DISABLED removed from testEnvironment it fails: a labelled child reports enabled=true, and its requests reach only the local collector. Experiment with the old served-defects env: one failing pm get produced 3 POST /v1/events to the local collector, and 0 with PM_TELEMETRY_DISABLED=1. Trap: a project settings telemetry.endpoint is ignored; only the global profile under PM_GLOBAL_PATH is honored, so the test proves the route before any delivery-capable command (filed upstream as pm-cli#1660). All 18 test files that spawn the installed pm CLI pass: 420/420. served-defects passes for node and bun. test-environment.test.ts 6/6. typecheck, lint, docstring and duplicates pass."
@@ -23,4 +25,5 @@ files[3]{path,scope,note}:
   test/test-environment.test.ts,project,local-collector regression
 tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref},note}:
   node --test --test-name-pattern='deliver no pm telemetry' test/test-environment.test.ts,project,300,claude-hub,"2026-11-04T09:51:31.652Z",local_mutation,fix/test-children-never-deliver-telemetry,labelled child sends nothing to a local collector
+close_reason: "Delivered by #179 \"Hard-disable pm telemetry in every test child so expected refusals never reach production Sentry (pm-vcs-rd82)\" (merged as e8a7ade). Checks successful at the PR head 43a330a: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""
