@@ -474,3 +474,33 @@ test('container and service env settings cannot hide global npm installs', () =>
   }
   assert.ok(workflowGlobalNpmInstalls('jobs:\n  audit:\n    services:\n      first:\n        env: {NPM_CONFIG_GLOBAL: "true"}\n      second:\n        env: {NPM_CONFIG_GLOBAL: "false"}\n    steps:\n      - run: npm install npm@11.21.0\n').length > 0);
 });
+
+test('command family prefixes and camelCase cover shared npm mutations', () => {
+  for (const command of ['u', 'upd', 'upg', 'installTest', 'install-t', 'uninstall', 'rm', 'r', 'un', 'ln',
+    'clean-install', 'cleanInstallTest', 'ic', 'unlink', 'remove', 'install-clean', 'isntall-clean', 'sit']) {
+    assert.ok(globalNpmInstalls(`npm ${command} -g npm@latest`).length > 0, command);
+  }
+  assert.ok(globalNpmInstalls('npm link -g').length > 0);
+  for (const script of ['npm uninstall -g some-tool', 'npm remove -g some-tool', 'npm link -g some-tool',
+    'npm run lint', 'npm test', 'npm "installTest" -g some-tool']) assert.deepEqual(globalNpmInstalls(script), [], script);
+});
+
+test('joined and physical scans cover Cmd caret continuations with LF and CRLF', () => {
+  for (const newline of ['\n', '\r\n']) {
+    for (const marker of ['^', '\\', '`']) {
+      const source = ['jobs:', '  audit:', '    steps:', '      - shell: cmd', '        run: |',
+        `          npm install ${marker}  `, '            -g npm@latest', ''].join(newline);
+      assert.ok(workflowGlobalNpmInstalls(source).length > 0, JSON.stringify({ newline, marker }));
+    }
+  }
+  assert.ok(globalNpmInstalls('npm install ^\n -g ^\n npm').length > 0);
+  assert.ok(globalNpmInstalls('echo safe # ^\nnpm install -g npm').length > 0);
+});
+
+test('indentationless job metadata sequences preserve executable step extraction', () => {
+  for (const key of ['needs', 'runs-on']) {
+    const source = `jobs:\n  audit:\n    ${key}:\n    - ubuntu-latest\n    - dependency\n    steps:\n    - run: npm test\n`;
+    assert.deepEqual(workflowGlobalNpmInstalls(source), [], key);
+    assert.ok(workflowGlobalNpmInstalls(source.replace('npm test', 'npm install -g npm')).length > 0, key);
+  }
+});

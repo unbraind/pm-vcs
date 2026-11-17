@@ -5,16 +5,17 @@
  * obfuscation is out of scope: an npm command held in a variable, `eval`,
  * shell aliases, and scripts outside the workflow YAML would not pass review.
  */
-/**
- * Install-family commands: install and its abbreviated and misspelled
- * aliases (i, in, ins, inst, insta, instal, isnt, isnta, isntal, isntall),
- * add, install-test/it, install-ci-test/cit, ci, and update with its aliases
- * (up, upgrade, udpate) all count as installing.
- */
-const installFamily = new Set(['install', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall', 'add', 'install-test', 'it', 'ci', 'install-ci-test', 'cit', 'update', 'up', 'upgrade', 'udpate']);
+/** Family words from npm 11.21.0 commands and aliases, without expanded abbreviations. */
+const installFamily = ['install', 'install-test', 'install-ci-test', 'ci', 'clean-install', 'clean-install-test',
+  'isntall', 'add', 'it', 'cit', 'ic', 'install-clean', 'isntall-clean', 'sit',
+  'update', 'upgrade', 'udpate', 'u', 'uninstall', 'remove', 'rm', 'r', 'un', 'unlink', 'link', 'ln'];
+const updateFamily = ['update', 'upgrade', 'udpate', 'u'];
 
-/** Update-family lines bypass install operand classification. */
-const updateFamily = new Set(['update', 'up', 'upgrade', 'udpate']);
+/** Normalize quoted camelCase commands, then conservatively accept every nonempty family prefix. */
+function familyCommand(word: string, family: string[]): boolean {
+  const normalized = unquote(word).replace(/([a-z0-9])([A-Z])/gu, '$1-$2').toLowerCase();
+  return normalized.length > 0 && family.some(command => command.startsWith(normalized));
+}
 
 /** npm reads these environment keys case-insensitively. */
 function relevantEnvKey(key: string): boolean {
@@ -66,7 +67,7 @@ function safeGlobalOperands(line: string): boolean {
   // Keep quoted words together, but preserve punctuation, backticks and quote
   // fragments for the allowlist to reject. This remains a line-based scan.
   const words = (line.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+|["']/gu) ?? []).map(unquote);
-  const installIndex = words.findIndex(word => installFamily.has(word));
+  const installIndex = words.findIndex(word => familyCommand(word, installFamily));
   if (installIndex === -1) return false;
   const operands = words.slice(installIndex + 1).filter(word => !word.startsWith('-'));
   const registrySpec = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(@[A-Za-z0-9.^~<>=*|+_ -]+)?$/u;
@@ -106,9 +107,9 @@ const approvedBootstrapShapes: RegExp[] = [
 ];
 
 /**
- * Scan unconditionally joined backslash and backtick continuations and physical lines,
+ * Scan unconditionally joined backslash, backtick and Cmd caret continuations and physical lines,
  * taking the union of findings. Quoted hashes need joining; comment backslashes
- * need physical boundaries. PowerShell needs backtick joining. No shell parsing
+ * need physical boundaries. Trailing blanks and CRLF do not hide continuations. No shell parsing
  * chooses between those forms.
  * An exact approved bootstrap is exempt only in the form where it is exact.
  * Comment and here-document text is scanned like any other text; false positives
@@ -116,11 +117,8 @@ const approvedBootstrapShapes: RegExp[] = [
  */
 export function globalNpmInstalls(script: string, env?: Record<string, string>): string[][] {
   const physical = script.split('\n').map(line => line.replace(/\r$/u, '')).join('\n');
-  const findings = [
-    ...scanNpmLines(physical.replace(/\\\n/gu, ''), env),
-    ...scanNpmLines(physical.replace(/`\n/gu, ''), env),
-    ...scanNpmLines(physical, env),
-  ];
+  const joined = physical.replace(/[\\`^][\t ]*\n/gu, '');
+  const findings = [...scanNpmLines(joined, env), ...scanNpmLines(physical, env)];
   return [...new Map(findings.map(finding => [JSON.stringify(finding), finding])).values()];
 }
 
@@ -149,15 +147,15 @@ function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
     // A line is an npm install line when it mentions npm at a word boundary
     // — /usr/bin/npm, npx npm@…, command npm and `then npm` included — and
     // any token is an install-family word.
-    if (!/\bnpm\b/iu.test(line)) continue;
-    const installIndex = tokens.findIndex(word => installFamily.has(word));
+    if (!/\bnpm\b/iu.test(line) || setsGlobalConfig(line)) continue;
+    const installIndex = tokens.findIndex(word => familyCommand(word, installFamily));
     if (installIndex === -1) continue;
     if (!globalConfigured && !globalMarker(tokens)) continue;
     // Every global update-family line is a violation, whatever its operands.
     // Option values, redirect targets and comments can look like packages;
     // rejecting updates of unrelated packages is an accepted false positive.
-    // Only install-family lines retain operand classification.
-    if (!tokens.some(word => updateFamily.has(word)) && safeGlobalOperands(line)) continue;
+    // Install, uninstall and link families retain operand classification.
+    if (!tokens.some(word => familyCommand(word, updateFamily)) && safeGlobalOperands(line)) continue;
     if (approvedBootstrapShapes.some(shape => shape.test(line))) continue;
     findings.push(tokens);
   }
@@ -284,8 +282,8 @@ export function workflowGlobalNpmInstalls(source: string): string[][] {
     const indent = /^ */u.exec(line)![0].length;
     while (parents.length && parents[parents.length - 1].indent >= indent) {
       const last = parents[parents.length - 1];
-      // YAML also permits an indentationless sequence under steps.
-      if (last.indent === indent && last.path.length === 3 && last.path[0] === 'jobs' && last.path[2] === 'steps' && line.slice(indent).startsWith('- ')) break;
+      // YAML permits an indentationless sequence under any job key.
+      if (last.indent === indent && last.path.length === 3 && last.path[0] === 'jobs' && line.slice(indent).startsWith('- ')) break;
       parents.pop();
     }
     let parent = parents[parents.length - 1]?.path ?? [];
