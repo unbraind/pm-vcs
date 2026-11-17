@@ -5,6 +5,26 @@ import { test } from 'node:test';
 import { globalNpmInstalls, workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 
 const rejected = [
+  // Round AM: punctuation, comment boundaries, operandless installs and persistent setters.
+  "npm install npm@11.19.0 -g;",
+  "npm install>/dev/null -g npm",
+  "npm \"install\" '-g' npm",
+  "npm install --prefix \"$RUNNER_TEMP/npm-local\" npm@11.19.0 # bootstrap \\\nnpm install -g npm@11.19.0",
+  "npm install --prefix \"$RUNNER_TEMP/npm-11.19.0\" npm@11.19.0 # bootstrap \\\nnpm install -g npm",
+  "npm install -g npm --prefix \"$RUNNER_TEMP/npm-local\" # approved bootstrap",
+  "npm update -g",
+  "npm up -g",
+  "npm install -g",
+  "npm i -g --no-audit",
+  "npm install>bootstrap.log -g npm@11.21.0",
+  "npm install npm -g; echo done",
+  "npm install npm -g>/dev/null",
+  "npm install npm@11.19.0 -g; echo ready",
+  "npm install npm@11.19.0 -g>install.log",
+  "npm config set global=true",
+  "npm config set global true",
+  "npm set location global",
+  "npm c set location=global",
   'npm install -g npm "--prefix $RUNNER_TEMP/npm-local"',
   'npm install -g npm "npm_config_prefix=$RUNNER_TEMP/npm-local"',
   // Round AH: run-wide signals, install families, redirects and effective prefixes.
@@ -104,7 +124,6 @@ const rejected = [
 ];
 const accepted = [
   'npm install -g npm "--prefix" "$RUNNER_TEMP/npm-local"',
-  'npm install -g npm --prefix "$RUNNER_TEMP/npm-local" # approved bootstrap',
   'env NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-local" NPM_CONFIG_GLOBAL=true npm install npm',
   'NPM_CONFIG_LOCATION=project; npm install npm',
   'npm install --prefix "$RUNNER_TEMP/npm-11.21.0" npm@11.21.0 --ignore-scripts --no-audit --no-fund',
@@ -123,7 +142,7 @@ const accepted = [
   'npm install -D pnpm',
 ];
 for (const command of rejected) test(`rejects ${JSON.stringify(command)}`, () => {
-  assert.equal(globalNpmInstalls(command).length, 1);
+  assert.ok(globalNpmInstalls(command).length > 0);
   const workflow = `jobs:\n  audit:\n    steps:\n      - run: |\n${command.split('\n').map(line => `          ${line}`).join('\n')}\n`;
   assert.deepEqual(workflowGlobalNpmInstalls(workflow), globalNpmInstalls(command));
   if (!command.includes('\n')) assert.deepEqual(workflowGlobalNpmInstalls(`jobs:\n  audit:\n    steps:\n      - run: ${JSON.stringify(command)}\n`), globalNpmInstalls(command));
@@ -256,5 +275,54 @@ test('only actual separators isolate a sibling prefix exemption', () => {
     assert.equal(globalNpmInstalls(`npm install -g ${redirect} npm`).length, 1);
     // A redirect may not lend the local prefix of a sibling to an unsafe install.
     assert.equal(globalNpmInstalls(`npm install -g ${redirect} npm && npm install --prefix "$RUNNER_TEMP/npm-local" npm`).length, 1);
+  }
+});
+
+test('attached shell punctuation never hides command words or global markers', () => {
+  for (const punctuation of [';', '&', '|', '<', '>', '(', ')', '`']) {
+    assert.equal(globalNpmInstalls(`npm install${punctuation}output -g npm`).length, 1);
+    assert.equal(globalNpmInstalls(`npm install npm -g${punctuation}output`).length, 1);
+  }
+});
+
+test('comment backslashes preserve physical newlines for LF and CRLF input', () => {
+  for (const newline of ['\n', '\r\n']) {
+    for (const comment of ['# bootstrap', '  # bootstrap', 'echo safe # bootstrap']) {
+      const findings = globalNpmInstalls(`${comment} \\${newline}npm install -g npm`);
+      assert.deepEqual(findings, [['npm', 'install', '-g', 'npm']]);
+    }
+    assert.equal(globalNpmInstalls(`npm install --prefix "$RUNNER_TEMP/npm-local" npm@11.19.0 # bootstrap \\${newline}npm install -g npm@11.19.0`).length, 1);
+  }
+});
+
+test('no approved bootstrap shape tolerates trailing comments', () => {
+  for (const bootstrap of [
+    'npm install --prefix "$RUNNER_TEMP/npm-local" npm@11.19.0',
+    'npm --prefix "$RUNNER_TEMP/npm-local" install npm@11.19.0',
+    'npm install -g npm --prefix "$RUNNER_TEMP/npm-local"',
+    'npm install -g npm "--prefix" "$RUNNER_TEMP/npm-local"',
+    'env NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-local" NPM_CONFIG_GLOBAL=true npm install npm',
+    'npm_config_prefix="$RUNNER_TEMP/npm-local" npm_config_global=true npm install npm',
+  ]) {
+    assert.deepEqual(globalNpmInstalls(bootstrap, { NPM_CONFIG_GLOBAL: 'true' }), []);
+    assert.equal(globalNpmInstalls(`${bootstrap} # bootstrap`, { NPM_CONFIG_GLOBAL: 'true' }).length, 1);
+  }
+});
+
+test('persistent npm setters reject the writing step without requiring a same-run install', () => {
+  for (const setter of ['npm config set global=true', 'npm config set global true', 'npm set location global', 'npm c set location=global']) {
+    const source = `jobs:\n  audit:\n    steps:\n      - run: ${setter}\n      - run: npm install npm@11.19.0\n`;
+    assert.deepEqual(workflowGlobalNpmInstalls(source), [['npm configuration persisted by set', setter]]);
+  }
+  assert.deepEqual(globalNpmInstalls('npm config get globalconfig'), []);
+});
+
+test('spaced and unsupported env entries cannot hide effective global settings', () => {
+  for (const entry of ['NPM_CONFIG_GLOBAL : "true"', '"NPM_CONFIG_GLOBAL" : "true"', "'NPM_CONFIG_LOCATION' : global", '? unsupported']) {
+    for (const source of [
+      `env:\n  ${entry}\n${workflow('run: npm install npm@11.19.0')}`,
+      `jobs:\n  audit:\n    env:\n      ${entry}\n    steps:\n      - run: npm install npm@11.19.0\n`,
+      workflow(`env:\n          ${entry}\n        run: npm install npm@11.19.0`),
+    ]) assert.equal(workflowGlobalNpmInstalls(source).length, 1, source);
   }
 });

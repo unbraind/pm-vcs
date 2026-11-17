@@ -40,9 +40,9 @@ function unquote(word: string): string {
     word[0] === "'" && word[word.length - 1] === "'") ? word.slice(1, -1) : word;
 }
 
-/** The whitespace-separated tokens of one logical line. Quotes never split a token further. */
+/** Word checks split at whitespace and shell punctuation, then remove surrounding quotes. */
 function lineTokens(line: string): string[] {
-  return line.trim().split(/\s+/u).filter(Boolean).map(unquote);
+  return line.trim().split(/[\s;&|<>()`]+/u).filter(Boolean).map(unquote);
 }
 
 /** One of the tokens marks this line as installing globally. */
@@ -63,40 +63,48 @@ function namesNpm(tokens: string[]): boolean {
   return tokens.some(word => !word.startsWith('-') && (/npm/iu.test(word) || word.startsWith('$')));
 }
 
+/** Persistent global/location setters affect later steps even without an install in this run. */
+function setsGlobalConfig(line: string): boolean {
+  return /\bnpm\b/iu.test(line) && lineTokens(line).includes('set') && /global|location/iu.test(line);
+}
+
 /**
  * The approved bootstrap shapes: whole logical lines that install npm into a
  * job-local prefix under $RUNNER_TEMP, built from the real release workflows
  * and the approved fixtures. A global install line with an npm operand is a
  * violation unless its whole trimmed text matches one of these exactly, so
  * the exemption comes only from an exact line, never from text elsewhere on
- * the line, from a comment, or from another command. A trailing comment after
- * the exact command is the only tolerated addition.
+ * the line, from a comment, or from another command. Trailing comments never
+ * receive an exemption.
  */
 const approvedBootstrapShapes: RegExp[] = [
   // The release workflow bootstrap: the pinned npm into $RUNNER_TEMP, followed
   // by any of --ignore-scripts, --no-audit and --no-fund.
-  /^npm install --prefix "\$RUNNER_TEMP\/npm-[\w.-]+" npm@\d+(?:\.\d+)*(?: --ignore-scripts)?(?: --no-audit)?(?: --no-fund)?(?:\s+#.*)?$/u,
+  /^npm install --prefix "\$RUNNER_TEMP\/npm-[\w.-]+" npm@\d+(?:\.\d+)*(?: --ignore-scripts)?(?: --no-audit)?(?: --no-fund)?$/u,
   // The same bootstrap with the prefix option before the install-family word.
-  /^npm --prefix "\$RUNNER_TEMP\/npm-[\w.-]+" install npm@\d+(?:\.\d+)*(?:\s+#.*)?$/u,
+  /^npm --prefix "\$RUNNER_TEMP\/npm-[\w.-]+" install npm@\d+(?:\.\d+)*$/u,
   // An approved fixture form: -g with a job-local --prefix, which relocates
   // the global location, optionally followed by npm ci.
-  /^npm install -g npm --prefix "\$RUNNER_TEMP\/npm-[\w.-]+"(?: && npm ci)?(?:\s+#.*)?$/u,
+  /^npm install -g npm --prefix "\$RUNNER_TEMP\/npm-[\w.-]+"(?: && npm ci)?$/u,
   // The same fixture form with the prefix flag quoted.
-  /^npm install -g npm "--prefix" "\$RUNNER_TEMP\/npm-[\w.-]+"(?:\s+#.*)?$/u,
+  /^npm install -g npm "--prefix" "\$RUNNER_TEMP\/npm-[\w.-]+"$/u,
   // Env-assignment prefixes must precede npm and carry a job-local prefix.
-  /^env NPM_CONFIG_PREFIX="\$RUNNER_TEMP\/npm-[\w.-]+" NPM_CONFIG_GLOBAL=true npm install npm(?:\s+#.*)?$/u,
-  /^npm_config_prefix="\$RUNNER_TEMP\/npm-[\w.-]+" npm_config_global=true npm install npm(?:\s+#.*)?$/u,
+  /^env NPM_CONFIG_PREFIX="\$RUNNER_TEMP\/npm-[\w.-]+" NPM_CONFIG_GLOBAL=true npm install npm$/u,
+  /^npm_config_prefix="\$RUNNER_TEMP\/npm-[\w.-]+" npm_config_global=true npm install npm$/u,
 ];
 
 /**
  * Scan logical lines fail-closed: join backslash continuations, then split on
  * newlines only. Comment and here-document text is scanned like any other
  * text — false positives there are acceptable. A global install line with an
- * npm operand is a violation unless it matches an approved bootstrap shape,
+ * npm operand (or no operand) is a violation unless it matches an approved bootstrap shape,
  * and writing npm configuration for later steps rejects the writing step.
  */
 export function globalNpmInstalls(script: string, env?: Record<string, string>): string[][] {
-  const run = script.replace(/\\\r?\n/gu, '');
+  // A comment ends at the physical newline, even when its last character is
+  // a backslash. Conservatively preserve any line containing a comment start.
+  const run = script.replace(/[^\n]*\n/gu, line =>
+    line.includes(' #') || line.trimStart().startsWith('#') ? line : line.replace(/\\\r?\n$/u, ''));
   const lines = run.split('\n').map(line => line.trim()).filter(Boolean);
   const findings: string[][] = [];
   // A global npm_config_* exported through GITHUB_ENV reaches every later
@@ -105,21 +113,16 @@ export function globalNpmInstalls(script: string, env?: Record<string, string>):
   if (/github_env/iu.test(run) && /npm_config_(?:global|location|prefix)/iu.test(run))
     findings.push(['npm configuration written to GITHUB_ENV']);
   for (const line of lines) {
+    if (setsGlobalConfig(line)) findings.push(['npm configuration persisted by set', line]);
     // A written npmrc line names its target path and a write operator; the
     // value being global or location-selected is what makes it a replacement.
     if (/npmrc/iu.test(line) && (line.includes('>') || /\btee\b/iu.test(line) || /config\s+set/u.test(line)) &&
       /global|location/iu.test(line))
       findings.push(['npm configuration written to an npmrc file', line]);
   }
-  const globalConfigured = envForcesGlobal(env ?? {}) || runForcesGlobal(run) || lines.some(line => {
-    // npm config set / npm set / npm c set name global or location; the run
-    // conservatively counts as global-configured from then on. Only a set
-    // token configures: the release workflow reads `npm config get
-    // globalconfig`, and a bare config token would reject that read-only
-    // step, so config alone must not count (narrowed: a real workflow tripped).
-    const tokens = lineTokens(line);
-    return /\bnpm\b/iu.test(line) && tokens.includes('set') && /global|location/iu.test(line);
-  });
+  // Only a set token configures: the release workflow's read-only
+  // `npm config get globalconfig` must not force the run global.
+  const globalConfigured = envForcesGlobal(env ?? {}) || runForcesGlobal(run) || lines.some(setsGlobalConfig);
   for (const line of lines) {
     const tokens = lineTokens(line);
     // A line is an npm install line when it mentions npm at a word boundary
@@ -129,7 +132,8 @@ export function globalNpmInstalls(script: string, env?: Record<string, string>):
     const installIndex = tokens.findIndex(word => installFamily.has(word));
     if (installIndex === -1) continue;
     if (!globalConfigured && !globalMarker(tokens)) continue;
-    if (!namesNpm(tokens.slice(installIndex + 1))) continue;
+    const operands = tokens.slice(installIndex + 1);
+    if (!namesNpm(operands) && operands.some(word => !word.startsWith('-'))) continue;
     if (approvedBootstrapShapes.some(shape => shape.test(line))) continue;
     findings.push(tokens);
   }
@@ -272,11 +276,14 @@ export function workflowGlobalNpmInstalls(source: string): string[][] {
       keyIndent += 2;
       sequence = true;
     }
-    const entry = /^(?:([\w-]+)|'([^']+)'|"([^"\\]+)"):\s*(.*)$/u.exec(text);
+    const entry = /^(?:([\w-]+)|'([^']+)'|"([^"\\]+)")\s*:\s*(.*)$/u.exec(text);
     // Sequence items outside steps (a job's needs list, for example) are
     // inert metadata: only steps[*].run is executable, so consume them.
     if (sequence && !entry && parent.length === 3 && parent[0] === 'jobs' && parent[2] !== 'steps') continue;
     if (!entry) {
+      // Unsupported env entries cannot silently erase effective npm settings.
+      if (parent[0] === 'env' ||
+        (parent[0] === 'jobs' && (parent[2] === 'env' || parent[4] === 'env'))) return unreadableRun();
       if ((!parent.length && !['---', '...'].includes(text)) ||
         (parent[0] === 'jobs' && (parent.length <= 3 || (parent.length === 4 && parent[3] === '*')))) return unreadableRun();
       continue;
