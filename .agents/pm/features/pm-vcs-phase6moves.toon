@@ -2,14 +2,19 @@ id: pm-vcs-phase6moves
 title: Preserve explicit FileId intent for ambiguous edited moves
 description: "Same-inode rename plus edit and unambiguous unchanged-content moves retain FileIds today. An edited move across filesystems can lose both inode and content evidence, so guessing can conflate independent files. Add an explicit native move or identity-mapping operation with collision and erasure guards."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[1]: "gh:unbraind/pm-vcs#189"
 created_at: "2026-10-21T15:48:35.100Z"
-updated_at: "2026-11-07T14:42:38.054Z"
+updated_at: "2026-11-16T20:40:27.534Z"
+closed_at: "2026-11-16T20:40:27.506Z"
+completed_at: "2026-11-16T20:40:27.506Z"
 author: codex-agent
 acceptance_criteria: An explicitly declared edited move retains its FileId and PM ChangeId trace across filesystems; independent copies keep new identities; ambiguous inference never silently picks an unrelated source.
 parent: pm-vcs-b7cb
+resolution: Implemented and merged in #189 (3af90fe).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #189 as 3af90fe; checks successful at head 10a459e: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 comments[37]{created_at,author,text}:
   "2026-11-06T18:11:18.317Z",codex-astra,"Design: add explicit FileId mapping to native staging, validated under the shared writer lease and committed in the existing index/tree identity fields. Reserve declared identities before inference; return typed ambiguous_move with candidate paths and a concrete remedy for tied move evidence. Align three-way merge inputs by unique FileId before content merging so replay uses the same path. Tests will cover adversarial pairing, seeded oracle sequences, separate processes, and crash/retry/clone convergence. Full release certification remains in CI as requested."
   "2026-11-06T18:19:42.161Z",codex-astra,Implementation uses the existing tree FileId as durable move authority. Focused attribution tests pass 7/7. The seeded identity-keyed oracle passed 18 rounds of two-sided edits/moves plus reversed merges; separate-process disjoint and competing declarations passed. Merge and rebase produced the same tree; fatal before/after-index cuts recovered and cloned correctly. Working stat hints are intentionally excluded from byte-equality claims; canonical committed tree/payload bytes are checked.
@@ -156,4 +161,5 @@ tests[11]:
 docs[2]{path,scope}:
   ARCHITECTURE.md,project
   README.md,project
+close_reason: "Delivered by #189 \"Preserve explicit FileId intent for ambiguous edited moves\" (merged as 3af90fe). Checks successful at the PR head 10a459e: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""

@@ -2,12 +2,17 @@ id: pm-vcs-toolchain-1110
 title: Adapt isolated telemetry fixture to the global settings owner
 description: "Adapt the SDK 2026.11.6 fixture for https://github.com/unbraind/pm-vcs/pull/194 while preserving real local collector assertions."
 type: Chore
-status: in_progress
+status: closed
 priority: 2
 tags[1]: "gh:unbraind/pm-vcs#194"
 created_at: "2026-11-10T12:34:10.025Z"
-updated_at: "2026-11-10T17:14:39.301Z"
+updated_at: "2026-11-16T20:40:41.099Z"
+closed_at: "2026-11-16T20:40:41.057Z"
+completed_at: "2026-11-16T20:40:41.057Z"
 author: codex-toolchain-1110
+resolution: Implemented and merged in #194 (7f04874).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #194 as 7f04874; checks successful at head e1bca61: CodeQL, codeql, enable-auto-merge, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 comments[3]{created_at,author,text}:
   "2026-11-10T12:34:14.995Z",codex-toolchain-1110,"Installed CHANGELOG 2026.11.5 names GH-1660 (pm-gh1660): project telemetry was inert; consent and endpoint now belong solely to the global profile, and init omits telemetry from project settings. The fixture incorrectly copied a project settings object and mutated its absent telemetry block. Read the authoritative global settings through public readSettings, explicitly opt that isolated profile in, and route its endpoint to the real local HTTP collector before running labelled children. Keep the hard opt-out and assert zero telemetry/Sentry requests."
   "2026-11-10T12:45:16.768Z",codex-toolchain-1110,"Focused real-collector regression passes 1/1 with zero failed/skipped tests; global fixture consent is explicitly enabled, while the hard test opt-out prevents both event and Sentry delivery. Auto-merge disabled before any push. Regenerate the staged self-host archive as required by AGENTS.md; release gates follow."
@@ -29,4 +34,5 @@ tests[2]:
       author: codex-toolchain-1110
       created_at: "2026-11-10T17:14:37.494Z"
       source_kind: local_mutation
+close_reason: "Delivered by #194 \"chore(deps-dev): bump the pm-toolchain group with 3 updates\" (merged as 7f04874). Checks successful at the PR head e1bca61: CodeQL, codeql, enable-auto-merge, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""

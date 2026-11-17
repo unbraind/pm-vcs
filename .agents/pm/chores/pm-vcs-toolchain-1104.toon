@@ -2,13 +2,18 @@ id: pm-vcs-toolchain-1104
 title: Refresh the November toolchain and synchronize concurrency fixtures
 description: "Supersede https://github.com/unbraind/pm-vcs/pull/173 with the requested exact toolchain pins. Compare the killed bisect and receiver revocation tests on the old and new CLI, replace timing windows with deterministic synchronization, and verify gates and the committed self-host archive."
 type: Chore
-status: in_progress
+status: closed
 priority: 2
 tags[5]: dependencies,"gh:unbraind/pm-vcs#173","gh:unbraind/pm-vcs#182",migration,sdk
 created_at: "2026-11-05T10:22:28.965Z"
-updated_at: "2026-11-05T15:51:14.254Z"
+updated_at: "2026-11-16T20:40:17.935Z"
+closed_at: "2026-11-16T20:40:17.910Z"
+completed_at: "2026-11-16T20:40:17.910Z"
 author: codex-toolchain-1104
 acceptance_criteria: Repeat both concurrency cases 20 times alone and at CI concurrency on both pins; preserve assertions; document causes and gates; commit tracker and refreshed self-host archive; open a replacement PR without modifying the Dependabot branch.
+resolution: Implemented and merged in #182 (0f82684).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #182 as 0f82684; checks successful at head c09526d: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 comments[25]{created_at,author,text}:
   "2026-11-05T10:22:33.227Z",codex-toolchain-1104,"Plan: compare the unchanged Node 22 fixtures on CLI 2026.11.1 and 2026.11.4, twenty executions alone and twenty together with CI file concurrency 4. The bisect fixture observes a transient pending/worker window by polling; the revoker polls a receipt while blocking the parent event loop. Verify which ordering assumptions cause failures before replacing them with explicit barriers. Registry pm-changelog is now 2026.11.4; retain the explicitly requested 2026.10.31 pin."
   "2026-11-05T10:27:15.735Z",codex-toolchain-1104,"CI run 41960589334 job test (22) fails specifically with revocation worker timeout in the Bun-invoked gate; its preceding npm gate passed the same case. The worker has a 10-second IPC timeout although lock refusal itself waits 5 seconds plus startup and filesystem work. This is a test timing flake already on CLI 2026.11.1, not a sentinel or typed SDK contract change. The missing-pm-vcs-cli diagnostic occurs inside the passing stat-cache negative fixture. Fix: run one real revoker process to completion synchronously inside the held lease, then run a separate successful revocation outside it; preserve exact store_locked and revoked assertions."
@@ -49,4 +54,5 @@ docs[3]{path,scope}:
   "https://github.com/unbraind/pm-vcs/actions/runs/41960589334",project
   "https://github.com/unbraind/pm-vcs/actions/runs/42034001234",project
   "https://github.com/unbraind/pm-vcs/pull/182/checks",project
+close_reason: "Delivered by #182 \"Fix bisect and revocation barriers for pm-cli 2026.11.4\" (merged as 0f82684). Checks successful at the PR head c09526d: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""
