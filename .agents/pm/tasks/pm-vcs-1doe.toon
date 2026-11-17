@@ -2,12 +2,17 @@ id: pm-vcs-1doe
 title: "Finish the pm-github 2026.11.15 pin PR: regenerate the self-host bundle"
 description: ""
 type: Task
-status: in_progress
+status: closed
 priority: 2
 tags[1]: "gh:unbraind/pm-vcs#208"
 created_at: "2026-11-16T08:59:58.350Z"
-updated_at: "2026-11-16T13:21:48.121Z"
+updated_at: "2026-11-16T20:40:45.677Z"
+closed_at: "2026-11-16T20:40:45.652Z"
+completed_at: "2026-11-16T20:40:45.652Z"
 author: pi-glm
+resolution: Implemented and merged in #208 (38f8f1e).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #208 as 38f8f1e; checks successful at head e4a8429: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 comments[6]{created_at,author,text}:
   "2026-11-16T09:03:59.357Z",pi-glm,"PR checks test (22)/test (26) both fail at test/exact-gates.test.ts:183 'operational entry points enforce real audits through direct CLI processes': the self-host gate reports the committed selfhost.bundle is not byte-identical to the committed source for .github/workflows/pm-github-sync.yml and pm-github-closeout.yml because the bundle still contains the old pm-github caller shape (2026.11.04 pin plus pm-github-version input). Fix: regenerate the bundle with self-host:write and commit it alongside the workflow pin. Both open review threads (Greptile on the sync caller, CodeRabbit on the closeout caller) flag exactly this and are valid."
   "2026-11-16T09:33:35.895Z",pi-glm,"Gate results at the pushed head: typecheck pass, lint pass, changelog:check pass (CHANGELOG.md already up to date, no manual edits), self-host workflow-contract gate accept:self-host pass ('the committed bundle's tip tree is byte-identical to the committed source except validated external action revisions'), node --test test/self-host.test.ts pass (69 tests). The exact-gates local run of 'operational entry points enforce real audits through direct CLI processes' hits the helper's fixed 60s child-process cap on this slow host (60.2s vs 9.7s on CI); the equivalent uncapped accept:self-host gate passes, so the earlier ETIMEDOUT is environmental. Both review threads are addressed by the regenerated committed bundle (PRRT_kwDOToJT7M63oH4X, PRRT_kwDOToJT7M63o3j2)."
@@ -27,4 +32,5 @@ tests[5]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/self-host.test.ts,project,pi-glm,"2026-11-16T09:10:23.884Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
 docs[1]{path,scope}:
   docs/issue-sync-2026-11-16.md,project
+close_reason: "Delivered by #208 \"Pin pm-github 2026.11.15 to fix issue ownership planning and bound CI dispatch\" (merged as 38f8f1e). Checks successful at the PR head e4a8429: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
 body: ""
