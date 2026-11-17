@@ -1,0 +1,17 @@
+id: pm-vcs-selfhost-cli-timeout
+title: Bound committed self-host CLI verification without timing out the operational test
+description: "The operational-entry fixture in test/exact-gates.test.ts invokes the real committed self-host audit with a fixed 60000 ms child timeout. Round AS reproduced ETIMEDOUT both before and after regenerating and committing the archive; the post-refresh file run passed five tests and timed out this sixth case at head 948f18c. The ordinary guard workflow gate passed 241 tests, and the other referencing fixture files passed. Investigate verifier runtime and an evidence-based subprocess budget without weakening archive integrity or silently skipping verification."
+type: Issue
+status: open
+priority: 2
+tags[3]: follow-up,performance,test
+created_at: "2026-11-17T11:07:06.923Z"
+updated_at: "2026-11-17T11:07:06.923Z"
+author: codex-sol
+acceptance_criteria: Measure committed audit runtime on supported runtimes and constrained runners; preserve byte/hash verification and read-only acceptance; the operational subprocess test completes reliably or emits an explicit bounded diagnostic
+files[2]{path,scope}:
+  test/exact-gates.test.ts,project
+  scripts/self-host.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=1 test/exact-gates.test.ts,project,600,codex-sol,"2026-11-17T11:07:06.923Z",local_mutation,fix/job-local-npm
+body: ""
