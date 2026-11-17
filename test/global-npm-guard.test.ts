@@ -5,6 +5,12 @@ import { test } from 'node:test';
 import { globalNpmInstalls, workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 
 const rejected = [
+  // Round AP: every global update rejects, regardless of apparent operands.
+  'npm update -g --cache /tmp/x',
+  'npm update -g > update.log',
+  'npm update -g # nightly',
+  'npm up -g some-package',
+  'NPM_CONFIG_GLOBAL=true npm update',
   // Round AN: quoted hashes must not split a continued global install.
   'npm install --cache "$RUNNER_TEMP/npm #cache" \\\n  -g npm@11.19.0',
   "npm install --cache '$RUNNER_TEMP/a #b' \\\n  -g npm",
@@ -342,5 +348,17 @@ test('spaced and unsupported env entries cannot hide effective global settings',
       `jobs:\n  audit:\n    env:\n      ${entry}\n    steps:\n      - run: npm install npm@11.19.0\n`,
       workflow(`env:\n          ${entry}\n        run: npm install npm@11.19.0`),
     ]) assert.equal(workflowGlobalNpmInstalls(source).length, 1, source);
+  }
+});
+
+
+test('update aliases reject every operand in global lines and configured runs', () => {
+  for (const alias of ['update', 'up', 'upgrade', 'udpate']) {
+    for (const operands of ['', 'some-package', '--cache cache-dir', '> update.log', '# nightly']) {
+      assert.ok(globalNpmInstalls(`npm ${alias} -g ${operands}`).length > 0);
+      assert.ok(globalNpmInstalls(`npm ${alias} ${operands}`, { NPM_CONFIG_GLOBAL: 'true' }).length > 0);
+      assert.ok(globalNpmInstalls(`npm ${alias} ${operands}`, { NPM_CONFIG_LOCATION: 'global' }).length > 0);
+    }
+    assert.deepEqual(globalNpmInstalls(`npm ${alias} some-package`), []);
   }
 });

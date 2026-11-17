@@ -13,6 +13,9 @@
  */
 const installFamily = new Set(['install', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall', 'add', 'install-test', 'it', 'ci', 'install-ci-test', 'cit', 'update', 'up', 'upgrade', 'udpate']);
 
+/** Update-family lines bypass install operand classification. */
+const updateFamily = new Set(['update', 'up', 'upgrade', 'udpate']);
+
 /** npm reads these environment keys case-insensitively. */
 function relevantEnvKey(key: string): boolean {
   return key.toLowerCase() === 'npm_config_global' || key.toLowerCase() === 'npm_config_location';
@@ -138,8 +141,14 @@ function scanNpmLines(run: string, env?: Record<string, string>): string[][] {
     const installIndex = tokens.findIndex(word => installFamily.has(word));
     if (installIndex === -1) continue;
     if (!globalConfigured && !globalMarker(tokens)) continue;
-    const operands = tokens.slice(installIndex + 1);
-    if (!namesNpm(operands) && operands.some(word => !word.startsWith('-'))) continue;
+    // Every global update-family line is a violation, whatever its operands.
+    // Option values, redirect targets and comments can look like packages;
+    // rejecting updates of unrelated packages is an accepted false positive.
+    // Only install-family lines retain operand classification.
+    if (!tokens.some(word => updateFamily.has(word))) {
+      const operands = tokens.slice(installIndex + 1);
+      if (!namesNpm(operands) && operands.some(word => !word.startsWith('-'))) continue;
+    }
     if (approvedBootstrapShapes.some(shape => shape.test(line))) continue;
     findings.push(tokens);
   }
