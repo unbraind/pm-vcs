@@ -262,22 +262,30 @@ test('daily/manual release triggers and preparation gates remain enforced', () =
 const npmBootstrapStep = 'Use npm with trusted publishing support';
 const npmVerifyStep = 'Verify job-local npm version';
 
+/** Read an unconditional, required step as individual shell lines. */
+function requiredStepLines(step: Record<string, unknown> | undefined, name: string): string[] {
+  assert.ok(typeof step?.run === 'string', `the named ${name} step must run a command`);
+  assert.ok(!Object.hasOwn(step, 'continue-on-error'), `the ${name} step must not set continue-on-error`);
+  assert.ok(!Object.hasOwn(step, 'if'), `the ${name} step must not set if`);
+  return step.run.split('\n').map(line => line.trim()).filter(line => line.length > 0 && !line.startsWith('#'));
+}
+
 /** Audit the bootstrap and version check in the order a single job runs them. */
 function assertJobLocalNpm(steps: readonly unknown[]): void {
   const bootstrapIndex = steps.findIndex(step => mapping(step)?.name === npmBootstrapStep);
   const verifyIndex = steps.findIndex(step => mapping(step)?.name === npmVerifyStep);
-  const bootstrap = mapping(steps[bootstrapIndex])?.run;
-  const verify = mapping(steps[verifyIndex])?.run;
-  assert.ok(typeof bootstrap === 'string', 'the named bootstrap step must install npm');
-  assert.ok(typeof verify === 'string', 'the named verify step must check the npm version');
+  const bootstrap = requiredStepLines(mapping(steps[bootstrapIndex]), 'bootstrap');
+  const verify = requiredStepLines(mapping(steps[verifyIndex]), 'verify');
   assert.ok(verifyIndex > bootstrapIndex, 'the verify step must run after the bootstrap');
 
-  const version = bootstrap.match(/npm install --prefix "\$RUNNER_TEMP\/npm-(\d+)\.(\d+)\.(\d+)" npm@\1\.\2\.\3/u)?.slice(1).map(Number);
-  assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)));
+  const install = /^npm install --prefix "\$RUNNER_TEMP\/npm-(\d+)\.(\d+)\.(\d+)" npm@\1\.\2\.\3(?:\s+--(?:ignore-scripts|no-audit|no-fund))*$/u;
+  const version = bootstrap.map(line => install.exec(line)).find(match => match !== null)?.slice(1).map(Number);
+  assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)),
+    'the bootstrap step must execute a job-local npm install with trusted publishing support');
   const pin = version.join('.');
-  assert.ok(bootstrap.includes(`echo "$RUNNER_TEMP/npm-${pin}/node_modules/.bin" >> "$GITHUB_PATH"`),
+  assert.ok(bootstrap.some(line => line === `echo "$RUNNER_TEMP/npm-${pin}/node_modules/.bin" >> "$GITHUB_PATH"`),
     'the bootstrap step must append its prefix bin directory to $GITHUB_PATH');
-  assert.ok(verify.includes(`test "$(npm --version)" = "${pin}"`),
+  assert.ok(verify.some(line => line === `test "$(npm --version)" = "${pin}"`),
     'the verify step must expect exactly the installed version');
 }
 
@@ -300,6 +308,35 @@ test('the bootstrap check cannot substitute for separate post-bootstrap verifica
   const withoutVerify = steps.filter((_step, index) => index !== verifyIndex);
   assert.throws(() => assertJobLocalNpm(withoutVerify), /named verify step/u);
   assert.throws(() => assertJobLocalNpm([steps[verifyIndex], ...withoutVerify]), /after the bootstrap/u);
+});
+
+test('job-local npm commands must execute instead of appearing in output or comments', () => {
+  const install = 'npm install --prefix "$RUNNER_TEMP/npm-11.5.1" npm@11.5.1 --ignore-scripts';
+  const addPath = 'echo "$RUNNER_TEMP/npm-11.5.1/node_modules/.bin" >> "$GITHUB_PATH"';
+  const verify = 'test "$(npm --version)" = "11.5.1"';
+  const steps = [{ name: npmBootstrapStep, run: `${install}\n${addPath}` }, { name: npmVerifyStep, run: verify }];
+  assertJobLocalNpm(steps);
+
+  for (const inert of [
+    (command: string) => `echo '${command}'`,
+    (command: string) => `printf '%s\\n' '${command}'`,
+    (command: string) => `: '${command}'`,
+    (command: string) => `# ${command}`,
+  ]) {
+    assert.throws(() => assertJobLocalNpm([{ ...steps[0], run: `${inert(install)}\n${addPath}` }, steps[1]]), /execute a job-local npm install/u);
+    assert.throws(() => assertJobLocalNpm([{ ...steps[0], run: `${install}\n${inert(addPath)}` }, steps[1]]), /must append its prefix/u);
+    assert.throws(() => assertJobLocalNpm([steps[0], { ...steps[1], run: inert(verify) }]), /must expect exactly/u);
+  }
+});
+
+test('job-local npm steps cannot be skipped or allowed to fail', () => {
+  const steps = releaseSteps();
+  for (const name of [npmBootstrapStep, npmVerifyStep]) {
+    for (const [key, value] of [['continue-on-error', true], ['if', false]] as const) {
+      const mutated = steps.map(step => mapping(step)?.name === name ? { ...mapping(step), [key]: value } : step);
+      assert.throws(() => assertJobLocalNpm(mutated), new RegExp(`must not set ${key}`, 'u'), `${name} with ${key}`);
+    }
+  }
 });
 
 test('no workflow replaces the shared global npm installation', () => {

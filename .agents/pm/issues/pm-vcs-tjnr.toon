@@ -6,7 +6,9 @@ status: in_progress
 priority: 2
 tags[2]: "gh:unbraind/pm-ops#284","gh:unbraind/pm-vcs#213"
 created_at: "2026-11-16T14:39:25.582Z"
-updated_at: "2026-11-17T20:38:34.414Z"
+updated_at: "2026-11-17T23:26:13.334Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: pi-glm
 acceptance_criteria: "The release workflow installs the pinned npm with --prefix into a job-local directory and prepends that prefix bin to the job path; The workflow keeps the exact-version assertion on the effective npm; A workflow-contract test fails if any workflow replaces the global npm; Gates pass: typecheck, lint, tests, changelog:check"
 comments[37]{created_at,author,text}:
@@ -56,7 +58,7 @@ files[8]{path,scope}:
   test/release-preparation.test.ts,project
   test/verify-release-changelog-date.test.ts,project
   test/verify-release-publish-attestation.test.ts,project
-tests[22]:
+tests[24]:
   - command: "npm run typecheck && npm run lint && npm test && node --test test/release-approval.test.ts && npm run changelog:check"
     scope: project
     timeout_seconds: 1200
@@ -214,6 +216,20 @@ tests[22]:
     provenance:
       author: codex-sol
       created_at: "2026-11-17T20:34:31.360Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test test/release-approval.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T23:26:12.114Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test --test-concurrency=1 test/release-preparation.test.ts test/exact-gates.test.ts test/self-host.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T23:26:13.251Z"
       source_kind: local_mutation
       source_ref: fix/job-local-npm
 docs[3]{path,scope}:
