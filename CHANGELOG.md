@@ -65,6 +65,7 @@
 
 ### Fixed
 
+- Repair scheduled GitHub issue sync failure ([pm-vcs-issue-sync-1116](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-issue-sync-1116.toon))
 - Keep test children from delivering pm telemetry and Sentry reports ([pm-vcs-rd82](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-rd82.toon))
 - Stop concurrent test packs from rewriting the shared build ([pm-vcs-v5bg](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-v5bg.toon))
 - Isolate test children and provenance from ambient agent sessions ([pm-vcs-testenv](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-testenv.toon))
