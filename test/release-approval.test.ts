@@ -1,9 +1,10 @@
 import "./helpers/isolate-session.ts";
+import { workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 /** Audit every workflow's effective permissions, publication approval and npm authentication. */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseDocument, stringify } from 'yaml';
@@ -258,14 +259,95 @@ test('daily/manual release triggers and preparation gates remain enforced', () =
   }
 });
 
-test('publishing installs an npm version supporting trusted publishing', () => {
+const npmBootstrapStep = 'Use npm with trusted publishing support';
+const npmVerifyStep = 'Verify job-local npm version';
+
+/** Read an unconditional, required step as individual shell lines. */
+function requiredStepLines(step: Record<string, unknown> | undefined, name: string): string[] {
+  assert.ok(typeof step?.run === 'string', `the named ${name} step must run a command`);
+  assert.ok(!Object.hasOwn(step, 'continue-on-error'), `the ${name} step must not set continue-on-error`);
+  assert.ok(!Object.hasOwn(step, 'if'), `the ${name} step must not set if`);
+  return step.run.split('\n').map(line => line.trim()).filter(line => line.length > 0 && !line.startsWith('#'));
+}
+
+/** Audit the bootstrap and version check in the order a single job runs them. */
+function assertJobLocalNpm(steps: readonly unknown[]): void {
+  const bootstrapIndex = steps.findIndex(step => mapping(step)?.name === npmBootstrapStep);
+  const verifyIndex = steps.findIndex(step => mapping(step)?.name === npmVerifyStep);
+  const bootstrap = requiredStepLines(mapping(steps[bootstrapIndex]), 'bootstrap');
+  const verify = requiredStepLines(mapping(steps[verifyIndex]), 'verify');
+  assert.ok(verifyIndex > bootstrapIndex, 'the verify step must run after the bootstrap');
+
+  const install = /^npm install --prefix "\$RUNNER_TEMP\/npm-(\d+)\.(\d+)\.(\d+)" npm@\1\.\2\.\3(?:\s+--(?:ignore-scripts|no-audit|no-fund))*$/u;
+  const version = bootstrap.map(line => install.exec(line)).find(match => match !== null)?.slice(1).map(Number);
+  assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)),
+    'the bootstrap step must execute a job-local npm install with trusted publishing support');
+  const pin = version.join('.');
+  assert.ok(bootstrap.some(line => line === `echo "$RUNNER_TEMP/npm-${pin}/node_modules/.bin" >> "$GITHUB_PATH"`),
+    'the bootstrap step must append its prefix bin directory to $GITHUB_PATH');
+  assert.ok(verify.some(line => line === `test "$(npm --version)" = "${pin}"`),
+    'the verify step must expect exactly the installed version');
+}
+
+/** Read the ordered steps of the actual release job. */
+function releaseSteps(): unknown[] {
   const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
-  const scripts = Object.values(mapping(release.jobs) ?? {}).flatMap(job => {
-    const steps = mapping(job)?.steps;
-    return Array.isArray(steps) ? steps.map(step => mapping(step)?.run).filter(value => typeof value === 'string') : [];
-  }).join('\n');
-  const version = scripts.match(/npm install -g npm@(\d+)\.(\d+)\.(\d+)/u)?.slice(1).map(Number);
-  assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)));
+  const steps = mapping(mapping(release.jobs)?.release)?.steps;
+  assert.ok(Array.isArray(steps), 'the release job must have steps');
+  return steps;
+}
+
+test('publishing installs an npm version supporting trusted publishing', () => {
+  assertJobLocalNpm(releaseSteps());
+});
+
+test('the bootstrap check cannot substitute for separate post-bootstrap verification', () => {
+  const steps = releaseSteps();
+  const verifyIndex = steps.findIndex(step => mapping(step)?.name === npmVerifyStep);
+  assert.ok(verifyIndex >= 0);
+  const withoutVerify = steps.filter((_step, index) => index !== verifyIndex);
+  assert.throws(() => assertJobLocalNpm(withoutVerify), /named verify step/u);
+  assert.throws(() => assertJobLocalNpm([steps[verifyIndex], ...withoutVerify]), /after the bootstrap/u);
+});
+
+test('job-local npm commands must execute instead of appearing in output or comments', () => {
+  const install = 'npm install --prefix "$RUNNER_TEMP/npm-11.5.1" npm@11.5.1 --ignore-scripts';
+  const addPath = 'echo "$RUNNER_TEMP/npm-11.5.1/node_modules/.bin" >> "$GITHUB_PATH"';
+  const verify = 'test "$(npm --version)" = "11.5.1"';
+  const steps = [{ name: npmBootstrapStep, run: `${install}\n${addPath}` }, { name: npmVerifyStep, run: verify }];
+  assertJobLocalNpm(steps);
+
+  for (const inert of [
+    (command: string) => `echo '${command}'`,
+    (command: string) => `printf '%s\\n' '${command}'`,
+    (command: string) => `: '${command}'`,
+    (command: string) => `# ${command}`,
+  ]) {
+    assert.throws(() => assertJobLocalNpm([{ ...steps[0], run: `${inert(install)}\n${addPath}` }, steps[1]]), /execute a job-local npm install/u);
+    assert.throws(() => assertJobLocalNpm([{ ...steps[0], run: `${install}\n${inert(addPath)}` }, steps[1]]), /must append its prefix/u);
+    assert.throws(() => assertJobLocalNpm([steps[0], { ...steps[1], run: inert(verify) }]), /must expect exactly/u);
+  }
+});
+
+test('job-local npm steps cannot be skipped or allowed to fail', () => {
+  const steps = releaseSteps();
+  for (const name of [npmBootstrapStep, npmVerifyStep]) {
+    for (const [key, value] of [['continue-on-error', true], ['if', false]] as const) {
+      const mutated = steps.map(step => mapping(step)?.name === name ? { ...mapping(step), [key]: value } : step);
+      assert.throws(() => assertJobLocalNpm(mutated), new RegExp(`must not set ${key}`, 'u'), `${name} with ${key}`);
+    }
+  }
+});
+
+test('no workflow replaces the shared global npm installation', () => {
+  // A global npm install replaces the npm inside the runner's shared Node
+  // installation. Parallel jobs on one host share that installation, so one
+  // job's global install corrupts a sibling's npm mid-install (ENOTEMPTY, or
+  // `npm: command not found`). Every pinned npm install must be prefix-local.
+  for (const path of workflowFiles(fileURLToPath(workflowRoot))) {
+    const source = readFileSync(path, 'utf8');
+    assert.deepEqual(workflowGlobalNpmInstalls(source), [], `${basename(path)} must not replace the global npm`);
+  }
 });
 
 test('automatic release activation is absent and publishing documentation matches behaviour', () => {
