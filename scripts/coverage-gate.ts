@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { globSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
-import { resolve, relative, join } from "node:path";
+import { resolve, relative, join, sep } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { discoverShardTestFiles, SHARD_TIMINGS_FILE, shardTestFiles } from "../test/helpers/ci-shards.ts";
 
@@ -21,6 +21,7 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
   const flags = coverageFlags(root).filter(flag => !flag.startsWith("--temp-directory="));
   if (paths.length !== total || total < 1) throw new Error("coverage-gate: missing shards");
   const digest = coverageDigest(root);
+  const sources = new Set(globSync(["*.ts", "src/**/*.ts", "engine/**/*.ts", "scripts/**/*.ts"], { cwd: root }).map(file => file.split(sep).join("/")));
   const coverageDirectory = join(root, "coverage");
   mkdirSync(coverageDirectory, { recursive: true });
   const scratch = mkdtempSync(join(coverageDirectory, "merged-raw-"));
@@ -36,8 +37,10 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
       ordinals.add(artifact.shard);
       if (artifact.digest !== digest) throw new Error("coverage-gate: source mismatch (source files, test inventory, shard timings or gate options)");
       const result = artifact.raw.map((script: {url: string}) => {
-        if (script.url.startsWith("..") || resolve(root, script.url) === script.url) throw new Error("coverage-gate: non-relative source");
-        return {...script, url:pathToFileURL(resolve(root, script.url)).href};
+        const encodedSource = script.url.split(/[?#]/, 1)[0]!;
+        const source = decodeURIComponent(encodedSource);
+        if (source.startsWith("..") || resolve(root, source) === source || !sources.has(source)) throw new Error("coverage-gate: non-relative source");
+        return {...script, url:pathToFileURL(resolve(root, source)).href + script.url.slice(encodedSource.length)};
       });
       writeFileSync(join(scratch, `coverage-${index}.json`), JSON.stringify({result}));
     }
@@ -69,7 +72,13 @@ export function runCoverageShard(root: string, shard: string, output: string): n
   const sources = new Set(globSync(["*.ts", "src/**/*.ts", "engine/**/*.ts", "scripts/**/*.ts"], {cwd:root}).map(file => pathToFileURL(resolve(root,file)).href));
   const offsets = readdirSync(resolve(root,output,"tmp")).filter(name => name.endsWith(".json")).flatMap(name => {
     const data = JSON.parse(readFileSync(resolve(root,output,"tmp",name),"utf8"));
-    return data.result.filter((script: {url:string}) => sources.has(script.url)).map((script: {url:string}) => ({...script,url:relative(root,fileURLToPath(script.url)).replaceAll("\\","/")}));
+    return data.result.flatMap((script: {url:string}) => {
+      const source = script.url.split(/[?#]/, 1)[0]!;
+      if (!sources.has(source)) return [];
+      // Encode the path separately: literal filename delimiters are not module suffixes.
+      const encodedSource = relative(root, fileURLToPath(source)).split(sep).map(encodeURIComponent).join("/");
+      return [{...script, url:encodedSource + script.url.slice(source.length)}];
+    });
   });
   writeFileSync(resolve(root, output, "hits.json"), JSON.stringify({ shard, node: process.versions.node, digest, hits, raw:offsets }));
   return 0;

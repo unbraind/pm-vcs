@@ -6,10 +6,12 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-18T04:36:45.275Z"
+updated_at: "2026-11-18T06:18:14.009Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[78]:
+comments[80]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -245,6 +247,12 @@ comments[78]:
   - created_at: "2026-11-18T04:36:44.325Z"
     author: codex-sol
     text: "Round BT merged main at 4173acb. The only Git conflict was selfhost.bundle, resolved by regenerating it from the staged merge tree after tracker updates. Main supplied the job-local npm 11.19.0 bootstrap, executable-line release approval checks and byte-identical npm guard (MD5 7a8164f2b5a5aadb3ca9dcdbbd1d2179). The PR retained quick and deep tiers, eight-way test and coverage sharding, coverage merge, step-wide npm userconfig isolation and cold-cache consumer priming. Tracker histories merged without conflicts. Local Node 26.13.0 gates passed: npm guard 288, release approval and all-workflow npm audit 34, shard/CodeQL/routing/coverage merge/dependency refresh 24, deep composition 6 including all five Node and Bun scenarios, build, test compilation, typecheck, lint and changelog check. pm validate passed with advisory warnings and zero history drift. Committed self-host acceptance follows archive generation before push."
+  - created_at: "2026-11-18T06:13:19.482Z"
+    author: codex-sol
+    text: "Round BV: preserve full module URL identities in raw shard artifacts and merge; strip query and fragment only for encoded-path membership and filesystem conversion. Port the settled pm-ts-starter fixtures, run focused and required gates, regenerate the self-host archive last, and verify committed HEAD."
+  - created_at: "2026-11-18T06:17:34.087Z"
+    author: codex-sol
+    text: "Round BV regression evidence: all three new URL fixtures fail against the previous implementation (plain import survives but query/fragment imports and encoded delimiter filenames are dropped). The patched implementation passes all three, compares exact merged and unsharded c8 counters, and passes the expanded encoded traversal and unknown-source rejection fixture. Typecheck, test typecheck, lint, and changelog regeneration/check passed; broader focused gate tests continue."
 files[47]:
   - path: .github/workflows/ci-deep.yml
     scope: project
@@ -343,7 +351,7 @@ files[47]:
     scope: project
   - path: test/tracker-admission.test.ts
     scope: project
-tests[59]:
+tests[62]:
   - command: "npm run typecheck && npm run build:test && npm run lint"
     scope: project
     timeout_seconds: 240
@@ -782,6 +790,27 @@ tests[59]:
     provenance:
       author: codex-sol
       created_at: "2026-11-18T04:31:57.016Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: node --test --test-concurrency=1 test/coverage-merge.test.ts test/ci-shards.test.ts test/test-environment.test.ts test/exact-gates.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-18T06:15:48.483Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: node --test --test-name-pattern='merged shard hits equal unsharded' test/coverage-merge.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-18T06:17:38.319Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: node --test --test-concurrency=1 test/coverage-merge.test.ts test/ci-shards.test.ts test/test-environment.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-18T06:18:13.914Z"
       source_kind: local_mutation
       source_ref: ci/quick-pr-tier-deep-local-tier
 docs[5]:

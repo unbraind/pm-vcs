@@ -6,10 +6,89 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { runCoverageShard, mergeCoverage } from "../scripts/coverage-gate.ts";
 import { shardTestFiles } from "./helpers/ci-shards.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
+
+/** Build a real c8 project using the package's unmodified coverage command. */
+function coverageFixture(t: TestContext): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "c8 URL union-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "test/helpers"), { recursive: true });
+  mkdirSync(join(root, "src"));
+  writeFileSync(join(root, "test/ci-shard-times.json"), "{}");
+  const { scripts: { coverage } } = JSON.parse(readFileSync("package.json", "utf8"));
+  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module", scripts: { coverage } }));
+  for (const helper of ["release-suite.ts", "test-environment.ts"]) {
+    writeFileSync(join(root, "test/helpers", helper), readFileSync(join("test/helpers", helper), "utf8"));
+  }
+  return root;
+}
+
+/** Compare the gate result and every c8 counter against an actual unsharded run. */
+function assertMergedEqualsUnsharded(root: string, paths: string[]): void {
+  const status = mergeCoverage(root, paths, paths.length);
+  const merged = JSON.parse(readFileSync(join(root, "coverage/merged.json"), "utf8"));
+  const { scripts: { coverage } } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const args = coverage.split(" && ").at(-1).slice(3).replaceAll("'", "").split(" ");
+  const whole = spawnSync(process.execPath, [createRequire(import.meta.url).resolve("c8/bin/c8.js"), ...args], {
+    cwd: root, env: testEnvironment(), encoding: "utf8",
+  });
+  assert.equal(status, whole.status, whole.stdout + whole.stderr);
+  assert.deepEqual(merged, JSON.parse(readFileSync(join(root, "coverage/coverage-final.json"), "utf8")));
+}
+
+test("coverage shards preserve plain, query and fragment module identities", t => {
+  const root = coverageFixture(t);
+  writeFileSync(join(root, "src/value.ts"), `export function classify(value: number) {
+  if (value > 0) return "positive";
+  return "negative";
+}
+`);
+  const fixture = `import assert from 'node:assert/strict';
+import {classify} from '../src/value.ts';
+const {classify: query} = await import('../src/value.ts?case=positive');
+const {classify: fragment} = await import('../src/value.ts#case=positive');
+assert.equal(classify(-1), 'negative');
+assert.equal(query(1), 'positive');
+assert.equal(fragment(1), 'positive');
+`;
+  writeFileSync(join(root, "test/value.test.ts"), fixture);
+  assert.equal(runCoverageShard(root, "1/1", "partial"), 0);
+  const artifact = JSON.parse(readFileSync(join(root, "partial/hits.json"), "utf8")) as { raw: { url: string }[] };
+  assert.deepEqual(artifact.raw.map(script => script.url).sort(),
+    ["src/value.ts", "src/value.ts?case=positive", "src/value.ts#case=positive"].sort());
+  assertMergedEqualsUnsharded(root, ["partial/hits.json"]);
+
+  // Each exact URL receives its complementary branch in another test process.
+  writeFileSync(join(root, "test/complement.test.ts"), fixture
+    .replace("classify(-1), 'negative'", "classify(1), 'positive'")
+    .replace("query(1), 'positive'", "query(-1), 'negative'")
+    .replace("fragment(1), 'positive'", "fragment(-1), 'negative'"));
+  for (const [shard, output] of [["1/2", "first"], ["2/2", "second"]] as const) {
+    assert.equal(runCoverageShard(root, shard, output), 0);
+  }
+  assertMergedEqualsUnsharded(root, ["first/hits.json", "second/hits.json"]);
+});
+
+for (const [character, encoded] of [["#", "%23"], ["?", "%3F"]] as const) {
+  test(`coverage shard filenames round-trip ${character}`, { skip: process.platform === "win32" && character === "?" }, t => {
+    const root = coverageFixture(t);
+    const source = `src/value${character}case.ts`;
+    const url = `src/value${encoded}case.ts?view=%23#fragment`;
+    writeFileSync(join(root, source), "export const value = 42;\n");
+    writeFileSync(join(root, "test/value.test.ts"), `import assert from 'node:assert/strict';
+import {value} from '../${url}';
+assert.equal(value, 42);
+`);
+    assert.equal(runCoverageShard(root, "1/1", "whole"), 0);
+    const artifact = JSON.parse(readFileSync(join(root, "whole/hits.json"), "utf8"));
+    assert.deepEqual(artifact.raw.map((script: { url: string }) => script.url), [url]);
+    assert.deepEqual(Object.keys(artifact.hits), [source]);
+    assertMergedEqualsUnsharded(root, ["whole/hits.json"]);
+  });
+}
 
 test("merged shard hits equal unsharded c8 including exclusive branches and functions", t => {
   const root=realpathSync(mkdtempSync(join(tmpdir(),"c8 union-"))); t.after(()=>rmSync(root,{recursive:true,force:true}));
@@ -55,6 +134,8 @@ export function negative() { return "negative"; }
   const change=(mutate:(artifact: {shard:string;node:string;digest:string;raw:{url:string}[]})=>void) => {const artifact=JSON.parse(saved);mutate(artifact);writeFileSync(join(root,paths[0]!),JSON.stringify(artifact));};
   change(artifact=>{artifact.shard="3/2"});assert.throws(()=>mergeCoverage(root,paths,2),/incomplete shard/);
   change(artifact=>{artifact.raw[0].url="../outside.ts"});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
+  change(artifact=>{artifact.raw[0].url="%2E%2E/outside.ts?case=positive"});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
+  change(artifact=>{artifact.raw[0].url="src/missing.ts#case=positive"});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
   change(artifact=>{artifact.raw[0].url=resolve(root,"src/value.ts")});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
   const [major, minor, patch] = process.versions.node.split(".").map(Number);
   change(artifact => { artifact.node = [major, minor, patch! + 1].join("."); });
