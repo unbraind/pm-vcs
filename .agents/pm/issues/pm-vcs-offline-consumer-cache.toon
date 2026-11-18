@@ -6,22 +6,24 @@ status: in_progress
 priority: 1
 tags[4]: ci,follow-up,"gh:unbraind/pm-vcs#209",testing
 created_at: "2026-11-18T02:42:22.815Z"
-updated_at: "2026-11-18T03:46:19.337Z"
+updated_at: "2026-11-18T05:41:43.402Z"
 author: codex-sol
 parent: pm-vcs-ci-disk-reserve
 expected_result: Offline packed consumers pass on a CI runner with no restored npm cache.
 actual_result: Coverage collection refused the offline installs with ENOTCACHED.
-comments[2]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-11-18T02:42:23.946Z",codex-sol,"Hosted evidence from run 44223802640: https://github.com/unbraind/pm-vcs/actions/runs/44223802640/job/134532123753 and https://github.com/unbraind/pm-vcs/actions/runs/44223802640/job/134532123938. Collection failed before merge. Shard 8 uploaded coverage-failure-shard-8 successfully."
   "2026-11-18T03:46:15.393Z",codex-sol,"Run 44223802640 showed ENOTCACHED for the pako packument in quick and coverage shards 6 and 8. A tarball-only scratch cache reproduced the failure. Adding the exact locked pako@3.0.3 package spec made the same offline install pass, and the generated consumer lockfile contained only the archive and pako. The SDK peer is supplied from the repository install. Commit 139c49f gives all four packed consumer fixtures a fresh cache, primes it online by exact package spec, and retains offline installation. The isolated cold-cache composition test passed all five Node, Bun and project CLI scenarios. Typecheck, lint, test compilation and changelog verification passed. The separate self-host child timeout remains tracked by pm-vcs-selfhost-audit-budget. The intermittent staging syscall baseline is tracked by pm-vcs-move-probe-baseline and the pinned-Bun TOON retry passed."
-files[6]{path,scope}:
+  "2026-11-18T05:41:42.237Z",codex-sol,"Round BU maps Greptile thread PRRT_kwDOToJT7M64xWIe and the failing quick-shard (22, 1) and coverage-shard (26, 1) jobs at 467c906 to the commit containing this entry, \"Isolate offline packed consumer npm environments\".\nhttps://github.com/unbraind/pm-vcs/pull/209#discussion_r4609000971\nhttps://github.com/unbraind/pm-vcs/actions/runs/44238842942/job/134581611534\nhttps://github.com/unbraind/pm-vcs/actions/runs/44238842942/job/134581611801\n\nBoth npm children now use an environment built locally by testEnvironment from fixture inputs. Registry cache priming supplies its own NODE_OPTIONS timeout. The unchanged audit reproduced the failure at 467c906. After the fix, the environment suite passed 6/6, the cold-cache composition suite passed all five Node, Bun and project CLI scenarios, quick shard 1/8 passed 256/256 with zero skips, and the shard tests passed 7/7. Typecheck, lint, test compilation and changelog verification passed. The staged changes are inputs to selfhost.bundle, and exact-head self-host acceptance is the linked pre-push gate."
+files[7]{path,scope}:
   .github/workflows/ci.yml,project
   test/composition-consumer.test.ts,project
   test/helpers/offline-packed-consumer.ts,project
   test/move-planning-consumer.test.ts,project
   test/snapshot-durability-consumer.test.ts,project
   test/sparse-move-consumer.test.ts,project
-tests[7]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  test/test-environment.test.ts,project
+tests[10]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   npm_config_cache=$(mktemp -d) node --expose-gc --no-concurrent-array-buffer-sweeping --test test/composition-consumer.test.ts,project,codex-sol,"2026-11-18T03:21:23.650Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   PM_TEST_DEPTH=quick npm_config_cache=$(mktemp -d) node test/helpers/ci-shards.ts 6/8,project,codex-sol,"2026-11-18T03:21:26.167Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   PM_TEST_DEPTH=quick npm_config_cache=$(mktemp -d) node test/helpers/ci-shards.ts 8/8,project,codex-sol,"2026-11-18T03:21:29.104Z",local_mutation,ci/quick-pr-tier-deep-local-tier
@@ -29,6 +31,9 @@ tests[7]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   "npm run typecheck && npm run lint && npm run build:test",project,codex-sol,"2026-11-18T03:21:33.861Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   "npm run changelog:check",project,codex-sol,"2026-11-18T03:21:36.796Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   "npm run accept:self-host",project,codex-sol,"2026-11-18T03:21:39.003Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  node --test test/test-environment.test.ts,project,codex-sol,"2026-11-18T04:59:16.461Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  node --test test/ci-shards.test.ts,project,codex-sol,"2026-11-18T04:59:18.409Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  PM_TEST_DEPTH=quick node test/helpers/ci-shards.ts 1/8,project,codex-sol,"2026-11-18T04:59:20.144Z",local_mutation,ci/quick-pr-tier-deep-local-tier
 docs[2]{path,scope}:
   docs/ci-tiers.md,project
   docs/validation/pr150-full-suite-ci-repair.md,project
