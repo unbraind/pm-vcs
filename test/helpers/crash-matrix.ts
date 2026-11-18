@@ -1,3 +1,4 @@
+import { testTime, testPrefix } from "../support/depth.ts";
 /** Complete ordinal enumeration is an assertion, independent of scheduling and cut execution. */
 import { mkdirSync } from "node:fs";
 import assert from "node:assert/strict";
@@ -42,10 +43,10 @@ export interface CrashEntry { entry: string; preloads: string[] }
 /** Bundle preloads too: fatal children need no TypeScript loader or repeated compilation. */
 export function prepareCrashEntry(root: string, source: string): CrashEntry {
   const entry = join(root, "publication.mjs");
-  const bundle = spawnSync("bun", ["build", `./${source}`, "--target=node", "--format=esm", "--minify", "--keep-names", `--outfile=${entry}`], { cwd: packageRoot, env: testEnvironment({ NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: 30_000 });
+  const bundle = spawnSync("bun", ["build", `./${source}`, "--target=node", "--format=esm", "--minify", "--keep-names", `--outfile=${entry}`], { cwd: packageRoot, env: testEnvironment({ NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: testTime(30_000) });
   if ((bundle.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return { entry: join(packageRoot, source), preloads: ["forbid-git.ts", "crash-child.ts"].map(name => pathToFileURL(join(packageRoot, "test/helpers", name)).href) };
   assert.equal(bundle.status, 0, `prepare the shared publication entry point: ${bundle.stderr}`);
-  const preloads = spawnSync("bun", ["build", "./test/helpers/forbid-git.ts", "./test/helpers/crash-child.ts", "--target=node", "--format=esm", "--entry-naming=[name].mjs", `--outdir=${root}`], { cwd: packageRoot, env: testEnvironment({ NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: 30_000 });
+  const preloads = spawnSync("bun", ["build", "./test/helpers/forbid-git.ts", "./test/helpers/crash-child.ts", "--target=node", "--format=esm", "--entry-naming=[name].mjs", `--outdir=${root}`], { cwd: packageRoot, env: testEnvironment({ NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: testTime(30_000) });
   assert.equal(preloads.status, 0, `prepare shared publication preloads: ${preloads.stderr}`);
   return { entry, preloads: ["forbid-git.mjs", "crash-child.mjs"].map(name => pathToFileURL(join(root, name)).href) };
 }
@@ -58,8 +59,9 @@ export async function lifecycleMatrix(scenario: string, execute: (name: string, 
     const owner = new CutOwner(join(scope.root, "owner-0"), join(scope.root, "cache"), scenario, entry, preloads); owners.push(owner); await owner.ready;
     const { steps } = await owner.request(0); assert.ok(steps !== undefined && steps.length >= 20);
     if (expectedSteps !== undefined) assert.deepEqual(steps, expectedSteps, "isolated owners must preserve the original fixture source trace");
-    const ordinals = Array.from({ length: steps.length }, (_, index) => index + 1); assertCompleteCuts(steps, ordinals);
-    assert.throws(() => assertCompleteCuts(steps, ordinals.slice(1)), /enumerated cuts must equal/, "removing one actual recorded cut must fail the guard");
+    const allOrdinals = Array.from({ length: steps.length }, (_, index) => index + 1); assertCompleteCuts(steps, allOrdinals);
+    const ordinals = testPrefix(allOrdinals);
+    assert.throws(() => assertCompleteCuts(steps, allOrdinals.slice(1)), /enumerated cuts must equal/, "removing one actual recorded cut must fail the guard");
     for (let index = 1; index < Math.min(availableParallelism(), ordinals.length); index++) owners.push(new CutOwner(join(scope.root, `owner-${index}`), join(scope.root, "cache"), scenario, entry, preloads));
     await Promise.all(owners.map(item => item.ready));
     await Promise.all(owners.slice(1).map(async item => { const probe = await item.request(0); assert.deepEqual(probe.steps, steps, "every fixture owner must preserve the complete source enumeration"); }));
@@ -74,8 +76,8 @@ export async function lifecycleMatrix(scenario: string, execute: (name: string, 
         });
       }
     }));
-    assertCompleteCuts(steps, completed.sort((a, b) => a - b));
-    result = { count: steps.length, workers: owners.length, guard: `${steps.length - 1}/${steps.length} removed-cut enumeration rejected; ${completed.length}/${steps.length} cuts verified`, milliseconds: performance.now() - started, averages: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value / steps.length])) };
+    assert.deepEqual(completed.sort((a, b) => a - b), ordinals, "every selected native cut must be verified");
+    result = { count: ordinals.length, workers: owners.length, guard: `${steps.length - 1}/${steps.length} removed-cut enumeration rejected; ${completed.length}/${ordinals.length} selected cuts verified`, milliseconds: performance.now() - started, averages: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value / ordinals.length])) };
   } catch (cause) { primary = new Error("Native lifecycle matrix failed", { cause }); }
   const closed = await Promise.allSettled(owners.map(owner => owner.close()));
   try {

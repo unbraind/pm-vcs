@@ -1,3 +1,4 @@
+import { testTime } from "../support/depth.ts";
 /** Real lifecycle fixtures, shared by serial regressions and isolated crash workers. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -80,7 +81,7 @@ async function packedFixture(source = false) {
 export async function interruptedUnpack(source = false) {
   const f = await packedFixture(source); const selected = f.repo.readIndex().find(entry => entry.fileId === f.id)!;
   const preloadArgs = !source && process.env.CRASH_PRELOADS !== undefined ? (JSON.parse(process.env.CRASH_PRELOADS) as string[]).flatMap(path => ["--import", path]) : ["--import", new URL("./forbid-git.ts", import.meta.url).href, ...(process.env.CRASH_COMPILE_CACHE === undefined ? [] : ["--import", new URL("./crash-child.ts", import.meta.url).href])];
-  const killed = spawnSync(process.execPath, [...preloadArgs, (source ? undefined : process.env.CRASH_ENTRY) ?? join(packageRoot, "test/helpers/erasure-purge-worker.ts"), f.repo.root, f.id, "unpacked"], { env: { ...testEnvironment(), ...discardChildCoverage(), CRASH_COMPILE_CACHE: process.env.CRASH_COMPILE_CACHE }, encoding: "utf8", timeout: 120_000 });
+  const killed = spawnSync(process.execPath, [...preloadArgs, (source ? undefined : process.env.CRASH_ENTRY) ?? join(packageRoot, "test/helpers/erasure-purge-worker.ts"), f.repo.root, f.id, "unpacked"], { env: { ...testEnvironment(), ...discardChildCoverage(), CRASH_COMPILE_CACHE: process.env.CRASH_COMPILE_CACHE }, encoding: "utf8", timeout: testTime(120_000) });
   assert.equal(killed.signal, "SIGKILL", killed.stderr);
   f.repo.objects.recoverWriterLock();
   f.repo.objects.withWriteLock(() => assert.equal([...f.repo.objects.walkErasureInventory()].filter(entry => entry.id === selected.id).length, 3));

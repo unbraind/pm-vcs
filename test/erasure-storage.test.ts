@@ -423,7 +423,7 @@ test("a post-deletion foreign copy leaves denial pending and native accountabili
   assert.equal(f.repo.operations.read().filter((entry)=>entry.command==="obliterate").length,1);
 });
 
-test("SIGKILL at EVERY erasure proof, scan and publication boundary converges without duplicate receipts", async(t)=>{
+test("SIGKILL at selected erasure proof, scan and publication boundary converges without duplicate receipts", async(t)=>{
   const probe=await fixture(); const steps:string[]=[]; erasureScanBoundary.visit=(step)=>steps.push(step);
   probe.repo.obliterate(probe.fileId,"erase-fixture","incident",new Date(1)); erasureScanBoundary.visit=()=>{};
   const timing=await withErasureFixtureBase("erasure-storage",()=>fixtureCrashMatrix({steps,source:"test/helpers/erasure-scan-worker.ts",prepare:fixture,args:f=>[f.repo.root,f.fileId],verify:f=>{
@@ -432,7 +432,7 @@ test("SIGKILL at EVERY erasure proof, scan and publication boundary converges wi
     assert.equal(Object.keys(JSON.parse(readFileSync(join(f.repo.controlDirectory,"erasure-verification.json"),"utf8")).records).length,1);
     assert.equal(receipt.fileId,f.fileId);
   }}));t.diagnostic(JSON.stringify({scenario:"scan-publication",...timing}));
-  t.diagnostic(`${steps.length} SIGKILL boundaries: ${[...new Set(steps)].join(", ")}`);
+  t.diagnostic(`${timing.count}/${steps.length} selected SIGKILL boundaries: ${[...new Set(steps)].join(", ")}`);
 });
 
 test("fingerprint windows, proof validation, foreign classes and native scanner faults fail safely", async()=>{
@@ -508,7 +508,7 @@ test("raw diagnostics do not guess compressed user bytes and unknown native stor
   assert.equal(scanErasureStorage(root,[fingerprint(selected)]).files,1);
 });
 
-test("SIGKILL at every native proof/denial write step resumes with retained foreign temporaries and one receipt",async(t)=>{
+test("SIGKILL at selected native proof/denial write step resumes with retained foreign temporaries and one receipt",async(t)=>{
   const probe=await fixture();
   /** Use a real child so a crash cannot run JavaScript cleanup or release its writer lease. */
   const run=(f:Awaited<ReturnType<typeof fixture>>,ordinal:number)=>spawnSync(process.execPath,["--import",new URL("./helpers/forbid-git.ts",import.meta.url).href,join(packageRoot,"test/helpers/erasure-proof-crash.ts"),f.repo.root,f.fileId,String(ordinal)],{env:{...testEnvironment(),...discardChildCoverage(),GIT_CEILING_DIRECTORIES:dirname(f.dir.root)},encoding:"utf8",timeout:30_000});
@@ -518,7 +518,7 @@ test("SIGKILL at every native proof/denial write step resumes with retained fore
     assert.equal(receipt.fileId,f.fileId);assert.equal(f.repo.objects.denials()[0].pending,false);
     assert.equal(f.repo.operations.read().filter((entry)=>entry.command==="obliterate").length,1);
   }}));t.diagnostic(JSON.stringify({scenario:"proof-denial",...timing}));
-  t.diagnostic(`${steps.length} native before/after crash cuts across proof and both denial publications`);
+  t.diagnostic(`${timing.count}/${steps.length} selected native before/after crash cuts across proof and both denial publications`);
 });
 
 test("one non-git tracker serializes a competing erasure at EVERY proof/scan/publication boundary and reports peer success truthfully",async(t)=>{

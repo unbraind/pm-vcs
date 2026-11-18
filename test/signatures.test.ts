@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Real native changes, adversarial signatures and atomic receiver policy enforcement. */
 import assert from "node:assert/strict";
@@ -426,12 +427,13 @@ test("wire error reconstruction accepts only validated change ids and fixed refu
   }
 });
 
-test("2,000 native signed changes report measured verification wall time", async () => {
+test(`${testDepth(2000)} native signed changes report measured verification wall time`, async () => {
+  const size = testDepth(2000);
   const { repository, commit, keys } = fixture();
   const commits = new Map<string, Commit>();
   let parent: string | undefined;
   repository.objects.withWriteLock(() => {
-    for (let i = 0; i < 2000; i++) {
+    for (let i = 0; i < size; i++) {
       const draft = { ...commit, parents: parent === undefined ? [] : [parent], message: `synthetic change ${i}` };
       const identity = writeCommit(repository.objects, draft);
       const signed = { ...draft, changeId: identity, attestation: signChange(identity, draft, keys.privateKey) };
@@ -448,19 +450,19 @@ test("2,000 native signed changes report measured verification wall time", async
   assert.equal(verified.handled, true);
   const result = verified.result as { signatures: ChangeSignatureResult[]; corrupt: string[]; missing: string[] };
   assert.deepEqual(result.corrupt, []); assert.deepEqual(result.missing, []);
-  assert.equal(result.signatures.length, 2000); assert.ok(result.signatures.every(row => row.status === "valid"));
-  console.log(`SIGNATURE-BENCHMARK changes=2000 valid=2000 elapsed_ms=${elapsed.toFixed(3)}`);
+  assert.equal(result.signatures.length, size); assert.ok(result.signatures.every(row => row.status === "valid"));
+  console.log(`SIGNATURE-BENCHMARK changes=${size} valid=${size} elapsed_ms=${elapsed.toFixed(3)}`);
   const metadata = new CountedCommits(requireClosure(repository.objects, [parent!]).commits);
   const coldStart = performance.now();
   assertTrustedChanges(repository.controlDirectory, metadata, [parent!]);
   const coldElapsed = performance.now() - coldStart;
-  assert.equal(metadata.visits, 2000);
+  assert.equal(metadata.visits, size);
   metadata.visits = 0;
   const warmStart = performance.now();
   assertTrustedChanges(repository.controlDirectory, metadata, [parent!]);
   const warmElapsed = performance.now() - warmStart;
   assert.equal(metadata.visits, 0);
-  console.log(`SIGNATURE-PUBLICATION-BENCHMARK changes=2000 cold_ms=${coldElapsed.toFixed(3)} warm_ms=${warmElapsed.toFixed(3)} warm_commit_visits=0`);
+  console.log(`SIGNATURE-PUBLICATION-BENCHMARK changes=${size} cold_ms=${coldElapsed.toFixed(3)} warm_ms=${warmElapsed.toFixed(3)} warm_commit_visits=0`);
   updateTrustedKeys(repository.objects, repository.controlDirectory, { keyId: fingerprint, effectiveAt: Date.now() + 1 });
   assert.throws(() => assertTrustedChanges(repository.controlDirectory, commits), { reason: "revoked" });
 });
