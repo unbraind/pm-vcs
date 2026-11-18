@@ -1,0 +1,238 @@
+id: pm-vcs-tjnr
+title: Install the pinned release npm into a job-local prefix
+description: "The release workflow replaces the runner's global npm with the pinned npm. Parallel jobs on one runner host share the toolcache Node installation, so one job's global install mutates a sibling job's npm mid-install (ENOTEMPTY, or npm: command not found). Tracked by unbraind/pm-ops#284."
+type: Issue
+status: in_progress
+priority: 2
+tags[2]: "gh:unbraind/pm-ops#284","gh:unbraind/pm-vcs#213"
+created_at: "2026-11-16T14:39:25.582Z"
+updated_at: "2026-11-17T23:26:42.546Z"
+author: pi-glm
+acceptance_criteria: "The release workflow installs the pinned npm with --prefix into a job-local directory and prepends that prefix bin to the job path; The workflow keeps the exact-version assertion on the effective npm; A workflow-contract test fails if any workflow replaces the global npm; Gates pass: typecheck, lint, tests, changelog:check"
+comments[38]{created_at,author,text}:
+  "2026-11-16T15:18:05.935Z",codex-sol,"Continuation: verified the existing worktree and remote branch state, preserved the earlier changes, and reused this item. Rerunning required gates to completion under the continuation author before committing results."
+  "2026-11-16T15:28:55.474Z",codex-sol,"Root cause confirmed in the workflow source: global installation of the pinned npm replaces the same Node installation used by parallel jobs on a shared toolcache. Replaced each bootstrap with a job-local prefix, published only its bin directory to the job PATH, and retained exact-pin checks including a separate subsequent-step assertion. Workflow contracts reject global npm replacement across all workflow files. No runner settings or shared tool installations were modified."
+  "2026-11-16T15:42:42.194Z",codex-sol,The first combined gate command hit its 20-minute timeout during shared-host disk contention and is not pass evidence. Retrying all gates to completion using memory-backed temporary fixtures and the existing harness deadline scale. Assertions and test selection are unchanged.
+  "2026-11-16T15:59:12.342Z",codex-sol,"Gate results before publication: typecheck and lint completed successfully; node --test test/release-approval.test.ts and changelog:check passed together. The first npm test command timed out during disk contention; the full replacement run is active and remains pending evidence. Regenerated the required self-host bundle using the repository writer. Publishing a draft for exact-head CI validation."
+  "2026-11-16T16:09:19.061Z",codex-sol,"Implementation commit 139bd057e9477e86251542deaf86e18a64f31be9 installs and verifies the release npm privately to each job. Typecheck, lint, workflow contracts and changelog checks passed. The first broad npm test attempt timed out; the full replacement remains active. Releasing the claim for orchestrator verification and exact-head CI."
+  "2026-11-16T16:47:57.335Z",codex-sol,"The broad local npm test retry reached its 60-minute command limit during the release suite and is not pass evidence. Typecheck, lint, workflow contracts, changelog:check and the committed self-host verification passed separately. Full release-suite and hosted Windows acceptance remain pending CI. Tracking PR: https://github.com/unbraind/pm-vcs/pull/213. The PR remains open for orchestrator verification; exact-head CI is queued or running."
+  "2026-11-16T19:23:57.341Z",codex-sol,"Review round P: replace the workflow-wide regex with a dependency-free shell command parser and regression fixtures. Parse run scripts with existing yaml where available; preserve allowed prefix-local installs. Verify typecheck, lint or docstring, focused guard/workflow contracts and changelog checks before pushing. No review-thread actions."
+  "2026-11-16T19:28:37.078Z",codex-sol,"Review round P addresses PRRT_kwDOToJT7M64FalA: shared-npm replacement guard now tokenizes shell commands and uses existing yaml for run scripts. Added 38 fixtures covering npm aliases, flag placement/location, package specs, continuations, quotes/paths, separators and allowed installs. npm run typecheck, npm run build:test, npm run lint and npm run changelog:check PASS. The new linked guard and workflow contracts passed through pm test --run --only-last --progress: 71 pass, 0 fail/cancel/skip/todo. Full-suite certification is left to CI; review threads remain untouched. Stage the new files and final tracker pair before self-host:write; accept:self-host must pass at committed HEAD before push."
+  "2026-11-17T07:50:21.871Z",pi-guard-1117aj,"Round AJ: merged origin/main (kept both sides; the selfhost bundle is a regenerated artifact and is rewritten by the self-host gate at HEAD; no history lines rewritten), then replaced the guard's shell parser with a line-based fail-closed rule identical to the other fleet repositories: logical lines only (continuations joined, newline-only splits), comment and here-document text scanned like any other text, install family extended with update/up/upgrade/udpate, markers covering single-dash g clusters, global-containing tokens, -L with any value and two-plus-letter prefixes of global/location, npm config set/set as a run-wide global signal (narrowed to a set token: a read-only 'npm config get globalconfig' line tripped the broader form), operands naming npm by substring or computed form (tarball URLs, x@npm:npm), exemptions restricted to exact approved bootstrap lines, and step-level rejection of GITHUB_ENV npm_config_* writes and global/location npmrc writes. The accepted npx fixture moved to rejected (thread PRRT_kwDOToJT7M64II4P): the rule scans quoted text, so npx-prefixed and echoed global installs can no longer hide. Both guard and release-approval test files now import the session isolation helper first (thread PRRT_kwDOToJT7M64GMoi), and the release-approval test also asserts the bootstrap appends the same prefix's node_modules/.bin to $GITHUB_PATH and that the Verify job-local npm version step expects exactly the installed version."
+  "2026-11-17T07:53:55.259Z",pi-guard-1117aj,"Gates at HEAD: guard fixtures (130) and release-approval tests pass; typecheck, eslint, duplication gate and changelog:check pass; the test-environment isolation audit passes with the corrected import order. Self-host gate executed in order: commit 0421d29, build, self-host:write, bundle commit d3c0d5d, then accept:self-host at HEAD reported the committed bundle's tip tree byte-identical to the committed source (validated external action revisions excepted). Full suite and hosted acceptance remain with CI."
+  "2026-11-17T08:23:32.929Z",codex-sol,"Round AM verified against unchanged guard: punctuation and comment-continuation bypasses, operandless global installs, persistent npm config setters, and spaced YAML env keys reproduce. Quoted command words already reject; add explicit regression coverage. Keep line-based checks and exact raw-line bootstrap matching. Unresolved review threads: PRRT_kwDOToJT7M64U3xe, PRRT_kwDOToJT7M64U3xi. Delegated npx finding is already rejected by Round AJ; preserve its rejected fixture. Run targeted gates directly; never execute linked PM tests. Preserve the existing test-session isolation import in the pm-vcs fixture."
+  "2026-11-17T08:29:14.477Z",codex-sol,"Round AM targeted verification: 190 tests passed with zero failures, cancellations or skips. node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/test-environment.test.ts => PASS; npm run typecheck => PASS; npm run lint => PASS; npm run duplicates => PASS; npm run changelog:check => PASS. All real workflows pass the guard; no bootstrap trailing comment was found. Guard source md5 d7ec9edd85b0c9fbe3d5a9f0e4d8d9e2 is identical across five packages. Fixture bodies match, retaining the required pm-vcs session-isolation import. Protected root item dates are unchanged; rejected fixtures are preserved. Same-class config persistence and spaced YAML env-key fixes from PRRT_kwDOVHTnEc64VRGg, PRRT_kwDOToJT7M64U3xi and PRRT_kwDOVHTnEc64VRGj were applied to every copy. Next: commit source and tracker, build, regenerate selfhost.bundle, commit, and accept:self-host at HEAD. Keep the claim until archive evidence is recorded."
+  "2026-11-17T08:32:17.261Z",codex-sol,"Round AM self-host receipt: npm run build and npm run self-host:write passed after source/tracker commit a2a614a09e1627c859e6e034de2f9cd8cc6aa438. Archive commit 0db653a15ff023a051d3ec173b290f06633b07f1 passed npm run accept:self-host at HEAD: the committed tip tree is byte-identical to committed source except validated external action revisions. Recording this receipt and releasing the claim requires one final archive regeneration and commit; accept:self-host will run again at the final HEAD. All targeted gates passed. No item closure or protected date mutation."
+  "2026-11-17T08:42:15.807Z",codex-sol,"Round AN: inspect unresolved review threads; scan joined and physical lines independently and union findings, with exact bootstrap exemptions local to each form. Preserve all fixtures and add quoted-hash regressions. Run the requested package gates directly; do not execute linked PM tests."
+  "2026-11-17T08:48:40.083Z",codex-sol,"Round AN verified: PRRT_kwDOToJT7M64VtgM. Joined and physical scans union findings with exact per-form exemptions; guard md5 9472ab1dff99c26c27085f766054f46d matches all five PRs. Four quoted-hash fixtures and LF/CRLF union/exemption/dedup checks added; all existing fixtures retained. Restored the package-specific isolation import after the first suite caught its omission during fixture copying. Final node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/test-environment.test.ts: 195/195 pass, zero skipped. npm run typecheck, npm run changelog:check, npm run lint and npm run duplicates: pass; duplicates 0%. Next: commit source and PM evidence, npm run build, npm run self-host:write, commit bundle, npm run accept:self-host at final HEAD. No review-thread mutations or lifecycle timestamp changes."
+  "2026-11-17T08:51:28.590Z",codex-sol,"Self-host evidence: source and tracker committed as cb175a99bb3a1374eff5ec669171e2fe704a5bb0; npm run build and npm run self-host:write passed; bundle committed as 4ac4d4e7e62fa01f9b40fc83d4b2153a34379027. npm run accept:self-host passed at that HEAD, verifying committed bundle/source byte equality. The final receipt requires another archive refresh; stage the PM pair, regenerate the bundle, commit them together, and repeat acceptance at the final HEAD. All seven real workflows were also scanned directly with zero violations."
+  "2026-11-17T09:02:32.767Z",codex-sol,"Round AP: reject every global update/up/upgrade/udpate line regardless of operands; option values, redirect targets and comment words cannot hide an update. Install-family operand handling stays unchanged. Preserve all prior fixtures, add the five requested rejections and alias/global-environment coverage, then run the Round AN gates directly. All five PRs remain open. No review-thread mutations."
+  "2026-11-17T09:04:43.408Z",codex-sol,"Round AP verification: node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/test-environment.test.ts => PASS; npm run typecheck => PASS; npm run lint => PASS; npm run duplicates => PASS; npm run changelog:check => PASS; git diff --check => PASS. Focused suite: ℹ tests 201, ℹ pass 201, ℹ fail 0, ℹ cancelled 0, ℹ skipped 0, ℹ todo 0. Every real workflow still passes; all prior fixtures retained. Guard md5 e882f7b9396d4a810ccf85250dc05a04. All tracker writes finish before the source commit; build, self-host:write, bundle commit and accept:self-host at final HEAD follow without further tracker writes."
+  "2026-11-17T10:20:57.845Z",codex-sol,"Round AR: reproduced assignment-valued short-flag, renamed-archive, quoted-expression and uppercase Boolean bypasses against the unchanged shared guard. Preserve dual line scans and all fixtures; replace global operand inference with a registry-spec allowlist, normalize option names before marker tests and compare env values exactly. Run the round AN gates and regenerate changelog after all tracker writes. Leave this item open."
+  "2026-11-17T10:26:07.094Z",codex-sol,"Round AR implementation and validation: No unresolved review threads; synchronize all four Round AR fixes.. Global install operands now require the plain registry name-spec allowlist and exclude npm identities; archive, path, URL, git, alias, computed and quote-fragment operands reject. Option names are unquoted and split before assignment-valued marker tests. Env keys ignore case but safe global/location values compare exactly, including run assignments. Both physical and joined scans and bootstrap exemptions remain. Preserved all prior fixtures; focused guard: 202/202; round AN contract gate: 239/239; typecheck passed. All real workflows pass the guard. Guard md5: 1b36b35bf3ce5df79ae313b939f17971. Lint and duplication gates passed with zero clones. Final tracker writes precede tag refresh and changelog regeneration/check; keep the item in_progress and release the claim. No review thread mutations or workflow dispatches. After the code/tracker commit: build, write and commit the bundle, then accept:self-host at final HEAD. No tracker mutation follows that acceptance gate."
+  "2026-11-17T10:52:49.192Z",codex-sol,"Round AS: verified current code before editing. The line union omits PowerShell backticks and the workflow extractor omits container and service env scopes. Add LF/CRLF and effective-env regressions, preserve all existing fixtures, and keep all five guard copies identical. The only merge conflict with main is the generated self-host bundle; reconcile main separately before code changes."
+  "2026-11-17T11:01:40.563Z",codex-sol,"Round AS: addressed shared guard findings PRRT_kwDOTOTl1M64YXiD and PRRT_kwDOTOTl1M64YXiL from pm-ops#289 with LF/CRLF PowerShell continuations, normalized physical lines and container/service env regression fixtures. Preserve independent backslash/physical scans and every existing fixture. All five copies have md5 a515dca0fd6175db9bcb1dc5c780989c. Merged main separately before code edits; the generated bundle conflict retained the branch artifact pending required regeneration after the source commit. All main changelog bullets retained. Requested gate passed 241/241; build, typecheck, lint and duplicates passed. Additional referencing tests ran 70/71: the operational committed-archive subprocess hit its fixed 60-second timeout before the final source and bundle commits; repeat that file after regeneration. No equivalent overlapping npm install test exists here. No findings refused. Changelog regeneration/check, source commit, build, bundle write/commit and final self-host acceptance follow in that order, with no tracker write after acceptance. CI is not yet verified."
+  "2026-11-17T11:07:12.382Z",codex-sol,"Final referencing check at the regenerated archive head 948f18c still passed 5/6 and hit ETIMEDOUT in the operational subprocess after 60 seconds. This is separate from the guard fixes; deduplicated follow-up pm-vcs-selfhost-cli-timeout records the repeated evidence. All tracker writes finish now, followed by changelog regeneration/check, a tracker commit, build, a refreshed bundle commit and direct accept:self-host at final HEAD. The final acceptance result will be reported externally because no tracker writes may follow that gate."
+  "2026-11-17T12:06:12.846Z","harness:claude-code","Orchestrator: removed pm-vcs-selfhost-cli-timeout from this branch before merge. It duplicates pm-vcs-selfhost-audit-budget, filed earlier on pm-vcs#209 for the same 60000 ms operational self-host subprocess timeout in test/exact-gates.test.ts. That item carries the follow-up; the ETIMEDOUT evidence above stands as recorded."
+  "2026-11-17T13:53:44.168Z",codex-sol,"Round AV: reproduced command-prefix/camelCase, Cmd continuation and indentationless job-list defects with failing regressions. Checked npm 11.21.0 packaged command/alias definitions; retain conservative prefix scanning, physical/joined union and operand allowlist. Audit found no optional npm setup followed by unconditional verification in this repository."
+  "2026-11-17T13:57:30.756Z",codex-sol,"Round AV verified results: node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/release-preparation.test.ts test/test-environment.test.ts PASS (246/246/0/0/0 tests/pass/fail/cancelled/skipped); npm run typecheck PASS; npm run lint PASS; npm run duplicates PASS; Build, self-host writer and bundle commit will follow this source/tracker commit; accept:self-host will run at the final committed HEAD with no later tracker writes.. Changelog regeneration/check follows these final tracker writes. Item remains in progress for orchestrator review."
+  "2026-11-17T14:51:17.775Z",codex-sol,"Round AW: verifying four shared guard findings before edits: continuation forms must scan separately, link/ln can have implicit global effects, --g denotes global mode, and multiline npmrc writes must be checked against all run contents. Keep the line-based guard identical across all five packages, preserve existing fixtures, and run workflow/reference gates. No new tracker items or closures."
+  "2026-11-17T14:57:58.375Z",codex-sol,"Round AW: reproduced all four findings against the unchanged guard, including the two-step npmrc workflow. Addresses PRRT_kwDOUMUq1864eCYU, PRRT_kwDOUMUq1864eYv2, PRRT_kwDOVHTnEc64esLn, PRRT_kwDOVHTnEc64esLy, duplicate continuation thread PRRT_kwDOToJT7M64eSHz. The line-based guard now unions physical lines and three independent joins, applies the registry operand allowlist to implicit link/ln effects (including bare links), accepts one-letter global option prefixes, and checks npmrc writes against the whole run. Preserved every existing fixture; added accepted non-npm registry links and npmrc writes with no global/location mention. Guard MD5 02f427a1776c5b99d68b1c10b03a3939. Verified: node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/release-preparation.test.ts test/test-environment.test.ts PASS (272/272/0/0/0 tests/pass/fail/cancelled/skipped); npm run typecheck PASS; npm run lint PASS; npm run duplicates PASS. After this final tracker update, regenerate/check the changelog, commit source/tracker, build, write and commit selfhost.bundle, then run accept:self-host at final HEAD; no tracker writes will follow that gate. All five PRs were open and mergeable; the pm-slack unresolved-thread read had no findings. Final changelog generation/check follows these tracker writes. Item remains in progress for orchestrator review."
+  "2026-11-17T14:59:44.683Z",codex-sol,"Round AW bundle-reference audit: selfhost.bundle additionally requires test/exact-gates.test.ts and test/self-host.test.ts; test/release-preparation.test.ts already passed. Run the additional pair serially with RAM temporary storage in a fresh isolated clone of the final committed HEAD, preserving source, assertions, timeouts and identity allowlists. This separates final-head evidence from unrelated unreachable objects in the shared development object store. Record this plan before changelog/source finalization; no tracker write follows final self-host acceptance."
+  "2026-11-17T15:37:29.069Z",codex-sol,"Round AW late review PRRT_kwDOTOTl1M64gC3N: reproduced empty findings for npm link --loglevel warn, npm ln --loglevel warn, and a command-looking option value before link. Option values must not masquerade as package operands for implicit links. Keep the scanner line-based: accept inline option values and known boolean global flags, but reject ambiguous unbound link options conservatively, including shell punctuation hidden in an option token. Existing accepted link -g some-tool remains accepted; added accepted inline-option registry links and rejected bare/options/punctuation regressions. Recheck the affected AN/reference suites and quality gates, then finalize tracker/changelog/source and regenerate the final self-host archive where required."
+  "2026-11-17T15:45:49.755Z",codex-sol,"Round AW PRRT_kwDOTOTl1M64gC3N final refinement: read-only npm config queries confirmed that -g false and --g false consume a boolean option value. Empty inline values also fail closed. Verified: every existing fixture remains, new link-option and punctuation regressions reject, and known boolean global/inline-value registry links remain accepted. Full line-based guard MD5 0055f72ef4fb208809848324cb902d9a. Final affected gates: node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/test-environment.test.ts test/release-preparation.test.ts PASS (287/287/0/0/0 tests/pass/fail/cancelled/skipped); npm run typecheck PASS; npm run lint PASS; npm run duplicates PASS. Production package source and manifests did not change in this follow-up; prior expanded reference and real npm/Bun acceptance results remain applicable. Final tracker writes precede changelog regeneration/check. Commit source/tracker first, then build, write/commit the archive, and run accept:self-host plus the bundle-reference pair at the resulting final HEAD; no tracker write follows that final acceptance. Leave this item in progress for orchestrator verification."
+  "2026-11-17T17:32:46.988Z",codex-sol,"Round BA: verified review gaps in workflow extraction, run-wide configuration and operand classification, or release-fixture generation order. Implement focused regression controls, retain existing fixture verdicts and run required package gates. No review-thread actions, merge or publication. Leave item open."
+  "2026-11-17T17:46:57.558Z",codex-sol,"Guard review fixes propagated from the validated BA regressions. YAML parsing, scoped env precedence, matrix.env metadata, conservative env-key mentions, npmrc writers, separated long-option values and forced-env exemptions pass 306/306 focused guard, workflow and session-environment checks. Guard md5 37eeb79e59b47af34f9466e1d264e893. Typecheck, lint and duplication gates passed. Supplementary bundle-reference tests passed 70/71; the unchanged operational entry-point test hit its existing 60-second child-process timeout while importing the committed archive. A focused retry on the guard branch also timed out at that limit before any BA code commit. No unrelated timeout policy was changed. All tracker evidence is finalized now, including claim release. Next fetch tags, regenerate/check CHANGELOG.md, commit code and tracker, build, regenerate and commit selfhost.bundle, then run accept:self-host at final HEAD with no subsequent tracker writes. Leave items in progress. No review-thread actions, merge, dispatch or publication."
+  "2026-11-17T19:18:42.663Z",codex-sol,"Review BG: tie npm version verification to the named post-bootstrap step and exercise its removal as a mutation control."
+  "2026-11-17T19:22:10.048Z",codex-sol,The previous assertion passed after the named verification step was removed. The new mutation control rejects both removal and running it before the bootstrap. All five guard copies share the same checksum.
+  "2026-11-17T19:25:39.248Z",codex-sol,Review BG maps PRRT_kwDOToJT7M64kbji to 2a6c4f8886f41643ca198b457a5ee24fe6c1cb73. The assertion reads the named verification step after bootstrap. Removing or moving that step fails the mutation test.
+  "2026-11-17T20:38:32.692Z",codex-sol,"Round BH. 0101c1f carries the shared guard and fixtures byte for byte at MD5 7a8164f2b5a5aadb3ca9dcdbbd1d2179. Built on the pushed round BG evidence at 10ad31e. Guard 288/288, seven checked workflow files, 74 release and workflow tests, typecheck, test compilation, lint and changelog check passed. The self-host snapshot is regenerated from the staged source and tracker evidence; acceptance is checked on the resulting commit."
+  "2026-11-17T23:26:41.102Z",codex-sol,"Round BK maps PRRT_kwDOToJT7M64rWej to f6970afb4ca499e7a615b62b36242eb98163fd34. The release approvals test matches standalone npm installation, path export and version-check commands and rejects conditional or failure-tolerant steps. New controls fail with the former matcher and pass with the fix. Release approval tests passed 34 of 34 and the three bundle-reference suites passed 71 of 71. Typecheck, test typecheck, lint and changelog check passed. The shared npm guard retains MD5 7a8164f2b5a5aadb3ca9dcdbbd1d2179."
+files[8]{path,scope}:
+  .github/workflows/release.yml,project
+  selfhost.bundle,project
+  test/global-npm-guard.test.ts,project
+  test/global-npm-guard.ts,project
+  test/release-approval.test.ts,project
+  test/release-preparation.test.ts,project
+  test/verify-release-changelog-date.test.ts,project
+  test/verify-release-publish-attestation.test.ts,project
+tests[24]:
+  - command: "npm run typecheck && npm run lint && npm test && node --test test/release-approval.test.ts && npm run changelog:check"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-16T15:20:46.990Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: "npm run typecheck && npm run lint && npm test && node --test test/release-approval.test.ts && npm run changelog:check && git diff --check"
+    scope: project
+    timeout_seconds: 3600
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-16T15:42:58.727Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: "node --test test/release-approval.test.ts && npm run changelog:check"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-16T15:53:24.754Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test test/global-npm-guard.test.ts test/release-approval.test.ts test/release-preparation.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-16T19:26:27.150Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: "node --test test/global-npm-guard.test.ts test/release-approval.test.ts && npm run typecheck && npm run lint && npm run duplicates && npm run changelog:check"
+    scope: project
+    provenance:
+      author: pi-guard-1117aj
+      created_at: "2026-11-17T07:50:22.592Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: "node --test test/test-environment.test.ts && npm run build && npm run self-host:write && git -C . diff --check && npm run accept:self-host"
+    scope: project
+    provenance:
+      author: pi-guard-1117aj
+      created_at: "2026-11-17T07:50:23.405Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/test-environment.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T08:25:46.005Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: npm run typecheck
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T08:27:48.529Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: npm run lint
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T08:27:51.154Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: npm run duplicates
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T08:28:05.098Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: "npm run changelog:check"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T08:28:09.225Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: npm run build
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T08:29:15.319Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: "npm run self-host:write"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T08:29:16.315Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: "npm run accept:self-host"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T08:29:17.487Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test test/global-npm-guard.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T09:02:46.336Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test --test-concurrency=2 test/release-preparation.test.ts test/exact-gates.test.ts test/self-host.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T10:57:48.031Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/release-preparation.test.ts test/test-environment.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T13:54:13.130Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: TMPDIR=/dev/shm node --test --test-concurrency=1 test/exact-gates.test.ts test/self-host.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T14:59:41.400Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test --test-concurrency=2 test/global-npm-guard.test.ts test/release-approval.test.ts test/test-environment.test.ts test/release-preparation.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T15:45:43.449Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: "npm run build && npm run build:test && PM_TEST_DEPTH=quick node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=2 test/ci-codeql.test.ts test/dependency-refresh-workflow.test.ts test/exact-gates.test.ts test/global-npm-guard.test.ts test/quality-scripts.test.ts test/raw-coverage.test.ts test/release-approval.test.ts test/release-preparation.test.ts test/self-host.test.ts test/verify-release-changelog-date.test.ts test/verify-release-publish-attestation.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T19:22:08.992Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test --test-concurrency=2 test/global-npm-guard.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T20:34:25.433Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test --test-concurrency=2 test/release-approval.test.ts test/dependency-refresh-workflow.test.ts test/release-preparation.test.ts test/verify-release-changelog-date.test.ts test/verify-release-publish-attestation.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T20:34:31.360Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test test/release-approval.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T23:26:12.114Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+  - command: node --test --test-concurrency=1 test/release-preparation.test.ts test/exact-gates.test.ts test/self-host.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T23:26:13.251Z"
+      source_kind: local_mutation
+      source_ref: fix/job-local-npm
+docs[3]{path,scope}:
+  CHANGELOG.md,project
+  README.md,project
+  test/global-npm-guard.ts,project
+body: ""
