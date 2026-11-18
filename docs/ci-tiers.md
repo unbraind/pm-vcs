@@ -237,8 +237,9 @@ as the original gate, before calculating percentages. Merging percentages or
 line-only branch keys is invalid: dynamically emitted branch ranges may differ
 between shards. A real two-file fixture covers a branch and a function exclusively
 in each shard and compares the merged totals and hits with an unsharded run.
-Missing/duplicate shards and differing Node versions fail closed. Thresholds,
-source scope, `npm run coverage`, `npm run release:check` and ci-deep stay unchanged.
+Missing or duplicate shards and differing Node majors fail closed. Minor and
+patch differences within the same major are accepted. Thresholds, source scope,
+`npm run coverage`, `npm run release:check` and ci-deep stay unchanged.
 
 The VCS merge invokes c8 report with the original scope, `--all --100 --per-file`,
 so every source file and all four original dimensions remain mandatory.

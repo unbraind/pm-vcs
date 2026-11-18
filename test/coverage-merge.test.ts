@@ -56,7 +56,15 @@ export function negative() { return "negative"; }
   change(artifact=>{artifact.shard="3/2"});assert.throws(()=>mergeCoverage(root,paths,2),/incomplete shard/);
   change(artifact=>{artifact.raw[0].url="../outside.ts"});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
   change(artifact=>{artifact.raw[0].url=resolve(root,"src/value.ts")});assert.throws(()=>mergeCoverage(root,paths,2),/non-relative source/);
-  change(artifact=>{artifact.node="0.0.0"});assert.throws(()=>mergeCoverage(root,paths,2),/runtime mismatch/);
+  const [major, minor, patch] = process.versions.node.split(".").map(Number);
+  change(artifact => { artifact.node = [major, minor, patch! + 1].join("."); });
+  assert.equal(mergeCoverage(root, paths, 2), 0, "accept different patches within one Node major");
+  change(artifact => { artifact.node = [major! + 1, minor, patch].join("."); });
+  assert.throws(() => mergeCoverage(root, paths, 2), /runtime mismatch/);
+  change(artifact => { artifact.node = String(major); });
+  assert.throws(() => mergeCoverage(root, paths, 2), /runtime mismatch/);
+  change(artifact => { Reflect.deleteProperty(artifact, "node"); });
+  assert.throws(() => mergeCoverage(root, paths, 2), /runtime mismatch/);
   change(artifact=>{artifact.digest="wrong"});assert.throws(()=>mergeCoverage(root,paths,2),/source mismatch/);
   change(artifact=>{Reflect.deleteProperty(artifact,"raw");});assert.throws(()=>mergeCoverage(root,paths,2),/first\/hits\.json has no raw hits array/);
   change(artifact=>{Reflect.deleteProperty(artifact,"shard")});assert.throws(()=>mergeCoverage(root,paths,2),/first\/hits\.json has no shard ordinal/);

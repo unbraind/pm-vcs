@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { globSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 import test from "node:test";
 import { parseDocument } from "yaml";
 import { testEnvironment } from "./helpers/test-environment.ts";
@@ -13,6 +13,32 @@ import { shardTestFiles, testFileWeight } from "./helpers/ci-shards.ts";
 const document=parseDocument(readFileSync(".github/workflows/ci.yml","utf8"),{strict:true,uniqueKeys:true});
 assert.deepEqual(document.errors,[]);
 const jobs=document.toJS().jobs;
+
+test("the coverage merge download selects only successful shard artifacts", () => {
+  type Step = { uses?: string; with?: { name?: string; pattern?: string } };
+  const shardJob = jobs["coverage-shard"];
+  const uploadSteps = (shardJob.steps as Step[]).filter(step => step.uses?.startsWith("actions/upload-artifact@"));
+  const rawUpload = uploadSteps.find(step => step.with?.name === "coverage-shard-${{ matrix.shard }}");
+  assert.ok(rawUpload, "each shard must upload its raw hits");
+  assert.ok(uploadSteps.length > 1, "failed shards must retain diagnostic artifacts");
+
+  const download = (jobs["coverage-merge"].steps as Step[]).find(step => step.uses?.startsWith("actions/download-artifact@"));
+  const pattern = download?.with?.pattern;
+  assert.ok(pattern, "the merge must filter downloads by artifact name");
+
+  for (const job of Object.values(jobs) as { steps?: Step[] }[]) {
+    for (const step of job.steps ?? []) {
+      if (!step.uses?.startsWith("actions/upload-artifact@")) continue;
+      const name = step.with?.name;
+      assert.ok(name, "an artifact upload must have an explicit name");
+      for (const shard of shardJob.strategy.matrix.shard as number[]) {
+        const artifact: string = name.replaceAll("${{ matrix.shard }}", String(shard));
+        assert.equal(matchesGlob(artifact, pattern), step === rawUpload, artifact);
+      }
+    }
+  }
+});
+
 test("quick and coverage matrices retain all files and unchanged deep gates",()=>{
   assert.deepEqual(jobs["quick-shard"].strategy.matrix,{"node-version":[22],shard:Array.from({length:8},(_,i)=>i+1)});
   assert.deepEqual(jobs["coverage-shard"].strategy.matrix,{"node-version":[26],shard:Array.from({length:8},(_,i)=>i+1)});

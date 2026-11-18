@@ -26,11 +26,13 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
   const scratch = mkdtempSync(join(coverageDirectory, "merged-raw-"));
   try {
     const ordinals = new Set<string>();
+    const nodeMajor = process.versions.node.split(".")[0];
     for (const [index, path] of paths.entries()) {
       const artifact = JSON.parse(readFileSync(resolve(root, path), "utf8"));
       if (!Array.isArray(artifact.raw)) throw new Error(`coverage-gate: ${path} has no raw hits array`);
       if (typeof artifact.shard !== "string") throw new Error(`coverage-gate: ${path} has no shard ordinal`);
-      if (artifact.node !== process.versions.node || ordinals.has(artifact.shard)) throw new Error("coverage-gate: duplicate shard or runtime mismatch");
+      const nodeVersion = typeof artifact.node === "string" && /^(\d+)\.\d+\.\d+(?:-[\w.-]+)?$/.exec(artifact.node);
+      if (!nodeVersion || nodeVersion[1] !== nodeMajor || ordinals.has(artifact.shard)) throw new Error("coverage-gate: duplicate shard or runtime mismatch");
       ordinals.add(artifact.shard);
       if (artifact.digest !== digest) throw new Error("coverage-gate: source mismatch (source files, test inventory, shard timings or gate options)");
       const result = artifact.raw.map((script: {url: string}) => {

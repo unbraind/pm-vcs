@@ -5,9 +5,24 @@ import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, cpSync, rmSync } f
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { testEnvironment } from './helpers/test-environment.ts';
-import { join, matchesGlob } from 'node:path';
+import { join } from 'node:path';
 import test from 'node:test';
 import { parseDocument } from 'yaml';
+
+/** Apply the workflow's star patterns in order, including paths in dot directories. */
+function selectedByPaths(path: string, patterns: readonly string[]): boolean {
+  return patterns.reduce((selected, entry) => {
+    const pattern = entry.replace(/^!/, '');
+    assert.doesNotMatch(pattern, /[?+[\]{}()\\]/, 'unsupported workflow path pattern');
+    const expression = pattern.split(/(\*\*\/|\*\*|\*)/).map(part => {
+      if (part === '**/') return '(?:[^/]+/)*';
+      if (part === '**') return '[\\s\\S]*';
+      if (part === '*') return '[^/]*';
+      return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }).join('');
+    return new RegExp('^' + expression + '$').test(path) ? !entry.startsWith('!') : selected;
+  }, false);
+}
 
 test('CodeQL filters inert data and re-includes every executable tracker extension', () => {
   const document = parseDocument(readFileSync('.github/workflows/codeql.yml', 'utf8'), { strict: true, uniqueKeys: true });
@@ -15,12 +30,25 @@ test('CodeQL filters inert data and re-includes every executable tracker extensi
   const workflow = document.toJS();
   for (const event of ['push', 'pull_request']) {
     const patterns: string[] = workflow.on[event].paths;
+    const trackerExclusion = '!.agents/pm/**';
+    const trackerItem = '.agents/pm/tasks/a.toon';
+    const assertTrackerExcluded = (paths: readonly string[]) => {
+      assert.equal(selectedByPaths(trackerItem, paths), false, event + ': ' + trackerItem);
+    };
+    assert.ok(patterns.includes(trackerExclusion), event + ': tracker exclusion is required');
+    assertTrackerExcluded(patterns);
+    assert.throws(
+      () => assertTrackerExcluded(patterns.filter(pattern => pattern !== trackerExclusion)),
+      { code: 'ERR_ASSERTION' },
+      event + ': removing the tracker exclusion must fail the contract',
+    );
     for (const [path, expected] of [
-      ...['js', 'mjs', 'cjs', 'ts', 'mts', 'cts', 'tsx', 'jsx'].flatMap(extension => [`.agents/pm/check.${extension}`, `.agents/pm/nested/check.${extension}`].map(path => [path, true] as const)),
+      ...['js', 'mjs', 'cjs', 'ts', 'mts', 'cts', 'tsx', 'jsx'].flatMap(extension =>
+        ['.agents/pm/check.', '.agents/pm/nested/check.', '.agents/pm/.nested/check.'].map(stem => [stem + extension, true] as const)),
       ['README.md', false], ['docs/example.json', false], ['package-lock.json', false],
-      ['.agents/pm/tasks/a.toon', false], ['.agents/pm/history/a.jsonl', false], ['.agents/pm/settings.json', false], ['index.ts', true],
+      ['.agents/pm/history/a.jsonl', false], ['.agents/pm/settings.json', false], ['index.ts', true],
     ] as const) {
-      assert.equal(patterns.reduce((selected, pattern) => matchesGlob(path, pattern.replace(/^!/, '')) ? !pattern.startsWith('!') : selected, false), expected, path);
+      assert.equal(selectedByPaths(path, patterns), expected, event + ': ' + path);
     }
   }
 });

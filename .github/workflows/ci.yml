@@ -172,7 +172,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: coverage-shard-${{ matrix.shard }}-failure
+          name: coverage-failure-shard-${{ matrix.shard }}
           path: coverage/shard-${{ matrix.shard }}/
           if-no-files-found: warn
           retention-days: 7
