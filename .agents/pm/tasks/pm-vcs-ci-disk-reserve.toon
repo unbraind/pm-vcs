@@ -6,12 +6,10 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-18T06:18:14.009Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-11-18T06:20:04.784Z"
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[80]:
+comments[83]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -253,6 +251,15 @@ comments[80]:
   - created_at: "2026-11-18T06:17:34.087Z"
     author: codex-sol
     text: "Round BV regression evidence: all three new URL fixtures fail against the previous implementation (plain import survives but query/fragment imports and encoded delimiter filenames are dropped). The patched implementation passes all three, compares exact merged and unsharded c8 counters, and passes the expanded encoded traversal and unknown-source rejection fixture. Typecheck, test typecheck, lint, and changelog regeneration/check passed; broader focused gate tests continue."
+  - created_at: "2026-11-18T06:19:03.792Z"
+    author: codex-sol
+    text: "Round BV thread PRRT_kwDOToJT7M64yYZu maps to implementation commit f8c4841e5f510296cf792c9efe09553ddf41aedf. The shard filter and merge preserve each encoded relative module URL plus its exact original query/fragment suffix; only the decoded path is checked for source membership. Fixtures cover three identities, one branch per instance, complementary branches across shards, literal delimiter filenames, encoded traversal and unknown-source rejection."
+  - created_at: "2026-11-18T06:19:28.634Z"
+    author: codex-sol
+    text: "Round BV gates on Node 24.19.0: the focused coverage-merge, ci-shards, test-environment and exact-gates command passed 24/24, zero failures or skips. The supplemental encoded traversal/unknown-source fixture passed 1/1 after its additions. npm run typecheck, npm run build:test and npm run lint passed on the final source/test snapshot. git fetch --tags origin, npm run changelog:full and npm run changelog:check passed. Node 26.13.0 coverage/shard/environment verification continues; final self-host regeneration and committed-HEAD acceptance follow the tracker receipt."
+  - created_at: "2026-11-18T06:20:03.095Z"
+    author: codex-sol
+    text: "Round BV Node 26.13.0 verification passed 18/18 coverage-merge, ci-shards and test-environment tests, zero failures or skips, including exact merged/unsharded counters. All requested source/test checks are green. Releasing the claim with the item still in progress for orchestrator verification. The final receipt will regenerate selfhost.bundle after tracker/changelog changes and run npm run accept:self-host at committed HEAD before push. Hosted CI for the new head is not observed; no review threads or workflow controls were changed."
 files[47]:
   - path: .github/workflows/ci-deep.yml
     scope: project
