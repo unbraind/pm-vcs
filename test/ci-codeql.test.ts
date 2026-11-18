@@ -16,7 +16,7 @@ test('CodeQL filters inert data and re-includes every executable tracker extensi
   for (const event of ['push', 'pull_request']) {
     const patterns: string[] = workflow.on[event].paths;
     for (const [path, expected] of [
-      ...['js', 'mjs', 'cjs', 'ts'].flatMap(extension => [`.agents/pm/check.${extension}`, `.agents/pm/nested/check.${extension}`].map(path => [path, true] as const)),
+      ...['js', 'mjs', 'cjs', 'ts', 'mts', 'cts', 'tsx', 'jsx'].flatMap(extension => [`.agents/pm/check.${extension}`, `.agents/pm/nested/check.${extension}`].map(path => [path, true] as const)),
       ['README.md', false], ['docs/example.json', false], ['package-lock.json', false],
       ['.agents/pm/tasks/a.toon', false], ['.agents/pm/history/a.jsonl', false], ['.agents/pm/settings.json', false], ['index.ts', true],
     ] as const) {

@@ -6,10 +6,12 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-17T21:48:47.223Z"
+updated_at: "2026-11-17T23:59:31.769Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[71]:
+comments[73]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -224,7 +226,13 @@ comments[71]:
   - created_at: "2026-11-17T21:48:45.616Z"
     author: codex-sol
     text: "Round BJ thread PRRT_kwDOToJT7M64p2kO maps to c5691755a9196de0ba219be8fccede3c11725f5b: the quick step exports the isolated npm user config for all 15 commands, and the workflow witness rejects the original prefix-only form. PRRT_kwDOToJT7M64p2kY maps to c5691755a9196de0ba219be8fccede3c11725f5b: the watchdog covers fixed child teardown and rejects invalid scales before spawning. Workflow contract 11/11, fixture lifetime 9/9 at each of 0.1 and 1, and six related test files 105/105. Typecheck, test typecheck, lint, regenerated changelog check, and committed self-host verification passed. Exact-gates verification uses a reachable-only checkout to avoid unrelated shared Git objects tracked in pm-vcs-identity-isolation. The final receipt commit gets a regenerated bundle and its own self-host verification."
-files[42]:
+  - created_at: "2026-11-17T23:53:48.194Z"
+    author: codex-sol
+    text: Round BL started from the refreshed PR branch. Verifying review claims and adding focused regression coverage before running repository gates.
+  - created_at: "2026-11-17T23:58:47.933Z"
+    author: codex-sol
+    text: "Round BL reproduced all three findings. Ordered CodeQL selection omitted mts, cts, tsx and jsx. Real coverage collections could be mixed despite a failing changed test being missed, and the replay test lost its former 600-second per-test timeout. Added executable-extension cases, real mixed-shard scenarios, and a timeout contract."
+files[43]:
   - path: .github/workflows/ci-deep.yml
     scope: project
   - path: .github/workflows/ci.yml
@@ -312,7 +320,9 @@ files[42]:
     scope: project
   - path: test/support/depth.ts
     scope: project
-tests[45]:
+  - path: test/tracker-admission.test.ts
+    scope: project
+tests[50]:
   - command: "npm run typecheck && npm run build:test && npm run lint"
     scope: project
     timeout_seconds: 240
@@ -655,12 +665,49 @@ tests[45]:
       created_at: "2026-11-17T21:47:48.575Z"
       source_kind: local_mutation
       source_ref: ci/quick-pr-tier-deep-local-tier
-docs[4]:
+  - command: node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/ci-codeql.test.ts test/ci-shards.test.ts test/coverage-merge.test.ts test/tracker-admission.test.ts test/dependency-refresh-workflow.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T23:58:55.188Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: npm run build
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T23:59:01.159Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: "npm run build:test"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T23:59:10.969Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: npm run typecheck
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T23:59:20.434Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+  - command: npm run lint
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T23:59:31.220Z"
+      source_kind: local_mutation
+      source_ref: ci/quick-pr-tier-deep-local-tier
+docs[5]:
   - path: .github/workflows/ci.yml
     scope: project
   - path: AGENTS.md
     scope: project
     note: Stage source and tracker changes before regenerating the self-host bundle
+  - path: CHANGELOG.md
+    scope: project
   - path: docs/ci-quick-fit-measurements.md
     scope: project
   - path: docs/ci-tiers.md

@@ -5,6 +5,13 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { testEnvironment } from "./test-environment.ts";
 
+export const SHARD_TIMINGS_FILE = "test/ci-shard-times.json";
+
+/** Discover the same complete inventory for partitioning and coverage digests. */
+export function discoverShardTestFiles(root: string): string[] {
+  return globSync("test/*.test.ts", { cwd: root }).sort();
+}
+
 /** Use portable timing keys without changing native discovery paths. */
 export function testFileWeight(file: string, timings: Readonly<Record<string, number>>): number {
   return timings[file.replaceAll("\\", "/")] ?? 60;
@@ -14,9 +21,9 @@ export function testFileWeight(file: string, timings: Readonly<Record<string, nu
 export function shardTestFiles(root: string, shard: string): string[] {
   if (!/^[1-9]\d*\/[1-9]\d*$/.test(shard)) throw new Error("ci-shards: invalid shard");
   const [ordinal, total] = shard.split("/").map(Number) as [number, number];
-  const files = globSync("test/*.test.ts", { cwd: root }).sort();
+  const files = discoverShardTestFiles(root);
   if (!Number.isSafeInteger(total) || ordinal > total || total > files.length) throw new Error("ci-shards: invalid shard");
-  const timings: Record<string, number> = JSON.parse(readFileSync(new URL("../ci-shard-times.json", import.meta.url), "utf8"));
+  const timings: Record<string, number> = JSON.parse(readFileSync(resolve(root, SHARD_TIMINGS_FILE), "utf8"));
   const weight = (file: string): number => testFileWeight(file, timings);
   const bins = Array.from({ length: total }, () => ({ cost: 0, files: [] as string[] }));
   for (const file of files.sort((left, right) => weight(right) - weight(left) || (left < right ? -1 : 1))) {

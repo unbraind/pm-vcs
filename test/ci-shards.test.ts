@@ -53,6 +53,7 @@ test("new files participate without timing entries and invalid or empty shards r
   const root = mkdtempSync(join(tmpdir(), "ci-shards-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(join(root, "test"));
+  writeFileSync(join(root, "test/ci-shard-times.json"), "{}");
   for (const name of ["new-a", "new-b", "new-c"]) writeFileSync(join(root, `test/${name}.test.ts`), "");
   assert.deepEqual([1, 2].flatMap(index => shardTestFiles(root, `${index}/2`)).sort(), globSync("test/*.test.ts", { cwd: root }).sort());
   for (const shard of ["0/2", "3/2", "1/4", "1/0", "1/9007199254740992", "bad"]) assert.throws(() => shardTestFiles(root, shard), /invalid shard/);
@@ -69,4 +70,9 @@ test("required aggregates reject failures, cancellations and skipped prerequisit
     const env=testEnvironment({NODE_VERSION:node,CHANGES:changes,CODE:"false",QUICK:"skipped",RELEASE:"skipped",COVERAGE:"skipped"});
     const child=spawnSync("bash",["-c",run],{env,encoding:"utf8"});assert.equal(child.status===0,changes==="success",`${node} CODE=false CHANGES=${changes}`);
   }
+});
+
+test("the tracker replay test retains its scaled per-test deadline", () => {
+  const replay = readFileSync("test/tracker-admission.test.ts", "utf8");
+  assert.match(replay, /test\("seeded model sequences preserve SDK state across native bundle replay and file sync", \{ timeout: testTime\(600_000\) \}/);
 });

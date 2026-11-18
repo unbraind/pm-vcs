@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { globSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { shardTestFiles } from "../test/helpers/ci-shards.ts";
+import { discoverShardTestFiles, SHARD_TIMINGS_FILE, shardTestFiles } from "../test/helpers/ci-shards.ts";
 
 /** Run a c8 command with independent output and no inherited test-runner context. */
 function c8(root: string, args: string[]): number {
@@ -20,6 +20,7 @@ function c8(root: string, args: string[]): number {
 export function mergeCoverage(root: string, paths: readonly string[], total: number): number {
   const flags = coverageFlags(root).filter(flag => !flag.startsWith("--temp-directory="));
   if (paths.length !== total || total < 1) throw new Error("coverage-gate: missing shards");
+  const digest = coverageDigest(root);
   const coverageDirectory = join(root, "coverage");
   mkdirSync(coverageDirectory, { recursive: true });
   const scratch = mkdtempSync(join(coverageDirectory, "merged-raw-"));
@@ -31,7 +32,7 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
       if (typeof artifact.shard !== "string") throw new Error(`coverage-gate: ${path} has no shard ordinal`);
       if (artifact.node !== process.versions.node || ordinals.has(artifact.shard)) throw new Error("coverage-gate: duplicate shard or runtime mismatch");
       ordinals.add(artifact.shard);
-      if (artifact.digest !== coverageDigest(root)) throw new Error("coverage-gate: source mismatch");
+      if (artifact.digest !== digest) throw new Error("coverage-gate: source mismatch (source files, test inventory, shard timings or gate options)");
       const result = artifact.raw.map((script: {url: string}) => {
         if (script.url.startsWith("..") || resolve(root, script.url) === script.url) throw new Error("coverage-gate: non-relative source");
         return {...script, url:pathToFileURL(resolve(root, script.url)).href};
@@ -58,6 +59,7 @@ export function mergeCoverage(root: string, paths: readonly string[], total: num
 export function runCoverageShard(root: string, shard: string, output: string): number {
   if (!/^[1-9]\d*\/[1-9]\d*$/.test(shard) || Number(shard.split("/")[0]) > Number(shard.split("/")[1])) throw new Error("coverage-gate: invalid shard");
   const flags = coverageFlags(root).filter(flag => flag !== "--100" && !flag.startsWith("--temp-directory=") && !flag.startsWith("--reporter="));
+  const digest = coverageDigest(root);
   const status = c8(root, [...flags, "--check-coverage=false", `--temp-directory=${output}/tmp`, `--reports-dir=${output}`, "--reporter=json", "--reporter=json-summary", "node", "--expose-gc", "--no-concurrent-array-buffer-sweeping", "--test", "--test-concurrency=1", ...shardTestFiles(root, shard)]);
   if (status !== 0) return status;
   const raw = JSON.parse(readFileSync(resolve(root, output, "coverage-final.json"), "utf8"));
@@ -67,7 +69,7 @@ export function runCoverageShard(root: string, shard: string, output: string): n
     const data = JSON.parse(readFileSync(resolve(root,output,"tmp",name),"utf8"));
     return data.result.filter((script: {url:string}) => sources.has(script.url)).map((script: {url:string}) => ({...script,url:relative(root,fileURLToPath(script.url)).replaceAll("\\","/")}));
   });
-  writeFileSync(resolve(root, output, "hits.json"), JSON.stringify({ shard, node: process.versions.node, digest: coverageDigest(root), hits, raw:offsets }));
+  writeFileSync(resolve(root, output, "hits.json"), JSON.stringify({ shard, node: process.versions.node, digest, hits, raw:offsets }));
   return 0;
 }
 
@@ -76,10 +78,12 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   process.exitCode = args[0] === "--shard" ? runCoverageShard(process.cwd(), args[1]!, args[3]!) : mergeCoverage(process.cwd(), args.slice(2), Number(args[1]));
 }
 
-/** Bind artifacts to the complete measured source inventory and original gate options. */
+/** Bind artifacts to measured sources, gate options, and the inputs that assign tests to shards. */
 function coverageDigest(root: string): string {
   const sources = globSync(["*.ts", "src/**/*.ts", "engine/**/*.ts", "scripts/**/*.ts"], {cwd:root}).sort();
-  return createHash("sha256").update(JSON.stringify(sources.map(file => [file, readFileSync(join(root,file),"utf8")])) + readFileSync(join(root,"package.json"),"utf8")).digest("hex");
+  const inputs = [...sources, "package.json", ...discoverShardTestFiles(root), SHARD_TIMINGS_FILE];
+  const hashes = inputs.map(file => [file, createHash("sha256").update(readFileSync(join(root, file))).digest("hex")]);
+  return createHash("sha256").update(JSON.stringify(hashes)).digest("hex");
 }
 
 /** Read the original c8 source scope and options from the unchanged local/deep command. */

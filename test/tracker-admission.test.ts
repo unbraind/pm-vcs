@@ -1,5 +1,5 @@
 import "./helpers/isolate-session.ts";
-import { testDepth } from "./support/depth.ts";
+import { testDepth, testTime } from "./support/depth.ts";
 /** Real SDK tracker tests for capture isolation, SDK normalization and native publication. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -175,7 +175,7 @@ test("CLI uses the same strict admission path and exposes a compact retry rather
 /** Deterministic generator: the seed and sequence count are stable regression evidence. */
 function random(seed: number) { let state = seed; return () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state; }; }
 
-test("seeded model sequences preserve SDK state across native bundle replay and file sync", async () => {
+test("seeded model sequences preserve SDK state across native bundle replay and file sync", { timeout: testTime(600_000) }, async () => {
   const f = await fixture(); const next = random(0x53295);
   const configPath = join(f.repo.controlDirectory, "config.json");
   writeFileSync(configPath, JSON.stringify({ recordPaths: ["**/*.toon"], recordPolicy: {} }));

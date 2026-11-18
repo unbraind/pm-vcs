@@ -8,12 +8,14 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { runCoverageShard, mergeCoverage } from "../scripts/coverage-gate.ts";
+import { shardTestFiles } from "./helpers/ci-shards.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 
 test("merged shard hits equal unsharded c8 including exclusive branches and functions", t => {
   const root=realpathSync(mkdtempSync(join(tmpdir(),"c8 union-"))); t.after(()=>rmSync(root,{recursive:true,force:true}));
   mkdirSync(join(root,"test/helpers"),{recursive:true});
   mkdirSync(join(root,"src"));
+  writeFileSync(join(root, "test/ci-shard-times.json"), "{}");
   const manifest=JSON.parse(readFileSync("package.json","utf8")); writeFileSync(join(root,"package.json"),JSON.stringify({type:"module",scripts:{coverage:manifest.scripts.coverage}}));
   writeFileSync(join(root,"test/helpers/release-suite.ts"),readFileSync("test/helpers/release-suite.ts","utf8"));
   writeFileSync(join(root,"test/helpers/test-environment.ts"),readFileSync("test/helpers/test-environment.ts","utf8"));
@@ -84,4 +86,40 @@ export function negative() { return "negative"; }
   const failedReport=t.mock.method(childProcess,"spawnSync",()=>({status:1}));syncBuiltinESMExports();
   try { assert.equal(mergeCoverage(root,paths,2),1); } finally { failedReport.mock.restore();syncBuiltinESMExports(); }
   assert.equal(readFileSync(join(root,"coverage/merged.json"),"utf8"),freshMerged);
+});
+
+test("coverage merge rejects shards collected against different test partition inputs", t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "c8 partition-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "test"));
+  mkdirSync(join(root, "src"));
+  const { scripts: { coverage } } = JSON.parse(readFileSync("package.json", "utf8"));
+  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module", scripts: { coverage } }));
+  const timings = join(root, "test/ci-shard-times.json");
+  writeFileSync(timings, "{}");
+  writeFileSync(join(root, "src/value.ts"), "export const value = 42;\n");
+  const passingTest = "import assert from 'node:assert/strict'; import { value } from '../src/value.ts'; assert.equal(value, 42);\n";
+  const firstTest = join(root, "test/b.test.ts");
+  writeFileSync(firstTest, passingTest);
+  writeFileSync(join(root, "test/c.test.ts"), passingTest);
+
+  assert.deepEqual(shardTestFiles(root, "1/2"), [join("test", "b.test.ts")]);
+  assert.equal(runCoverageShard(root, "1/2", "first"), 0);
+  writeFileSync(firstTest, passingTest.replace("42", "0"));
+  assert.equal(runCoverageShard(root, "2/2", "changed"), 0);
+  assert.throws(() => mergeCoverage(root, ["first/hits.json", "changed/hits.json"], 2), /source mismatch/);
+  writeFileSync(firstTest, passingTest);
+
+  const newTest = join(root, "test/a.test.ts");
+  writeFileSync(newTest, "throw new Error('this new test must run');\n");
+  assert.ok(shardTestFiles(root, "1/2").includes(join("test", "a.test.ts")));
+  assert.deepEqual(shardTestFiles(root, "2/2"), [join("test", "b.test.ts")]);
+  assert.equal(runCoverageShard(root, "2/2", "added"), 0);
+  assert.throws(() => mergeCoverage(root, ["first/hits.json", "added/hits.json"], 2), /source mismatch/);
+  rmSync(newTest);
+
+  writeFileSync(timings, JSON.stringify({ "test/c.test.ts": 120 }));
+  assert.deepEqual(shardTestFiles(root, "2/2"), [join("test", "b.test.ts")]);
+  assert.equal(runCoverageShard(root, "2/2", "reweighted"), 0);
+  assert.throws(() => mergeCoverage(root, ["first/hits.json", "reweighted/hits.json"], 2), /source mismatch/);
 });
