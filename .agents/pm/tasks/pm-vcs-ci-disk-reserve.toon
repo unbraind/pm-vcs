@@ -6,12 +6,10 @@ status: in_progress
 priority: 2
 tags[7]: ci,follow-up,"gh:unbraind/pm-vcs#151","gh:unbraind/pm-vcs#154","gh:unbraind/pm-vcs#209",infrastructure,performance
 created_at: "2026-11-05T03:29:08.898Z"
-updated_at: "2026-11-18T02:25:29.134Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-11-18T02:30:07.550Z"
 author: codex-agent
 parent: pm-vcs-tracker-admission
-comments[76]:
+comments[77]:
   - created_at: "2026-11-15T13:11:29.225Z"
     author: codex-sol
     text: "Reusing this CI capacity Task for Fleet CI v2, companion pm-cli-website-dyhg. Preserve all four required checks (test 22/26 and Windows launcher 22/26). One quick Node 26 npm release gate per PR replaces four full gates, removing sequential gate accumulation implicated in #154. Deep keeps all four full gates as isolated matrix jobs. Keep the 20 GiB guard and all coverage thresholds. Release caller rollout pm-ops#272 files are out of scope."
@@ -241,6 +239,9 @@ comments[76]:
   - created_at: "2026-11-18T02:22:41.376Z"
     author: codex-sol
     text: "Round BP verified three defects at 7d87bfd: the merge wildcard also selects a failed-shard artifact, exact Node version equality rejects patch drift between independent Node 26 setup steps, and path.matchesGlob leaves dot-directory tracker data unselected even when its exclusion is removed. Add regressions for artifact routing, same-major coverage merge, and removal of the tracker exclusion on both events."
+  - created_at: "2026-11-18T02:30:06.542Z"
+    author: codex-sol
+    text: "Round BP PRRT_kwDOToJT7M64vhOj maps to ff87f0df4dc768049ce2a2c05b0d16cda2883a32: failure artifacts use coverage-failure-shard-N and the download contract rejects all non-shard uploads. PRRT_kwDOToJT7M64vhOu maps to ff87f0df4dc768049ce2a2c05b0d16cda2883a32: the merge accepts patch differences within a major and rejects a different major or an invalid Node version. PRRT_kwDOToJT7M64vhO2 maps to ff87f0df4dc768049ce2a2c05b0d16cda2883a32: ordered CodeQL patterns include dot directories. Removing the data exclusion fails the contract independently for push and pull_request. All nine affected test files passed, 126 tests on Node 26.13.0. The six exact-gate tests and 64 self-host tests ran in a clean checkout of the branch with temporary files on memory-backed storage. The three focused files passed all 12 tests on Node 22.18.0. Typecheck, test compilation, lint, changelog:check, and committed self-host acceptance passed. The archive will be regenerated with this receipt and checked at the pushed head."
 files[43]:
   - path: .github/workflows/ci-deep.yml
     scope: project
