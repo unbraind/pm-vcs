@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
+import { installOfflinePackedConsumer } from "./helpers/offline-packed-consumer.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { pmExecutable } from "../scripts/pm-environment.ts";
 
@@ -413,15 +414,15 @@ process.stdout.write(JSON.stringify({ runtime: process.argv[2], sdk: installedSd
 test("built and npm-packed SDK10 Node/native Bun consumers and project-installed CLI execute composition and denied merges", /** Use a packed artifact and real peer dependency instead of SDK doubles. */ async (t) => {
   const temporary = makeTempDir();
   try {
-    const npmEnvironment = { ...testEnvironment(), ...discardChildCoverage() };
+    // Keep the regression cold even when the invoking user's npm cache is warm.
+    const npmEnvironment = testEnvironment({ ...discardChildCoverage(), npm_config_cache: join(temporary.root, "npm-cache") });
     for (const key of Object.keys(npmEnvironment)) if (key.toLowerCase() === "npm_config_allow_scripts") delete npmEnvironment[key];
     const packed = spawnSync("npm", ["pack", "--ignore-scripts", "--pack-destination", temporary.root], { cwd: packageRoot, env: npmEnvironment, encoding: "utf8", timeout: 120_000 });
     assert.equal(packed.status, 0, packed.stderr);
     const archive = join(temporary.root, packed.stdout.trim().split(/\r?\n/).at(-1)!);
     const project = join(temporary.root, "consumer"); mkdirSync(project);
     writeFileSync(join(project, "package.json"), JSON.stringify({ name: "composition-consumer", private: true, type: "module" }));
-    const installed = spawnSync("npm", ["install", "--offline", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund", archive], { cwd: project, env: npmEnvironment, encoding: "utf8", timeout: 120_000 });
-    assert.equal(installed.status, 0, installed.stderr);
+    installOfflinePackedConsumer(archive, project, npmEnvironment);
     // The consumer uses the actual pinned SDK and its installed dependency graph.
     symlinkSync(join(packageRoot, "node_modules", "@unbrained"), join(project, "node_modules", "@unbrained"), "junction");
     const design = readFileSync(join(project, "node_modules", "pm-vcs", "docs", "links-layers-obliteration.md"), "utf8"); assert.match(design, /Typed obliteration/);

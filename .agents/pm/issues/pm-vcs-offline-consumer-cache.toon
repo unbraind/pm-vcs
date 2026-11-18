@@ -1,0 +1,36 @@
+id: pm-vcs-offline-consumer-cache
+title: Provision npm registry metadata for offline packed-consumer tests
+description: "On PR #209 at 3c5304a, coverage shards 6 and 8 failed after successful npm ci. The offline packed composition and move-planning consumers reported ENOTCACHED for the pako registry metadata. A fresh cache containing only the pako 3.0.3 tarball reproduced the missing-metadata error in a one-dependency fixture. Caching pako@3.0.3 by package spec allowed the same offline install. Ensure clean CI jobs provision the registry metadata required by offline fixtures and verify with an empty npm cache."
+type: Issue
+status: in_progress
+priority: 1
+tags[4]: ci,follow-up,"gh:unbraind/pm-vcs#209",testing
+created_at: "2026-11-18T02:42:22.815Z"
+updated_at: "2026-11-18T03:22:30.688Z"
+assignee: codex-sol
+claim_principal: codex-sol
+author: codex-sol
+parent: pm-vcs-ci-disk-reserve
+expected_result: Offline packed consumers pass on a CI runner with no restored npm cache.
+actual_result: Coverage collection refused the offline installs with ENOTCACHED.
+comments[1]{created_at,author,text}:
+  "2026-11-18T02:42:23.946Z",codex-sol,"Hosted evidence from run 44223802640: https://github.com/unbraind/pm-vcs/actions/runs/44223802640/job/134532123753 and https://github.com/unbraind/pm-vcs/actions/runs/44223802640/job/134532123938. Collection failed before merge. Shard 8 uploaded coverage-failure-shard-8 successfully."
+files[6]{path,scope}:
+  .github/workflows/ci.yml,project
+  test/composition-consumer.test.ts,project
+  test/helpers/offline-packed-consumer.ts,project
+  test/move-planning-consumer.test.ts,project
+  test/snapshot-durability-consumer.test.ts,project
+  test/sparse-move-consumer.test.ts,project
+tests[7]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  npm_config_cache=$(mktemp -d) node --expose-gc --no-concurrent-array-buffer-sweeping --test test/composition-consumer.test.ts,project,codex-sol,"2026-11-18T03:21:23.650Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  PM_TEST_DEPTH=quick npm_config_cache=$(mktemp -d) node test/helpers/ci-shards.ts 6/8,project,codex-sol,"2026-11-18T03:21:26.167Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  PM_TEST_DEPTH=quick npm_config_cache=$(mktemp -d) node test/helpers/ci-shards.ts 8/8,project,codex-sol,"2026-11-18T03:21:29.104Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  node --expose-gc --no-concurrent-array-buffer-sweeping --test --test-concurrency=1 test/ci-shards.test.ts test/ci-routing.test.ts test/dependency-refresh-workflow.test.ts test/exact-gates.test.ts test/release-preparation.test.ts test/self-host.test.ts test/move-planning-consumer.test.ts test/snapshot-durability-consumer.test.ts test/sparse-move-consumer.test.ts,project,codex-sol,"2026-11-18T03:21:31.604Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  "npm run typecheck && npm run lint && npm run build:test",project,codex-sol,"2026-11-18T03:21:33.861Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  "npm run changelog:check",project,codex-sol,"2026-11-18T03:21:36.796Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  "npm run accept:self-host",project,codex-sol,"2026-11-18T03:21:39.003Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+docs[2]{path,scope}:
+  docs/ci-tiers.md,project
+  docs/validation/pr150-full-suite-ci-repair.md,project
+body: ""
