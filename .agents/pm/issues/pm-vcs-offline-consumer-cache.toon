@@ -6,15 +6,14 @@ status: in_progress
 priority: 1
 tags[4]: ci,follow-up,"gh:unbraind/pm-vcs#209",testing
 created_at: "2026-11-18T02:42:22.815Z"
-updated_at: "2026-11-18T03:22:30.688Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-11-18T03:46:19.337Z"
 author: codex-sol
 parent: pm-vcs-ci-disk-reserve
 expected_result: Offline packed consumers pass on a CI runner with no restored npm cache.
 actual_result: Coverage collection refused the offline installs with ENOTCACHED.
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-11-18T02:42:23.946Z",codex-sol,"Hosted evidence from run 44223802640: https://github.com/unbraind/pm-vcs/actions/runs/44223802640/job/134532123753 and https://github.com/unbraind/pm-vcs/actions/runs/44223802640/job/134532123938. Collection failed before merge. Shard 8 uploaded coverage-failure-shard-8 successfully."
+  "2026-11-18T03:46:15.393Z",codex-sol,"Run 44223802640 showed ENOTCACHED for the pako packument in quick and coverage shards 6 and 8. A tarball-only scratch cache reproduced the failure. Adding the exact locked pako@3.0.3 package spec made the same offline install pass, and the generated consumer lockfile contained only the archive and pako. The SDK peer is supplied from the repository install. Commit 139c49f gives all four packed consumer fixtures a fresh cache, primes it online by exact package spec, and retains offline installation. The isolated cold-cache composition test passed all five Node, Bun and project CLI scenarios. Typecheck, lint, test compilation and changelog verification passed. The separate self-host child timeout remains tracked by pm-vcs-selfhost-audit-budget. The intermittent staging syscall baseline is tracked by pm-vcs-move-probe-baseline and the pinned-Bun TOON retry passed."
 files[6]{path,scope}:
   .github/workflows/ci.yml,project
   test/composition-consumer.test.ts,project
