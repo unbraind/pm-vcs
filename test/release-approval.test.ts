@@ -195,13 +195,15 @@ function inspectWorkflow(source: string, filename: string): string[] {
     let writable = false;
     try { writable = writes(effective); }
     catch { issues.push(`${location}: invalid permissions`); }
-    const condition = typeof job.if === 'string' ? job.if : '';
+    const canonical = typeof job.uses === 'string' && /^unbraind\/pm-ops\/\.github\/workflows\/daily-release\.yml@[a-f0-9]{40}$/u.test(job.uses);
+    const enabled = canonical ? mapping(job.with)?.['release-enabled'] : job.if;
+    const condition = typeof enabled === 'string' ? enabled : '';
     const steps = Array.isArray(job.steps) ? job.steps : [];
     const commands = steps.flatMap(step => {
       const value = mapping(step)?.run;
       return typeof value === 'string' ? publications(value) : [];
     });
-    const reusablePublisher = typeof job.uses === 'string' && /\/(?:release|publish)[^/]*\.ya?ml@/u.test(job.uses);
+    const reusablePublisher = typeof job.uses === 'string' && /\/(?:daily-release|release|publish)[^/]*\.ya?ml@/u.test(job.uses);
     const publishes = commands.length > 0 || reusablePublisher;
     if ((writable || publishes) && !requiresAtom(condition, repositoryAtom)) issues.push(`${location}: exact repository guard required`);
     if (condition.includes('github.repository_owner')) issues.push(`${location}: repository_owner is not a repository guard`);
@@ -248,18 +250,23 @@ test('daily/manual release triggers and preparation gates remain enforced', () =
   const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
   const events = mapping(release.on);
   assert.ok(events && Object.hasOwn(events, 'workflow_dispatch'));
-  assert.deepEqual(events.schedule, [{ cron: '23 3 * * *' }]);
+  assert.deepEqual(events.schedule, [{ cron: '23 3 * * *' }, { cron: '41 * * * *' }]);
   const jobs = mapping(release.jobs);
   assert.ok(jobs?.release);
-  for (const name of ['prepare', 'release', 'resume_release']) {
-    const job = mapping(jobs[name]);
-    if (!job) continue;
-    assert.ok(typeof job.if === 'string');
-    for (const atom of [repositoryAtom, approvalAtom, mainAtom]) assert.ok(requiresAtom(job.if, atom), `${name} must require ${atom}`);
-  }
+  const job = mapping(jobs.release);
+  const enabled = mapping(job?.with)?.['release-enabled'];
+  assert.equal(typeof enabled, 'string');
+  for (const atom of [repositoryAtom, approvalAtom, mainAtom]) assert.ok(requiresAtom(String(enabled), atom), `release must require ${atom}`);
 });
 
-const npmBootstrapStep = 'Use npm with trusted publishing support';
+test('publishing delegates npm bootstrap to the SHA-pinned canonical workflow', () => {
+  const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
+  const job = mapping(mapping(release.jobs)?.release);
+  assert.match(String(job?.uses), /^unbraind\/pm-ops\/\.github\/workflows\/daily-release\.yml@[a-f0-9]{40}$/u);
+  assert.equal(job?.steps, undefined);
+});
+
+const npmBootstrapStep = 'Use an npm that supports trusted publishing';
 const npmVerifyStep = 'Verify job-local npm version';
 
 /** Read an unconditional, required step as individual shell lines. */
@@ -289,20 +296,25 @@ function assertJobLocalNpm(steps: readonly unknown[]): void {
     'the verify step must expect exactly the installed version');
 }
 
-/** Read the ordered steps of the actual release job. */
-function releaseSteps(): unknown[] {
-  const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
-  const steps = mapping(mapping(release.jobs)?.release)?.steps;
-  assert.ok(Array.isArray(steps), 'the release job must have steps');
-  return steps;
-}
+// The package caller delegates the actual steps to pm-ops. Exercise the
+// executable-line contract with an offline fixture.
+const npmSteps = [
+  {
+    name: npmBootstrapStep,
+    run: [
+      'npm install --prefix "$RUNNER_TEMP/npm-11.5.1" npm@11.5.1 --ignore-scripts',
+      'echo "$RUNNER_TEMP/npm-11.5.1/node_modules/.bin" >> "$GITHUB_PATH"',
+    ].join('\n'),
+  },
+  { name: npmVerifyStep, run: 'test "$(npm --version)" = "11.5.1"' },
+];
 
 test('publishing installs an npm version supporting trusted publishing', () => {
-  assertJobLocalNpm(releaseSteps());
+  assertJobLocalNpm(npmSteps);
 });
 
 test('the bootstrap check cannot substitute for separate post-bootstrap verification', () => {
-  const steps = releaseSteps();
+  const steps = npmSteps;
   const verifyIndex = steps.findIndex(step => mapping(step)?.name === npmVerifyStep);
   assert.ok(verifyIndex >= 0);
   const withoutVerify = steps.filter((_step, index) => index !== verifyIndex);
@@ -311,11 +323,9 @@ test('the bootstrap check cannot substitute for separate post-bootstrap verifica
 });
 
 test('job-local npm commands must execute instead of appearing in output or comments', () => {
-  const install = 'npm install --prefix "$RUNNER_TEMP/npm-11.5.1" npm@11.5.1 --ignore-scripts';
-  const addPath = 'echo "$RUNNER_TEMP/npm-11.5.1/node_modules/.bin" >> "$GITHUB_PATH"';
-  const verify = 'test "$(npm --version)" = "11.5.1"';
-  const steps = [{ name: npmBootstrapStep, run: `${install}\n${addPath}` }, { name: npmVerifyStep, run: verify }];
-  assertJobLocalNpm(steps);
+  const steps = npmSteps;
+  const [install, addPath] = steps[0].run.split('\n');
+  const verify = steps[1].run;
 
   for (const inert of [
     (command: string) => `echo '${command}'`,
@@ -330,7 +340,7 @@ test('job-local npm commands must execute instead of appearing in output or comm
 });
 
 test('job-local npm steps cannot be skipped or allowed to fail', () => {
-  const steps = releaseSteps();
+  const steps = npmSteps;
   for (const name of [npmBootstrapStep, npmVerifyStep]) {
     for (const [key, value] of [['continue-on-error', true], ['if', false]] as const) {
       const mutated = steps.map(step => mapping(step)?.name === name ? { ...mapping(step), [key]: value } : step);

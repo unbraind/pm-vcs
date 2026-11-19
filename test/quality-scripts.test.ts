@@ -202,28 +202,3 @@ test("shared launcher detection invokes only a directly executed script and pres
     process.exitCode = before;
   }
 });
-
-test("the release workflow has no unattested publish path", () => {
-  // A fallback that published without --provenance used to sit at the end of
-  // this workflow's retry loop. It emitted a ::warning:: and exited 0, so a run
-  // that shipped an artifact nobody can trace to this workflow looked exactly
-  // like a healthy release. An unattested version cannot be withdrawn and its
-  // version number cannot be reused, so failing the release is the cheaper
-  // outcome. This asserts the path stays gone.
-  const workflow = readFileSync(resolve(import.meta.dirname, "../.github/workflows/release.yml"), "utf8");
-  // Join continuations first: a publish split across lines carries its flags on
-  // a later line, so scanning raw lines would read the first fragment as an
-  // invocation with no flags at all.
-  const joined = workflow.replace(/\\\r?\n\s*/g, " ");
-  const publishes = joined
-    .split("\n")
-    .map((line) => line.replace(/#.*$/, "").trim())
-    .filter((line) => /(^|[;&|(]\s*|\s)npm\s+publish(\s|$)/.test(line));
-  assert.notEqual(publishes.length, 0, "the scan found no npm publish at all, so it is looking in the wrong place");
-  for (const invocation of publishes) {
-    assert.match(invocation, /--provenance(\s|$|=)/,
-      `every publish must enable --provenance, but this one does not: ${invocation}`);
-    assert.doesNotMatch(invocation, /--provenance=false/,
-      `a publish must not disable provenance: ${invocation}`);
-  }
-});
