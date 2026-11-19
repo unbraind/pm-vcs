@@ -1,0 +1,13 @@
+id: pm-vcs-release-attempt-recovery
+title: Track operator recovery after a recorded npm publish attempt
+description: "The pm-ops v2026.11.18 Daily Release workflow records attempted publication before contacting npm. Its explicit retirement refuses any matching publish or post-hook attempt journal, even when the npm coordinate, Git tag and GitHub Release are absent. Document the supported untouched-candidate path in the caller. Track upstream evidence-bound recovery for a stranded candidate after a recorded attempt. Preserve the attempt journal and fail closed on ambiguous acceptance."
+type: Issue
+status: open
+priority: 2
+tags[2]: "area:release",follow-up
+created_at: "2026-11-19T01:57:06.407Z"
+updated_at: "2026-11-19T01:57:06.407Z"
+author: codex-sol
+acceptance_criteria: A reviewed and released shared workflow supports operator recovery from a proven pre-acceptance failure while preserving the attempt record and refusing ambiguous publication evidence.
+parent: pm-vcs-release-caller-rollout
+body: ""

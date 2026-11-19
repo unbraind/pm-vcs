@@ -41,8 +41,11 @@ test('caller grants the shared transaction permissions without workflow-level pr
   assert.doesNotMatch(text, /secrets:|NPM_TOKEN|NODE_AUTH_TOKEN/u);
 });
 
-test('daily preparation and hourly reconciliation retain the canonical schedule and retirement opt-in', () => {
+test('daily preparation and hourly reconciliation retain the canonical schedule', () => {
   assert.deepEqual(caller.on.schedule ?? [], [{"cron":"23 3 * * *"},{"cron":"41 * * * *"}]);
+});
+
+test('manual retirement is an opt-in boolean forwarded to reconciliation only', () => {
   assert.deepEqual(caller.on.workflow_dispatch.inputs['retire-unpublished'], { description: 'Retire only owned untouched unpublished intent', type: 'boolean', default: false });
   assert.equal(caller.jobs.release.with['reconcile-only'], "${{ (github.event_name == 'schedule' && github.event.schedule == '41 * * * *') || inputs.retire-unpublished == true }}");
   assert.equal(caller.jobs.release.with['retire-unpublished'], "${{ github.event_name == 'workflow_dispatch' && inputs.retire-unpublished == true }}");

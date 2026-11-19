@@ -26,11 +26,33 @@ test('a release commit carries the archive generated from its staged metadata', 
     execFileSync('git', ['add', '--', ...paths], { cwd: root, env });
     execFileSync('git', ['commit', '-qm', 'Fixture baseline'], { cwd: root, env });
     const expected = execFileSync('git', ['hash-object', '--stdin'], { cwd: root, env, input: 'new calendar release\n', encoding: 'utf8' });
-    writeFileSync(join(root, 'npm'), '#!/bin/bash\nset -euo pipefail\nif [[ "$*" == "run changelog:full" ]]; then printf "new calendar release\\n" > CHANGELOG.md; exit 0; fi\n[[ "$*" == "run self-host:write" ]]\ngit rev-parse :CHANGELOG.md > selfhost.bundle\n', { mode: 0o755 });
-    const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script], { cwd: root, env: { ...env, PATH: `${root}:${env.PATH}` }, encoding: 'utf8', timeout: 10000 });
-    assert.equal(result.status, 0, result.stderr);
+    // Model both the script rewrite and the run-time argument in pm-ops v2026.11.18.
+    const releaseScript = script.split(/\s+/u).includes('--include-empty') ? script : `${script} --include-empty`;
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      scripts: {
+        'release:changelog': releaseScript,
+        'postrelease:changelog': manifest.scripts['postrelease:changelog'],
+        'changelog:full': 'node generate.mjs',
+        'self-host:write': 'node archive.mjs',
+      },
+    }));
+    writeFileSync(join(root, 'generate.mjs'), `
+      import assert from 'node:assert/strict';
+      import { writeFileSync } from 'node:fs';
+      assert.deepEqual(process.argv.slice(2), ['--include-empty', '--include-empty']);
+      writeFileSync('CHANGELOG.md', 'new calendar release\\n');
+    `);
+    writeFileSync(join(root, 'archive.mjs'), `
+      import assert from 'node:assert/strict';
+      import { execFileSync } from 'node:child_process';
+      import { writeFileSync } from 'node:fs';
+      assert.deepEqual(process.argv.slice(2), []);
+      writeFileSync('selfhost.bundle', execFileSync('git', ['rev-parse', ':CHANGELOG.md']));
+    `);
+    const result = spawnSync('npm', ['run', 'release:changelog', '--', '--include-empty'], { cwd: root, env, encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
     // This is the generic shared commit boundary; writer integrity is exercised by accept:self-host.
-    execFileSync('git', ['add', '--', 'selfhost.bundle'], { cwd: root, env });
+    execFileSync('git', ['add', '--', 'package.json', 'selfhost.bundle'], { cwd: root, env });
     execFileSync('git', ['commit', '-qm', 'Fixture shared release commit'], { cwd: root, env });
     assert.equal(execFileSync('git', ['show', 'HEAD:selfhost.bundle'], { cwd: root, env, encoding: 'utf8' }), expected);
     assert.equal(execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, env, encoding: 'utf8' }), '');

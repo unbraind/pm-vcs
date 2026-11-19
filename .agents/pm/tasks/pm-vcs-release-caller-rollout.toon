@@ -6,9 +6,11 @@ status: in_progress
 priority: 2
 tags[3]: "area:release","gh:unbraind/pm-ops#272","gh:unbraind/pm-vcs#207"
 created_at: "2026-11-14T22:26:50.942Z"
-updated_at: "2026-11-19T00:03:32.523Z"
+updated_at: "2026-11-19T01:58:26.970Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex-ops272-1114
-comments[18]{created_at,author,text}:
+comments[20]{created_at,author,text}:
   "2026-11-14T22:27:00.144Z",codex-ops272-1114,"Orient and start the authorized fleet rollout. Verified released v2026.11.14 at 7687a35d7522482bd8361d60dbc2589e9afbc81c. Preserve this package approval, schedule, preparation and publication hooks through canonical inputs. The merged Jira pilot proves cross-repository npm identity acceptance; this package must still pass its own first-run preflight. Run caller contracts, installed attestation, strict YAML, actionlint and regenerated changelog checks. Shared-runner hold gates every push. No review-thread action, merge, dispatch or publication."
   "2026-11-14T22:40:31.059Z",codex-ops272-1114,"Rolled the Jira pilot contract into this package: released workflow pin 7687a35d7522482bd8361d60dbc2589e9afbc81c (v2026.11.14), exact pm-ops 2026.11.14 validator, explicit include-empty changelog generation/check/notes hooks, and declared yaml for caller tests. Preserved package-owned approval, schedule and preparation inputs. Focused gates passed 70/70, zero failures/skips; linked caller test passed 6/6 in a scratch pm project to avoid tracker run artifacts. Reverting only release.yml to the old copy in a disposable fixture failed 5 of 6 contracts. Actionlint passed 1/1, strict workflow/Dependabot YAML parsing 2/2, installed publish-attestation passed 1/1. Regenerate changelog and check after this final tracker write. Full npm/Bun certification remains with CI; no full local pass is claimed. Cross-repository npm OIDC evidence is Jira run 43639146392, recorded on pm-ops#272; first package activation must still pass its preflight. This package has no npm trusted publisher: releases remain red at the OIDC step until the owner configures the publisher for this repository and release.yml. Every push waits on the shared-runner hold. No merge, dispatch, publication or review-thread action. Leave this item open and release only this author claim."
   "2026-11-15T02:49:11.044Z",codex-ops272-1114,"Round 2 CI follow-up: canonical tag lookup can return unverified-offline. The old inline-publisher success-message assertion then fails despite a valid caller. Update the package attestation test to assert structured recognition, require an explicit deferral without an attestation claim offline, and preserve all refusal checks. Prove it with forced offline execution in a disposable Git fixture; keep coverage source inventory and thresholds unchanged."
@@ -27,12 +29,15 @@ comments[18]{created_at,author,text}:
   "2026-11-18T23:59:37.288Z",codex-sol,"Round CY will merge current main, adopt the published pm-ops v2026.11.18 reusable workflow, and verify the release, CI, changelog, and self-host gates."
   "2026-11-19T00:02:19.513Z",codex-sol,"Merged origin/main in 6898d5b and preserved the Round BX receipt. Kept Fleet CI v2, the job-local npm guard and executable-line fixtures, the main pm-changelog version and release metadata, and the reusable caller approval, recovery and package hooks. Seven changed tracker histories retain both parents in timestamp order. Pinned unbraind/pm-ops/.github/workflows/daily-release.yml at c46a2419c63af3b348e6b559b0733ab0d9942cc7 (v2026.11.18)."
   "2026-11-19T00:03:31.476Z",codex-sol,"Local gates passed: global npm guard (288), release approval (35), release preparation (2), CI shards and CodeQL (10), typecheck, build, build:test, lint and changelog:check. The exact pinned workflow passed the unchanged global npm guard and input and permission compatibility checks. Its six npm bootstraps use executable job-local installs and version checks. PM validation found zero history drift and reported existing advisory warnings. The changelog was regenerated after fetching tags. Final self-host acceptance is required at the snapshot commit before push."
-files[15]{path,scope}:
+  "2026-11-19T01:54:49.551Z",codex-sol,Round DA at PR head 0c9eeb1. The pinned workflow runs its build before changelog generation. Use npm lifecycle ordering to run the archive hook after successful generation and keep release-files staging. The caller already declares and forwards the retirement input. Verify its contract against the reference caller and document the operator procedure.
+  "2026-11-19T01:58:26.970Z",codex-sol,"Round DA direct gates passed: 354 focused release, approval, guard and workflow tests with zero failures or skips, typecheck, build:test, lint, and changelog:check. The updated preparation fixture fails on the old script because the generator receives no flags, and verifies the staged changelog in the simulated release commit with the new hook. The pm-rl retirement contract already matches the caller. Follow-up pm-vcs-release-attempt-recovery records the pinned workflow refusal after a publish-attempt record."
+files[16]{path,scope}:
   .github/workflows/release.yml,project
   CHANGELOG.md,project
   docs/release-caller-rollout.md,project
   package-lock.json,project
   package.json,project
+  README.md,project
   self-host.json,project
   selfhost.bundle,project
   test/ci-codeql.test.ts,project
@@ -43,7 +48,7 @@ files[15]{path,scope}:
   test/release-workflow.test.ts,project
   test/self-host.test.ts,project
   test/verify-release-publish-attestation.test.ts,project
-tests[15]:
+tests[16]:
   - command: node --test --test-concurrency=2 test/release-workflow.test.ts
     scope: project
     provenance:
@@ -153,11 +158,21 @@ tests[15]:
       created_at: "2026-11-19T00:02:18.674Z"
       source_kind: local_mutation
       source_ref: codex/ops272-fleet-1114
-docs[3]:
+  - command: node --test --test-concurrency=2 test/release-preparation.test.ts test/release-approval.test.ts test/global-npm-guard.test.ts test/release-workflow.test.ts test/dependency-refresh-workflow.test.ts test/lease-workflows.test.ts test/ci-shards.test.ts test/ci-codeql.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-19T01:57:33.905Z"
+      source_kind: local_mutation
+      source_ref: codex/ops272-fleet-1114
+docs[4]:
   - path: CHANGELOG.md
     scope: project
   - path: docs/release-caller-rollout.md
     scope: project
+  - path: README.md
+    scope: project
+    note: Daily Release retirement procedure and journal refusal
   - path: selfhost.bundle
     scope: project
     note: "Regenerated from the merged source; accept:self-host passes at HEAD"
