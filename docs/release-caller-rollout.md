@@ -1,10 +1,11 @@
 # Pinned Daily Release rollout
 
-This package delegates release execution to pm-ops v2026.11.14 at
-`7687a35d7522482bd8361d60dbc2589e9afbc81c`. The package uses the matching
-released pm-ops validator and explicitly permits empty changelog sections in
-generation, checking and release notes. Dependabot covers the SHA through its
-root github-actions ecosystem.
+This package delegates release execution to pm-ops v2026.11.18 at
+`c46a2419c63af3b348e6b559b0733ab0d9942cc7`. The workflow installs npm into a
+job-local prefix, skips versions already held by the registry, retires stale
+candidates, and restarts preparation when main advances. The package explicitly
+permits empty changelog sections in generation, checking and release notes.
+Dependabot covers the SHA through its root github-actions ecosystem.
 
 Package-owned inputs: `{"reconcile-only":"${{ (github.event_name == 'schedule' && github.event.schedule == '41 * * * *') || inputs.retire-unpublished == true }}","retire-unpublished":"${{ github.event_name == 'workflow_dispatch' && inputs.retire-unpublished == true }}","release-enabled":"${{ github.repository == 'unbraind/pm-vcs' && vars.PM_RELEASE_APPROVED == 'true' && github.ref == 'refs/heads/main' }}","changelog-script":"release:changelog","release-files":"selfhost.bundle"}`. Existing daily schedules
 are retained, with canonical hourly reconciliation where scheduled releases exist.
