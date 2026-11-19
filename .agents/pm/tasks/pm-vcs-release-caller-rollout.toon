@@ -6,9 +6,9 @@ status: in_progress
 priority: 2
 tags[3]: "area:release","gh:unbraind/pm-ops#272","gh:unbraind/pm-vcs#207"
 created_at: "2026-11-14T22:26:50.942Z"
-updated_at: "2026-11-19T02:01:12.427Z"
+updated_at: "2026-11-19T02:16:57.475Z"
 author: codex-ops272-1114
-comments[21]{created_at,author,text}:
+comments[23]{created_at,author,text}:
   "2026-11-14T22:27:00.144Z",codex-ops272-1114,"Orient and start the authorized fleet rollout. Verified released v2026.11.14 at 7687a35d7522482bd8361d60dbc2589e9afbc81c. Preserve this package approval, schedule, preparation and publication hooks through canonical inputs. The merged Jira pilot proves cross-repository npm identity acceptance; this package must still pass its own first-run preflight. Run caller contracts, installed attestation, strict YAML, actionlint and regenerated changelog checks. Shared-runner hold gates every push. No review-thread action, merge, dispatch or publication."
   "2026-11-14T22:40:31.059Z",codex-ops272-1114,"Rolled the Jira pilot contract into this package: released workflow pin 7687a35d7522482bd8361d60dbc2589e9afbc81c (v2026.11.14), exact pm-ops 2026.11.14 validator, explicit include-empty changelog generation/check/notes hooks, and declared yaml for caller tests. Preserved package-owned approval, schedule and preparation inputs. Focused gates passed 70/70, zero failures/skips; linked caller test passed 6/6 in a scratch pm project to avoid tracker run artifacts. Reverting only release.yml to the old copy in a disposable fixture failed 5 of 6 contracts. Actionlint passed 1/1, strict workflow/Dependabot YAML parsing 2/2, installed publish-attestation passed 1/1. Regenerate changelog and check after this final tracker write. Full npm/Bun certification remains with CI; no full local pass is claimed. Cross-repository npm OIDC evidence is Jira run 43639146392, recorded on pm-ops#272; first package activation must still pass its preflight. This package has no npm trusted publisher: releases remain red at the OIDC step until the owner configures the publisher for this repository and release.yml. Every push waits on the shared-runner hold. No merge, dispatch, publication or review-thread action. Leave this item open and release only this author claim."
   "2026-11-15T02:49:11.044Z",codex-ops272-1114,"Round 2 CI follow-up: canonical tag lookup can return unverified-offline. The old inline-publisher success-message assertion then fails despite a valid caller. Update the package attestation test to assert structured recognition, require an explicit deferral without an attestation claim offline, and preserve all refusal checks. Prove it with forced offline execution in a disposable Git fixture; keep coverage source inventory and thresholds unchanged."
@@ -30,6 +30,8 @@ comments[21]{created_at,author,text}:
   "2026-11-19T01:54:49.551Z",codex-sol,Round DA at PR head 0c9eeb1. The pinned workflow runs its build before changelog generation. Use npm lifecycle ordering to run the archive hook after successful generation and keep release-files staging. The caller already declares and forwards the retirement input. Verify its contract against the reference caller and document the operator procedure.
   "2026-11-19T01:58:26.970Z",codex-sol,"Round DA direct gates passed: 354 focused release, approval, guard and workflow tests with zero failures or skips, typecheck, build:test, lint, and changelog:check. The updated preparation fixture fails on the old script because the generator receives no flags, and verifies the staged changelog in the simulated release commit with the new hook. The pm-rl retirement contract already matches the caller. Follow-up pm-vcs-release-attempt-recovery records the pinned workflow refusal after a publish-attempt record."
   "2026-11-19T02:01:11.588Z",codex-sol,"Round DA thread mapping: PRRT_kwDOToJT7M65RYFP -> ac751f7 (forward include-empty to the changelog generator and regenerate the release bundle in npm postrelease:changelog). PRRT_kwDOToJT7M65RYFK -> 994f379 (existing boolean recovery input and pass-through, matching pm-rl) and ac751f7 (README recovery steps and dedicated workflow contract). The pin refuses retirement after a recorded attempt. Track that upstream limitation in pm-vcs-release-attempt-recovery. accept:self-host passed at ac751f7. A disposable version bump generated and checked the actual changelog and committed the regenerated bundle."
+  "2026-11-19T02:14:35.602Z",codex-sol,"Exact-head CI at f34402e found one Round DA fixture defect in the Node 22 quick shard: the synthetic archive script launches git without an explicit child environment. Apply the existing test environment boundary in the fixture and include its entrypoint audit in the focused gates."
+  "2026-11-19T02:16:55.459Z",codex-sol,"Round DA follow-up for PRRT_kwDOToJT7M65RYFP: both CI shard 5 jobs on f34402e reported the same implicit environment in the synthetic bundle writer. The fixture now uses testEnvironment for its nested git read. Node 22.18.0 passed both the release-commit fixture and the entrypoint audit, covering 151 test entrypoints and 232 explicit child launches. Typecheck, build:test, lint and changelog:check passed."
 files[16]{path,scope}:
   .github/workflows/release.yml,project
   CHANGELOG.md,project
@@ -47,7 +49,7 @@ files[16]{path,scope}:
   test/release-workflow.test.ts,project
   test/self-host.test.ts,project
   test/verify-release-publish-attestation.test.ts,project
-tests[16]:
+tests[17]:
   - command: node --test --test-concurrency=2 test/release-workflow.test.ts
     scope: project
     provenance:
@@ -162,6 +164,13 @@ tests[16]:
     provenance:
       author: codex-sol
       created_at: "2026-11-19T01:57:33.905Z"
+      source_kind: local_mutation
+      source_ref: codex/ops272-fleet-1114
+  - command: node --test --test-concurrency=2 test/release-preparation.test.ts test/release-approval.test.ts test/global-npm-guard.test.ts test/release-workflow.test.ts test/dependency-refresh-workflow.test.ts test/lease-workflows.test.ts test/ci-shards.test.ts test/ci-codeql.test.ts test/test-environment.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-19T02:15:53.995Z"
       source_kind: local_mutation
       source_ref: codex/ops272-fleet-1114
 docs[4]:
