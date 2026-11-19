@@ -6,13 +6,20 @@ status: open
 priority: 3
 tags[2]: maintenance,privacy
 created_at: "2026-11-03T02:05:50.088Z"
-updated_at: "2026-11-06T18:39:12.701Z"
+updated_at: "2026-11-17T09:31:07.013Z"
 author: codex-sol
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-vcs-crash-matrix-ci,related,"2026-11-03T02:05:50.088Z",codex-sol,"cli:create:dep",detected
-comments[2]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-11-03T02:05:57.066Z",codex-sol,One rejected physical commit was confirmed unreachable from every ref and absent from the candidate ancestry. The candidate commit and all reachable candidate commits use approved metadata. No rejected address or object identifier is recorded here. Original objects and identity policy remain unchanged pending owner review.
   "2026-11-06T18:39:12.701Z",codex-astra,"Additional bounded evidence from pm-vcs-phase6moves at 243c627: the shared physical object database rejects one unapproved address, while a fresh reachable-only clone of the candidate branch passes scripts/audit-git-identities.ts with five approved identities. New branch commits use the required public identity. No shared objects, history or allowlists were changed; existing owner-reviewed isolation work remains open."
-files[1]{path,scope}:
-  scripts/audit-git-identities.ts,project
+  "2026-11-15T14:40:11.895Z",codex-sol,"Fleet CI v2 round 2 reproduces the existing shared physical-object condition: the all-object audit rejects one unapproved address, while a fresh single-branch clone of candidate 15d67bc passes with five approved identities. Every commit in origin/main..HEAD has the required public address. No rejected address or object id is recorded; original objects, history and allowlist remain unchanged."
+  "2026-11-16T11:55:12.350Z",codex-sol,Fleet CI v2 fixture review reproduces the existing shared physical-object audit rejection of one unapproved address. A fresh no-local single-branch clone of candidate 5b3894c passes scripts/audit-git-identities.ts with five approved identities; all branch commits use the required public address. No private address or rejected object identifier is recorded. Preserve the fail-closed policy and original object database; owner-reviewed isolation work remains open.
+  "2026-11-17T09:30:59.284Z",codex-sol,"Round AO live verification: the physical Git database contains one rejected identity-bearing object, but zero rejected objects are reachable from any ref and zero occur in the candidate HEAD ancestry. The required push-range email command reports only the approved bot address. After other targeted tests completed, the full exact-gates retry passed committed self-host verification within its existing watchdog, then failed at test/exact-gates.test.ts:192 because the physical identity audit refused that unrelated object. No rejected identity or object identifier is recorded here. Preserve all shared objects, history and allowlists; verify final candidate behavior in a fresh reachable-only checkout."
+files[2]:
+  - path: scripts/audit-git-identities.ts
+    scope: project
+  - path: test/exact-gates.test.ts
+    scope: project
+    note: Round AO physical identity boundary in real operational audit
 body: ""

@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { testDepth } from "./support/depth.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -48,7 +49,7 @@ test("generated histories agree across identical blobs, union and unrelated edit
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
       return seed >>> 16;
     };
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    for (let attempt = 0; attempt < testDepth(100); attempt += 1) {
       const events = Array.from({ length: 4 }, (_, index) => JSON.stringify({ ts: String(index), event: index }));
       const base = Array.from({ length: random() % 6 }, () => events[random() % events.length]);
       const extra = Array.from({ length: 1 + random() % 8 }, () => events[random() % events.length]).sort();

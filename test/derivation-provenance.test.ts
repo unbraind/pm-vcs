@@ -169,9 +169,9 @@ test("eight native objects describing 512 TiB refuse within the primary budget b
   }
   assert.equal(length, 512 * 1024 ** 4);
   // Most-expensive root first; refusal must occur without visiting even its first child.
-  let reads = 0; const started = performance.now();
+  let reads = 0;
   assert.throws(() => manifestIdentity(id, object => { reads++; return store.read(object); }), { bound: "logical_bytes" });
-  assert.equal(reads, 1); assert.ok(performance.now() - started < 1000);
+  assert.equal(reads, 1, "logical-byte refusal must read only the root, regardless of machine speed");
   assert.throws(() => repo.obliterate(entry.fileId!, "erase-fixture", "provenance", new Date(1)), { bound: "logical_bytes" });
   assert.equal(store.denials().length, 0); assert.equal(readFileSync(join(repo.root, "asset"), "utf8"), secret);
 });

@@ -1,0 +1,20 @@
+id: pm-vcs-selfhost-audit-budget
+title: Keep the self-host operational subprocess audit reliable under shared-host load
+description: "Round AO observed test/exact-gates.test.ts:188 time out in its real scripts/self-host.ts child at the unchanged 60000 ms helper budget. A retry at a committed byte-identical archive using the supported memory-backed scratch option still timed out: 5/6 tests passed and the self-host child returned ETIMEDOUT with null status. The standalone npm run accept:self-host command passed at the same head b2908989db5c20bf3e8eae75c0626bc581618b67. Investigate bounded test budgets and verification runtime under shared-host load without weakening archive equality, direct-process assertions or production durability."
+type: Issue
+status: open
+priority: 2
+tags[3]: follow-up,"gh:unbraind/pm-vcs#209",testing
+created_at: "2026-11-17T09:21:34.565Z"
+updated_at: "2026-11-17T09:31:10.199Z"
+author: codex-sol
+acceptance_criteria: The full exact-gates test file reliably validates the real committed archive under supported slow-host conditions; a hung subprocess remains bounded; missing and stale committed archives still fail; the standalone committed self-host gate remains independent.
+parent: pm-vcs-ci-disk-reserve
+comments[1]{created_at,author,text}:
+  "2026-11-17T09:31:10.198Z",codex-sol,"The retry after other targeted tests completed passed the real committed self-host child within the unchanged 60-second budget, then failed the physical Git identity audit at test/exact-gates.test.ts:192. The latter is the already tracked pm-vcs-identity-isolation boundary: one rejected physical object is unreachable from every ref and absent from candidate ancestry. This follow-up remains open for the two observed watchdog timeouts under concurrent shared-host load; no timeout or assertion was weakened."
+files[2]{path,scope}:
+  test/exact-gates.test.ts,project
+  scripts/self-host.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "PM_TEST_DEPTH=quick PM_VCS_CRASH_TMPDIR=\"$TMPDIR\" node --test test/exact-gates.test.ts",project,codex-sol,"2026-11-17T09:21:34.565Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+body: ""

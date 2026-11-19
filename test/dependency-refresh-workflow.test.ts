@@ -6,8 +6,46 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
+import { parseDocument } from "yaml";
 import { fileURLToPath } from "node:url";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
+
+type GateStep = { run: string; env?: Record<string, string> };
+
+/** Read a gate's shell script and step environment from the workflow. */
+function gateStep(file: string, job: string, name: string): GateStep {
+  const workflow = parseDocument(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"), { uniqueKeys: true });
+  assert.deepEqual(workflow.errors, []);
+  const steps = workflow.toJS().jobs[job].steps as (GateStep & { name: string })[];
+  const step = steps.find(step => step.name === name);
+  assert.ok(step?.run, `missing ${name}`);
+  return step;
+}
+
+/** Read both tiers, expanding the deep matrix and substituting the coverage probe. */
+function gateScripts(): GateStep[] {
+  const quick = gateStep("ci.yml", "release-gate", "Non-coverage release gates");
+  const coverage = gateStep("ci.yml", "coverage-shard", "Collect coverage shard");
+  const deep = gateStep("ci-deep.yml", "deep", "Full release gate");
+  return [
+    quick,
+    { ...coverage, run: coverage.run.replace(/^.*NPM_CONFIG_USERCONFIG=.*$/m, "NPM_CONFIG_USERCONFIG=/dev/null npm run release:check") },
+    ...["npm", "bun"].map(manager => ({ ...deep, run: deep.run.replaceAll("${{ matrix.package-manager }}", manager) })),
+  ];
+}
+
+const gateSpaceProbe = `df() {
+  if [[ "$2" == "/" ]]; then
+    if [[ "$1" == "-Pk" ]]; then
+      printf 'Filesystem 1024-blocks Used Available Capacity Mounted\nfixture 99999999 1 %s 1%% /\n' "$GATE_FREE_KIB"
+    else
+      printf 'root space fixture\n'
+    fi
+  else
+    return 99
+  fi
+}
+`;
 
 /** Check optional witness tools without making them prerequisites for Node tests. */
 function commandAvailable(command: string): boolean {
@@ -73,33 +111,31 @@ test("manual CI dispatch preserves all four required check names", () => {
   const refresh = readFileSync(new URL("../.github/workflows/dependency-refresh.yml", import.meta.url), "utf8");
   assert.match(ci.slice(0, ci.indexOf("jobs:")), /^  workflow_dispatch:/mu);
   assert.match(refresh.slice(0, refresh.indexOf("concurrency:")), /^  actions: write$/mu);
-  const jobs = ci.slice(ci.indexOf("jobs:\n") + "jobs:\n".length);
-  const names = [...jobs.matchAll(/^  ([\w-]+):\n[\s\S]*?node-version: \[([^\]]+)\]/gmu)]
-    .flatMap((match) => match[2]!.split(",").map((version) => `${match[1]} (${version.trim()})`));
+  const jobs = parseDocument(ci).toJS().jobs;
+  const names = ["test", "windows-acceptance-launcher"].flatMap(name => jobs[name].strategy.matrix["node-version"].map((version:number) => `${name} (${version})`));
   assert.deepEqual(names, ["test (22)", "test (26)", "windows-acceptance-launcher (22)", "windows-acceptance-launcher (26)"]);
 });
 
 test("dependency refresh provisions the CI-pinned Bun runtime before release checks", () => {
   const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const refresh = readFileSync(new URL("../.github/workflows/dependency-refresh.yml", import.meta.url), "utf8");
-  const pin = ci.match(/uses: (oven-sh\/setup-bun@[a-f0-9]{40} #[^\n]+)[\s\S]*?bun-version: "([^"]+)"/u);
-  assert.ok(pin, "CI must declare an immutable Bun action and runtime version");
-  const setup = refresh.indexOf(`uses: ${pin[1]}`);
-  assert.ok(setup >= 0, "refresh must use the same pinned Bun action as CI");
+  const setupStep = parseDocument(ci).toJS().jobs["release-gate"].steps.find((step:{uses?:string})=>step.uses?.startsWith("oven-sh/setup-bun@"));
+  assert.match(setupStep.uses, /^oven-sh\/setup-bun@[a-f0-9]{40}$/);
+  const refreshSteps = parseDocument(refresh).toJS().jobs.refresh.steps as {uses?:string;name:string;with?:Record<string,string>}[];
+  const setup = refreshSteps.findIndex(step=>step.uses === setupStep.uses);
   const gate = refresh.indexOf("      - name: Run release checks");
-  assert.ok(setup < gate, "Bun must be provisioned before the release gate");
-  assert.match(refresh.slice(setup, gate), new RegExp(`bun-version: "${pin[2]!.replaceAll(".", "\\.")}"`, "u"));
+  assert.ok(setup >= 0, "refresh must use the same pinned Bun action as CI");
+  assert.equal(refreshSteps[setup].with?.["bun-version"], setupStep.with["bun-version"]);
+  assert.ok(refreshSteps.findIndex(step=>step.name === "Run release checks") > setup, "Bun must be provisioned before the release gate");
   assert.match(refresh.slice(gate), /run: npm run release:check/u);
 });
 
 test("Bun CI gate executes tracker lens tests in the Bun runtime", {
   skip: !commandAvailable("bash") || !commandAvailable("bun"),
 }, () => {
-  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const tail = ci.slice(ci.indexOf("      - name: Full Bun release gate"));
-  const step = tail.slice(0, tail.indexOf("\n\n"));
-  const script = step.slice(step.indexOf("        run: |\n") + "        run: |\n".length)
-    .split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
+  const workflow = parseDocument(readFileSync(new URL("../.github/workflows/ci-deep.yml", import.meta.url), "utf8")).toJS();
+  const native = workflow.jobs.deep.steps.find((step: { name: string }) => step.name === "Native Bun contract tests").run as string;
+  const script = "bun run release:check\n" + native;
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-bun-workflow-"));
   try {
     mkdirSync(join(root, "test"));
@@ -109,6 +145,7 @@ import { writeFileSync } from "node:fs";
 import { test } from "node:test";
 test("runtime witness", () => { assert.ok(process.versions.bun); writeFileSync("bun-ran", process.versions.bun); });
 `);
+    writeFileSync(join(root, "test/change-bundles.test.ts"), "");
     const result = spawnSync("bash", ["-e", "-c", script], { env: testEnvironment({ RUNNER_TEMP: root }), cwd: root, encoding: "utf8", timeout: 120_000 });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readFileSync(join(root, "gate-ran"), "utf8"), "yes");
@@ -118,14 +155,13 @@ test("runtime witness", () => { assert.ok(process.versions.bun); writeFileSync("
 
 test("release gates retire only their own scratch receipts after success and failure", () => {
   const root=mkdtempSync(join(tmpdir(),"pm-vcs-gate-scratch-"));const runner=join(root,"runner");const outside=join(root,"outside");mkdirSync(runner);mkdirSync(outside);writeFileSync(join(runner,"foreign"),"unrelated runner file");writeFileSync(join(outside,"foreign"),"unrelated audit file");
-  const ci=readFileSync(new URL("../.github/workflows/ci.yml",import.meta.url),"utf8");
   const allocations=join(root,"allocations.json");
   const probe=`import assert from 'node:assert/strict';import {mkdtempSync,readdirSync,writeFileSync} from 'node:fs';import {tmpdir} from 'node:os';import {join,sep} from 'node:path';import {ObjectStore} from ${JSON.stringify(new URL("../engine/objects.ts",import.meta.url).href)};assert.ok(tmpdir().startsWith(process.env.RUNNER_TEMP+sep));const root=mkdtempSync(join(tmpdir(),'native-store-'));new ObjectStore(join(root,'objects')).write('blob',Buffer.from('fixture'));assert.ok(readdirSync(tmpdir()).some(name=>name.startsWith('pm-vcs-namespace-')));writeFileSync(join(tmpdir(),'owned-receipt'),'fixture');writeFileSync(process.env.GATE_ALLOCATIONS,JSON.stringify({disk:tmpdir(),memory:process.env.PM_VCS_CRASH_TMPDIR}));process.exit(Number(process.env.GATE_FAILURE));`;
   try {
-    for(const gate of ["npm","Bun"])for(const status of [0,7])for(const metrics of [true,false]){
-      const tail=ci.slice(ci.indexOf(`      - name: Full ${gate} release gate`));const step=tail.slice(0,tail.indexOf("\n\n"));const marker="        run: |\n";const script=step.includes(marker)?step.slice(step.indexOf(marker)+marker.length).split("\n").filter(line=>line.startsWith("          ")).map(line=>line.slice(10)).join("\n"):step.match(/run: ([^\n]+)/u)![1]!;
-      const command=(metrics?'':'df() { if [[ "$2" == "/" ]]; then command df "$@"; else return 99; fi; }; du() { return 98; };\n')+'npm() { "$GATE_NODE" --input-type=module -e "$GATE_PROBE"; }; bun() { npm; };\n'+script;
-      const result=spawnSync("bash",["-c",command],{env:testEnvironment({RUNNER_TEMP:runner,TMPDIR:outside,PM_VCS_CRASH_TMPDIR:outside,GATE_ALLOCATIONS:allocations,GATE_NODE:process.execPath,GATE_PROBE:probe,GATE_FAILURE:String(status)}),encoding:"utf8",timeout:60_000});
+    for(const { run, env } of gateScripts())for(const status of [0,7])for(const metrics of [true,false]){
+
+      const command=(metrics?'':'df() { if [[ "$2" == "/" ]]; then command df "$@"; else return 99; fi; }; du() { return 98; };\n')+'npm() { if [[ -z ${gate_probed:-} ]]; then gate_probed=yes; "$GATE_NODE" --input-type=module -e "$GATE_PROBE"; fi; }; bun() { npm; };\n'+run;
+      const result=spawnSync("bash",["-c",command],{env:testEnvironment({...env,RUNNER_TEMP:runner,TMPDIR:outside,PM_VCS_CRASH_TMPDIR:outside,GATE_ALLOCATIONS:allocations,GATE_NODE:process.execPath,GATE_PROBE:probe,GATE_FAILURE:String(status)}),encoding:"utf8",timeout:60_000});
       assert.equal(result.status,status,result.stderr);assert.match(result.stdout,/gate storage before-gate/u);assert.match(result.stdout,/gate storage before-cleanup/u);if(metrics)assert.match(result.stdout,/Inodes/u);assert.deepEqual(readdirSync(runner),["foreign"]);assert.equal(readFileSync(join(runner,"foreign"),"utf8"),"unrelated runner file");assert.deepEqual(readdirSync(outside),["foreign"]);assert.equal(readFileSync(join(outside,"foreign"),"utf8"),"unrelated audit file");
       const owned=JSON.parse(readFileSync(allocations,"utf8")) as {disk:string;memory:string};assert.equal(existsSync(owned.disk),false);if(owned.memory!==outside)assert.equal(existsSync(owned.memory),false,"the gate removes its own memory scope");
     }
@@ -134,13 +170,43 @@ test("release gates retire only their own scratch receipts after success and fai
 
 test("release gate free-space guards reject a missing KiB and accept exactly twenty GiB", () => {
   const root=mkdtempSync(join(tmpdir(),"pm-vcs-gate-space-"));const runner=join(root,"runner");mkdirSync(runner);const witness=join(root,"ran");
-  const ci=readFileSync(new URL("../.github/workflows/ci.yml",import.meta.url),"utf8");
-  try{for(const gate of["npm","Bun"])for(const free of[20_971_519,20_971_520]){
-    rmSync(witness,{force:true});const tail=ci.slice(ci.indexOf(`      - name: Full ${gate} release gate`));const step=tail.slice(0,tail.indexOf("\n\n"));const marker="        run: |\n";const script=step.slice(step.indexOf(marker)+marker.length).split("\n").filter(line=>line.startsWith("          ")).map(line=>line.slice(10)).join("\n");
-    const commands='df() { if [[ "$2" == "/" ]]; then if [[ "$1" == "-Pk" ]]; then printf "Filesystem 1024-blocks Used Available Capacity Mounted\\nfixture 99999999 1 %s 1%% /\\n" "$GATE_FREE_KIB"; else printf "root space fixture\\n"; fi; else return 99; fi; }; npm() { printf "ran\\n" >> "$GATE_WITNESS"; }; bun() { npm; };\n';
-    const result=spawnSync("bash",["-c",commands+script],{env:testEnvironment({RUNNER_TEMP:runner,GATE_FREE_KIB:String(free),GATE_WITNESS:witness}),encoding:"utf8",timeout:60_000});
+  try{for(const { run, env } of gateScripts())for(const free of[20_971_519,20_971_520]){
+    rmSync(witness,{force:true});
+    const commands=gateSpaceProbe+'npm() { printf "ran\\n" >> "$GATE_WITNESS"; }; bun() { npm; };\n';
+    const result=spawnSync("bash",["-c",commands+run],{env:testEnvironment({...env,RUNNER_TEMP:runner,GATE_FREE_KIB:String(free),GATE_WITNESS:witness}),encoding:"utf8",timeout:60_000});
     assert.equal(result.status,free<20_971_520?1:0,result.stderr);assert.equal(existsSync(witness),free>=20_971_520);if(free<20_971_520)assert.match(result.stderr,/fewer than 20 GiB free/u);assert.deepEqual(readdirSync(runner),[]);
   }}finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test("every quick release command inherits the isolated npm user configuration", () => {
+  const quick = gateStep("ci.yml", "release-gate", "Non-coverage release gates");
+  const { scripts } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { scripts: Record<string, string> };
+  const commands = scripts["release:check"].split(" && ").filter(command => command !== "npm run coverage");
+  const expected = commands.map(command => `${command} /dev/null`);
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-gate-userconfig-"));
+  const probe = 'npm() { printf "npm %s %s\\n" "$*" "$(printenv NPM_CONFIG_USERCONFIG)" >> "$GATE_WITNESS"; };\n';
+  const run = (step: GateStep): string[] => {
+    const witness = join(root, "npm-calls");
+    rmSync(witness, { force: true });
+    const result = spawnSync("bash", ["-c", gateSpaceProbe + probe + step.run], {
+      env: testEnvironment({ NPM_CONFIG_USERCONFIG: "runner-user-config", ...step.env, RUNNER_TEMP: root, GATE_FREE_KIB: "20971520", GATE_WITNESS: witness }),
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return readFileSync(witness, "utf8").trimEnd().split("\n");
+  };
+  try {
+    assert.deepEqual(run(quick), expected);
+    const env = { ...quick.env };
+    delete env.NPM_CONFIG_USERCONFIG;
+    const prefixOnly = quick.run.replace(/^npm run typecheck\b/m, "NPM_CONFIG_USERCONFIG=/dev/null $&");
+    const mutated = run({ run: prefixOnly, env });
+    assert.equal(mutated[0], expected[0]);
+    assert.throws(() => assert.deepEqual(mutated, expected), /runner-user-config/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Bun witness skips when either optional tool is unavailable", () => {
@@ -165,4 +231,49 @@ test("Bun witness skips when either optional tool is unavailable", () => {
       assert.match(result.stdout, /ok \d+ - Bun CI gate executes tracker lens tests in the Bun runtime[^\n]*# SKIP/u);
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("quick/deep workflows retain tier boundaries, timeouts and safe change detection", () => {
+  const workflows = Object.fromEntries(["ci.yml", "ci-deep.yml", "codeql.yml"].map(file => {
+    const document = parseDocument(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"), { uniqueKeys: true });
+    assert.deepEqual(document.errors, []);
+    return [file, document.toJS()];
+  }));
+  const ci = workflows["ci.yml"]; const deep = workflows["ci-deep.yml"];
+  assert.deepEqual(Object.keys(ci.on).sort(), ["pull_request", "workflow_dispatch"]);
+  assert.deepEqual(deep.jobs.deep.strategy.matrix, { "node-version": [22, 26], "package-manager": ["npm", "bun"] });
+  assert.equal(deep.jobs.deep.env.PM_TEST_DEPTH, "full"); assert.equal(deep.jobs.deep.env.PM_TEST_TIME_SCALE, 3);
+  assert.equal(deep.jobs.deep["timeout-minutes"], 120);
+  for (const job of Object.values(ci.jobs) as { env: { PM_TEST_DEPTH: string }; "timeout-minutes": number }[]) {
+    if (job.env) assert.equal(job.env.PM_TEST_DEPTH, "quick"); assert.ok(job["timeout-minutes"] <= 22);
+  }
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-tier-classifier-"));
+  try {
+    const script = ci.jobs.changes.steps.find((step: { name: string }) => step.name === "Detect code changes").run as string;
+    assert.equal(script, ci.jobs["windows-acceptance-launcher"].steps.find((step: { name: string }) => step.name === "Detect code changes").run);
+    const pathsFile = join(root, "paths"); const output = join(root, "output");
+    for (const [paths, code] of [
+      [[], false],
+      [["README.md", ".agents/pm/tasks/fixture.toon", "docs/guide.md", "LICENSE"], true],
+      [["engine/source.ts", "docs/moved.md"], true],
+      [[".agents/pm/nested/extension.ts"], true], [[".agents/pm/hook.mjs"], true],
+      [["test/unusual\nname.test.ts"], true], [["selfhost.bundle"], true],
+    ] as [string[], boolean][]) {
+      writeFileSync(pathsFile, paths.map(path => path + "\0").join("")); writeFileSync(output, "");
+      const result = spawnSync("bash", ["-c", 'git() { [[ "$*" == *"--no-renames -z"* ]] || return 19; cat "$PATHS_FILE"; };\n' + script], {
+        env: testEnvironment({ GITHUB_EVENT_NAME: "pull_request", BASE_SHA: "base", HEAD_SHA: "head", RUNNER_TEMP: root, GITHUB_OUTPUT: output, PATHS_FILE: pathsFile }), encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr); assert.equal(readFileSync(output, "utf8"), `code=${code}\n`);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// A stale archive or invalid shipped documentation must fail before merge.
+test("docs and tracker PRs retain every gate that consumes their committed inputs", () => {
+  const ci = parseDocument(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"), { uniqueKeys: true }).toJS();
+  const cheap = ci.jobs.test.steps.find((step: { name: string }) => step.name === "Check documentation and tracker changes");
+  assert.equal(cheap.if, "needs.changes.result == 'success' && needs.changes.outputs.code != 'true'");
+  for (const gate of ["changelog:check", "verify:release-changelog-date", "audit:identities", "accept:self-host", "pack:check"]) {
+    assert.ok(cheap.run.split("\n").includes(`npm run ${gate}`), `cheap path must run ${gate}`);
+  }
 });

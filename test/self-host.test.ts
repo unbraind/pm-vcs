@@ -850,13 +850,14 @@ test("main --check fails when the bundle is missing from HEAD", () => {
   }
 });
 
-test("main --check fails when the bundle does not match the source", () => {
+for (const changedPath of ["README.md", ".agents/pm/tasks/fixture.toon"]) test(`main --check fails when the bundle does not match ${changedPath}`, () => {
   const f = fixture();
   try {
     main(f.root, ["node", "self-host.ts", "--write"]);
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "add bundle"]);
-    writeFileSync(join(f.root, "README.md"), "changed\n");
+    mkdirSync(join(f.root, changedPath, ".."), { recursive: true });
+    writeFileSync(join(f.root, changedPath), "changed\n");
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "change source"]);
     const origExit = process.exitCode;
