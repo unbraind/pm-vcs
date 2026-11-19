@@ -1,0 +1,22 @@
+id: pm-vcs-identity-unbrained
+title: Use the unbrained commit identity
+description: "Apply the 2026-11-19 owner decision to tracked fixtures, documentation, and PM history. Verify identity mapping and package gates."
+type: Chore
+status: open
+priority: 2
+tags: []
+created_at: "2026-11-19T11:35:21.228Z"
+updated_at: "2026-11-19T11:49:59.472Z"
+author: codex-sol
+comments[2]{created_at,author,text}:
+  "2026-11-19T11:35:34.255Z",codex-sol,The owner selected unbrained as the fleet commit name and retained the existing noreply address. Verify package checks and reseal affected PM histories.
+  "2026-11-19T11:49:53.696Z",codex-sol,"Local tests, typecheck, tracker health, and changelog checks completed. History redaction verified for 9 items with zero hash mismatches. Historical Git attribution matched per commit after mapping 0 approved-address records to the fleet name."
+tests[5]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  npm run typecheck,project,600,codex-sol,"2026-11-19T11:42:34.194Z",local_mutation,chore/commit-identity-unbrained
+  node --test --test-concurrency=2 test/path-identity.test.ts test/verify-pack-privacy.test.ts,project,600,codex-sol,"2026-11-19T11:43:01.165Z",local_mutation,chore/commit-identity-unbrained
+  "npm run audit:identities",project,600,codex-sol,"2026-11-19T11:48:17.208Z",local_mutation,chore/commit-identity-unbrained
+  "npm run pack:check",project,600,codex-sol,"2026-11-19T11:48:21.891Z",local_mutation,chore/commit-identity-unbrained
+  "npm run accept:self-host",project,600,codex-sol,"2026-11-19T11:48:25.655Z",local_mutation,chore/commit-identity-unbrained
+docs[1]{path,scope}:
+  docs/certification-2026.10.4.md,project
+body: ""
