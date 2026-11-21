@@ -1,0 +1,24 @@
+id: pm-vcs-github-c1741e698b48-176
+title: served-defects test delivers its expected refusals to production Sentry and blocked the pm-cli daily release
+description: "GH issue #176: https://github.com/unbraind/pm-vcs/issues/176 · author @unbraind · state reason completed · created 2026-11-04T07:06:33Z · updated 2026-11-04T21:33:24Z"
+type: Issue
+status: closed
+priority: 2
+tags[2]: "gh:unbraind/pm-vcs#176","github_author:unbraind"
+created_at: "2026-11-04T07:06:33Z"
+updated_at: "2026-11-21T08:17:11.365Z"
+closed_at: "2026-11-04T21:33:24Z"
+completed_at: "2026-11-04T21:33:24Z"
+author: pm-github
+close_reason: "Closed on GitHub as completed on 2026-11-04T21:33:24Z; closing PR https://github.com/unbraind/pm-vcs/pull/179 (\"Hard-disable pm telemetry in every test child so expected refusals never reach production Sentry (pm-vcs-rd82)\")"
+github_close_reason: "Closed on GitHub as completed on 2026-11-04T21:33:24Z; closing PR https://github.com/unbraind/pm-vcs/pull/179 (\"Hard-disable pm telemetry in every test child so expected refusals never reach production Sentry (pm-vcs-rd82)\")"
+github_closed_at: "2026-11-04T21:33:24Z"
+github_created_at: "2026-11-04T07:06:33Z"
+github_link_only: false
+github_number: 176
+github_release: ""
+github_state: closed
+github_state_reason: completed
+github_updated_at: "2026-11-04T21:33:24Z"
+github_url: "https://github.com/unbraind/pm-vcs/issues/176"
+body: "Downstream impact: [unbraind/pm-cli#1659](https://github.com/unbraind/pm-cli/issues/1659), tracked in pm-cli as [pm-usn5k2](https://github.com/unbraind/pm-cli/blob/main/.agents/pm/issues/pm-usn5k2.toon).\n\n## What happened\n\n`test/served-defects.test.ts` spawns an installed pm with `PM_TELEMETRY_SOURCE_CONTEXT: \"test\"` and `PM_TELEMETRY_INLINE_FLUSH: \"1\"`. The comment says the intent is to label the runs and to avoid the detached flusher. Under pm-cli's documented policy (docs/CONFIGURATION.md, *Test environments*), a valid explicit `PM_TELEMETRY_SOURCE_CONTEXT` permits intentional test delivery. So the test's expected refusals were sent to the production Sentry project, as `ExtensionCommandError` from `vcs fetch/push/clone/remote` with `pm.error_code=denied`, exit 1, and `environment=test`.\n\nCI runs on 2026-11-04 (00:26–03:45Z, two GitHub runners) created PM-CLI-3R, 3S, 3T, 3V, 3W and 3X. These blocked pm-cli's Auto Release Sentry gate for the 2026.11.4 cut.\n\n## Fix in this repo\n\nFor this suite, set `PM_TELEMETRY_DISABLED: \"1\"` (or `DO_NOT_TRACK: \"1\"`) next to the source-context label, or point the spawned CLI at a local collector. Either way the label stays without delivering to production. pm-cli will separately stop its release gate from counting `environment=test` issues (pm-usn5k2), but test runs should still not reach the production project.\n\n---\n\n### GitHub comments (2)\n\n> **@unbraind** (2026-11-04T10:45:28Z)\n>\n> Fix in #179 ([pm-vcs-rd82](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-rd82.toon)). `testEnvironment()` now adds the hard opt-out `PM_TELEMETRY_DISABLED=1` for every test child, served-defects drops the delivery-permitting label, and a regression test against a local collector proves that a labelled child reports telemetry disabled and sends zero requests. It fails when the opt-out is removed. A project `telemetry.endpoint` is silently ignored, which made \"point such tests at a local collector\" impossible without editing the global profile by hand. That is reported upstream as unbraind/pm-cli#1660.\n\n> **@unbraind** (2026-11-04T18:38:42Z)\n>\n> Requirement update, from the fix in #179: the second point above, \"keep the test source-context label while preventing delivery to production\", is superseded.\n> \n> In pm-cli a valid `PM_TELEMETRY_SOURCE_CONTEXT=test` is what permits test delivery, even under `NODE_ENV=test`. Keeping it in children that must never deliver would leave one guard instead of two.\n> \n> #179 therefore:\n> \n> - hard-disables telemetry and Sentry in every test child (`PM_TELEMETRY_DISABLED=1` in `testEnvironment()`);\n> - drops the label from served-defects.\n> \n> A regression test shows that a child that *does* carry the label still reports telemetry disabled and sends zero requests. Tracker: pm-vcs-rd82, whose acceptance criteria record the same.\n>"
