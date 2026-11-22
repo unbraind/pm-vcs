@@ -41,10 +41,10 @@ package install <tarball> --project`. Both `npx -y
 --version
 --json vcs init --record-path '.agents/pm/**/*.toon' --set-field tags:set,notes:sequence,updated_at:timestamp
 --json vcs add .agents/pm/chores/pm-vcs-bcgs.toon .agents/pm/history/pm-vcs-bcgs.jsonl
---author 'SteveBot <1153461+unbraind@users.noreply.github.com>' --json vcs commit --message 'Real tracker initial snapshot' --item pm-vcs-bcgs
+--author 'unbrained <1153461+unbraind@users.noreply.github.com>' --json vcs commit --message 'Real tracker initial snapshot' --item pm-vcs-bcgs
 comment pm-vcs-bcgs '<disposable launcher marker>'
 --json vcs add .agents/pm/chores/pm-vcs-bcgs.toon .agents/pm/history/pm-vcs-bcgs.jsonl
---author 'SteveBot <1153461+unbraind@users.noreply.github.com>' --json vcs commit --message '<disposable launcher marker>' --item pm-vcs-bcgs
+--author 'unbrained <1153461+unbraind@users.noreply.github.com>' --json vcs commit --message '<disposable launcher marker>' --item pm-vcs-bcgs
 --json vcs status
 --json vcs log --limit 2
 --json vcs diff <first-commit> <second-commit>

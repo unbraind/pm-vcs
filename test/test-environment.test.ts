@@ -21,8 +21,9 @@ const session = {
 };
 
 test("child allowlist drops all ambient session namespaces and keeps only deliberate fixture identity", () => {
-  const source = { ...session, PATH: "synthetic-bin", HOME: "synthetic-home", NODE_V8_COVERAGE: "ambient-coverage", NODE_OPTIONS: "ambient-preload", PM_PATH: "ambient-tracker", UNRELATED_SECRET: "private-value" };
+  const source = { ...session, PATH: "synthetic-bin", HOME: "synthetic-home", NODE_V8_COVERAGE: "ambient-coverage", NODE_OPTIONS: "ambient-preload", PM_PATH: "ambient-tracker", PM_TEST_DEPTH: "quick", PM_TEST_TIME_SCALE: "3", UNRELATED_SECRET: "private-value" };
   const env = testEnvironment({}, source);
+  assert.equal(env.PM_TEST_DEPTH, "quick"); assert.equal(env.PM_TEST_TIME_SCALE, "3");
   assert.equal(env.PATH, source.PATH); assert.equal(env.HOME, source.HOME); assert.equal(env.NODE_ENV, "test"); assert.equal(env.NODE_V8_COVERAGE, source.NODE_V8_COVERAGE); assert.equal(env.PM_AGENT_PROBES, "0");
   for (const key of Object.keys(session)) if (key !== "PM_AGENT_PROBES") assert.equal(env[key], undefined, key);
   for (const key of ["NODE_OPTIONS", "PM_PATH", "UNRELATED_SECRET"]) assert.equal(env[key], undefined, key);

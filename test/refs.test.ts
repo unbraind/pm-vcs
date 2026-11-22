@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { afterEach, mock, test } from "node:test";
 
 import { ObjectStoreError } from "../engine/objects.ts";
+import { durability } from "../engine/durability.ts";
 import {
   BRANCH_PREFIX,
   TAG_PREFIX,
@@ -257,4 +258,31 @@ test("ref cleanup preserves a competing owner that replaced the original process
   const f = freshRefs(); const lock = join(f.root, "refs/heads/a.lock");
   assert.throws(() => f.refs.transaction([{ name: "refs/heads/a", expected: null, next: id }], () => { renameSync(lock, `${lock}.retired`); writeFileSync(lock, "peer owner"); }), { code: "ref_locked" });
   assert.equal(readFileSync(lock, "utf8"), "peer owner"); assert.equal(f.refs.read("refs/heads/a"), null);
+});
+
+test("a completed ref batch reports its first release failure after closing every lock", () => {
+  const { refs, root } = freshRefs();
+  const release = durability.release;
+  const first = new Error("first ref release failed");
+  const second = new Error("second ref release failed");
+  const released: string[] = [];
+  const descriptors: number[] = [];
+  mock.method(durability, "release", (...args: Parameters<typeof release>) => {
+    const result = release(...args);
+    if (args[0].startsWith(join(root, "refs"))) {
+      released.push(args[0]);
+      descriptors.push(args[1]);
+      throw released.length === 1 ? first : second;
+    }
+    return result;
+  });
+  assert.throws(() => refs.transaction([
+    { name: "refs/heads/a", expected: null, next: id },
+    { name: "refs/heads/b", expected: null, next: otherId },
+  ]), error => error === first);
+  assert.deepEqual(released, ["a", "b"].map(name => join(root, "refs/heads", `${name}.lock`)));
+  assert.equal(refs.read("refs/heads/a"), id);
+  assert.equal(refs.read("refs/heads/b"), otherId);
+  for (const path of released) assert.equal(existsSync(path), false);
+  for (const descriptor of descriptors) assert.throws(() => fstatSync(descriptor), { code: "EBADF" });
 });

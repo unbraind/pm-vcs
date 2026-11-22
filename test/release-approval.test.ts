@@ -1,9 +1,10 @@
 import "./helpers/isolate-session.ts";
+import { workflowGlobalNpmInstalls } from './global-npm-guard.ts';
 /** Audit every workflow's effective permissions, publication approval and npm authentication. */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseDocument, stringify } from 'yaml';
@@ -194,13 +195,15 @@ function inspectWorkflow(source: string, filename: string): string[] {
     let writable = false;
     try { writable = writes(effective); }
     catch { issues.push(`${location}: invalid permissions`); }
-    const condition = typeof job.if === 'string' ? job.if : '';
+    const canonical = typeof job.uses === 'string' && /^unbraind\/pm-ops\/\.github\/workflows\/daily-release\.yml@[a-f0-9]{40}$/u.test(job.uses);
+    const enabled = canonical ? mapping(job.with)?.['release-enabled'] : job.if;
+    const condition = typeof enabled === 'string' ? enabled : '';
     const steps = Array.isArray(job.steps) ? job.steps : [];
     const commands = steps.flatMap(step => {
       const value = mapping(step)?.run;
       return typeof value === 'string' ? publications(value) : [];
     });
-    const reusablePublisher = typeof job.uses === 'string' && /\/(?:release|publish)[^/]*\.ya?ml@/u.test(job.uses);
+    const reusablePublisher = typeof job.uses === 'string' && /\/(?:daily-release|release|publish)[^/]*\.ya?ml@/u.test(job.uses);
     const publishes = commands.length > 0 || reusablePublisher;
     if ((writable || publishes) && !requiresAtom(condition, repositoryAtom)) issues.push(`${location}: exact repository guard required`);
     if (condition.includes('github.repository_owner')) issues.push(`${location}: repository_owner is not a repository guard`);
@@ -247,25 +250,114 @@ test('daily/manual release triggers and preparation gates remain enforced', () =
   const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
   const events = mapping(release.on);
   assert.ok(events && Object.hasOwn(events, 'workflow_dispatch'));
-  assert.deepEqual(events.schedule, [{ cron: '23 3 * * *' }]);
+  assert.deepEqual(events.schedule, [{ cron: '23 3 * * *' }, { cron: '41 * * * *' }]);
   const jobs = mapping(release.jobs);
   assert.ok(jobs?.release);
-  for (const name of ['prepare', 'release', 'resume_release']) {
-    const job = mapping(jobs[name]);
-    if (!job) continue;
-    assert.ok(typeof job.if === 'string');
-    for (const atom of [repositoryAtom, approvalAtom, mainAtom]) assert.ok(requiresAtom(job.if, atom), `${name} must require ${atom}`);
+  const job = mapping(jobs.release);
+  const enabled = mapping(job?.with)?.['release-enabled'];
+  assert.equal(typeof enabled, 'string');
+  for (const atom of [repositoryAtom, approvalAtom, mainAtom]) assert.ok(requiresAtom(String(enabled), atom), `release must require ${atom}`);
+});
+
+test('publishing delegates npm bootstrap to the SHA-pinned canonical workflow', () => {
+  const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
+  const job = mapping(mapping(release.jobs)?.release);
+  assert.match(String(job?.uses), /^unbraind\/pm-ops\/\.github\/workflows\/daily-release\.yml@[a-f0-9]{40}$/u);
+  assert.equal(job?.steps, undefined);
+});
+
+const npmBootstrapStep = 'Use an npm that supports trusted publishing';
+const npmVerifyStep = 'Verify job-local npm version';
+
+/** Read an unconditional, required step as individual shell lines. */
+function requiredStepLines(step: Record<string, unknown> | undefined, name: string): string[] {
+  assert.ok(typeof step?.run === 'string', `the named ${name} step must run a command`);
+  assert.ok(!Object.hasOwn(step, 'continue-on-error'), `the ${name} step must not set continue-on-error`);
+  assert.ok(!Object.hasOwn(step, 'if'), `the ${name} step must not set if`);
+  return step.run.split('\n').map(line => line.trim()).filter(line => line.length > 0 && !line.startsWith('#'));
+}
+
+/** Audit the bootstrap and version check in the order a single job runs them. */
+function assertJobLocalNpm(steps: readonly unknown[]): void {
+  const bootstrapIndex = steps.findIndex(step => mapping(step)?.name === npmBootstrapStep);
+  const verifyIndex = steps.findIndex(step => mapping(step)?.name === npmVerifyStep);
+  const bootstrap = requiredStepLines(mapping(steps[bootstrapIndex]), 'bootstrap');
+  const verify = requiredStepLines(mapping(steps[verifyIndex]), 'verify');
+  assert.ok(verifyIndex > bootstrapIndex, 'the verify step must run after the bootstrap');
+
+  const install = /^npm install --prefix "\$RUNNER_TEMP\/npm-(\d+)\.(\d+)\.(\d+)" npm@\1\.\2\.\3(?:\s+--(?:ignore-scripts|no-audit|no-fund))*$/u;
+  const version = bootstrap.map(line => install.exec(line)).find(match => match !== null)?.slice(1).map(Number);
+  assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)),
+    'the bootstrap step must execute a job-local npm install with trusted publishing support');
+  const pin = version.join('.');
+  assert.ok(bootstrap.some(line => line === `echo "$RUNNER_TEMP/npm-${pin}/node_modules/.bin" >> "$GITHUB_PATH"`),
+    'the bootstrap step must append its prefix bin directory to $GITHUB_PATH');
+  assert.ok(verify.some(line => line === `test "$(npm --version)" = "${pin}"`),
+    'the verify step must expect exactly the installed version');
+}
+
+// The package caller delegates the actual steps to pm-ops. Exercise the
+// executable-line contract with an offline fixture.
+const npmSteps = [
+  {
+    name: npmBootstrapStep,
+    run: [
+      'npm install --prefix "$RUNNER_TEMP/npm-11.5.1" npm@11.5.1 --ignore-scripts',
+      'echo "$RUNNER_TEMP/npm-11.5.1/node_modules/.bin" >> "$GITHUB_PATH"',
+    ].join('\n'),
+  },
+  { name: npmVerifyStep, run: 'test "$(npm --version)" = "11.5.1"' },
+];
+
+test('publishing installs an npm version supporting trusted publishing', () => {
+  assertJobLocalNpm(npmSteps);
+});
+
+test('the bootstrap check cannot substitute for separate post-bootstrap verification', () => {
+  const steps = npmSteps;
+  const verifyIndex = steps.findIndex(step => mapping(step)?.name === npmVerifyStep);
+  assert.ok(verifyIndex >= 0);
+  const withoutVerify = steps.filter((_step, index) => index !== verifyIndex);
+  assert.throws(() => assertJobLocalNpm(withoutVerify), /named verify step/u);
+  assert.throws(() => assertJobLocalNpm([steps[verifyIndex], ...withoutVerify]), /after the bootstrap/u);
+});
+
+test('job-local npm commands must execute instead of appearing in output or comments', () => {
+  const steps = npmSteps;
+  const [install, addPath] = steps[0].run.split('\n');
+  const verify = steps[1].run;
+
+  for (const inert of [
+    (command: string) => `echo '${command}'`,
+    (command: string) => `printf '%s\\n' '${command}'`,
+    (command: string) => `: '${command}'`,
+    (command: string) => `# ${command}`,
+  ]) {
+    assert.throws(() => assertJobLocalNpm([{ ...steps[0], run: `${inert(install)}\n${addPath}` }, steps[1]]), /execute a job-local npm install/u);
+    assert.throws(() => assertJobLocalNpm([{ ...steps[0], run: `${install}\n${inert(addPath)}` }, steps[1]]), /must append its prefix/u);
+    assert.throws(() => assertJobLocalNpm([steps[0], { ...steps[1], run: inert(verify) }]), /must expect exactly/u);
   }
 });
 
-test('publishing installs an npm version supporting trusted publishing', () => {
-  const release = document(readFileSync(new URL('release.yml', workflowRoot), 'utf8'));
-  const scripts = Object.values(mapping(release.jobs) ?? {}).flatMap(job => {
-    const steps = mapping(job)?.steps;
-    return Array.isArray(steps) ? steps.map(step => mapping(step)?.run).filter(value => typeof value === 'string') : [];
-  }).join('\n');
-  const version = scripts.match(/npm install -g npm@(\d+)\.(\d+)\.(\d+)/u)?.slice(1).map(Number);
-  assert.ok(version && (version[0] > 11 || version[0] === 11 && (version[1] > 5 || version[1] === 5 && version[2] >= 1)));
+test('job-local npm steps cannot be skipped or allowed to fail', () => {
+  const steps = npmSteps;
+  for (const name of [npmBootstrapStep, npmVerifyStep]) {
+    for (const [key, value] of [['continue-on-error', true], ['if', false]] as const) {
+      const mutated = steps.map(step => mapping(step)?.name === name ? { ...mapping(step), [key]: value } : step);
+      assert.throws(() => assertJobLocalNpm(mutated), new RegExp(`must not set ${key}`, 'u'), `${name} with ${key}`);
+    }
+  }
+});
+
+test('no workflow replaces the shared global npm installation', () => {
+  // A global npm install replaces the npm inside the runner's shared Node
+  // installation. Parallel jobs on one host share that installation, so one
+  // job's global install corrupts a sibling's npm mid-install (ENOTEMPTY, or
+  // `npm: command not found`). Every pinned npm install must be prefix-local.
+  for (const path of workflowFiles(fileURLToPath(workflowRoot))) {
+    const source = readFileSync(path, 'utf8');
+    assert.deepEqual(workflowGlobalNpmInstalls(source), [], `${basename(path)} must not replace the global npm`);
+  }
 });
 
 test('automatic release activation is absent and publishing documentation matches behaviour', () => {

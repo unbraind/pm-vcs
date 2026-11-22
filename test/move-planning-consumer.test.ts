@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { devNull } from "node:os";
 import { test } from "node:test";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
+import { installOfflinePackedConsumer } from "./helpers/offline-packed-consumer.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 import { pmExecutable } from "../scripts/pm-environment.ts";
@@ -106,8 +107,7 @@ for (const entrypoint of ["sdk", "json", "toon"]) for (const group of ["merge", 
     const archive = join(scope.root, packed.stdout.trim().split(/\r?\n/).at(-1)!);
     const root = join(scope.root, "consumer"); mkdirSync(root);
     writeFileSync(join(root, "package.json"), JSON.stringify({ name: "move-planning-consumer", private: true, type: "module" }));
-    const installed = spawnSync("npm", ["install", "--offline", "--ignore-scripts", "--legacy-peer-deps", "--no-audit", "--no-fund", archive], { cwd: root, env: environment, encoding: "utf8", timeout: 120_000 });
-    assert.equal(installed.status, 0, installed.stderr);
+    installOfflinePackedConsumer(archive, root, environment);
     symlinkSync(join(packageRoot, "node_modules/@unbrained"), join(root, "node_modules/@unbrained"), "junction");
     writeFileSync(join(root, "consumer.mjs"), program);
     for (const runtime of [process.execPath, "bun"]) {

@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { testTime } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Native fixture cleanup waits for its owners and retries transient nonempty directories. */
 import assert from "node:assert/strict";
@@ -53,10 +54,23 @@ test("fixture teardown surfaces task failures after closing all other owners and
 
 
 test("fixture cleanup actively stops a registered live child before removing its root", async () => {
+  // Managed cleanup can take 1000 ms to escalate to SIGKILL, even on a scaled run.
+  const teardownBudget = 1500;
+  const timeout = Math.max(teardownBudget, testTime(teardownBudget));
   const fixture = makeManagedTempDir(); const child = fixture.child(spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { env: testEnvironment(), stdio: "ignore" }));
   const cleanup = fixture.cleanup(); let timer: ReturnType<typeof setTimeout> | undefined;
-  try { const completed = await Promise.race([cleanup.then(() => true), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 1500); })]); assert.equal(completed, true, "Cleanup must stop its live child"); assert.equal(existsSync(fixture.root), false); }
+  try { const completed = await Promise.race([cleanup.then(() => true), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), timeout); })]); assert.equal(completed, true, "Cleanup must stop its live child"); assert.equal(existsSync(fixture.root), false); }
   finally { clearTimeout(timer); if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await cleanup; }
+});
+
+const liveChildTestArgs = ["--test", "--test-name-pattern=^fixture cleanup actively stops", fileURLToPath(import.meta.url)];
+
+test("the cleanup watchdog allows fixed teardown delays at scale 0.1", () => {
+  const result = spawnSync(process.execPath, liveChildTestArgs, {
+    env: testEnvironment({ PM_TEST_TIME_SCALE: "0.1", NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: 30_000,
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /fixture cleanup actively stops a registered live child/u);
 });
 
 
@@ -88,4 +102,22 @@ test("ordinary workers share recovery storage and parent cleanup removes normal 
     }
   } finally { await fixture.cleanup(); }
   for (const path of artifacts) assert.equal(existsSync(path), false, "parent cleanup removes both fixture data and sibling native ledgers");
+});
+
+
+test("invalid watchdog scale refuses before starting the cleanup fixture child", async () => {
+  const fixture = makeManagedTempDir();
+  const marker = join(fixture.root, "spawned");
+  const preload = join(fixture.root, "spawn-witness.mjs");
+  writeFileSync(preload, `import cp from "node:child_process"; import {writeFileSync} from "node:fs"; import {syncBuiltinESMExports} from "node:module";
+if (process.argv[1]?.endsWith("fixture-lifetime.test.ts")) { const spawn = cp.spawn; cp.spawn = (...args) => { writeFileSync(${JSON.stringify(marker)}, "started"); return spawn(...args); }; syncBuiltinESMExports(); }
+`);
+  try {
+    const result = spawnSync(process.execPath, ["--import", preload, ...liveChildTestArgs], {
+      env: testEnvironment({ PM_TEST_TIME_SCALE: "0", NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: 30_000,
+    });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout + result.stderr, /PM_TEST_TIME_SCALE/u);
+    assert.equal(existsSync(marker), false, "invalid scale must refuse before a fixture process exists");
+  } finally { await fixture.cleanup(); }
 });

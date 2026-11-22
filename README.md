@@ -36,6 +36,21 @@ that first publish, the maintainer configures npm trusted publishing for
 The daily workflow and manual dispatch both require this variable and `main`.
 Publishing uses OIDC with provenance; no stored npm token is needed.
 
+### Retire an unpublished release candidate
+
+In GitHub Actions, open **Daily Release**, choose **Run workflow** on `main`,
+and set `retire-unpublished` to `true`. Check the reconciliation job for the
+retirement result. After successful retirement, the next daily run can prepare
+a fresh candidate. Leave the input at its default `false` for normal runs.
+
+The workflow verifies the candidate's ownership and exact head and requires
+the absence of the npm version, Git tag, GitHub Release, and publish or
+post-release attempt records. If a publish attempt was recorded before npm
+accepted the tarball, preserve the attempt record and escalate for maintainer
+reconciliation. The pinned workflow refuses retirement for that state.
+
+### Install the package
+
 Once published, install the package and compatible pm host, then activate the
 extension in an initialized pm project:
 

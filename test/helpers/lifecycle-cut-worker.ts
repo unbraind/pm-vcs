@@ -1,3 +1,4 @@
+import { testTime } from "../support/depth.ts";
 /** Persistent isolated fixture owner; only the actual publication child receives SIGKILL. */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -16,7 +17,7 @@ const prepare = scenario === "retired-instance" ? retiredPending : scenario === 
 await prepareTemplate(scenario);
 /** Keep successful probes and every killed child on exactly the same warmed entry point. */
 function run(f: Awaited<ReturnType<typeof prepare>>, ordinal: number, source = false) {
-  return spawnSync(process.execPath, [...(source ? [new URL("./forbid-git.ts", import.meta.url).href, new URL("./crash-child.ts", import.meta.url).href] : preloads).flatMap(path => ["--import", path]), source ? join(packageRoot, "test/helpers/erasure-purge-worker.ts") : entry, f.repo.root, f.second, String(ordinal)], { env: { ...testEnvironment(), ...discardChildCoverage(), CRASH_COMPILE_CACHE: cache, CRASH_TIMING: "1" }, stdio: ["ignore", "pipe", "pipe", "pipe"], encoding: "utf8", timeout: scenario === "interrupted-unpack" ? 120_000 : 30_000 });
+  return spawnSync(process.execPath, [...(source ? [new URL("./forbid-git.ts", import.meta.url).href, new URL("./crash-child.ts", import.meta.url).href] : preloads).flatMap(path => ["--import", path]), source ? join(packageRoot, "test/helpers/erasure-purge-worker.ts") : entry, f.repo.root, f.second, String(ordinal)], { env: { ...testEnvironment(), ...discardChildCoverage(), CRASH_COMPILE_CACHE: cache, CRASH_TIMING: "1" }, stdio: ["ignore", "pipe", "pipe", "pipe"], encoding: "utf8", timeout: testTime(scenario === "interrupted-unpack" ? 120_000 : 30_000) });
 }
 process.send!({ ready: true });
 process.on("message", async (message: { ordinal: number; steps?: string[] } | "close") => {

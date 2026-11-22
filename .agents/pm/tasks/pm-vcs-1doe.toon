@@ -1,0 +1,36 @@
+id: pm-vcs-1doe
+title: "Finish the pm-github 2026.11.15 pin PR: regenerate the self-host bundle"
+description: ""
+type: Task
+status: closed
+priority: 2
+tags[1]: "gh:unbraind/pm-vcs#208"
+created_at: "2026-11-16T08:59:58.350Z"
+updated_at: "2026-11-16T20:40:45.677Z"
+closed_at: "2026-11-16T20:40:45.652Z"
+completed_at: "2026-11-16T20:40:45.652Z"
+author: pi-glm
+resolution: Implemented and merged in #208 (38f8f1e).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #208 as 38f8f1e; checks successful at head e4a8429: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
+comments[6]{created_at,author,text}:
+  "2026-11-16T09:03:59.357Z",pi-glm,"PR checks test (22)/test (26) both fail at test/exact-gates.test.ts:183 'operational entry points enforce real audits through direct CLI processes': the self-host gate reports the committed selfhost.bundle is not byte-identical to the committed source for .github/workflows/pm-github-sync.yml and pm-github-closeout.yml because the bundle still contains the old pm-github caller shape (2026.11.04 pin plus pm-github-version input). Fix: regenerate the bundle with self-host:write and commit it alongside the workflow pin. Both open review threads (Greptile on the sync caller, CodeRabbit on the closeout caller) flag exactly this and are valid."
+  "2026-11-16T09:33:35.895Z",pi-glm,"Gate results at the pushed head: typecheck pass, lint pass, changelog:check pass (CHANGELOG.md already up to date, no manual edits), self-host workflow-contract gate accept:self-host pass ('the committed bundle's tip tree is byte-identical to the committed source except validated external action revisions'), node --test test/self-host.test.ts pass (69 tests). The exact-gates local run of 'operational entry points enforce real audits through direct CLI processes' hits the helper's fixed 60s child-process cap on this slow host (60.2s vs 9.7s on CI); the equivalent uncapped accept:self-host gate passes, so the earlier ETIMEDOUT is environmental. Both review threads are addressed by the regenerated committed bundle (PRRT_kwDOToJT7M63oH4X, PRRT_kwDOToJT7M63o3j2)."
+  "2026-11-16T12:04:05.551Z",codex-sol,"Codex continuation: preserved and fast-forwarded the already-pushed shared-reference diagnosis commit 6df6f27; main is already included. Rechecking existing self-host fix and both original test matrix failures without treating an interrupted full test run as passing."
+  "2026-11-16T12:19:27.572Z",codex-sol,"Direct job logs confirm both original failures: 132765234753 log lines 28661-28664 and 132765234957 lines 5533-5536 report removed pm-github-version lines still in the committed bundle. Existing fix commit 8f55d67 regenerated it; 6df6f27 retained and refreshed it with shared-reference diagnosis. Thread PRRT_kwDOToJT7M63oH4X is already resolved remotely; remaining PRRT_kwDOToJT7M63o3j2 has the same valid issue addressed by that bundle. No thread actions performed. Typecheck, lint, changelog and tracker validation pass. The default linked self-host test runner hit its 120-second wrapper limit under shared load; rerunning with an explicit 900-second wrapper budget, without changing test assertions or production budgets. The full npm suite is still running."
+  "2026-11-16T12:55:03.338Z",codex-sol,"Verified resumed snapshot commit 15f5adc with npm run accept:self-host: committed bundle is byte-identical to committed source except validated external action revisions. Focused linked node --test test/self-host.test.ts rerun with --timeout 900 completes 63/63, 0 fail/cancel/skip/todo, in 338454 ms; the prior default-wrapper 120-second timeout is excluded from passing evidence. Typecheck, lint, changelog:check and tracker validation pass. Both original test matrix failures and review threads are addressed by the existing bundle regeneration plus this tracker-aligned snapshot. Full npm test remains active without a terminal result at receipt preparation and is not counted as passing. No PM_TEST_DEPTH tier exists on this branch. Release this claim for orchestrator review and retain the separate shared-reference diagnosis commit."
+  "2026-11-16T13:21:48.118Z",codex-sol,"Bounded final receipt: the full npm test attempt did not reach terminal suite accounting after more than an hour and was stopped as a task-owned process tree within the continuation stop window. It is incomplete and excluded from passing evidence; no interrupted full run is retained as certification. The independently completed focused self-host suite remains 63/63 and the committed bundle verification passed on 1bda11b. All other recorded required narrow gates pass. Regenerate the snapshot with this final stop receipt and verify committed-source equality again; leave the item in progress and ownership released."
+files[3]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  .github/workflows/pm-github-sync.yml,project
+  selfhost.bundle,project
+tests[5]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "npm run accept:self-host",project,pi-glm,"2026-11-16T09:10:08.252Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
+  npm run typecheck,project,pi-glm,"2026-11-16T09:10:13.684Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
+  npm run lint,project,pi-glm,"2026-11-16T09:10:17.958Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
+  "npm run changelog:check",project,pi-glm,"2026-11-16T09:10:21.380Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
+  node --test test/self-host.test.ts,project,pi-glm,"2026-11-16T09:10:23.884Z",local_mutation,ci/pm-github-2026.11.15-bounded-ci-dispatch
+docs[1]{path,scope}:
+  docs/issue-sync-2026-11-16.md,project
+close_reason: "Delivered by #208 \"Pin pm-github 2026.11.15 to fix issue ownership planning and bound CI dispatch\" (merged as 38f8f1e). Checks successful at the PR head e4a8429: CodeQL, codeql, test (22), test (26), windows-acceptance-launcher (22), windows-acceptance-launcher (26)."
+body: ""

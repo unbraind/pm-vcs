@@ -121,7 +121,9 @@ test("loadConfig accepts the repository's own well-formed configuration", () => 
   const cfg: SelfHostConfig = loadConfig(join(import.meta.dirname, "..", "self-host.json"));
   assert.equal(cfg.bundle, "selfhost.bundle");
   assert.equal(cfg.ref, "refs/heads/self-host");
-  assert.deepEqual([...cfg.exclude], ["selfhost.bundle", "package.json", "package-lock.json"]);
+  assert.deepEqual([...cfg.exclude], [".github/pm-release-candidate.json", "selfhost.bundle", "package.json", "package-lock.json"]);
+  assert.equal(isExcluded(".github/pm-release-candidate.json", cfg.exclude), true);
+  assert.equal(isExcluded(".github/workflows/release.yml", cfg.exclude), false);
 });
 
 // The config is the gate's only tunable, so a malformed one must fail loudly
@@ -848,13 +850,14 @@ test("main --check fails when the bundle is missing from HEAD", () => {
   }
 });
 
-test("main --check fails when the bundle does not match the source", () => {
+for (const changedPath of ["README.md", ".agents/pm/tasks/fixture.toon"]) test(`main --check fails when the bundle does not match ${changedPath}`, () => {
   const f = fixture();
   try {
     main(f.root, ["node", "self-host.ts", "--write"]);
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "add bundle"]);
-    writeFileSync(join(f.root, "README.md"), "changed\n");
+    mkdirSync(join(f.root, changedPath, ".."), { recursive: true });
+    writeFileSync(join(f.root, changedPath), "changed\n");
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "change source"]);
     const origExit = process.exitCode;

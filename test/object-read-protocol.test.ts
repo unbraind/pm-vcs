@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { testDepth, testKinds } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Every logical reader shares generation retries, pinned handles and terminal denial enforcement. */
 import assert from "node:assert/strict";
@@ -134,13 +135,38 @@ test("EVERY reader x EVERY compact/unpack/repack/GC boundary retains live bytes 
 
 test("EVERY reader retries from the top or pins its opened handle when each storage transition interrupts resolution", async (t) => {
   const f = await fixture(); let cells = 0;
-  for (const reader of readers) for (const kind of transitions) for (const boundary of ["generation-marker","generation","loose","pack-catalog","resolved","pinned","inventory"]) {
-    prepare(f,kind); let injected = false;
-    objectReadBoundary.visit = (step) => { if (step !== boundary || injected) return; injected = true; objectReadBoundary.visit = () => {}; transition(f,kind); };
+  const resolutionBoundaries = ["generation-marker","generation","loose","pack-catalog","resolved","pinned","inventory"];
+  const schedules = readers.flatMap((reader, index) => transitions.flatMap((kind, kindIndex) => resolutionBoundaries.flatMap((boundary, boundaryIndex) =>
+    testDepth(700, 26) === 700 || (kindIndex === index % transitions.length && boundaryIndex === index % resolutionBoundaries.length) ? [{reader, kind, boundary}] : [])));
+  if (testDepth(700, 26) < 700) schedules.push({reader: readers.find(reader => reader.name === "inventory")!, kind: "compact", boundary: "inventory"});
+  const injectedBoundaries = new Set<string>(), injectedTransitions = new Set<string>();
+  assert.equal(new Set(schedules.map(row => row.reader)).size, readers.length);
+  assert.equal(new Set(schedules.map(row => row.kind)).size, transitions.length);
+  assert.equal(new Set(schedules.map(row => row.boundary)).size, resolutionBoundaries.length);
+  const results: { reader: string; kind: Transition; boundary: string; reachable: boolean; injected: boolean }[] = [];
+  for (const {reader, kind, boundary: requestedBoundary} of schedules) {
+    prepare(f,kind);
+    const reached = new Set<string>();
+    objectReadBoundary.visit = step => { reached.add(step); };
+    verify(reader,f,f.live,false);
+    objectReadBoundary.visit = () => {};
+    const boundary = testDepth(700, 26) < 700 && !reached.has(requestedBoundary)
+      ? resolutionBoundaries.find(step => reached.has(step))! : requestedBoundary;
+    assert.ok(boundary, reader.name + " must reach a resolver boundary");
+    let injected = false;
+    objectReadBoundary.visit = (step) => { if (step !== boundary || injected) return; injected = true; injectedBoundaries.add(step); injectedTransitions.add(kind); objectReadBoundary.visit = () => {}; transition(f,kind); };
     verify(reader,f,f.live,false); objectReadBoundary.visit = () => {};
     verify(reader,f,f.erased,true); cells++;
+    const reachable = reached.has(boundary);
+    results.push({ reader: reader.name, kind, boundary, reachable, injected });
+    if (reachable) assert.equal(injected,true,reader.name + "/" + kind + "/" + boundary + " must inject its transition");
+    if (testDepth(700, 26) < 700) assert.equal(injected,true,"every quick row must inject");
   }
-  assert.equal(cells,700); t.diagnostic(`resolution matrix: ${readers.length} readers x 4 transitions x 7 resolver boundaries = ${cells} schedules, plus erased checks`);
+  assert.equal(new Set(results.filter(row => row.injected).map(row => row.reader)).size,readers.length);
+  t.diagnostic("per-row injection: " + results.filter(row => row.injected).length + "/" + results.length + " schedules");
+  assert.deepEqual([...injectedBoundaries].sort(), [...resolutionBoundaries].sort());
+  assert.deepEqual([...injectedTransitions].sort(), [...transitions].sort());
+  assert.equal(cells,testDepth(700, 26)); t.diagnostic(`resolution matrix: ${readers.length} readers x 4 transitions x 7 resolver boundaries = ${cells} schedules, plus erased checks`);
 });
 
 test("a retained object retries a retired pack catalog after concurrent GC repacks its survivors", async () => {
@@ -309,8 +335,8 @@ test("EVERY pinned reader boundary tolerates an external retirement with unchang
       writeFileSync(plan,JSON.stringify({loose:entries.map((entry)=>({path:join(store.storageRoot(),entry.id.slice(0,2),entry.id.slice(2)),bytes:deflateSync(frameObject(entry.object.type,entry.object.payload)).toString("base64")})),packs:[...new Set(entries.filter((entry)=>entry.packed!==undefined).map((entry)=>entry.path))]}));
       return plan;
     };
-    const trace=observe(reader,0,preparePlan()); if(trace.length===0) empty++; points+=trace.length;
-    for(let ordinal=1;ordinal<=trace.length;ordinal++) { observe(reader,ordinal,preparePlan()); verify(reader,f,f.erased,true); schedules++; }
+    const trace=observe(reader,0,preparePlan()); if(trace.length===0) empty++; points+=testKinds(trace, kind=>kind).length;
+    for(const {ordinal} of testKinds(trace.map((kind,index)=>({kind,ordinal:index+1})), row=>row.kind)) { observe(reader,ordinal,preparePlan()); verify(reader,f,f.erased,true); schedules++; }
   }
   assert.equal(schedules,points); assert.equal(empty,3); t.diagnostic(`${readers.length} readers x loose/packed: ${schedules} actual pinned/native I/O boundary injections; independent process preserves generation and writer-lock inode/mtime; erased reads remain denied`);
 });

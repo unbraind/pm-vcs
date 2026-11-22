@@ -126,13 +126,23 @@ test("the fail-open guard still admits a genuinely attested publish", () => {
 });
 
 test("this repository's own workflows pass the gate", () => {
-  // The gate pointed at this checkout, which is what CI runs. Reported through
-  // captured streams rather than the process ones so a failure is readable.
+  // An unavailable canonical tag lookup is a deferral, never an attestation.
+  // Keep that result visible without depending on a live API success message.
+  const audited = verify(root);
   const lines: string[] = [];
   let exitCode = 0;
-  report(verify(root), (line) => lines.push(line), (code) => { exitCode = code; });
+  report(audited, (line) => lines.push(line), (code) => { exitCode = code; });
   assert.equal(exitCode, 0, `the gate must pass on this repository:\n${lines.join("\n")}`);
-  assert.ok(lines.some((line) => line.includes("every publish invocation is attested")));
+  assert.deepEqual(audited.failures, []);
+  assert.notEqual(audited.recognition.kind, "none", "the caller must be found");
+  assert.ok(lines.some((line) => line.includes("unbraind/pm-ops/.github/workflows/daily-release.yml@")));
+  if (audited.recognition.kind === "unverified-offline") {
+    assert.ok(lines.some((line) => line.includes("unverified-offline; attestation deferred")));
+    assert.ok(lines.every((line) => !line.includes("every publish invocation is attested")));
+  } else {
+    assert.equal(audited.recognition.kind, "recognized");
+    assert.ok(lines.some((line) => line.includes("every publish invocation is attested")));
+  }
 });
 
 test("the launcher runs only as the process entry point", () => {

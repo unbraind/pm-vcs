@@ -1,4 +1,5 @@
 /** Shared native power scenarios; each entrypoint owns its SDK fixture and filesystem hooks. */
+import { testPrefix } from "../support/depth.ts";
 import assert from "node:assert/strict";
 import fs, { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -106,7 +107,7 @@ export function registerJournalSequence(entrypoint: string): void {
   assert.ok(match !== null && sequences.includes(match[1] as Sequence), "entrypoint must name one declared power scenario");
   const kind = match[1] as Sequence;
   registerJournalCleanup();
-test(`EVERY native ${kind} boundary survives directory-entry loss and completes its receipts`,async t=>{
- const root=await fixture();const template=join(root,"template");sequence(template,kind,-1);const result=sequence(join(root,"probe"),kind,0,template);const recorded=sequence(join(root,"other"),kind,0,template,undefined,true);assert.deepEqual(result.steps,recorded.steps,"fast hooks must preserve every recorded native boundary");assert.deepEqual(result.cuts,recorded.cuts,"fast hooks must preserve every full crash-image ordinal");let completed=0;for(const cut of result.cuts){sequence(join(root,`cut-${cut}`),kind,cut,template);if(++completed%25===0){console.log(`power ${kind}: ${completed}/${result.cuts.length} distinct images`);global.gc?.();}}assert.equal(completed,recorded.cuts.length,"every recorded full crash image must be recovered");t.diagnostic(`${result.steps.length} ${kind} native boundaries, ${result.cuts.length} distinct full crash images restored with two convergent engine replays each; byte-identical images share the proven verdict; retained object and foreign tripwire preserved`);
+test(`${process.env.PM_TEST_DEPTH === "quick" ? "Quick prefix of" : "EVERY"} native ${kind} boundary survives directory-entry loss and completes its receipts`,async t=>{
+ const root=await fixture();const template=join(root,"template");sequence(template,kind,-1);const result=sequence(join(root,"probe"),kind,0,template);const recorded=sequence(join(root,"other"),kind,0,template,undefined,true);assert.deepEqual(result.steps,recorded.steps,"fast hooks must preserve every recorded native boundary");assert.deepEqual(result.cuts,recorded.cuts,"fast hooks must preserve every full crash-image ordinal");const cuts=testPrefix(result.cuts);let completed=0;for(const cut of cuts){sequence(join(root,`cut-${cut}`),kind,cut,template);if(++completed%25===0){console.log(`power ${kind}: ${completed}/${cuts.length} distinct images`);global.gc?.();}}assert.equal(completed,cuts.length,"every selected crash image must be recovered");t.diagnostic(`${result.steps.length} ${kind} native boundaries, ${completed}/${recorded.cuts.length} distinct full crash images restored with two convergent engine replays each; byte-identical images share the proven verdict; retained object and foreign tripwire preserved`);
 });
 }
