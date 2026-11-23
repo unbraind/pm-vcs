@@ -1652,7 +1652,8 @@ test("renewal closure discards leaf bytes with native memory and one physical ha
   const closureUrl = pathToFileURL(join(process.cwd(), "engine/closure.ts")).href;
   const trace = join(parent, "memory.strace");
   const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { inspectClosure } from ${JSON.stringify(closureUrl)}; const r=Repository.open(process.argv[1]); global.gc(); const before=process.memoryUsage(); const peakBefore=process.resourceUsage().maxRSS*1024; const report=r.objects.withWriteLock(()=>inspectClosure(r.objects,[process.argv[2],process.argv[2]])); const after=process.memoryUsage(); process.stdout.write(JSON.stringify({report,before,after,peakBefore,peakAfter:process.resourceUsage().maxRSS*1024}));`;
-  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read,pread64", "-o", trace, process.execPath, "--expose-gc", "--max-old-space-size=32", "--input-type=module", "-e", program, repo.root, target], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
+  // The cold-process heap and RSS budget measures closure traversal without V8 coverage overhead.
+  const child = spawnSync("strace", ["-yy", "-e", "trace=openat,read,pread64", "-o", trace, process.execPath, "--expose-gc", "--max-old-space-size=32", "--input-type=module", "-e", program, repo.root, target], { env: testEnvironment({ NODE_V8_COVERAGE: "" }), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.status, 0, child.stderr);
   const result = JSON.parse(child.stdout) as { report: ReturnType<typeof inspectClosure>; before: NodeJS.MemoryUsage; after: NodeJS.MemoryUsage; peakBefore: number; peakAfter: number };
   assert.deepEqual(result.report.missing, []); assert.deepEqual(result.report.corrupt, []);
