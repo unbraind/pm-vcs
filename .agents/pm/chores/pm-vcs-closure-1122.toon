@@ -2,19 +2,25 @@ id: pm-vcs-closure-1122
 title: Refresh tracker closure PR #205
 description: "Recheck current main, verify delivery evidence, regenerate the changelog and record the validation outcome."
 type: Chore
-status: open
+status: in_progress
 priority: 2
 tags[1]: tracker-sweep
 created_at: "2026-11-22T23:53:35.683Z"
-updated_at: "2026-11-23T00:08:34.907Z"
+updated_at: "2026-11-23T10:00:39.052Z"
 author: codex-agent
-comments[2]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-11-22T23:53:39.968Z",codex-agent,PR #204 merged without a containing package release tag. The existing branch completion date differs from the merged timestamp. Preserve the original date and regenerate the committed self-host archive from staged sources.
   "2026-11-23T00:08:29.385Z",codex-agent,"Focused linked test completed successfully. 88 pass, 0 fail, 0 skipped."
-files[1]{path,scope}:
+  "2026-11-23T09:51:28.380Z",codex-agent,"Closure follow-up: closure delivery merge date. Verify against current main and the existing PR head before recording the result."
+  "2026-11-23T09:52:48.868Z",codex-agent,"The closure verifier requires completed_at to equal a cited PR merge second. pm-vcs-toolchain-1114b records 2026-11-14 15:20:27.626Z, after PR #204 merged at 2026-11-14 15:20:00Z. Preserve the item. The committed self-host text snapshot must be regenerated after the evidence commit."
+  "2026-11-23T10:00:34.865Z",codex-agent,"Linked Node tests passed 98/98 with no skips, and the changelog check passed. Final verification will use the committed branch. CI checks for the closure follow-up are tracked at https://github.com/unbraind/pm-vcs/pull/205/checks."
+files[2]{path,scope}:
   CHANGELOG.md,project
-tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  selfhost.bundle,project
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-concurrency=2 test/verify-release-changelog-date.test.ts test/self-host.test.ts,project,codex-agent,"2026-11-22T23:53:44.176Z",local_mutation,chore/close-merged-items-2026-11-14
-docs[1]{path,scope}:
+  node --test --test-concurrency=2 test/verify-release-changelog-date.test.ts test/self-host.test.ts test/prepare-merge-driver.test.ts,project,codex-agent,"2026-11-23T09:52:47.731Z",local_mutation,chore/close-merged-items-2026-11-14
+docs[2]{path,scope}:
   CHANGELOG.md,project
+  README.md,project
 body: ""
