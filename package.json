@@ -96,7 +96,7 @@
   },
   "homepage": "https://pm-cli.unbrained.dev/packages/pm-vcs",
   "devDependencies": {
-    "@babel/core": "8.1.2",
+    "@babel/core": "8.1.3",
     "@babel/eslint-parser": "8.1.2",
     "@babel/plugin-syntax-typescript": "8.0.3",
     "@types/node": "26.6.6",
