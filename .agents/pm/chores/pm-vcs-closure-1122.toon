@@ -6,9 +6,9 @@ status: in_progress
 priority: 2
 tags[1]: tracker-sweep
 created_at: "2026-11-22T23:53:35.683Z"
-updated_at: "2026-11-23T16:38:01.762Z"
+updated_at: "2026-11-23T17:08:52.954Z"
 author: codex-agent
-comments[8]{created_at,author,text}:
+comments[9]{created_at,author,text}:
   "2026-11-22T23:53:39.968Z",codex-agent,PR #204 merged without a containing package release tag. The existing branch completion date differs from the merged timestamp. Preserve the original date and regenerate the committed self-host archive from staged sources.
   "2026-11-23T00:08:29.385Z",codex-agent,"Focused linked test completed successfully. 88 pass, 0 fail, 0 skipped."
   "2026-11-23T09:51:28.380Z",codex-agent,"Closure follow-up: closure delivery merge date. Verify against current main and the existing PR head before recording the result."
@@ -17,6 +17,7 @@ comments[8]{created_at,author,text}:
   "2026-11-23T16:12:54.159Z",codex-agent,"Correct delivery timestamps on 1 terminal records using GitHub merge data and pinned PM. Preserve closed status and append evidence to each item. The remote advertises no tags, so the delivery comment identifies the merge commit and records the missing tag."
   "2026-11-23T16:37:58.074Z",codex-agent,"The release-date, self-host and merge-driver focused tests passed. The combined packs and phase-6 files exceeded the 120- and 300-second PM execution limits. The two named tests that consume the checked-in tracker passed. Identity and pack privacy passed. Full coverage remains a CI gate."
   "2026-11-23T16:37:59.874Z",codex-agent,"The registered focused Node tests and changelog check passed. Identity, public-content and history prefix checks are part of the final-head gate. The full release gate runs in package CI."
+  "2026-11-23T17:08:52.954Z",codex-agent,"CI observation at 2026-11-23T17:08:51+00:00 for pushed head 2dcdcc79. In progress or queued: quick-shard (22, 6). Run: https://github.com/unbraind/pm-vcs/actions/runs/45218997083/job/137848515150. The requested CI watch ends at 17:10:25Z."
 files[2]{path,scope}:
   CHANGELOG.md,project
   selfhost.bundle,project
