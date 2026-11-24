@@ -128,6 +128,7 @@
 - Finish the pm-github 2026.11.15 pin PR: regenerate the self-host bundle ([pm-vcs-1doe](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-1doe.toon))
 - Adapt isolated telemetry fixture to the global settings owner ([pm-vcs-toolchain-1110](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-toolchain-1110.toon))
 - Refresh the November toolchain and synchronize concurrency fixtures ([pm-vcs-toolchain-1104](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-toolchain-1104.toon))
+- Adopt current pm-cli linked artifact and option contracts ([pm-vcs-toolchain-1114b](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-toolchain-1114b.toon))
 - Refresh the self-host snapshot after Dependabot changelog updates ([pm-vcs-hgu2](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-hgu2.toon))
 - Fit the complete crash-cut matrix within CI runtime ([pm-vcs-crash-matrix-ci](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/tasks/pm-vcs-crash-matrix-ci.toon))
 - Release readiness behind PM_RELEASE_APPROVED ([pm-vcs-release-gate](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/chores/pm-vcs-release-gate.toon))

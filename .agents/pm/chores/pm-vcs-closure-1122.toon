@@ -1,0 +1,36 @@
+id: pm-vcs-closure-1122
+title: Refresh tracker closure PR #205
+description: "Recheck current main, verify delivery evidence, regenerate the changelog and record the validation outcome."
+type: Chore
+status: in_progress
+priority: 2
+tags[2]: "gh:unbraind/pm-vcs#205",tracker-sweep
+created_at: "2026-11-22T23:53:35.683Z"
+updated_at: "2026-11-23T22:38:08.047Z"
+author: codex-agent
+comments[11]{created_at,author,text}:
+  "2026-11-22T23:53:39.968Z",codex-agent,PR #204 merged without a containing package release tag. The existing branch completion date differs from the merged timestamp. Preserve the original date and regenerate the committed self-host archive from staged sources.
+  "2026-11-23T00:08:29.385Z",codex-agent,"Focused linked test completed successfully. 88 pass, 0 fail, 0 skipped."
+  "2026-11-23T09:51:28.380Z",codex-agent,"Closure follow-up: closure delivery merge date. Verify against current main and the existing PR head before recording the result."
+  "2026-11-23T09:52:48.868Z",codex-agent,"The closure verifier requires completed_at to equal a cited PR merge second. pm-vcs-toolchain-1114b records 2026-11-14 15:20:27.626Z, after PR #204 merged at 2026-11-14 15:20:00Z. Preserve the item. The committed self-host text snapshot must be regenerated after the evidence commit."
+  "2026-11-23T10:00:34.865Z",codex-agent,"Linked Node tests passed 98/98 with no skips, and the changelog check passed. Final verification will use the committed branch. CI checks for the closure follow-up are tracked at https://github.com/unbraind/pm-vcs/pull/205/checks."
+  "2026-11-23T16:12:54.159Z",codex-agent,"Correct delivery timestamps on 1 terminal records using GitHub merge data and pinned PM. Preserve closed status and append evidence to each item. The remote advertises no tags, so the delivery comment identifies the merge commit and records the missing tag."
+  "2026-11-23T16:37:58.074Z",codex-agent,"The release-date, self-host and merge-driver focused tests passed. The combined packs and phase-6 files exceeded the 120- and 300-second PM execution limits. The two named tests that consume the checked-in tracker passed. Identity and pack privacy passed. Full coverage remains a CI gate."
+  "2026-11-23T16:37:59.874Z",codex-agent,"The registered focused Node tests and changelog check passed. Identity, public-content and history prefix checks are part of the final-head gate. The full release gate runs in package CI."
+  "2026-11-23T17:08:52.954Z",codex-agent,"CI observation at 2026-11-23T17:08:51+00:00 for pushed head 2dcdcc79. In progress or queued: quick-shard (22, 6). Run: https://github.com/unbraind/pm-vcs/actions/runs/45218997083/job/137848515150. The requested CI watch ends at 17:10:25Z."
+  "2026-11-23T22:31:38.506Z",codex-agent,Integrated the merged renewal heap fix and retained the verified completion time and pending-run receipt. Regenerate the changelog and self-host snapshot against the updated tracker.
+  "2026-11-23T22:38:00.041Z",codex-agent,Main contains the renewal heap fixture fix. Regenerate the self-host snapshot from the staged source and tracker state and validate the committed snapshot independently.
+files[2]{path,scope}:
+  CHANGELOG.md,project
+  selfhost.bundle,project
+tests[6]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 test/verify-release-changelog-date.test.ts test/self-host.test.ts,project,codex-agent,"2026-11-22T23:53:44.176Z",local_mutation,chore/close-merged-items-2026-11-14
+  node --test --test-concurrency=2 test/verify-release-changelog-date.test.ts test/self-host.test.ts test/prepare-merge-driver.test.ts,project,codex-agent,"2026-11-23T09:52:47.731Z",local_mutation,chore/close-merged-items-2026-11-14
+  "npm run changelog:check",project,codex-agent,"2026-11-23T16:13:10.368Z",local_mutation,chore/close-merged-items-2026-11-14
+  node --test --test-concurrency=2 test/packs.test.ts test/phase6-staging.test.ts,project,codex-agent,"2026-11-23T16:22:39.269Z",local_mutation,chore/close-merged-items-2026-11-14
+  node --test --test-concurrency=2 --test-name-pattern='public tracker benchmark|scale benchmark commits a real tracker copy' test/packs.test.ts test/phase6-staging.test.ts,project,codex-agent,"2026-11-23T16:35:41.613Z",local_mutation,chore/close-merged-items-2026-11-14
+  node --test --test-concurrency=2 test/verify-release-changelog-date.test.ts test/self-host.test.ts test/prepare-merge-driver.test.ts test/verify-pack-privacy.test.ts,project,codex-agent,"2026-11-23T22:31:47.863Z",local_mutation,chore/close-merged-items-2026-11-14
+docs[2]{path,scope}:
+  CHANGELOG.md,project
+  README.md,project
+body: ""
