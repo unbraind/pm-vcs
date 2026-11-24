@@ -7,7 +7,7 @@ import { cpSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSyn
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { test } from "node:test";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
 import { cloneFrom } from "../engine/sync.ts";
@@ -264,7 +264,7 @@ test("installed pm vcs commands propose fetch apply rederive review and land thr
     // A second clone starts at the original base and imports the served native series.
     const clone = Repository.open(cloneRoot);
     assert.equal(clone.objects.has(id), false, "the independent served clone has no proposal before fetching");
-    const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+    const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
     const previousToken = process.env.PM_VCS_TOKEN;
     process.env.PM_VCS_TOKEN = "token-a";
     try {
@@ -358,7 +358,7 @@ test("series bundles include fragment closure and rederive identical binary prop
 
 test("extension forge command defaults explicit remotes and refusal paths use real native repositories", async () => {
   const source = fixture();
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   try {
     source.sender.remotes.add("origin", source.receiver.root);
     source.sender.remotes.add("named", source.receiver.root);
@@ -405,7 +405,7 @@ test("extension forge command defaults explicit remotes and refusal paths use re
 test("forge fetch validates remote roots before catalog CAS", async t => {
   const source = fixture(); const server = await serverProcess(source.directory.root);
   const sandbox = createSandbox({ mergeInstall: false, commitFence: false });
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   let answer: RecordDocument = {};
   const responder = createServer(async (request, response) => {
     request.resume(); response.setHeader("content-type", "application/json");
@@ -495,7 +495,7 @@ test("file forge publication from a linked instance uses the shared receiver lea
 
 test("series apply never fast-forwards through an undeclared merge parent", async () => {
   const directory = makeTempDir();
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   try {
     const repository = Repository.init(join(directory.root, "merge-series"));
     const store = repository.objects;

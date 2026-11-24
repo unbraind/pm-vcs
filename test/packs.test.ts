@@ -11,7 +11,7 @@ import fs, { symlinkSync, mkdirSync, readdirSync, readFileSync, writeFileSync, l
 import { dirname, join } from "node:path";
 import { afterEach, mock, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import { installPackedExtension } from "../scripts/pm-environment.ts";
 import extension from "../index.ts";
 import { collectGarbage } from "../engine/gc.ts";
@@ -178,7 +178,7 @@ test("bounded and streamed typed readers consume packs; compact SDK and command 
   const repo = await fresh(); const id = repo.objects.write("manifest", Buffer.from("line\n"));
   const big = repo.objects.write("blob", Buffer.alloc(20_000));
   const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "utf8"));
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   const result = await harness.runCommand({ command: "vcs compact", pmRoot: join(repo.root, ".agents/pm") });
   assert.equal(result.errorMessage, undefined); assert.ok(![...repo.objects.walkLooseInventory()].length);
   assert.deepEqual(repo.objects.readBoundedTyped(id, "manifest"), Buffer.from("line\n"));

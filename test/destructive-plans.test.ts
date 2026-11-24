@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { afterEach, mock, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { destructionBoundary, inspectDestructions } from "../engine/destruction.ts";
 import { collectGarbage } from "../engine/gc.ts";
@@ -136,7 +136,7 @@ test("unpack validates every published pack before recovering owned staging jobs
 test("SDK and agent CLI expose bounded read-only destructive receipts and typed invalid limits", async () => {
   const f = await fixture(); const before = treeHash(f.repo.controlDirectory); const inventory = inspectDestructions(f.repo.controlDirectory, 1); assert.ok(inventory.receipts.length <= 1); assert.equal(treeHash(f.repo.controlDirectory), before);
   assert.throws(() => inspectDestructions(f.repo.controlDirectory, 0), { code: "invalid_receipt_limit" });
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs destructive-receipts", pmRoot: f.root, options: {} }); assert.equal(result.errorMessage, undefined); assert.ok(result.result); assert.equal(treeHash(f.repo.controlDirectory), before);
   f.repo.commit({ message: "receipt setup", author: { name: "Fixture", email: "fixture@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 } }, new Date(1));
   const linked = join(f.dir.root, "linked-receipts"); f.repo.linkInstance("receipts", linked);

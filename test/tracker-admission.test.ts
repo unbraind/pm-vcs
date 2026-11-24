@@ -10,7 +10,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, renameSync, 
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { normalizeStatusInput, resolveRuntimeStatusRegistry, appendHistoryEntry, createHistoryEntry, PmClient, readHistorySnapshot, verifyHistoryEntries, readLocatedItem, locateItem, readSettings, resolveItemTypeRegistry, serializeItemDocument, commitItemMutations, commitWorkspaceTransaction, type ItemDocument, type PmClientFullMutationOptions } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness, encodeToon } from "@unbrained/pm-cli/sdk/testing";
+import { encodeToon } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension, { TrackerCapture, TrackerAdmissionRefusal, parseTrackerAdmissionRequest } from "../index.ts";
 import { trackerAdmissionBoundary } from "../engine/tracker-admission.ts";
 import { generateKeyPairSync } from "node:crypto";
@@ -160,7 +161,7 @@ test("settings changes during capture invalidate all certificates, including tho
 });
 
 test("CLI uses the same strict admission path and exposes a compact retry rather than a torn tip", async () => {
-  const f = await fixture(); const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const f = await fixture(); const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   writeFileSync(join(f.root, "selection.json"), JSON.stringify({ items: [f.a], expectedTip: null }));
   const context = { pmRoot: f.pmRoot, repoRoot: f.root, args: ["Certified tracker"], command: "vcs commit-tracker" };
   const report = await harness.runCommand({ ...context, options: { input: join(f.root, "selection.json") } }); assert.equal(report.errorMessage, undefined); assert.equal((report.result as { ok: boolean }).ok, true);
@@ -568,7 +569,7 @@ test("relative selection files use the same workspace root precedence as opening
   const f = await fixture(); const other = temp();
   writeFileSync(join(f.root, "selection.json"), JSON.stringify({ items: [f.a], expectedTip: null }));
   writeFileSync(join(other, "selection.json"), JSON.stringify({ items: [f.b], expectedTip: null }));
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const handler = harness.activation.commands.handlers.find(entry => entry.command === "vcs commit-tracker")!;
   const result = await handler.run({ command: "vcs commit-tracker", args: ["Local selection"], options: { input: "selection.json" }, global: {}, pm_root: f.pmRoot, repo_root: f.root, source_workspace_root: other }) as { ok: boolean; revision: string };
   assert.ok(result.ok);

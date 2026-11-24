@@ -1,6 +1,6 @@
 import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { FileTransport } from "../engine/transport.ts";
 /** Real shallow and blob-filtered repositories with verified range-demand hydration. */
@@ -199,9 +199,9 @@ test("a complete-history-only peer refuses depth before any clone ref or directo
 test("clone and fetch command flags apply depth and blob filters through the real extension loader", async () => {
   const { repo } = await source(); const workspace = root(); mkdirSync(workspace);
   const client = new PmClient({ cwd: workspace, pmRoot: workspace, noExtensions: true }); await client.init("commands", { defaults: true, author: "fixture" });
-  type Capabilities = NonNullable<NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]>;
+  type Capabilities = NonNullable<NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"]>;
   const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "utf8")) as { capabilities: Capabilities };
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   for (const options of [{ depth: "1" }, { filter: "blob:none" }, { depth: "1", filter: "blob:none" }]) {
     const destination = root();
     const result = await harness.runCommand({ command: "vcs clone", args: [repo.root, destination], options, pmRoot: workspace });

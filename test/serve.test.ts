@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { connect } from "node:net";
 import { exportBundle, parseBundle } from "../engine/bundle.ts";
 import { HttpTransport } from "../engine/http-transport.ts";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import type { LeaseProof } from "../engine/publication-leases.ts";
 import { afterEach, test } from "node:test";
@@ -841,7 +841,7 @@ test("an unauthenticated server is read-only unless the operator explicitly reop
   const readonly = await serveRoot({ unauthenticatedWrites: false });
   const name = readonly.repository.root.slice(join(readonly.repository.root, "..").length + 1);
   const tip = readonly.repository.refs.read("refs/heads/main");
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const serveFlags = new Set(harness.assertCommandContract({ command: "vcs serve" }).flags.map((flag) => flag.long));
 
   // Reads stay open: an operator who serves without --auth meant to serve reads.

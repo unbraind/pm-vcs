@@ -12,7 +12,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 
 import extension from "../index.ts";
 import { CONTROL_DIRECTORY, Repository } from "../engine/repo.ts";
@@ -28,7 +28,7 @@ after(() => {
 
 /** Capability list the harness accepts, derived from its own signature. */
 type HarnessCapabilities = NonNullable<
-  NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]
+  NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"]
 >;
 
 /** The shipped manifest's capabilities, so the harness activates exactly as at runtime. */
@@ -56,7 +56,7 @@ async function repoWithCommit(): Promise<{
   sandboxes.push(handle);
   const root = handle.root;
   Repository.init(root);
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   const run = async (
     command: string,
     args: string[] = [],
@@ -84,7 +84,7 @@ test("a non-numeric --limit is refused, with the flag named as the caller typed 
 test("a --set-field entry with no strategy separator is refused", async () => {
   const handle = makeTempDir();
   sandboxes.push(handle);
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   const result = await harness.runCommand({
     command: "vcs init",
     args: [],
@@ -272,7 +272,7 @@ test("a record conflict names the fields that disagreed, not just the path", asy
   sandboxes.push(handle);
   const root = handle.root;
   Repository.init(root, "main", { recordPaths: ["*.rec"], recordPolicy: { fields: {} } });
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   const run = async (command: string, args: string[] = [], options: Record<string, unknown> = {}) => (
     await harness.runCommand({ command, args, options, global: { author: AUTHOR }, pmRoot: root })
   ) as { handled: boolean; result: unknown; errorMessage?: string };
@@ -320,7 +320,7 @@ async function conflictedHarness(): Promise<{
   sandboxes.push(handle);
   const root = handle.root;
   Repository.init(root);
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   const run = async (command: string, args: string[] = [], options: Record<string, unknown> = {}) => (
     await harness.runCommand({ command, args, options, global: { author: AUTHOR }, pmRoot: root })
   ) as { handled: boolean; result: unknown; errorMessage?: string };

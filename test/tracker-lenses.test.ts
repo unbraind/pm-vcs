@@ -8,7 +8,7 @@ import { mkdirSync, existsSync, readFileSync, readlinkSync, readdirSync, writeFi
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension, { explainChange, TRACKER_LENSES, type ExplainChangeOptions } from "../index.ts";
 import { Repository } from "../engine/repo.ts";
 import { encodeConflict, fieldSide } from "../engine/conflicts.ts";
@@ -198,7 +198,7 @@ test("typed refusals explain invalid controls and shallow ancestry instead of in
 
 test("CLI harness accepts default and explicit native revisions and rejects invalid lens pages", async () => {
   const { repo, root, first } = await fixture();
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const run = (args: string[], options?: Record<string, unknown>) => harness.runCommand({ command: "vcs explain", args, options, pmRoot: join(root, ".agents/pm") });
   const result = await run([]); assert.equal((result.result as { commit: string }).commit, first);
   await run([first], { lenses: "lifecycle,policy", limit: "1", offset: "0" });
@@ -211,7 +211,7 @@ test("CLI harness accepts default and explicit native revisions and rejects inva
 test("CLI explain treats blank revisions as HEAD and trims explicit revisions", async () => {
   const { root, first } = await fixture();
   assert.equal(existsSync(join(root, ".git")), false);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   for (const args of [[], [""], ["  \t "], [`  ${first}  `]]) {
     const result = await harness.runCommand({ command: "vcs explain", args, pmRoot: join(root, ".agents/pm") });
     assert.equal(result.errorMessage, undefined, String(result.errorMessage));

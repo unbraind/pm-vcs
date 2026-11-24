@@ -1,0 +1,56 @@
+id: pm-vcs-sdk-1122
+title: Adopt pm-cli 2026.11.24 host-aligned SDK behaviour
+description: "Companion: pm-cli-website-spus. Acceptance: pin the current first-party toolchain, align native workspace and command refusal tests, retain dependency notes, regenerate the self-host source snapshot, and record scoped local and CI evidence."
+type: Chore
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-11-24T16:41:34.689Z"
+updated_at: "2026-11-24T18:02:32.140Z"
+author: codex-agent
+comments[3]{created_at,author,text}:
+  "2026-11-24T16:41:41.223Z",codex-agent,Stale Actions PR #225 fails the committed self-host source audit before the aggregate test job. Toolchain PR #227 reaches TAP across multiple shards. The first repository-location failures occur where a harness request supplies a storage root but leaves the source workspace implicit. Compare the installed host contract and keep real CLI and tracker refusal assertions.
+  "2026-11-24T16:55:08.382Z",codex-agent,"The installed SDK builds source_workspace_root from PM_SOURCE_WORKSPACE_ROOT or process cwd, while pmRoot addresses tracker storage. The old harness callers relied on an implicit tracker-to-workspace fallback. Test fixtures now select their workspace at dispatch and restore the caller environment. Concurrent fixture requests are serialized inside each test process. The installed-consumer fixture sets an explicit workspace for its own disposable repositories. A plain-directory regression checks ambient refusal, both fixture layouts and restoration. In a disposable copy the test fails when the fixture selects no workspace. Every changelog entry point has a failing remove-flag witness."
+  "2026-11-24T18:02:30.456Z",codex-agent,"Two-worker scoped quick-depth run across 34 affected and gate test files reported 795 passed, 2 failure rows for the same composition consumer (subtest and parent), and 4 pre-existing deep-only skips. The consumer switched repositories without switching the host workspace. Setting the workspace at that transition preserves all real CLI checks. Its separate quick retry passed 2/2, with four deep consumer combinations deferred. Native workspace and changelog smoke passed 5/5. Linked workspace regression passed 1/1 and fails with the old raw dispatch. Build, typecheck, test compilation, lint, tracker health, identity audit, zero pack privacy findings across 365 files, production audit, duplication and docstrings passed. The baseline committed self-host proof passed. Regenerate the snapshot with these tracker and test changes, then run its committed-source audit before pushing. Local runtime supports the scoped fallback. PR CI owns quick shards and configured coverage, and CI Deep owns full npm and Bun gates."
+files[35]{path,scope}:
+  package-lock.json,project
+  package.json,project
+  selfhost.bundle,project
+  test/annotate.test.ts,project
+  test/change-bundles.test.ts,project
+  test/checkpoints.test.ts,project
+  test/composition-consumer.test.ts,project
+  test/composition.test.ts,project
+  test/destructive-plans.test.ts,project
+  test/explicit-moves.test.ts,project
+  test/gc.test.ts,project
+  test/helpers/first-class-conflict-cases.ts,project
+  test/helpers/serve-worker.ts,project
+  test/helpers/workspace-harness.ts,project
+  test/instances.test.ts,project
+  test/issue-26-regression.test.ts,project
+  test/json-header-repair.test.ts,project
+  test/lease-workflows.test.ts,project
+  test/packs.test.ts,project
+  test/partial-history.test.ts,project
+  test/release-workflow.test.ts,project
+  test/resolution-propagation.test.ts,project
+  test/rewrite-commands.test.ts,project
+  test/serve.test.ts,project
+  test/served-acceptance.test.ts,project
+  test/served-forge.test.ts,project
+  test/served-sync.test.ts,project
+  test/signatures.test.ts,project
+  test/surface.test.ts,project
+  test/sync-commands.test.ts,project
+  test/tracker-admission-review.test.ts,project
+  test/tracker-admission.test.ts,project
+  test/tracker-lenses.test.ts,project
+  test/vcs-commands-edges.test.ts,project
+  test/vcs-commands.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 --test-name-pattern=the.host.keeps.source.selection test/vcs-commands.test.ts,project,codex-agent,"2026-11-24T16:55:06.739Z",local_mutation,deps/adopt-pm-cli-host-alignment-1122
+docs[2]{path,scope}:
+  AGENTS.md,project
+  CHANGELOG.md,project
+body: ""

@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { after, test } from "node:test";
 
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 
 import extension from "../index.ts";
 import type { BranchListing, RemoteBranchListing } from "../vcs-commands.ts";
@@ -25,7 +25,7 @@ after(() => {
 
 /** Capability list the harness accepts, derived from its own signature. */
 type HarnessCapabilities = NonNullable<
-  NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]
+  NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"]
 >;
 
 const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "utf8")) as {
@@ -37,8 +37,8 @@ const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "ut
  *
  * @returns The activated harness.
  */
-function activate(): ReturnType<typeof createExtensionTestHarness> {
-  return createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+function activate(): ReturnType<typeof createWorkspaceHarness> {
+  return createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
 }
 
 /**

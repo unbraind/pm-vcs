@@ -8,7 +8,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { encodeConflict, fieldSide, readConflict } from "../engine/conflicts.ts";
 import { annotatePath, type AnnotationRow } from "../engine/annotate.ts";
@@ -51,7 +51,7 @@ test("text annotation follows actual setters, groups adjacent lines, handles emp
   assert.equal(annotatePath(repo.objects, first, "text.txt")[0].end, 3);
   edit(repo, "empty.txt", ""); assert.deepEqual(annotatePath(repo.objects, repo.resolve("HEAD"), "empty.txt"), []);
   assert.throws(() => annotatePath(repo.objects, next, "absent"), /No file at absent/);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs annotate", args: ["./text.txt"], options: { at: first, full: true }, pmRoot: join(repo.root, ".agents/pm") });
   assert.equal(result.errorMessage, undefined); assert.equal((result.result as { annotations: unknown[] }).annotations.length, 3);
   const current = await harness.runCommand({ command: "vcs annotate", args: ["text.txt"], pmRoot: join(repo.root, ".agents/pm") });
@@ -77,7 +77,7 @@ test("manifest text annotation preserves setters through blob transitions rename
   const small = edit(repo, moved, "shared\nafter\n");
   assert.equal(repo.objects.read(repo.readIndex()[0].id).type, "blob");
   assert.deepEqual(annotatePath(repo.objects, small, moved, true).map(row => row.changeId), [change(repo, first), change(repo, changed)]);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs annotate", args: [path], options: { at: large, full: true }, pmRoot: join(root, ".agents/pm") });
   assert.equal(result.errorMessage, undefined, String(result.errorMessage));
   assert.deepEqual((result.result as { annotations: AnnotationRow[] }).annotations.map(row => row.changeId), [change(repo, first), change(repo, large), change(repo, first)]);
@@ -273,7 +273,7 @@ test("--at accepts stable change identities and ambiguous rewritten versions req
   const repo = Repository.init(temp()); const first = edit(repo, "text.txt", "first\n");
   const stable = change(repo, first);
   assert.equal(repo.resolve(stable), first);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs annotate", args: ["text.txt"], options: { at: stable }, pmRoot: join(repo.root, ".agents/pm") });
   assert.equal(result.errorMessage, undefined);
   repo.refs.setHeadDetached(first); repo.refs.compareAndSwap("refs/heads/main", first, null);

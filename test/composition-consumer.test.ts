@@ -123,6 +123,7 @@ writeFileSync(join(target.root, "asset.bin"), Buffer.from([0, 255, 128, 19, 47])
 const pin = target.commit({ message: "pin", author }, new Date());
 const link = { version: 1, repository: target.identity(), revision: pin, mappings: [{ source: "asset.bin", destination: "vendor/asset.bin" }] };
 const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+process.env.PM_SOURCE_WORKSPACE_ROOT = root;
 // Random temporary names must recover the original pending publication in every shipped runtime.
 const retryTarget=join(repo.controlDirectory,"retry-publication.json");let retryCrash=true;
 destructionBoundary.visit=(step)=>{if(retryCrash&&step==="deleted"&&existsSync(retryTarget)){retryCrash=false;throw new Error("consumer publication interruption");}};
@@ -170,7 +171,10 @@ proofRepo.objects.accept([{type:"blob",id:hashObject("blob",nestedProof),payload
 for(const packed of [false,true]){
  if(packed)proofRepo.objects.compact();
  assert.throws(()=>proofRepo.obliterate("asset","proof-erase","incident",new Date()),error=>error.status==="unverified"&&error.bound==="uncatalogued_provenance");
- const refused=await harness.runCommand({command:"vcs obliterate",args:["asset"],pmRoot:proofRoot,options:{eraseTokenFile:proofToken,reason:"incident"}});assert.match(String(refused.errorMessage),/Native provenance is unknown/);assert.equal(refused.handled,false);assert.equal(proofRepo.objects.denials().length,0);
+ process.env.PM_SOURCE_WORKSPACE_ROOT = proofRoot;
+ const refused=await harness.runCommand({command:"vcs obliterate",args:["asset"],pmRoot:proofRoot,options:{eraseTokenFile:proofToken,reason:"incident"}}).finally(() => {
+   process.env.PM_SOURCE_WORKSPACE_ROOT = root;
+ });assert.match(String(refused.errorMessage),/Native provenance is unknown/);assert.equal(refused.handled,false);assert.equal(proofRepo.objects.denials().length,0);
 }
 const liveProof=proofRepo.objects.write("blob",Buffer.from("newly protected proof object"));const deadProof=proofRepo.objects.write("blob",Buffer.from("collectible proof object"));
 let interrupted=false;destructionBoundary.visit=(step,path)=>{if(!interrupted&&step==="intent-persisted"&&path.startsWith(join(proofRepo.controlDirectory,"destruction"))&&JSON.parse(readFileSync(path,"utf8")).entries.some(entry=>entry.path.endsWith(liveProof.slice(2)))){interrupted=true;throw new Error("interrupt proof GC");}};
@@ -233,6 +237,7 @@ writeFileSync(join(root,"guarded-secret.bin"),"consumer guard refusal marker 876
 assert.throws(()=>repo.obliterate("guarded-secret.bin","consumer-erase","incident",new Date()),{code:"unsupported_erasure_storage"});
 assert.equal(readFileSync(uncertainSource,"utf8"),"foreign replacement");assert.equal(repo.objects.denials().length,0);
 root=join(process.cwd(),process.argv[2]+"-erasure");mkdirSync(root);
+process.env.PM_SOURCE_WORKSPACE_ROOT = root;
 await new PmClient({cwd:root,pmRoot:join(root,".agents/pm"),noExtensions:true}).init("erasure",{defaults:true,author:"fixture"});
 repo=Repository.init(root);repo.identity();repo.setAuthority("fixture","consumer-read","consumer-erase");
 repo.stageLink("dependency.link",link);repo.commit({message:"known native origin",author},new Date());

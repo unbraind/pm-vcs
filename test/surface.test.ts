@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 
 import { VcsError } from "../git.ts";
 import extension, {
@@ -40,7 +40,7 @@ after(() => {
  * than restated, so a capability added to the host shows up here automatically.
  */
 type HarnessCapabilities = NonNullable<
-  NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]
+  NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"]
 >;
 
 /** The shipped manifest, read from disk so tests assert against the real file. */
@@ -68,8 +68,8 @@ const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "ut
  *
  * @returns The activated harness.
  */
-function activate(): ReturnType<typeof createExtensionTestHarness> {
-  return createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+function activate(): ReturnType<typeof createWorkspaceHarness> {
+  return createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
 }
 
 test("the manifest, package metadata and module agree on identity", () => {

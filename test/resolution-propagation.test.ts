@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
 import { annotatePath } from "../engine/annotate.ts";
@@ -139,7 +139,7 @@ test("real three-author tracker: two descendants per agent inherit a third autho
   const path = a.status().conflicts![0].path;
   b.merge("agent-a", { message: "receive disagreement", author, recordConflicts: true }, now);
   const descendants = [edit(a, "a1.txt", "a1", { ...author, name: "agent-a" }), edit(a, "a2.txt", "a2", { ...author, name: "agent-a" }), edit(b, "b1.txt", "b1", { ...author, name: "agent-b" }), edit(b, "b2.txt", "b2", { ...author, name: "agent-b" })];
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs resolve", args: [path], options: { at: merged, field: "status", take: "theirs" }, global: { author: "agent-c" }, pmRoot: join(a.root, ".agents/pm") });
   assert.equal(result.errorMessage, undefined); assert.equal((result.result as { resolved: unknown[] }).resolved.length, 1);
   for (const old of descendants) {
@@ -414,7 +414,7 @@ test("legacy merge modes refuse competing explicit resolutions before publicatio
 
 for (const operation of ["merge", "rebase", "cherry-pick", "revert"] as const) {
   test(`competing resolution ${operation} refusal names only supported recovery flags`, async () => {
-    const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+    const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
     const flags = new Set(harness.assertCommandContract({ command: `vcs ${operation}` }).flags.map((flag) => flag.long));
     for (const text of [false, true]) {
       const { repo, path, merged } = conflict(text); repo.createBranch("resolver-b", "HEAD", now);

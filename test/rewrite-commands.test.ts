@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
@@ -30,7 +30,7 @@ after(() => {
 
 /** Capability list the harness accepts, derived from its own signature. */
 type HarnessCapabilities = NonNullable<
-  NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]
+  NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"]
 >;
 
 /** The shipped manifest's capabilities, so the harness activates exactly as at runtime. */
@@ -63,7 +63,7 @@ async function repoWithHistory(): Promise<{
   const handle = makeTempDir();
   sandboxes.push(handle);
   const root = handle.root;
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   const run = async (
     command: string,
     args: string[] = [],

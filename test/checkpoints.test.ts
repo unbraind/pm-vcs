@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient, createAssuranceWorkspaceContext, evaluateAssuranceGate, recordAssuranceVerdict, type AssuranceDocument, type AssuranceGateVerdict } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension, { attachCheckpoint, checkpointClaims, CheckpointRefusal, createSemanticCheckpoint, inspectCheckpoints, loadCheckpointReceipt, parseCheckpointPolicy, parseCheckpointRequest, parseCheckpointRequirement, updateCheckpointPolicy, CHECKPOINT_POLICY_FILE, type CheckpointRequest } from "../index.ts";
 import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
 import { assertCheckpointPublication, readCheckpointPolicy } from "../engine/checkpoints.ts";
@@ -304,7 +304,7 @@ test("receiver administration fails closed on malformed and unreadable policy", 
 
 test("CLI harness delegates verified receipt attachment, policy and compact inspection to the SDK", async () => {
   const { repo, root, pmRoot, request } = await fixture();
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const input = join(root, "request.json"); writeFileSync(input, JSON.stringify(request));
   const context = { pmRoot, repoRoot: root };
   assert.equal((await harness.runCommand({ ...context, command: "vcs checkpoint attach", args: ["HEAD"], options: { input } })).handled, true);
@@ -348,7 +348,7 @@ test("linked-instance CLI policy is hub-owned and inspection sees the shared req
   const { repo, request } = await fixture();
   const root = join(temp(), "linked");
   repo.linkInstance("checkpoint-view", root, { include: ["**"] });
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const input = join(root, "requirements.json"); writeFileSync(input, JSON.stringify([request]));
   const context = { pmRoot: join(root, ".agents/pm") };
   const set = await harness.runCommand({ ...context, command: "vcs checkpoint policy", options: { input } });

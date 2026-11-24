@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { exportBundle, parseBundle } from "../engine/bundle.ts";
 import { requireClosure } from "../engine/closure.ts";
@@ -443,7 +443,7 @@ test(`${testDepth(2000)} native signed changes report measured verification wall
   repository.refs.compareAndSwap("refs/heads/main", repository.refs.resolveHead(), parent!);
   assertTrustedChanges(repository.controlDirectory, commits); // unconfigured compatibility boundary.
   const fingerprint = trust(repository, keys.publicKey);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const start = performance.now();
   const verified = await harness.runCommand({ command: "vcs verify", options: { signatures: true }, pmRoot: repository.root });
   const elapsed = performance.now() - start;
@@ -495,7 +495,7 @@ test("agent CLI signs, verifies, trusts and revokes while every written reposito
   const privateDer = keys.privateKey.export({ format: "der", type: "pkcs8" });
   const keyPath = join(dir.root, "agent-key.pem"); writeFileSync(keyPath, privatePem, { mode: 0o600 });
   const publicPath = join(dir.root, "agent-public.pem"); writeFileSync(publicPath, keys.publicKey.export({ format: "pem", type: "spki" }));
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const outputs: string[] = [];
   /** Capture every command result and error as an agent would receive it. */
   const run = async (command: string, args: string[] = [], options: Record<string, unknown> = {}) => {
@@ -546,7 +546,7 @@ test("revocation CLI identifies invalid effective-at input without changing rece
   const fingerprint = trust(repository, keys.publicKey);
   const policy = readFileSync(join(repository.controlDirectory, TRUSTED_KEYS_FILE));
   const config = readFileSync(join(repository.controlDirectory, "config.json"));
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   for (const effectiveAt of ["bad", "", "1969-12-31T23:59:59.999Z", "+999999-01-01T00:00:00Z"]) {
     const result = await harness.runCommand({ command: "vcs revoke-key", args: [fingerprint], options: { effectiveAt }, pmRoot: repository.root });
     assert.equal(result.handled, false);
@@ -564,7 +564,7 @@ test("signature verification diagnostics count only failures and cap history-siz
   const { repository, keys, signed, id, original } = fixture();
   trust(repository, keys.publicKey);
   repository.refs.compareAndSwap("refs/heads/main", original, id);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   let tip = id;
   const handler = harness.activation.commands.handlers.find(entry => entry.command === "vcs verify")!;
   for (let count = 1; count <= 21; count++) {
@@ -630,7 +630,7 @@ test("linked instances administer shared trust and reject private keys stored in
   writeFileSync(externalKey, keys.privateKey.export({ type: "pkcs8", format: "pem" }));
   writeFileSync(internalKey, keys.privateKey.export({ type: "pkcs8", format: "pem" }));
   writeFileSync(publicPath, keys.publicKey.export({ type: "spki", format: "pem" }));
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const run = (command: string, args: string[] = [], options: Record<string, unknown> = {}) => harness.runCommand({ command, args, options, pmRoot: linked.path });
   assert.equal((await run("vcs sign", [], { key: internalKey })).handled, false);
   assert.equal((await run("vcs sign", [], { key: externalKey })).handled, true);
@@ -718,7 +718,7 @@ test("sign attributes descendant rewrites to its caller and preserves signed aut
   repository.refs.compareAndSwap("refs/heads/main", original, child);
   const keyPath = join(dir.root, "sign.pem");
   writeFileSync(keyPath, keys.privateKey.export({ type: "pkcs8", format: "pem" }));
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const before = Date.now();
   const result = await harness.runCommand({ command: "vcs sign", args: [original], options: { key: keyPath },
     global: { author: "Signer <signer@example.invalid>" }, pmRoot: repository.root });
@@ -774,7 +774,7 @@ for (const shared of [false, true]) test(`sign replays detached HEAD descendants
   const before = readCommit(repository.objects, tip);
   const keyPath = join(dir.root, "sign.pem");
   writeFileSync(keyPath, keys.privateKey.export({ type: "pkcs8", format: "pem" }));
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const target = shared ? original : parent;
   const result = await harness.runCommand({ command: "vcs sign", args: [target], options: { key: keyPath },
     global: { author: "Signer <signer@example.invalid>" }, pmRoot: repository.root });

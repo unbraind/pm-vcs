@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, copyFileSync, cpSync, mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
 import { remoteLeaseProofs } from "../engine/lease-workflows.ts";
@@ -18,7 +18,7 @@ test("real extension lease and push workflows persist __proto__, constructor and
   const sandbox = createSandbox({ mergeInstall: false, commitFence: false });
   const dir = temporaryDirectory();
   try {
-    const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+    const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
     const sender = Repository.init(sandbox.root);
     writeFileSync(join(sender.root, "asset"), "leased asset"); sender.stage(["asset"]);
     sender.commit({ message: "asset", author: { name: "Author", email: "author@example.invalid", timestamp: 1, timezoneOffsetMinutes: 0 } }, new Date());
