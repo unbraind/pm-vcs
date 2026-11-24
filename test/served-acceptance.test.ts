@@ -8,7 +8,7 @@ import { fork, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
@@ -133,7 +133,7 @@ test("two served clones commit real PM item fields, merge them and verify all th
     assert.match(record, /web/);
     assert.match(record, /api/);
     assert.equal(readFileSync(join(b.root, itemPath), "utf8"), record);
-    const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+    const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
     for (const repository of [source, a, b]) {
       const verified = await harness.runCommand({ command: "vcs verify", pmRoot: repository.root });
       assert.equal(verified.errorMessage, undefined);

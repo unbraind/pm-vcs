@@ -10,14 +10,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./workspace-harness.ts";
 
 import extension from "../../index.ts";
 import { packageRoot } from "./tmp.ts";
 
 /** Capability list the harness accepts, derived from its own signature. */
 type HarnessCapabilities = NonNullable<
-  NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]
+  NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"]
 >;
 
 const [serveRoot, listen, auth, writes] = process.argv.slice(2);
@@ -30,7 +30,7 @@ const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "ut
   capabilities: HarnessCapabilities;
 };
 
-const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
 const run = await harness.runCommand({
   command: "vcs serve",
   options: { root: serveRoot, ...(listen === undefined ? {} : { listen }), ...(auth === undefined || auth === "-" ? {} : { auth }), allowUnauthenticatedWrites: writes === "allow" },

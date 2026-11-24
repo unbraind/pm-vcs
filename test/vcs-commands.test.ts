@@ -1,11 +1,12 @@
 import "./helpers/isolate-session.ts";
 import assert from "node:assert/strict";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, mock, test } from "node:test";
 
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 
 import { VcsError } from "../git.ts";
 import extension from "../index.ts";
@@ -35,7 +36,7 @@ after(() => {
 
 /** Capability list the harness accepts, derived from its own signature so a new capability surfaces automatically. */
 type HarnessCapabilities = NonNullable<
-  NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]
+  NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"]
 >;
 
 /** The shipped manifest's capabilities, read from disk so the harness activates exactly as at runtime. */
@@ -48,8 +49,8 @@ const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "ut
  *
  * @returns The activated harness.
  */
-function activate(): ReturnType<typeof createExtensionTestHarness> {
-  return createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+function activate(): ReturnType<typeof createWorkspaceHarness> {
+  return createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
 }
 
 /**
@@ -85,6 +86,33 @@ test("activation registers all 48 commands with no sibling dropped", async () =>
     harness.assertCommandContract({ command });
   }
   assert.equal(COMMANDS.length, 48);
+});
+
+test("the host keeps source selection independent from tracker storage", async () => {
+  const { root: ambient } = freshRepoDir();
+  const { root: flat } = freshRepoDir();
+  const { root: conventional } = freshRepoDir();
+  const nestedTracker = join(conventional, ".agents", "pm");
+  mkdirSync(nestedTracker, { recursive: true });
+  Repository.init(flat, "flat");
+  Repository.init(conventional, "conventional");
+  const host = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const fixture = await activate();
+  const previous = process.env.PM_SOURCE_WORKSPACE_ROOT;
+  process.env.PM_SOURCE_WORKSPACE_ROOT = ambient;
+  try {
+    const implicit = await host.runCommand({ command: "vcs status", pmRoot: nestedTracker });
+    assert.equal((implicit.cause as VcsError).code, "no_repository");
+    const results = await Promise.all([flat, nestedTracker].map((pmRoot) => fixture.runCommand({ command: "vcs status", pmRoot })));
+    assert.deepEqual(results.map(({ result, errorMessage }) => {
+      assert.equal(errorMessage, undefined);
+      return (result as { branch: string }).branch;
+    }), ["flat", "conventional"]);
+    assert.equal(process.env.PM_SOURCE_WORKSPACE_ROOT, ambient);
+  } finally {
+    if (previous === undefined) delete process.env.PM_SOURCE_WORKSPACE_ROOT;
+    else process.env.PM_SOURCE_WORKSPACE_ROOT = previous;
+  }
 });
 
 test("native commands validate PM associations and resolve linked file changes", async () => {

@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, renameSync, mkdirS
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { Repository } from "../engine/repo.ts";
 import { AmbiguousMoveError, type MoveIntent, type MoveCandidate, resolveMoveIntents, inferMoveSource } from "../engine/moves.ts";
@@ -204,8 +204,8 @@ test("real PM host accepts explicit FileId staging without Git and rejects unusa
   const repo = fresh(); const pmRoot = join(repo.root, ".agents/pm");
   await new PmClient({ cwd: repo.root, pmRoot, noExtensions: true }).init("moves", { defaults: true, author: "fixture" });
   const [a] = twins(repo); unlinkSync(join(repo.root, "a")); put(repo, "dest", "entirely edited\n");
-  const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "utf8")) as { capabilities: NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"] };
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "utf8")) as { capabilities: NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"] };
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   for (const fileId of ["", " ", true, "bad"]) assert.match(String((await harness.runCommand({ command: "vcs add", args: ["dest"], options: { fileId }, pmRoot })).errorMessage), /--file-id requires/);
   assert.match(String((await harness.runCommand({ command: "vcs add", args: [], options: { fileId: a.fileId }, pmRoot })).errorMessage), /exactly one destination/);
   const result = await harness.runCommand({ command: "vcs add", args: ["dest"], options: { fileId: a.fileId }, pmRoot }); assert.equal(result.errorMessage, undefined);

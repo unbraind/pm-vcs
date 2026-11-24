@@ -6,7 +6,7 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { constants, deflateRawSync, deflateSync, inflateSync } from "node:zlib";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { decodeLink, encodeLink, type RepositoryLink } from "../engine/composition.ts";
 import { decodeManifest, encodeManifest, type Signature } from "../engine/model.ts";
@@ -46,7 +46,7 @@ for (const format of ["pretty", "newline"] as const) test(`JSON header repair ac
   const canonical = encodeLink(link);
   const input = format === "pretty" ? JSON.stringify({ mappings: link.mappings, revision: link.revision, repository: link.repository, version: 1 }, null, 2) : canonical.toString() + "\n";
   writeFileSync(spec, input);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs link", args: ["dependency.link"], options: { spec }, pmRoot: repo.root });
   assert.equal(result.errorMessage, undefined, "ordinary JSON whitespace must stage successfully");
   const id = hashObject("link", canonical);
@@ -61,7 +61,7 @@ for (const format of ["pretty", "newline"] as const) test(`JSON header repair ac
 
 test("JSON header repair rejects invalid roots, JSON and fields without object or index publication", async () => {
   const { repo, spec, link } = fixture();
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const before = snapshot(repo);
   const inputs = ["{", "null", "[]", "1", "true", '"link"', "{}",
     JSON.stringify({ ...link, extra: 1 }), JSON.stringify({ ...link, version: "1" }),
@@ -80,7 +80,7 @@ test("JSON header repair rejects invalid roots, JSON and fields without object o
 
 test("JSON header repair preserves missing, directory and permission errors for operator files", async () => {
   const { repo, spec } = fixture();
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const before = snapshot(repo);
   for (const code of ["ENOENT", "EISDIR", "EACCES"] as const) {
     if (code === "EACCES" && !modeDenialSupported) continue;

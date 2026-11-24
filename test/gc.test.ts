@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, 
 import { join, relative, sep } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { collectGarbage } from "../engine/gc.ts";
 import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
@@ -176,7 +176,7 @@ test("SIGKILL midway through sweep retains history and restart replans after exp
 test("extension GC is a dry run unless --apply is explicit", async () => {
   const repo = await fresh(); const garbage = repo.objects.write("blob", Buffer.from("garbage"));
   const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "utf8"));
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   const dry = await harness.runCommand({ command: "vcs gc", pmRoot: join(repo.root, ".agents/pm") });
   assert.equal(dry.errorMessage, undefined); assert.ok(repo.objects.has(garbage));
   const applied = await harness.runCommand({ command: "vcs gc", options: { apply: true }, pmRoot: join(repo.root, ".agents/pm") });

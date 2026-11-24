@@ -10,7 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./workspace-harness.ts";
 import extension from "../../index.ts";
 import { startRepositoryServer } from "../../engine/serve.ts";
 import { Repository } from "../../engine/repo.ts";
@@ -121,7 +121,7 @@ test("real PM worktrees: two PM_AUTHOR identities keep working, a third resolves
   b.merge("agent-a", { message: "receive merge", author, recordConflicts: true }, now);
   commit(b, "after-b.txt", "agent b continues");
   a.merge("agent-b", { message: "receive work", author, recordConflicts: true }, now);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const pmRoot = join(a.root, ".agents/pm");
   for (const command of ["vcs status", "vcs show", "vcs log", "vcs items"]) {
     const result = await harness.runCommand({ command, pmRoot }); assert.equal(result.errorMessage, undefined);
@@ -139,7 +139,7 @@ test("real PM worktrees: two PM_AUTHOR identities keep working, a third resolves
 
 test("legacy fail-on-conflict remains isolated and conflicting mode flags refuse before mutation", async () => {
   const { repo, path } = await divergent(true); const head = repo.resolve("HEAD");
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const pmRoot = join(repo.root, ".agents/pm");
   const invalid = await harness.runCommand({ command: "vcs merge", args: ["other"], options: { recordConflicts: true, failOnConflict: true }, pmRoot });
   assert.ok(invalid.errorMessage); assert.equal(repo.resolve("HEAD"), head); assert.equal(repo.readMergeState(), null);
@@ -153,7 +153,7 @@ test("legacy fail-on-conflict remains isolated and conflicting mode flags refuse
 test("CLI values, unfiltered unit selection and structural recording refusal have explicit outcomes", async () => {
   for (const value of ["done", '"closed"']) {
     const { repo, path } = await divergent(); record(repo, path);
-    const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+    const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
     const result = await harness.runCommand({ command: "vcs resolve", args: [path], options: { value }, pmRoot: join(repo.root, ".agents/pm") });
     assert.equal(result.errorMessage, undefined); assert.equal(repo.status().conflicts, undefined);
   }
@@ -165,7 +165,7 @@ test("CLI values, unfiltered unit selection and structural recording refusal hav
 
 test("resolve command preserves raw empty and whitespace values before optional JSON decoding", async () => {
   const { repo } = await resolutionFixture(); const head = repo.resolve("HEAD");
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   for (const [path, value, expected] of rawResolutionCases) {
     repo.reset(head, "hard", now);
     const result = await harness.runCommand({ command: "vcs resolve", args: [path], options: { value }, pmRoot: join(repo.root, ".agents/pm") });
@@ -458,7 +458,7 @@ test("resolution rejects absent selections, dirty state, out-of-view paths and i
   assert.throws(() => resolvePayload(repo.objects, { id: blob, conflicts: [textUnit] }, { value: 5 }), /must be strings/);
   assert.equal(repo.objects.readTyped(resolvePayload(repo.objects, { id: blob, conflicts: [textUnit] }, { value: "new" }).id, "blob").toString(), "new\ntwo");
   assert.equal(resolvePayload(repo.objects, { id: scalar, conflicts: [fieldUnit, textUnit] }, { field: "f", value: "new" }).conflicts?.length, 1);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   for (const options of [{}, { take: "invalid" }, { take: "ours", value: "x" }]) {
     const result = await harness.runCommand({ command: "vcs resolve", args: [path], options, pmRoot: join(repo.root, ".agents/pm") });
     assert.ok(result.errorMessage);
@@ -614,7 +614,7 @@ test("items conflict summaries reuse each root tree already read for linked file
   const item = (await client.create({ type: "Task", title: "Track conflicts", author: "fixture" })).item.id;
   await client.files(item, { add: [path], author: "fixture" });
   repo.stage([]); repo.commit({ message: "link conflict file", author }, now);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const trees = new Set(repo.allReachable().map((id) => readCommit(repo.objects, id).tree));
   const reads = new Map<ObjectId, number>(); const original = ObjectStore.prototype.readTyped;
   t.mock.method(ObjectStore.prototype, "readTyped", function (this: ObjectStore, id: ObjectId, type: ObjectType) {
@@ -741,7 +741,7 @@ test("structured field selectors preserve empty names and whitespace exactly", a
   commit(repo, path, values("base")); repo.createBranch("other", "HEAD", now);
   repo.switchTo("other", now); commit(repo, path, values("theirs"));
   repo.switchTo("main", now); commit(repo, path, values("ours")); record(repo, path);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   for (const field of names) {
     const result = await harness.runCommand({ command: "vcs resolve", args: [path], options: { field, take: "theirs" }, pmRoot: join(repo.root, ".agents/pm") });
     assert.equal(result.errorMessage, undefined);

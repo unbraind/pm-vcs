@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, truncateSync, writeFileSync } from
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension, { ChangeBundleRefusal, exportChangeBundle, importChangeBundle, inspectChangeBundle, parseChangeBundleAuthorization, parseChangeBundleScope, type ChangeBundleAuthorization, type ChangeBundleManifest, type ChangeBundleScope } from "../index.ts";
 import { parseBundle, serializeBundle } from "../engine/bundle.ts";
 import { canonicalRecordValue, encodeCommit, encodeManifest, encodeTree, readCommit, type RecordValue, type Signature, type TreeEntry } from "../engine/model.ts";
@@ -433,7 +433,7 @@ test("receiver change-signature policy remains authoritative even for a trusted 
 });
 
 test("CLI handlers use explicit input, external signing keys and independent import policy", async () => {
-  const f = await fixture(); const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const f = await fixture(); const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const external = temp(); const keyFile = join(external, "key.pem");
   writeFileSync(keyFile, keys.privateKey.export({ format: "pem", type: "pkcs8" }));
   const request = join(external, "request.json"); const authorization = join(external, "authority.json"); const expected = join(external, "expected.json");

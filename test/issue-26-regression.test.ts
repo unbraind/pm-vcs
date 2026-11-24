@@ -28,7 +28,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 
 import { reachable } from "../engine/merge.ts";
 import { readCommit } from "../engine/model.ts";
@@ -40,7 +40,7 @@ import { packageRoot } from "./helpers/sandbox.ts";
 
 /** Capability list the harness accepts, derived from its own signature. */
 type HarnessCapabilities = NonNullable<
-  NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"]
+  NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"]
 >;
 
 /** The shipped manifest's capabilities, so the harness activates exactly as at runtime. */
@@ -158,7 +158,7 @@ test("defect #3: status reports not clean after a conflicted merge", () => {
 test("defect #2: --fail-on-conflict exits non-zero without having committed the merge", async () => {
   // Pre-fix, the gate threw (so `handled === false`) but only after the merge
   // was committed, so HEAD had moved and the HEAD-unchanged assertion failed.
-  const harness = await createExtensionTestHarness(extension, { capabilities: manifest.capabilities });
+  const harness = await createWorkspaceHarness(extension, { capabilities: manifest.capabilities });
   const handle = makeTempDir();
   dir = handle;
   const root = handle.root;

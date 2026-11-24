@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { inflateSync, deflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { openRepository } from "../vcs-commands.ts";
 import { erasureScanBoundary } from "../engine/erasure-scan.ts";
@@ -313,7 +313,7 @@ test("typed reads and verification distinguish missing and corrupt from oblitera
 test("the real extension harness runs link, layer, authority and erasure operations with a real tracker", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
   const { repo, parent, client } = await fixture();
   const item = await client.create({ type: "Task", title: "Composition fixture", author: "fixture" }); assert.ok(item.item.id);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const pmRoot = repo.root;
   const readToken = join(parent, "read-token"); const eraseToken = join(parent, "erase-token");
   writeFileSync(readToken, "read-fixture"); writeFileSync(eraseToken, "erase-fixture");
@@ -569,7 +569,7 @@ test("history inspection propagates real I/O faults and refuses a denied fragmen
 });
 
 test("native CLI requires explicit composition options and can explicitly recover an absent writer lock", /** Exercise the scenario using a real tracker and disposable storage. */ async () => {
-  const { repo, parent } = await fixture(); const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const { repo, parent } = await fixture(); const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const token = join(parent, "erase-token"); writeFileSync(token, "erase-fixture");
   for (const request of [
     { command: "vcs authority", options: {} },
@@ -922,7 +922,7 @@ test("obliteration refuses forged ownership inside a nested control directory", 
 
 test("sparse-view CLI preserves operational errors from control metadata publication", /** A working-tree mutation refusal and a metadata I/O fault retain their separate error contracts. */ async () => {
   const { repo } = await fixture();
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   mkdirSync(join(repo.controlDirectory, "view.json"));
   const index = repo.readIndex();
   const result = await harness.runCommand({ command: "vcs view", args: ["**"], pmRoot: repo.root });
@@ -1028,7 +1028,7 @@ test("review ordinary crashed writers recover without erase authority and empty 
   const program = `import { Repository } from ${JSON.stringify(repoUrl)}; import { writeFileSync } from "node:fs"; Repository.open(process.argv[1]).objects.withWriteLock(()=>{writeFileSync(process.argv[2],String(process.pid)); process.kill(process.pid,"SIGKILL")});`;
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, repo.root, marker], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(child.signal, "SIGKILL"); assert.equal(existsSync(marker), true); rmSync(marker);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   let recovered: Awaited<ReturnType<typeof harness.runCommand>> | undefined;
   await assert.doesNotReject(async () => { recovered = await harness.runCommand({ command: "vcs recover-lock", pmRoot: repo.root }); });
   assert.ok(recovered);
@@ -1133,7 +1133,7 @@ test("review ordinary recovery retains pending erasure and first denial attribut
   repo.objects.recordDenials([{ ...denial, pending: true }, { id: hashObject("tombstone", encodeTombstone(tombstone)), tombstone, pending: false }]);
   const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { env: testEnvironment(), encoding: "utf8" }); assert.equal(dead.status, 0);
   writeFileSync(join(repo.controlDirectory, "objects.lock"), dead.stdout); rmSync(join(repo.controlDirectory, "authority.json"));
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const result = await harness.runCommand({ command: "vcs recover-lock", pmRoot: repo.root }); assert.equal(result.errorMessage, undefined);
   assert.equal(repo.objects.denials()[0].pending, true); assert.equal(repo.objects.denial(denial.tombstone.roots[0])?.id, denial.id);
   refuses(() => repo.objects.write("blob", Buffer.from("new publication"), "b".repeat(32)), "erasure_incomplete");
@@ -1512,7 +1512,7 @@ test("renewed listing skips unrelated sparse and malformed prefixes while preser
 
 test("renewed CLI reports missing arguments and audited retired prune explicitly", /** Real installed SDK command contexts exercise public argument grammar and authority boundaries. */ async () => {
   const { repo, parent } = await fixture();
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const link = await harness.runCommand({ command: "vcs link", pmRoot: repo.root });
   assert.match(String(link.errorMessage), /requires a descriptor path/); assert.doesNotMatch(String(link.errorMessage), /requires a a/);
   const layer = await harness.runCommand({ command: "vcs layer", pmRoot: repo.root }); assert.match(String(layer.errorMessage), /requires a layer name/);
@@ -1583,7 +1583,7 @@ for (const linked of [false, true]) test(`renewal erasure recovery authorizes be
   const crash = spawnSync(process.execPath, ["--input-type=module", "-e", `import { Repository } from ${JSON.stringify(url)}; Repository.open(process.argv[1]).objects.withWriteLock(()=>process.kill(process.pid,"SIGKILL"));`, repo.root], { env: testEnvironment(), encoding: "utf8", timeout: processFixtureTimeout });
   assert.equal(crash.signal, "SIGKILL");
   const lock = join(hub.controlDirectory, "objects.lock"); const owner = readFileSync(lock);
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   writeFileSync(join(repo.root, "erase-token"), "wrong-erase-grant");
   const denied = await harness.runCommand({ command: "vcs obliterate", args: ["selected.bin"], options: { recoverLock: true, eraseTokenFile: "erase-token", reason: "incident" }, pmRoot: repo.root });
   assert.match(String(denied.errorMessage), /authority|credential|Unauthorized/i);
@@ -1800,7 +1800,7 @@ test("grant repair distinguishes absent legacy invalid and unreadable authority 
 });
 
 test("grant repair CLI keeps current credentials separate from new tokens and legacy migration", /** Execute registered commands with real token files and unchanged grant bytes on refusal. */ async () => {
-  const { repo, parent } = await fixture(); const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const { repo, parent } = await fixture(); const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const readToken = join(parent, "new-read-token"); const eraseToken = join(parent, "new-erase-token"); const currentToken = join(parent, "current-token");
   writeFileSync(readToken, "new-read"); writeFileSync(eraseToken, "new-erase"); writeFileSync(currentToken, "erase-fixture");
   const options = { principal: "replacement", readTokenFile: readToken, eraseTokenFile: eraseToken };
@@ -1976,7 +1976,7 @@ test("grant repair installed CLI parses separate current and legacy flags and pr
 
 
 test("sparse-view CLI retains native publication failures after guarded worktree mutation", async t => {
- const {repo}=await fixture();const harness=await createExtensionTestHarness(extension,{capabilities:["commands","schema"]});const before=repo.readIndex();const rename=fs.renameSync;const destination=join(repo.controlDirectory,"view.json");const failure=Object.assign(new Error("native view publication failed"),{code:"EIO"});
+ const {repo}=await fixture();const harness=await createWorkspaceHarness(extension,{capabilities:["commands","schema"]});const before=repo.readIndex();const rename=fs.renameSync;const destination=join(repo.controlDirectory,"view.json");const failure=Object.assign(new Error("native view publication failed"),{code:"EIO"});
  t.mock.method(fs,"renameSync",(...args:Parameters<typeof fs.renameSync>)=>{if(args[1]===destination)throw failure;return rename(...args);});
  try{const result=await harness.runCommand({command:"vcs view",args:["**"],pmRoot:repo.root});assert.match(String(result.errorMessage),/native view publication failed/);assert.deepEqual(repo.readIndex(),before);assert.equal(existsSync(join(repo.controlDirectory,"objects.lock")),false);}finally{t.mock.restoreAll();}
 });

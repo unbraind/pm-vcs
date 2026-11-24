@@ -17,7 +17,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { spawn } from "node:child_process";
 import { afterEach, test } from "node:test";
 
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 
 import extension from "../index.ts";
 import type { CloneReport, FetchReport, PushReport } from "../engine/sync.ts";
@@ -116,9 +116,9 @@ async function serveSeededRepo(): Promise<Served> {
  *
  * @returns The manifest's capability list.
  */
-function manifestCapabilities(): NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"] {
+function manifestCapabilities(): NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"] {
   const manifest = JSON.parse(readFileSync(join(packageRoot, "manifest.json"), "utf8")) as {
-    capabilities: Parameters<typeof createExtensionTestHarness>[1] extends undefined ? never : NonNullable<Parameters<typeof createExtensionTestHarness>[1]>["capabilities"];
+    capabilities: Parameters<typeof createWorkspaceHarness>[1] extends undefined ? never : NonNullable<Parameters<typeof createWorkspaceHarness>[1]>["capabilities"];
   };
   return manifest.capabilities;
 }
@@ -128,8 +128,8 @@ function manifestCapabilities(): NonNullable<Parameters<typeof createExtensionTe
  *
  * @returns The activated harness.
  */
-function activate(): ReturnType<typeof createExtensionTestHarness> {
-  return createExtensionTestHarness(extension, { capabilities: manifestCapabilities() });
+function activate(): ReturnType<typeof createWorkspaceHarness> {
+  return createWorkspaceHarness(extension, { capabilities: manifestCapabilities() });
 }
 
 test("a served repository advertises file metadata and its explicit HTTP endpoints", async () => {

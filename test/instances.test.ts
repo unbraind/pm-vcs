@@ -38,7 +38,7 @@ import { isAncestor } from "../engine/merge.ts";
 import { flattenTree } from "../engine/worktree.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
 import extension from "../index.ts";
-import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { packageRoot } from "./helpers/sandbox.ts";
 
@@ -782,7 +782,7 @@ test("a merge in progress keeps its conflicted paths inside the view", () => {
 });
 
 test("committing with an unresolvable PM item fails visibly and commits nothing", async () => {
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const parent = freshDir();
   const root = join(parent, "hub");
   // A real tracker, so the item lookup is a real lookup and not an
@@ -823,7 +823,7 @@ test("committing with an unresolvable PM item fails visibly and commits nothing"
 });
 
 test("the command surface links, lists, unlinks, views and scans instances", async () => {
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   const parent = freshDir();
   const root = join(parent, "hub");
 

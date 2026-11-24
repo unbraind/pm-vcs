@@ -7,7 +7,8 @@ import { syncBuiltinESMExports } from "node:module";
 import nativePath, { join, relative, win32 } from "node:path";
 import { afterEach, mock, test } from "node:test";
 import { PmClient, parseItemDocument, readSettings, readLocatedItem, serializeItemDocument, splitFrontMatter } from "@unbrained/pm-cli/sdk";
-import { createExtensionTestHarness, decodeToon, encodeToon } from "@unbrained/pm-cli/sdk/testing";
+import { decodeToon, encodeToon } from "@unbrained/pm-cli/sdk/testing";
+import { createWorkspaceHarness } from "./helpers/workspace-harness.ts";
 import extension from "../index.ts";
 import { TrackerCapture, trackerWorkspacePath } from "../engine/tracker-admission.ts";
 import { flattenTree } from "../engine/worktree.ts";
@@ -164,7 +165,7 @@ test("tracker byte validation includes nested custom folders named like root run
 });
 
 test("commit-tracker stores exactly the same terminated message as the vcs commit handler", async () => {
-  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema"] });
+  const harness = await createWorkspaceHarness(extension, { capabilities: ["commands", "schema"] });
   for (const message of ["Review message", "  Multiple lines\n\nwith detail\n\n  "]) {
     const f = await fixture(); const repo = Repository.init(f.root);
     const ordinary = await harness.runCommand({ command: "vcs commit", pmRoot: f.pmRoot, options: { message, allowEmpty: true } });
