@@ -1,9 +1,10 @@
 import { objectFiles, type ObjectFile } from "./object-files.ts";
 import { prepareDestruction, DestructionRefusal, type DestructionReceipt, type DestructionRequest } from "./destruction.ts";
 import { durability } from "./durability.ts";
+import { readRegularFile, readRegularText, regularReadFlags } from "./regular-file.ts";
 /** Immutable indexed packs: independently compressed frames keep their uncompressed addresses. */
 import { createHash, randomBytes } from "node:crypto";
-import { constants, existsSync, fstatSync, lstatSync, mkdirSync, readdirSync, readFileSync, readSync, writeFileSync, type BigIntStats } from "node:fs";
+import { existsSync, fstatSync, lstatSync, mkdirSync, readdirSync, readSync, writeFileSync, type BigIntStats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { deflateSync } from "node:zlib";
 import { ObjectStoreError } from "./object-error.ts";
@@ -119,7 +120,7 @@ export class PackStorage {
     objectReadBoundary.visit("pack-catalog", id, 0);
     for (const path of paths) {
       let file: ObjectFile;
-      try { file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW); } catch (error) {
+      try { file = objectFiles.open(path, regularReadFlags); } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
         throw error;
       }
@@ -163,7 +164,7 @@ export class PackStorage {
     const result: { id: ObjectId; path: string }[] = [];
     for (const path of this.files()) {
       if (excluded.has(path)) continue;
-      const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const file = objectFiles.open(path, regularReadFlags);
       const fd = file.fd;
       try {
         const index = this.index(fd, path);
@@ -191,7 +192,8 @@ export class PackStorage {
       if (!entry.isDirectory() || !/^job-[0-9a-f]{24}$/.test(entry.name)) continue;
       const path = join(this.directory, entry.name);
       const marker = join(path, "owner");
-      if (!lstatSync(marker, { throwIfNoEntry: false })?.isFile() || readFileSync(marker, "utf8") !== `pm-vcs-pack-1 ${entry.name}\n`) { if (durability.resumeDirectory(path)) packBoundary.visit("recovered"); continue; }
+      const owner = lstatSync(marker, { bigint: true, throwIfNoEntry: false });
+      if (!owner?.isFile() || readRegularText(marker, owner) !== `pm-vcs-pack-1 ${entry.name}\n`) { if (durability.resumeDirectory(path)) packBoundary.visit("recovered"); continue; }
       this.cleanupJob(path, aliases); packBoundary.visit("recovered");
     }
   }
@@ -275,7 +277,8 @@ export class PackStorage {
     const staged = join(job, "payload"); this.durableFile(staged, bytes); syncDirectory(job); packBoundary.visit("staged");
     try { durability.link(staged, destination); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (!lstatSync(destination).isFile() || !readFileSync(destination).equals(bytes)) corrupt();
+      const observed = lstatSync(destination, { bigint: true });
+      if (!observed.isFile() || !readRegularFile(destination, observed).content.equals(bytes)) corrupt();
     }
     syncDirectory(this.directory); syncDirectory(join(destination, "..")); packBoundary.visit("published");
     return job;
@@ -287,7 +290,7 @@ export class PackStorage {
     for (const name of ["payload", "owner"]) {
       const path = join(job, name);
       if (lstatSync(path, { throwIfNoEntry: false })?.isFile() === true) {
-        const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const file = objectFiles.open(path, regularReadFlags);
         try { const before = fstatSync(file.fd, { bigint: true }); const result = durability.unlink(path, before); if (name === "payload" && result.deleted > 0) aliases?.set(inode(before), fstatSync(file.fd, { bigint: true })); }
         finally { file.close(); }
         syncDirectory(job); packBoundary.visit(`staging-${name}-retired`);

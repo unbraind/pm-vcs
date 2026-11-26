@@ -18,9 +18,10 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
-  readFileSync,
+  realpathSync,
   writeSync,
 } from "node:fs";
+import { readRegularText } from "./regular-file.ts";
 import { dirname, join, posix, sep, resolve } from "node:path";
 
 import { compareByteOrder } from "./model.ts";
@@ -98,7 +99,7 @@ export function assertRefName(name: string): void {
  */
 function readTrimmed(path: string): string | null {
   try {
-    return readFileSync(path, "utf8").trim();
+    return readRegularText(realpathSync(path)).trim();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -327,7 +328,7 @@ export class RefStore {
         let value: string | null;
         if (strict) {
           if (!entry.isFile()) throw new VerificationRefusal("integrity", "ref_type", "A reference is not a regular file.");
-          try { value = readFileSync(path, "utf8").trim(); } catch { throw new VerificationRefusal("integrity", "ref_io", "A reference disappeared or could not be read."); }
+          try { value = readRegularText(path).trim(); } catch { throw new VerificationRefusal("integrity", "ref_io", "A reference disappeared or could not be read."); }
           if (!isObjectId(value)) throw new VerificationRefusal("integrity", "ref_decode", "A reference does not contain a complete object identity.");
         } else { try { value = readTrimmed(path); } catch { continue; } }
         if (value === null || !isObjectId(value)) continue;

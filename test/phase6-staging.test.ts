@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import fs, { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
-import { afterEach, test } from "node:test";
+import { afterEach, mock, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { deflateSync, inflateSync } from "node:zlib";
 import { PmClient } from "@unbrained/pm-cli/sdk";
@@ -121,6 +121,69 @@ test("legacy blob file hashing uses bounded reads and refuses a truncated descri
   context.mock.method(fs, "readSync", () => 0); syncBuiltinESMExports();
   try { assert.throws(() => blobFileContentId(file), { code: "short_read" }); }
   finally { context.mock.restoreAll(); syncBuiltinESMExports(); }
+});
+
+test("native buffered and streaming snapshots refuse a replaced file in a non-Git tracker", async () => {
+  const { repo } = await fresh();
+  const path = join(repo.root, "asset");
+  const parked = join(repo.root, "parked");
+  const index = join(repo.controlDirectory, "index");
+  const small = Buffer.from("native data");
+  const large = Buffer.alloc(1_048_577, 42);
+  assert.equal(existsSync(join(repo.root, ".git")), false);
+  writeFileSync(path, small);
+  repo.stage(["asset"]);
+  writeFileSync(path, Buffer.concat([small, small]));
+  /** Replace the observed file with an identical byte stream just before its open. */
+  const refuseReplacement = (operation: () => unknown): void => {
+    const before = readFileSync(index);
+    const open = fs.openSync;
+    let replaced = false;
+    mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+      if (args[0] === path && !replaced) {
+        renameSync(path, parked);
+        replaced = true;
+        writeFileSync(path, readFileSync(parked));
+      }
+      return open(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      assert.throws(operation, { code: "worktree_path_changed" });
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+      if (replaced) renameSync(parked, path);
+    }
+    assert.ok(replaced);
+    assert.deepEqual(readFileSync(index), before);
+  };
+  refuseReplacement(() => repo.stage(["asset"]));
+  writeFileSync(path, large);
+  refuseReplacement(() => repo.stage(["asset"]));
+  repo.stage(["asset"]);
+  writeFileSync(path, Buffer.concat([large, Buffer.from("modified")]));
+  refuseReplacement(() => repo.status());
+  refuseReplacement(() => repo.scan());
+  writeFileSync(path, large);
+  repo.commit({ message: "tracked asset", author }, new Date());
+  repo.addLayer("private", new Map([["asset", { content: small, executable: false }]]));
+  refuseReplacement(() => repo.removeLayer("private"));
+  assert.equal(repo.layers().length, 1);
+  unlinkSync(path);
+  assert.throws(() => repo.removeLayer("private"), { code: "layer_edited" });
+});
+
+test("direct pathname hashers accept explicit file links and reject non-regular leaves", () => {
+  const directory = makeTempDir();
+  directories.push(directory);
+  const target = join(directory.root, "target");
+  const link = join(directory.root, "alias");
+  writeFileSync(target, "ordinary bytes");
+  symlinkSync("target", link);
+  assert.equal(blobFileContentId(link), blobFileContentId(target));
+  assert.equal(cdcFragmentedFileContentId(link), cdcFragmentedFileContentId(target));
+  assert.throws(() => blobFileContentId(directory.root), { code: "worktree_path_changed" });
 });
 
 for (const target of ["identical-target", "absent-target"]) test(`symlink staging preserves target text after a manifest for ${target}`, async () => {

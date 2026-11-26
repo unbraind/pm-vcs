@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 /** Faults at real publication boundaries preserve native errors and peer authority. */
 import assert from "node:assert/strict";
 import fs, { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -140,7 +141,7 @@ test("HEAD recovery handles an absent predecessor and a peer value without adopt
 test("permissive ref enumeration skips unreadable leaves while retaining readable peers", () => {
   const dir = makeTempDir(); temporary.push(dir); const refs = new RefStore(dir.root); const prefix = join(dir.root, "refs/heads"); mkdirSync(prefix, { recursive: true });
   const id = "a".repeat(64); writeFileSync(join(prefix, "readable"), id); writeFileSync(join(prefix, "unreadable"), id);
-  const read = fs.readFileSync; mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => { if (args[0] === join(prefix, "unreadable")) throw Object.assign(new Error("ref I/O"), { code: "EIO" }); return Reflect.apply(read, fs, args); }); syncBuiltinESMExports();
+  const read = fs.readFileSync; const observes = watchReadPath(join(prefix, "unreadable")); mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => { if (observes(args[0])) throw Object.assign(new Error("ref I/O"), { code: "EIO" }); return Reflect.apply(read, fs, args); }); syncBuiltinESMExports();
   assert.deepEqual(refs.list("refs/heads/"), [{ name: "refs/heads/readable", target: id }]);
   assert.throws(() => refs.list("refs/heads/", true), error => error instanceof Error && "bound" in error && error.bound === "ref_io");
 });

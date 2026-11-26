@@ -14,7 +14,8 @@ import { durability } from "./durability.ts";
 import { VerificationRefusal, assertVerificationBound, verificationLimits } from "./object-error.ts";
 import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Authorized FileId-scoped erasure over accountable loose and packed storage. */
-import { constants, type BigIntStats, existsSync, fstatSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { type BigIntStats, existsSync, fstatSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { readRegularFile, readRegularText, regularReadFlags } from "./regular-file.ts";
 import { objectFiles, type ObjectFile } from "./object-files.ts";
 import { dirname, join } from "node:path";
 import { authorize, readLayers, assertCompositionPath, syncDirectory, writePrivateJson } from "./composition.ts";
@@ -93,7 +94,7 @@ function assertSupportedControl(control: string, observe: ((bytes: Buffer, binar
       if (value === null ? entry.name !== "view.json" : typeof value !== "object") throw new ObjectStoreError("unsupported_erasure_storage", "Unknown native control JSON shape was preserved.");
     }
     if (entry.isFile() && /^objects\.(?:recovery\.)?lock(?:\.[0-9]+\.[0-9a-f]{12}\.tmp)?$/.test(entry.name)) {
-      const text = readFileSync(join(control, entry.name), "utf8");
+      const text = readRegularText(join(control, entry.name));
       if (text !== "" && (!/^[1-9][0-9]*$/.test(text) || !Number.isSafeInteger(Number(text)) || Number(text) > 2_147_483_647)) throw new ObjectStoreError("unsupported_erasure_storage", "Unknown writer lease bytes were preserved.");
     }
     if (entry.isFile() && ["identity", "objects.generation"].includes(entry.name)) {
@@ -101,7 +102,7 @@ function assertSupportedControl(control: string, observe: ((bytes: Buffer, binar
       if (!(entry.name === "objects.generation" && value === null) && (typeof value !== "string" || !/^[0-9a-f]{32}$/.test(value))) throw new ObjectStoreError("unsupported_erasure_storage", "Unknown native identity bytes were preserved.");
     }
     if (entry.isFile() && ["HEAD", "format"].includes(entry.name)) {
-      const text = readFileSync(join(control, entry.name), "utf8").trim();
+      const text = readRegularText(join(control, entry.name)).trim();
       try {
         if (entry.name === "format") { if (text !== "pmvcs-1") throw new Error("Unknown format."); }
         else if (text.startsWith("ref: ")) assertRefName(text.slice(5).trim());
@@ -109,7 +110,7 @@ function assertSupportedControl(control: string, observe: ((bytes: Buffer, binar
       } catch { throw new ObjectStoreError("unsupported_erasure_storage", "Unknown native control text was preserved."); }
     }
     if (entry.isFile() && /^(?:objects\.generation|(?:erasure-verification|erasure-purge|denials|exports|outputs)\.json)\.[0-9a-f]{12}\.tmp$/.test(entry.name)) {
-      const bytes = readFileSync(join(control, entry.name));
+      const { content: bytes } = readRegularFile(join(control, entry.name));
       if (bytes.length > 0) {
         try {
           const value: unknown = JSON.parse(bytes.toString("utf8"));
@@ -144,7 +145,7 @@ function assertSupportedControl(control: string, observe: ((bytes: Buffer, binar
         if (!/^ref-[1-9][0-9]*-[0-9a-f]{12}\.lock$/.test(entry.name) || entry.isDirectory()) assertRefName(name);
         if (entry.isDirectory()) inspectRefs(path, name);
         else {
-          file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+          file = objectFiles.open(path, regularReadFlags);
           const before = fstatSync(file.fd, { bigint: true });
           if (!before.isFile() || before.size > BigInt(verificationLimits.receiptBytes)) throw new Error("unsupported reference size or kind");
           const bytes = readFileSync(file.fd);
@@ -169,9 +170,11 @@ function assertSupportedControl(control: string, observe: ((bytes: Buffer, binar
       }
       const path = join(leases, entry.name); let file: ObjectFile | undefined;
       try {
-        file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-        const before = fstatSync(file.fd, { bigint: true }); const bytes = readFileSync(file.fd);
-        if (!before.isFile() || before.size !== BigInt(bytes.length)) throw new Error("Changed lease audit.");
+        file = objectFiles.open(path, regularReadFlags);
+        const before = fstatSync(file.fd, { bigint: true });
+        if (!before.isFile()) throw new Error("Changed lease audit.");
+        const bytes = readFileSync(file.fd);
+        if (before.size !== BigInt(bytes.length)) throw new Error("Changed lease audit.");
         if (bytes.length > 0) parseFileLeaseAudit(bytes.toString("utf8"), entry.name.slice(0, 32));
         const named = lstatSync(path, { bigint: true });
         if (controlStamp(before) !== controlStamp(named) || controlStamp(before) !== controlStamp(fstatSync(file.fd, { bigint: true }))) throw new Error("Changed lease audit.");
@@ -396,7 +399,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
     diagnoseControl();
     for (const instance of instances) {
       for (const entry of readdirSync(instance.controlDirectory, { withFileTypes: true })) {
-        if (entry.isFile()) observe(readFileSync(join(instance.controlDirectory, entry.name)), entry.name.endsWith(".json"));
+        if (entry.isFile()) observe(readRegularFile(join(instance.controlDirectory, entry.name)).content, entry.name.endsWith(".json"));
       }
     }
     const mutations = new Map<Repository, WorktreeMutation>();
@@ -418,7 +421,7 @@ export function eraseFile(repository: Repository, instances: readonly Repository
           }
         }
         const layerPath = join(instance.controlDirectory, "layers.json");
-        if (existsSync(layerPath)) observe(readFileSync(layerPath), true);
+        if (existsSync(layerPath)) observe(readRegularFile(layerPath).content, true);
         for (const output of nativeOutputs(instance.controlDirectory)) {
           if (owned.has(output.path) || !output.objects.some(id => selected.has(id)) && !selected.has(output.id)) continue;
           const leaf = mutation.inspectForErasure(output.path);

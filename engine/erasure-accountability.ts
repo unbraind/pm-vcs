@@ -1,6 +1,7 @@
 /** Physical erasure certificates require complete native representations and a stable namespace. */
+import { regularReadFlags } from "./regular-file.ts";
 import { createHash, randomBytes } from "node:crypto";
-import { constants, fstatSync, lstatSync, readdirSync, readSync, type BigIntStats } from "node:fs";
+import { fstatSync, lstatSync, readdirSync, readSync, type BigIntStats } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { writePrivateJson } from "./composition.ts";
 import { ZStream, zlibInflateInit2, zlibInflate, zlibInflateEnd, Z_NO_FLUSH, Z_STREAM_END, Z_OK, Z_BUF_ERROR } from "pako";
@@ -138,7 +139,7 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
       const kind = classifyErasureFile(parts).kind;
       for (let attempt = 0; attempt < ACCOUNTABILITY_ATTEMPTS; attempt++) {
         accountabilityBoundary.visit("file-resolve", path, attempt);
-        const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const file = objectFiles.open(path, regularReadFlags);
         try {
           const before = fstatSync(file.fd, { bigint: true });
           assertVerificationBound("accountability", "file_bytes", Number(before.size), verificationLimits.accountabilityFileBytes);
@@ -220,7 +221,7 @@ function inspectStorage(scope: string | readonly string[], options: Accountabili
       for (const [path, expected] of snapshots) {
         const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
         if (!stat?.isFile() || identity(stat) !== expected.stamp) throw new Changed();
-        const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const file = objectFiles.open(path, regularReadFlags);
         try {
           if (identity(fstatSync(file.fd, { bigint: true })) !== expected.stamp || physicalDigest(file.fd, expected.bytes, check) !== expected.sha256) throw new Changed();
           const named = lstatSync(path, { bigint: true, throwIfNoEntry: false });

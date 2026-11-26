@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 /** Native regressions for the remaining actionable pack/provenance review findings. */
 import assert from "node:assert/strict";
 import fs, { chmodSync, existsSync, fstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -288,6 +289,37 @@ test("erasure lease audit classification pins native bytes and directory kinds",
  }
 });
 
+test("erasure refuses a nonregular audit descriptor before reading bytes", async () => {
+ const f = await fixture();
+ f.repo.setAuthority("fixture", "read-fixture", "erase-fixture");
+ const control = f.repo.controlDirectory;
+ const fileId = f.entry.fileId!;
+ new PublicationLeases(f.repo.objects, control).change({ action: "acquire", fileId, refs: ["refs/heads/main"], ttlMs: 1000 });
+ const audit = join(control, "leases", `${fileId}.jsonl`);
+ const matches = watchReadPath(audit);
+ const stat = fs.fstatSync;
+ const read = fs.readFileSync;
+ let classified = false;
+ let reads = 0;
+ mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => {
+  const observed = stat(...args);
+  if (!matches(args[0])) return observed;
+  classified = true;
+  return Object.assign(Object.create(observed), { isFile: () => false });
+ });
+ mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+  if (matches(args[0])) reads++;
+  return read(...args);
+ });
+ syncBuiltinESMExports();
+ assert.throws(() => f.repo.objects.withWriteLock(() =>
+  validateErasureRequest(f.repo, [f.repo], fileId, "erase-fixture", "lease-proof", new Date(1), {})),
+ { code: "unsupported_erasure_storage" });
+ assert.ok(classified);
+ assert.equal(reads, 0);
+ assert.deepEqual(f.repo.objects.denials(), []);
+});
+
 test("erasure audit reports bounded raw storage and opaque record diagnostics without gating completion", async () => {
  const f = await fixture(); f.repo.setAuthority("fixture", "read-fixture", "erase-fixture");
  const opaque = f.repo.objects.write("record", Buffer.from("legacy non-JSON record content"), "c".repeat(32));
@@ -429,10 +461,10 @@ test("native process lock control entries remain recognized without acquiring op
 
 test("erasure refuses a lease directory changed after its native control entry was captured", async () => {
  const f = await fixture(); f.repo.setAuthority("fixture", "read-fixture", "erase-fixture"); const leases = join(f.repo.controlDirectory, "leases"); mkdirSync(leases);
- const authority = join(f.repo.controlDirectory, "authority.json"); const read = fs.readFileSync; let reads = 0; let injected = false;
+ const authority = join(f.repo.controlDirectory, "authority.json"); const read = fs.readFileSync; const observes = watchReadPath(authority); let reads = 0; let injected = false;
  mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
   const value = Reflect.apply(read, fs, args);
-  if (args[0] === authority && ++reads === 2) { injected = true; fs.renameSync(leases, join(f.dir.root, "original-leases")); writeFileSync(leases, "foreign changed namespace"); }
+  if (observes(args[0]) && ++reads === 2) { injected = true; fs.renameSync(leases, join(f.dir.root, "original-leases")); writeFileSync(leases, "foreign changed namespace"); }
   return value;
  }); syncBuiltinESMExports();
  assert.throws(() => f.repo.objects.withWriteLock(() => validateErasureRequest(f.repo, [f.repo], f.entry.fileId!, "erase-fixture", "lease-directory", new Date(1), {})), { code: "unsupported_erasure_storage" });

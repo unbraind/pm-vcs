@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 /** Exhausted proof budgets never become certificates or deletion authority on real non-git stores. */
 import assert from "node:assert/strict";
 import { afterEach, test, mock } from "node:test";
@@ -76,7 +77,7 @@ test("integrity cannot certify an empty result after a corrupt ref was omitted b
 test("integrity reference I/O, special leaves and disappearing observed directories cannot look like empty history",async()=>{
  const {repo}=await fixture();const refs=join(repo.controlDirectory,"refs/heads");const head=join(refs,"main");const saved=`${head}.saved`;renameSync(head,saved);symlinkSync(saved,head);refused(()=>repo.verify(),"integrity","ref_type");rmSync(head);renameSync(saved,head);
  renameSync(refs,`${refs}.saved`);writeFileSync(refs,"not a directory");refused(()=>repo.verify(),"integrity","ref_io");rmSync(refs);renameSync(`${refs}.saved`,refs);
- const read=fs.readFileSync;mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{if(args[0]===head)throw Object.assign(new Error("injected reference I/O"),{code:"EACCES"});return Reflect.apply(read,fs,args);});syncBuiltinESMExports();refused(()=>repo.verify(),"integrity","ref_io");mock.restoreAll();syncBuiltinESMExports();
+ const read=fs.readFileSync;const observes=watchReadPath(head);mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{if(observes(args[0]))throw Object.assign(new Error("injected reference I/O"),{code:"EACCES"});return Reflect.apply(read,fs,args);});syncBuiltinESMExports();refused(()=>repo.verify(),"integrity","ref_io");mock.restoreAll();syncBuiltinESMExports();
  const nested=join(refs,"nested");mkdirSync(nested);const readdir=fs.readdirSync;mock.method(fs,"readdirSync",(...args:Parameters<typeof fs.readdirSync>)=>{if(args[0]===nested)rmSync(nested,{recursive:true});return Reflect.apply(readdir,fs,args);});syncBuiltinESMExports();refused(()=>repo.verify(),"integrity","ref_io");mock.restoreAll();syncBuiltinESMExports();assert.ok(repo.verify().verified>0);
 });
 

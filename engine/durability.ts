@@ -1,3 +1,4 @@
+import { regularReadFlags } from "./regular-file.ts";
 import { configureDestruction, retireNamespace, withDestructionScope, resolveNamespacePath, resumeNamespaceDirectory, resumeNamespacePublication, prepareNamespaceDestruction, destructionBoundary, DestructionRefusal, type DestructionReceipt } from "./destruction.ts";
 import { withNativePublication, validateNativePublication } from "./publication-gate.ts";
 import { ObjectStoreError, assertVerificationBound, verificationLimits } from "./object-error.ts";
@@ -126,7 +127,7 @@ function observeProcessMarker(address: string, destination: string): { readonly 
   const before = fs.lstatSync(address, { bigint: true, throwIfNoEntry: false });
   if (!before?.isFile() || before.size > 4096n) return undefined;
   let file: ReturnType<typeof objectFiles.open>;
-  try { file = objectFiles.open(address, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); }
+  try { file = objectFiles.open(address, regularReadFlags); }
   catch (error) { if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined; throw error; }
   try {
     const held = fs.fstatSync(file.fd, { bigint: true }); let record: unknown;
@@ -237,7 +238,7 @@ configureDestruction({
   },
   update(path, offset, bytes, validate) {
     const before = fs.lstatSync(path, { bigint: true }); if (!before.isFile()) throw new Error("Progress is not a regular file.");
-    const file = objectFiles.open(path, fs.constants.O_RDWR | fs.constants.O_NOFOLLOW);
+    const file = objectFiles.open(path, fs.constants.O_RDWR | regularReadFlags);
     try {
       const opened = fs.fstatSync(file.fd, { bigint: true }); if (opened.dev !== before.dev || opened.ino !== before.ino) throw new Error("Progress identity changed.");
       validate(file.fd); fs.writeSync(file.fd, bytes, 0, bytes.length, offset); destructionBoundary.visit("progress-byte-written", path); durability.file(file.fd); destructionBoundary.visit("progress-byte-flushed", path);

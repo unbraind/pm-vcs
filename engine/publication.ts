@@ -1,5 +1,6 @@
 /** Native publication owns the same lease and logical dependencies as collection. */
-import { constants, fstatSync, lstatSync, readFileSync, realpathSync, type BigIntStats } from "node:fs";
+import { regularReadFlags } from "./regular-file.ts";
+import { fstatSync, lstatSync, readFileSync, realpathSync, type BigIntStats } from "node:fs";
 import { dirname, join } from "node:path";
 import { ObjectStore, isObjectId, type ObjectId } from "./objects.ts";
 import { ObjectStoreError, VerificationRefusal, assertVerificationBound, verificationLimits } from "./object-error.ts";
@@ -45,7 +46,7 @@ export function publicationRootIds(destination: string, bytes: string): ObjectId
 /** Pin and bound prepared control bytes; never interpret compressed objects or unrelated private metadata as roots. */
 export function readPublicationRoots(source: string, destination: string): ObjectId[] {
  if (nativePublicationKind(destination) === undefined) return [];
- const file = objectFiles.open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+ const file = objectFiles.open(source, regularReadFlags);
  try { const before = fstatSync(file.fd, { bigint: true }); const roots = publicationRootsFromFd(file.fd, destination); const after = lstatSync(source, { bigint: true, throwIfNoEntry: false }); if (after === undefined || stamp(before) !== stamp(after) || stamp(before) !== stamp(fstatSync(file.fd, { bigint: true }))) throw new VerificationRefusal("receipts", "namespace_changed", "The pinned publication source changed before validation ended."); return roots; }
  finally { file.close(); }
 }

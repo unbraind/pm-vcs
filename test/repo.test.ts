@@ -321,6 +321,7 @@ test("stage skips content work for a stable cached index entry", () => {
   writeFileSync(join(root, "changing.txt"), "changing");
   assert.deepEqual(repo.stage(["changing.txt"], () => ({
     content: Buffer.from("changing"),
+    symbolicLink: false,
     executable: false,
   })), ["changing.txt"]);
   assert.equal(repo.readIndex().find((entry) => entry.path === "changing.txt")?.stat, undefined);

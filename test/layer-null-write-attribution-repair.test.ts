@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 /** Real private-registry and post-erasure native writer regressions. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -60,9 +61,9 @@ test("layer registry distinguishes actual absence, empty array and valid private
 
 test("layer registry rejects an actual replacement with JSON null during its original read", () => {
   const { repo } = fixture(); const registry = join(repo.controlDirectory, "layers.json"); writeFileSync(registry, "[]");
-  const read = fs.readFileSync; let replaced = false;
+  const read = fs.readFileSync; const observes = watchReadPath(registry); let replaced = false;
   mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
-    if (args[0] === registry && !replaced) { replaced = true; writeFileSync(registry, "null"); }
+    if (observes(args[0]) && !replaced) { replaced = true; writeFileSync(registry, "null"); }
     return read(...args);
   });
   syncBuiltinESMExports();

@@ -1,6 +1,7 @@
 /** Bounded raw-byte diagnostics and one-way signatures; native provenance supplies the erasure guarantee. */
+import { regularReadFlags } from "./regular-file.ts";
 import { createHash } from "node:crypto";
-import { constants, fstatSync, lstatSync, readdirSync, readSync } from "node:fs";
+import { fstatSync, lstatSync, readdirSync, readSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { objectFiles } from "./object-files.ts";
 import { ObjectStoreError, VerificationRefusal } from "./object-error.ts";
@@ -214,7 +215,7 @@ export function scanErasureStorage(root: string, patterns: readonly ErasureFinge
       if (excluded.has(path)) continue;
       let file: ReturnType<typeof objectFiles.open> | undefined;
       try {
-        file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        file = objectFiles.open(path, regularReadFlags);
         const before = fstatSync(file.fd, { bigint: true });
         if (!before.isFile() || before.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new ErasureStorageRefusal("unsupported_erasure_storage", kind);
         const size = Number(before.size);

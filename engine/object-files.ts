@@ -1,4 +1,5 @@
 import { ObjectStoreError } from "./object-error.ts";
+import { regularReadFlags } from "./regular-file.ts";
 /** Deterministic ownership for every descriptor opened by object storage and durability. */
 import fs from "node:fs";
 
@@ -28,6 +29,15 @@ export const objectFiles = {
     };
     objectFiles.active.add(file);
     try { objectFiles.opened(file, path); return file; } catch (error) { file.close(); throw error; }
+  },
+  /** Open an optional leaf for descriptor validation, treating only ENOENT as absence. */
+  openReadable(path: string): ObjectFile | undefined {
+    try {
+      return objectFiles.open(path, regularReadFlags);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
   },
   /** Observe only registered, owned descriptors; production does not install an observer. */
   opened(_file: ObjectFile, _path: string): void {},

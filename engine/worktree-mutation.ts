@@ -237,7 +237,7 @@ export class WorktreeMutation {
     if (stat.isSymbolicLink()) content = fs.readlinkSync(parent.address, { encoding: "buffer" });
     else {
       let fd: number;
-      try { fd = fs.openSync(parent.address, fs.constants.O_RDONLY | worktreeMutationCapabilities.noFollow()); }
+      try { fd = fs.openSync(parent.address, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | worktreeMutationCapabilities.noFollow()); }
       catch (error) { this.destructiveFailure(error); }
       try {
         if (!this.same(stat, fs.fstatSync(fd, { bigint: true }))) this.changed();
