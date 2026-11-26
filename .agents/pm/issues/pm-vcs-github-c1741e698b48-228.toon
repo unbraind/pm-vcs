@@ -2,11 +2,11 @@ id: pm-vcs-github-c1741e698b48-228
 title: Issue-sync PRs can leave the committed self-host bundle stale
 description: Keep the committed self-host bundle in sync with issue import and closeout candidates.
 type: Issue
-status: in_progress
+status: open
 priority: 1
 tags[1]: "gh:unbraind/pm-vcs#228"
 created_at: "2026-11-26T06:02:07.747Z"
-updated_at: "2026-11-26T08:57:40.109Z"
+updated_at: "2026-11-26T09:54:47.171Z"
 assignee: pi-glm
 claim_principal: pi-glm
 author: codex-agent
@@ -95,4 +95,5 @@ docs[4]{path,scope}:
   ARCHITECTURE.md,project
   docs/ci-tiers.md,project
   docs/served-forge.md,project
+github_url: "https://github.com/unbraind/pm-vcs/issues/228"
 body: "Tracks https://github.com/unbraind/pm-vcs/issues/228."
