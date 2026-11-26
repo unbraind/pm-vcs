@@ -7,7 +7,11 @@ import { durability } from "../engine/durability.ts";
 // the **committed** bundle and the **committed** source, both straight out of
 // `HEAD`, and rejects differences except validated external action revisions.
 // `self-host:write` generates the bundle from tracked working files, or from
-// the Git index with `--staged`. Verification only considers committed bytes.
+// the Git index with `--staged`. Both the staged tree and the committed tree
+// are read as raw blob bytes straight from git's object database — never
+// through a checkout, whose line-ending conversion rules would stand between
+// the tree a commit records and the bytes this gate bundles. Verification only
+// considers committed bytes.
 //
 // The archive is bounded on purpose. The gate's contract is tip-tree equality —
 // a full history satisfied it too, but every regeneration appended one commit
@@ -24,7 +28,7 @@ import { durability } from "../engine/durability.ts";
 // alone and the bundle is reproducible.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { isPair, isScalar, parseDocument, visit } from "yaml";
@@ -141,7 +145,12 @@ export interface Verification {
 }
 
 /**
- * Reads and validates the gate configuration.
+ * Reads the gate configuration from its file on disk.
+ *
+ * The working-tree reader for the legacy `--write` mode, which snapshots the
+ * files on disk and is configured by the file on disk. The staged and
+ * committed trees use {@link readTreeSnapshot} instead, which parses the
+ * configuration out of the bytes the tree itself carries.
  *
  * @param path - Path to `self-host.json`.
  * @returns The parsed configuration.
@@ -154,15 +163,30 @@ export function loadConfig(path: string): SelfHostConfig {
   } catch {
     throw new Error(`self-host: could not read configuration at ${path}.`);
   }
+  return parseSelfHostConfig(raw);
+}
+
+/**
+ * Validates the gate configuration from its raw bytes.
+ *
+ * Split out of {@link loadConfig} so the staged and committed trees can be
+ * configured from the blob they carry while every shape rule stays in exactly
+ * one place — the file reader and the tree reader must never disagree about
+ * what a valid configuration is.
+ *
+ * @param raw - The configuration file's bytes as text.
+ * @returns The parsed configuration.
+ * @throws Error When the shape is not a `SelfHostConfig`.
+ */
+export function parseSelfHostConfig(raw: string): SelfHostConfig {
   let value: unknown;
   try {
     value = JSON.parse(raw) as unknown;
   } catch (error) {
     // Every other failure here is a `self-host:` message. A raw SyntaxError would
-    // be the odd one out, and in the verify path the config comes from the
-    // extracted worktree, so the message would name a temp directory and never
-    // mention the configuration at all.
-    throw new Error(`self-host: configuration at ${path} is not valid JSON: ${errorMessage(error)}`);
+    // be the odd one out, and the message must describe the configuration, not
+    // whichever file or tree it was read from.
+    throw new Error(`self-host: the configuration is not valid JSON: ${errorMessage(error)}`);
   }
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("self-host: configuration is not a JSON object.");
@@ -687,30 +711,167 @@ export function listTrackedFiles(root: string, environment = process.env): strin
   return raw.split("\0").filter((line) => line.length > 0);
 }
 
+/** One leaf entry of a git tree listing: its mode, object id and path. */
+export interface TreeEntry {
+  /** Git tree mode: `100644`, `100755`, or `120000` for a symbolic link. */
+  readonly mode: "100644" | "100755" | "120000";
+  /** Object id of the entry's blob, exactly as the tree records it. */
+  readonly sha: string;
+  /** Canonical repository-relative path. */
+  readonly path: string;
+}
+
+/** A tree's verification inputs: its configuration, raw blobs and source files. */
+export interface TreeSnapshot {
+  /** The gate configuration as staged or committed in the tree itself. */
+  readonly config: SelfHostConfig;
+  /** Every non-excluded source file: raw blob bytes and the tree-recorded mode. */
+  readonly files: ReadonlyMap<string, SourceFile>;
+  /** Raw blob bytes for every entry in the tree, keyed by path, before exclusion. */
+  readonly blobs: ReadonlyMap<string, Buffer>;
+}
+
 /**
- * Materializes the committed tree (`HEAD`) in a fresh directory so the gate reads
- * committed content and mode, never the working tree. A dirty checkout cannot
- * affect the verdict because the source bytes come from here, not from disk.
+ * Enumerates every leaf of a git tree straight from the object database.
  *
- * Uses a detached worktree rather than `git archive | tar`. Both produce the same
- * bytes, but the pipe made `tar` the only non-`git` binary the gate depended on,
- * and nothing tested that dependency: `accept:self-host` runs inside
- * `release:check` and therefore `prepublishOnly`, while the Windows CI job never
- * invokes it. A gate that can fail at publish time on a platform its own CI does
- * not exercise is worth one extra `git` call to avoid.
+ * NUL-delimited (`-z`) for the same reason {@link listTrackedFiles} is: a
+ * newline is a legal byte in a git path, and this listing feeds a byte-exact
+ * comparison, so no byte of a path may be read as a delimiter. The listing is
+ * also where gitlink entries are rejected: a submodule records a commit id, not
+ * content, so no bundle built over it could ever be byte-identical to anything
+ * this gate verifies, and failing here names the path instead of letting a
+ * checkout materialize an empty directory the reader would only trip over.
  *
- * The worktree is registered in `.git/worktrees` for the duration; the caller's
- * cleanup removes it, and a `git worktree prune` recovers from an interrupted run.
- *
- * @returns A cleanup function that removes the worktree registration.
+ * @param root - The repository root.
+ * @param treeish - A tree id (from `git write-tree`) or a committish such as `HEAD`.
+ * @returns Every leaf entry, in the tree's own order.
+ * @throws Error When git cannot list the tree, or the tree carries an entry
+ *   that is not an ordinary blob or symbolic link.
  */
-export function extractHead(root: string, into: string): () => void {
-  runGit(root, ["worktree", "add", "--detach", "--quiet", into, "HEAD"]);
-  return () => {
-    // Best effort: the verdict is already computed by the time this runs, and a
-    // failure to unregister must not turn a passing gate into a failing one.
-    spawnSync("git", ["worktree", "remove", "--force", into], { cwd: root });
-  };
+export function listTreeEntries(root: string, treeish: string): TreeEntry[] {
+  // Deliberately NOT `runGit`, which trims: the listing is NUL-delimited, and
+  // trimming the payload would be one more place a path byte gets interpreted.
+  const raw = execFileSync("git", ["ls-tree", "-r", "-z", treeish], {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+  });
+  const entries: TreeEntry[] = [];
+  for (const record of raw.split("\0")) {
+    if (record.length === 0) continue;
+    const tab = record.indexOf("\t");
+    const head = tab < 0 ? "" : record.slice(0, tab);
+    const [mode, type, sha] = head.split(" ");
+    const path = tab < 0 ? "" : record.slice(tab + 1);
+    if (tab < 0 || path.length === 0 || (mode !== "100644" && mode !== "100755" && mode !== "120000")) {
+      throw new Error(
+        `self-host: ${treeish} carries "${path}" as a ${type} entry (mode ${mode}); `
+        + `the bundle covers ordinary blobs, and a gitlink records a commit, not content.`,
+      );
+    }
+    entries.push({ mode, sha, path });
+  }
+  return entries;
+}
+
+/**
+ * Reads every entry's blob bytes straight from git's object database.
+ *
+ * One `git cat-file --batch` process serves the whole tree, and `cat-file`
+ * returns stored bytes exactly as git hashes them: it applies none of the
+ * checkout conversions — `core.autocrlf`, `eol` attributes, filter drivers —
+ * that a working-tree materialization would. That is the whole point. A
+ * checkout-based reader (`read-tree -u`, `worktree add`) smudges LF blobs into
+ * CRLF on a conversion-enabled host, so the writer would archive bytes the
+ * committed tree never stored and the check would read bytes the commit never
+ * recorded; the same commit then verified differently on different machines.
+ * Reading the object database is the only source whose bytes are identical to
+ * what the tree being committed actually is.
+ *
+ * @param root - The repository root.
+ * @param entries - The tree listing to read, from {@link listTreeEntries}.
+ * @returns Raw blob bytes keyed by path, one entry per listing entry.
+ * @throws Error When git cannot be run, reports a missing object, or answers
+ *   out of order — every one of which names the path at fault.
+ */
+export function readTreeBlobs(root: string, entries: readonly TreeEntry[]): Map<string, Buffer> {
+  const blobs = new Map<string, Buffer>();
+  if (entries.length === 0) return blobs;
+  const result = spawnSync("git", ["cat-file", "--batch"], {
+    cwd: root,
+    input: entries.map((entry) => `${entry.sha}\n`).join(""),
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  // `spawnSync` reports a failure to *launch* in `error`, leaving `status` null.
+  // Treating that as an absent object would turn a missing `git` into a clean
+  // verdict about the repository, so it stays a distinct failure.
+  if (result.error) {
+    throw new Error(`self-host: could not run git: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const detail = (result.stderr as Buffer).toString("utf8").trim();
+    throw new Error(`self-host: git cat-file --batch failed: ${detail}`);
+  }
+  const output = result.stdout as Buffer;
+  let offset = 0;
+  for (const entry of entries) {
+    const headerEnd = output.indexOf(0x0a, offset);
+    const header = headerEnd < 0 ? "" : output.subarray(offset, headerEnd).toString("utf8");
+    const [sha, type, sizeText] = header.split(" ");
+    const size = Number(sizeText);
+    if (headerEnd < 0 || type === "missing" || !Number.isInteger(size) || sha !== entry.sha || type !== "blob"
+      || headerEnd + 1 + size + 1 > output.length) {
+      throw new Error(
+        `self-host: git cat-file did not return ${entry.sha} for ${entry.path} `
+        + `(answered: ${header.length === 0 ? "end of stream" : header}).`,
+      );
+    }
+    // Copy out of the response buffer so the map does not pin the whole stream.
+    blobs.set(entry.path, Buffer.from(output.subarray(headerEnd + 1, headerEnd + 1 + size)));
+    offset = headerEnd + 1 + size + 1;
+  }
+  return blobs;
+}
+
+/**
+ * Reads a tree's verification inputs straight from git's object database.
+ *
+ * Shared by the staged writer and the check, so both derive the configuration,
+ * the source files and (for the check) the committed bundle from the same
+ * conversion-free source of truth: the bytes the tree actually stores. The
+ * configuration must come from the tree, never the working file — a staged run
+ * may leave an entirely different file on disk — and the mode comes from the
+ * tree rather than the filesystem, so the executable bit is what git recorded,
+ * not what a checkout happened to write. A symbolic link (`120000`) stores its
+ * target text as blob content; the reader keeps the historical bytes such a
+ * link always contributed: the target text as a non-executable file.
+ *
+ * @param root - The repository root.
+ * @param treeish - A tree id (from `git write-tree`) or a committish such as `HEAD`.
+ * @returns The tree's configuration, source files and raw blobs.
+ * @throws Error When the tree cannot be listed, a blob is missing, the tree
+ *   does not carry the configuration, or the configuration is invalid.
+ */
+export function readTreeSnapshot(root: string, treeish: string): TreeSnapshot {
+  const entries = listTreeEntries(root, treeish);
+  const blobs = readTreeBlobs(root, entries);
+  const configBytes = blobs.get(SELF_HOST_CONFIG);
+  if (configBytes === undefined) {
+    throw new Error(`self-host: ${treeish} does not carry ${SELF_HOST_CONFIG}; the gate cannot be configured from it.`);
+  }
+  const config = parseSelfHostConfig(configBytes.toString("utf8"));
+  const files = new Map<string, SourceFile>();
+  for (const entry of entries) {
+    if (isExcluded(entry.path, config.exclude)) continue;
+    // `readTreeBlobs` sets a blob for every listing entry or throws, so the
+    // lookup cannot miss; it stays a lookup so the map stays the one authority.
+    files.set(entry.path, {
+      content: blobs.get(entry.path)!,
+      mode: entry.mode === "100755" ? "100755" : "100644",
+    });
+  }
+  return { config, files, blobs };
 }
 
 /**
@@ -734,9 +895,11 @@ export function readCommittedFile(root: string, path: string): Buffer | null {
 /**
  * Reads every non-excluded tracked source file from a directory tree, using the
  * engine's own working-tree reader so content and mode are interpreted by the
- * same code that stages any other repository.
+ * same code that stages any other repository. The working-tree source for the
+ * legacy `--write` mode; the staged and committed trees are read from git's
+ * object database by `readTreeSnapshot` instead.
  *
- * @param root - Directory holding the working, staged, or committed source.
+ * @param root - Directory holding the working source.
  * @param tracked - Paths reported by `git ls-files`.
  * @param exclude - The exclusion list.
  * @returns Path to content and mode for every source file.
@@ -755,14 +918,13 @@ export function readSourceFiles(
     try {
       observed = readWorkingFile(root, path);
     } catch (error) {
-      // `readWorkingFile` reports this as a bare ENOENT, which names a temp
-      // directory the reader has never heard of and explains nothing. The
-      // interesting fact is *why* a path git tracks is not in the tree we
-      // extracted from HEAD — almost always an addition staged but not
-      // committed — so say that instead.
+      // `readWorkingFile` reports this as a bare ENOENT, which explains
+      // nothing. The interesting fact is *why* a path git tracks is missing
+      // from the working tree — a file deleted on disk but not staged is the
+      // usual story — so say that instead.
       const detail = errorMessage(error);
       throw new Error(
-        `self-host: tracked path ${path} is absent from ${root} (uncommitted addition?): ${detail}`,
+        `self-host: tracked path ${path} is absent from ${root} (deleted from the working tree?): ${detail}`,
       );
     }
     files.set(path, { content: observed.content, mode: observed.executable ? "100755" : "100644" });
@@ -798,12 +960,19 @@ export function headCommitTimestamp(root: string): number {
   return seconds * 1000;
 }
 
-/** Writes the bundle for the supplied source and skips an identical artifact. */
-function writeSnapshot(root: string, sourceRoot: string, tracked: readonly string[]): void {
-  const config = loadConfig(join(sourceRoot, SELF_HOST_CONFIG));
+/**
+ * Writes the bundle for the supplied source and skips an identical artifact.
+ *
+ * The caller decides where the source bytes come from: the working tree (the
+ * legacy `--write` mode) or the frozen Git index (`--staged`). The write path
+ * itself only ever reads the committed bundle — `HEAD`, through
+ * {@link readCommittedFile}, which is already conversion-free — and writes the
+ * new artifact at the fixed target.
+ */
+function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<string, SourceFile>): void {
   const { store, refs, cleanup } = freshStore();
   try {
-    const sourceTreeId = buildSourceTree(store, readSourceFiles(sourceRoot, tracked, config.exclude));
+    const sourceTreeId = buildSourceTree(store, files);
     const existingBundle = readCommittedFile(root, config.bundle);
     const headSha = runGit(root, ["rev-parse", "HEAD"]);
     const signature: Signature = {
@@ -831,58 +1000,56 @@ function writeSnapshot(root: string, sourceRoot: string, tracked: readonly strin
   }
 }
 
-/** Freezes the candidate tree and checks it out through an isolated index. */
+/**
+ * Freezes the candidate tree and snapshots it straight from the object database.
+ *
+ * `git write-tree` turns the index into a tree object, and the snapshot is
+ * then read from that tree with `ls-tree` and `cat-file` — raw stored bytes,
+ * no checkout. The earlier design materialized the tree with `read-tree -u`
+ * into a scratch work-tree first, which is a checkout and applies the host's
+ * conversion rules (`core.autocrlf`, `eol` attributes, filter drivers): with
+ * `core.autocrlf=true` the writer archived LF blobs as CRLF and the committed
+ * bundle failed the gate on a default checkout of the same commit. Reading
+ * the object database cannot record bytes the tree does not store.
+ */
 function writeStagedSnapshot(root: string): void {
   const tree = runGit(root, ["write-tree"]);
-  const scratch = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-index-"));
-  try {
-    const sourceRoot = join(scratch, "source");
-    mkdirSync(sourceRoot);
-    const environment = { ...process.env, GIT_INDEX_FILE: join(scratch, "index") };
-    runGit(root, [`--work-tree=${sourceRoot}`, "read-tree", "--reset", "-u", tree], environment);
-    writeSnapshot(root, sourceRoot, listTrackedFiles(root, environment));
-  } finally {
-    durability.discardTemporary(scratch);
-  }
+  const snapshot = readTreeSnapshot(root, tree);
+  writeSnapshot(root, snapshot.config, snapshot.files);
 }
 
 /** Verifies committed HEAD by default, or writes from working or staged source. */
 export function main(root: string, args: readonly string[]): void {
   if (args.includes("--write")) {
     if (args.includes("--staged")) writeStagedSnapshot(root);
-    else writeSnapshot(root, root, listTrackedFiles(root));
+    else {
+      const config = loadConfig(join(root, SELF_HOST_CONFIG));
+      writeSnapshot(root, config, readSourceFiles(root, listTrackedFiles(root), config.exclude));
+    }
     return;
   }
 
-  const extractDir = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-src-"));
   const { store, cleanup } = freshStore();
-  let removeWorktree: (() => void) | undefined;
   try {
-    removeWorktree = extractHead(root, extractDir);
-    // EVERY verification input comes from the extracted HEAD, not from `root`.
+    // EVERY verification input comes from HEAD's object database, not from `root`.
     //
-    // Reading the config or the tracked-path list from the working tree would
-    // reopen the hole the extraction exists to close: an uncommitted edit to
-    // `self-host.json` could exclude a committed path, and a staged-but-uncommitted
-    // add or delete moves `git ls-files` without moving the extracted tree. Either
-    // one lets a dirty checkout decide what the gate compares, which is precisely
-    // the property this gate advertises that it does not have.
-    const config = loadConfig(join(extractDir, SELF_HOST_CONFIG));
-    const tracked = listTrackedFiles(extractDir);
-    // `readSourceFiles` now raises the absent-path failure itself, naming the
-    // one path at fault. The post-hoc `missing` filter that used to live here
-    // could never fire — every non-excluded tracked path either landed in the
-    // map or had already thrown — so it was an unreachable diagnostic standing
-    // in for one that never ran.
-    const sourceFiles = readSourceFiles(extractDir, tracked, config.exclude);
-    const sourceTreeId = buildSourceTree(store, sourceFiles);
-    const bundleBytes = readCommittedFile(extractDir, config.bundle);
+    // The gate used to extract HEAD through `git worktree add` and read the
+    // files that checkout produced. A checkout applies the host's conversion
+    // rules — `core.autocrlf`, `eol` attributes, filter drivers — so one
+    // machine could read the same commit as CRLF and reject a bundle another
+    // machine accepted. `ls-tree` and `cat-file` return stored bytes exactly
+    // as git hashes them: an uncommitted edit, a staged change, or a
+    // line-ending preference can no longer move what the gate compares, which
+    // is the property this gate advertises that it has.
+    const snapshot = readTreeSnapshot(root, "HEAD");
+    const sourceTreeId = buildSourceTree(store, snapshot.files);
+    const bundleBytes = snapshot.blobs.get(snapshot.config.bundle) ?? null;
     if (bundleBytes === null) {
       throw new Error(
-        `self-host: no committed bundle at HEAD:${config.bundle}. Run \`npm run self-host:write -- --staged\` and commit ${config.bundle}.`,
+        `self-host: no committed bundle at HEAD:${snapshot.config.bundle}. Run \`npm run self-host:write -- --staged\` and commit ${snapshot.config.bundle}.`,
       );
     }
-    const result = verifySelfHost(store, bundleBytes, config.ref, sourceTreeId);
+    const result = verifySelfHost(store, bundleBytes, snapshot.config.ref, sourceTreeId);
     if (!result.ok) {
       console.error("self-host: the bundle's tip tree is not byte-identical to the committed source.");
       for (const problem of result.problems) console.error(`  - ${problem}`);
@@ -894,11 +1061,6 @@ export function main(root: string, args: readonly string[]): void {
     parseBundle(bundleBytes);
     console.log("self-host: the committed bundle's tip tree is byte-identical to the committed source except validated external action revisions.");
   } finally {
-    // Unregister before deleting: `git worktree remove` needs the directory it
-    // is removing to still be there, and a stale registration left behind would
-    // make the *next* run's `worktree add` fail on a path that no longer exists.
-    removeWorktree?.();
-    durability.discardTemporary(extractDir);
     cleanup();
   }
 }
