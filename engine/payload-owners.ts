@@ -4,6 +4,7 @@ import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readdi
 import { join } from "node:path";
 import { durability } from "./durability.ts";
 import { ObjectStoreError, type ObjectId } from "./objects.ts";
+import { regularReadFlags } from "./regular-file.ts";
 
 /** A native publication edge contains no recoverable content bytes. */
 export interface PayloadOwner { readonly id: ObjectId; readonly fileId: string }
@@ -17,7 +18,7 @@ export function payloadOwners(control: string): PayloadOwner[] {
   for (const entry of entries) {
     const match = /^([0-9a-f]{64})\.([0-9a-f]{32})$/.exec(entry.name);
     if (match === null || !entry.isFile()) throw new ObjectStoreError("unsupported_erasure_storage", "Unknown payload provenance storage was preserved.");
-    const address = join(path, entry.name); const file = objectFiles.open(address, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const address = join(path, entry.name); const file = objectFiles.open(address, regularReadFlags);
     try {
       const held = fstatSync(file.fd, { bigint: true }); const named = lstatSync(address, { bigint: true });
       if (!held.isFile() || !named.isFile() || held.size !== 0n || named.size !== 0n || held.dev !== named.dev || held.ino !== named.ino || held.mtimeNs !== named.mtimeNs || held.ctimeNs !== named.ctimeNs) throw new ObjectStoreError("unsupported_erasure_storage", "Changed payload provenance was preserved.");
@@ -37,16 +38,20 @@ export function recordPayloadOwner(control: string, id: ObjectId, fileId: string
   if (!lstatSync(directory).isDirectory()) throw new ObjectStoreError("unsupported_erasure_storage", "Payload provenance cannot follow links.");
   const path = join(directory, `${id}.${fileId}`);
   let fd: number;
+  let expected: ReturnType<typeof fstatSync> | undefined;
   try { fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.size !== 0) throw new ObjectStoreError("unsupported_erasure_storage", "Foreign provenance bytes were preserved.");
-    fd = openSync(path, constants.O_RDWR | constants.O_NOFOLLOW);
+    expected = lstatSync(path);
+    if (!expected.isFile() || expected.size !== 0) throw new ObjectStoreError("unsupported_erasure_storage", "Foreign provenance bytes were preserved.");
+    fd = openSync(path, constants.O_RDWR | regularReadFlags);
   }
   try {
     const held = fstatSync(fd); const current = lstatSync(path);
-    if (!current.isFile() || held.dev !== current.dev || held.ino !== current.ino) throw new ObjectStoreError("unsupported_erasure_storage", "Payload ownership changed during publication.");
+    if (!held.isFile() || held.size !== 0 || !current.isFile() || held.dev !== current.dev || held.ino !== current.ino
+        || (expected !== undefined && (held.dev !== expected.dev || held.ino !== expected.ino))) {
+      throw new ObjectStoreError("unsupported_erasure_storage", "Payload ownership changed during publication.");
+    }
     durability.file(fd); durability.directory(directory);
   } finally { closeSync(fd); }
 }

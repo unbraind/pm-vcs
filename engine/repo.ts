@@ -103,6 +103,7 @@ import {
   readWorkingFile,
   readWorkingStat,
   sameIndexStat,
+  type IndexStat,
   sameFileIdentity,
 } from "./worktree.ts";
 
@@ -753,19 +754,26 @@ export class Repository {
       let content: Buffer;
       let executable: boolean;
       let stat: IndexEntry["stat"];
+      let planned: IndexStat;
       let chunked = false;
       let regular = false;
       try {
         const observed = readWorkingStat(this.root, path);
+        planned = observed.stat;
         const existing = index.get(path);
         const observedMode = observed.executable ? "100755" : "100644";
         if (!declared.has(path) && existing?.fileId !== undefined && existing.mode === observedMode && sameIndexStat(existing.stat, observed.stat)) continue;
         regular = !observed.symbolicLink;
         chunked = regular && observed.stat.size >= BigInt(CDC_STAGING_THRESHOLD) && !isRecordPath(path, this.config) && !isLink;
         if (chunked) { content = Buffer.alloc(0); executable = observed.executable; stat = observed.stat; }
-        else ({ content, executable, stat } = read(this.root, path));
+        else {
+          const captured = read(this.root, path);
+          ({ content, executable, stat } = captured);
+          regular = !captured.symbolicLink;
+        }
       } catch (error) {
-        if (declared.has(path)) throw error;
+        if (declared.has(path) || (error instanceof ObjectStoreError && error.code === "worktree_path_changed")
+            || (error as NodeJS.ErrnoException).code === "ELOOP") throw error;
         // A sparse entry's path is intentionally absent: its file was never in
         // this working tree's view, so the miss is not a staged deletion.
         // Deleting it here would drop out-of-view content from the next commit
@@ -776,9 +784,9 @@ export class Repository {
       }
       const absolute = join(this.root, ...path.split("/"));
       const retainedId = regular && previous !== undefined && !isLink && !isRecordPath(path, this.config) && (this.objects.hasType(previous.id, "blob")
-        ? chunked && blobFileContentId(absolute) === previous.id
-        : this.objects.hasType(previous.id, "manifest") && matchesFragmentedFile(this.objects, previous.id, absolute)) ? previous.id : undefined;
-      const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS) : this.stagingContentId(path, content, isLink));
+        ? chunked && blobFileContentId(absolute, planned) === previous.id
+        : this.objects.hasType(previous.id, "manifest") && matchesFragmentedFile(this.objects, previous.id, absolute, planned)) ? previous.id : undefined;
+      const id = retainedId ?? (chunked ? cdcFragmentedFileContentId(absolute, STAGING_CDC_PARAMS, planned) : this.stagingContentId(path, content, isLink));
       const mode = executable ? "100755" : "100644";
       const existing = index.get(path);
       const identitySource = explicit ?? existing;
@@ -814,7 +822,7 @@ export class Repository {
       const sources = conflictSource === undefined ? [] : [conflictSource.id];
       const output = outputs.get(path);
       if (output?.complete === true && outputBirth(lstatSync(absolute, { bigint: true })) === output.birth
-        && (chunked ? blobFileContentId(absolute) : hashObject("blob", content)) === output.id) sources.push(...output.objects);
+        && (chunked ? blobFileContentId(absolute, planned) : hashObject("blob", content)) === output.id) sources.push(...output.objects);
       const buffered = content.length + bufferedBytes <= STAGING_BUFFER_LIMIT ? content : undefined;
       if (buffered !== undefined) bufferedBytes += buffered.length;
       // Release an over-budget snapshot before visiting another working file.
@@ -834,7 +842,7 @@ export class Repository {
       }
       publish.push(() => this.objects.withDerivation(sources, () => {
         if (chunked || retainedId !== undefined) {
-          const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId).manifestId;
+          const written = retainedId ?? writeCdcFragmentedFile(this.objects, absolute, STAGING_CDC_PARAMS, fileId, planned).manifestId;
           if (written !== id || !sameFileIdentity(stat!, readWorkingStat(this.root, path).stat)) {
             throw new ObjectStoreError("source_changed", "Working file changed during streaming staging; retry add.");
           }
@@ -965,9 +973,9 @@ export class Repository {
       // linear scan per hint made the filter quadratic in hints x entries.
       new Set(readHints(this.controlDirectory).filter((path) => indexedPaths.has(path))),
       excluded,
-      /** Compare manifest-backed files against their exact historical chunk boundaries. */ (entry) => {
+      /** Compare manifest-backed files against their exact historical chunk boundaries. */ (entry, observed) => {
         if (!this.objects.hasType(entry.id, "manifest")) return undefined;
-        return matchesFragmentedFile(this.objects, entry.id, join(this.root, ...entry.path.split("/")));
+        return matchesFragmentedFile(this.objects, entry.id, join(this.root, ...entry.path.split("/")), observed);
       },
     );
     if (refreshCache && refreshed.size > 0) {
@@ -1178,9 +1186,7 @@ export class Repository {
       const restore = new Map<string, Buffer>();
       for (const file of layer.files) {
         assertSafeFilePath(this.root, file.path, this.ignoreRules());
-        if (!discardEdits && (!existsSync(join(this.root, ...file.path.split("/")))
-          || !readFileSync(join(this.root, ...file.path.split("/"))).equals(Buffer.from(file.content, "base64"))
-          || ((statSync(join(this.root, ...file.path.split("/"))).mode & 0o100) !== 0) !== file.executable)) {
+        if (!discardEdits && !this.layerFileMatches(file)) {
           throw new ObjectStoreError("layer_edited", "Layer has edited or missing bytes; explicitly discard edits to remove it.");
         }
         const entry = index.get(file.path);
@@ -1198,6 +1204,18 @@ export class Repository {
       }
       writePrivateJson(join(this.controlDirectory, "layers.json"), layers.filter(/** Retain every other private snapshot. */ (entry) => entry.name !== name));
     });
+  }
+
+  /** Verify an overlay's bytes and mode from one stable working-file observation. */
+  private layerFileMatches(file: LocalLayer["files"][number]): boolean {
+    try {
+      const observed = readWorkingFile(this.root, file.path);
+      return observed.stat !== undefined && !observed.symbolicLink && observed.executable === file.executable
+        && observed.content.equals(Buffer.from(file.content, "base64"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
   }
 
   /** Stage a canonical typed link without copying target payloads or target credentials. */
@@ -1285,8 +1303,7 @@ export class Repository {
   /** Read the retired cleanup scope without accepting absolute, empty or malformed paths. */
   private retiredInstances(): string[] {
     const path = join(this.sharedControlDirectory, "unlinked-instances.json");
-    const retired = readControlJson(path, "bad_instances", "retired instance inventory");
-    if (retired === null && !existsSync(path)) return [];
+    const retired = readControlJson(path, "bad_instances", "retired instance inventory", []);
     if (!Array.isArray(retired) || retired.some(/** Only canonical relative paths previously emitted by unlink can be inventoried. */ (entry) =>
       typeof entry !== "string" || entry === "" || entry === "." || isAbsolute(entry)
       || entry.includes("\\") || relative(this.hubRoot, resolve(this.hubRoot, entry)).split(sep).join("/") !== entry)) {
@@ -1720,7 +1737,7 @@ export class Repository {
       if (this.objects.hasType(entry.id, "manifest")) {
         const observed = readWorkingStat(this.root, entry.path);
         if (observed.symbolicLink || (observed.executable ? "100755" : "100644") !== entry.mode
-          || !matchesFragmentedFile(this.objects, entry.id, absolute)) dirty.add(entry.path);
+          || !matchesFragmentedFile(this.objects, entry.id, absolute, observed.stat)) dirty.add(entry.path);
         continue;
       }
       const { content, executable } = read(this.root, entry.path);

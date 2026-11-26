@@ -2,7 +2,6 @@ import { decodeConflict, conflictReferences } from "./conflicts.ts";
 /** Typed erasure metadata and provenance checks at every object arrival boundary. */
 import { manifestIdentity } from "./erasure-provenance.ts";
 import { createHash } from "node:crypto";
-import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { compareByteOrder, decodeManifest, decodeTree } from "./model.ts";
 import { hashObject, isObjectId, ObjectStoreError, readControlJson, type ObjectId, type StoredObject } from "./objects.ts";
@@ -61,9 +60,7 @@ export function encodeTombstone(value: ErasureTombstone): Buffer {
 /** Read persisted denial, refusing corruption rather than reopening an erased identity. */
 export function readDenials(control: string): ErasureDenial[] {
   const path = join(control, "denials.json");
-  const raw = readControlJson(path, "bad_tombstone", "erasure denial registry");
-  if (raw === null && lstatSync(path, { throwIfNoEntry: false }) === undefined) return [];
-  return validateDenials(raw);
+  return validateDenials(readControlJson(path, "bad_tombstone", "erasure denial registry", []));
 }
 
 /** Validate local or received denial records including their canonical content addresses. */

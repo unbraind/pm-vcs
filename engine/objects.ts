@@ -3,6 +3,7 @@ import { recordPayloadOwner } from "./payload-owners.ts";
 import "./publication.ts";
 import { destructionBoundary, measureDestructionRevision } from "./destruction.ts";
 import { objectFiles, type ObjectFile } from "./object-files.ts";
+import { readRegularText } from "./regular-file.ts";
 import { durability } from "./durability.ts";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -24,7 +25,6 @@ import { constants as zlibConstants, deflateSync, inflateSync } from "node:zlib"
 import { createHash, randomBytes } from "node:crypto";
 import {
   type BigIntStats,
-  constants as fsConstants,
   fstatSync,
   existsSync,
   lstatSync,
@@ -118,6 +118,12 @@ const OBJECT_ID_PATTERN = /^[0-9a-f]{64}$/;
 export { ObjectStoreError } from "./object-error.ts";
 import { ObjectStoreError, assertVerificationBound } from "./object-error.ts";
 
+/** Preserve the native directory-read error while validating file kind before any read. */
+function readControlText(path: string, observed: BigIntStats): string {
+  if (observed.isDirectory()) throw Object.assign(new Error("EISDIR: illegal operation on a directory, read"), { code: "EISDIR" });
+  return readRegularText(path, observed);
+}
+
 /**
  * Reads one control-directory JSON file, returning the fallback only on ENOENT.
  *
@@ -140,8 +146,9 @@ import { ObjectStoreError, assertVerificationBound } from "./object-error.ts";
 export function readControlJson(path: string, code: string, what: string, absent: unknown = null): unknown {
   let contents: string;
   try {
-    if (lstatSync(path).isSymbolicLink()) throw new ObjectStoreError(code, `The ${what} cannot be a symbolic link.`);
-    contents = readFileSync(path, "utf8");
+    const observed = lstatSync(path, { bigint: true });
+    if (observed.isSymbolicLink()) throw new ObjectStoreError(code, `The ${what} cannot be a symbolic link.`);
+    contents = readControlText(path, observed);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     return absent;
@@ -330,11 +337,8 @@ export class ObjectStore {
 
   /** Open one exact loose representation without decoding its payload or following a leaf link. */
   private openLooseLocation(path: string): ObjectHandle | undefined {
-    let file: ObjectFile;
-    try { file = objectFiles.open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW); } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw error;
-    }
+    const file = objectFiles.openReadable(path);
+    if (file === undefined) return undefined;
     try {
       const stat = fstatSync(file.fd);
       return Object.assign(file, { path, offset: 0, length: stat.size, regular: stat.isFile() });
@@ -1130,7 +1134,7 @@ export class ObjectStore {
         const oldGuard = lstatSync(guardPath, { bigint: true, throwIfNoEntry: false });
         if (oldGuard !== undefined) {
           if (!oldGuard.isFile()) throw new ObjectStoreError("store_locked", "An unknown recovery owner was preserved.");
-          const owner = readFileSync(guardPath, "utf8"); const pid = Number(owner);
+          const owner = readRegularText(guardPath, oldGuard); const pid = Number(owner);
           if (!/^[1-9][0-9]*$/.test(owner) || !Number.isSafeInteger(pid) || pid > 2_147_483_647) throw new ObjectStoreError("store_locked", "A foreign recovery owner was preserved.");
           const abandoned = recoveryOwners.get(guardPath);
           const self = pid === process.pid && !recoveryLeases.has(lease) && abandoned !== undefined && abandoned.dev === oldGuard.dev && abandoned.ino === oldGuard.ino && abandoned.size === oldGuard.size && abandoned.mtimeNs === oldGuard.mtimeNs && abandoned.ctimeNs === oldGuard.ctimeNs;
@@ -1174,7 +1178,7 @@ export class ObjectStore {
     if (observed === undefined) return;
     if (observed.isSymbolicLink()) throw new ObjectStoreError("store_locked", "Lock owner is unknown.");
     let content: string;
-    try { content = readFileSync(path, "utf8"); } catch (error) {
+    try { content = readControlText(path, observed); } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }

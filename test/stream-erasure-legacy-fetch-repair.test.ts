@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 import { discardChildCoverage } from "./helpers/sandbox.ts";
 /** Real arrival, streaming loose-storage and legacy no-op fetch regressions. */
@@ -220,10 +221,10 @@ for (const change of ["new-copy", "lost-copy", "new-native"] as const) test(`str
 
 for (const changed of ["leaf", "parent", "root", "in-place"] as const) test(`pinned physical inventory tolerates namespace replacement and refuses ${changed} byte mutation`, () => {
   const { repo, selected } = fixture(); const path = objectPath(repo, selected.id); const root = join(repo.controlDirectory, "objects");
-  const read = fs.readFileSync; let changedOnce = false;
+  const read = fs.readFileSync; const observes = watchReadPath(path); let changedOnce = false;
   mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
     const result = read(...args);
-    if (typeof args[0] === "number" && !changedOnce) {
+    if (observes(args[0]) && !changedOnce) {
       changedOnce = true;
       if (changed === "in-place") writeFileSync(path, "changed bytes");
       else {

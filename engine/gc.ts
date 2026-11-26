@@ -6,7 +6,8 @@ import { inspectNamespacePublications, prepareDestruction, inspectDestructionChe
 import { packBoundary } from "./packs.ts";
 import { syncDirectory } from "./composition.ts";
 /** Conservative collection under the same interprocess transaction as writers. */
-import { lstatSync, readdirSync, readFileSync, realpathSync, } from "node:fs";
+import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { readRegularText } from "./regular-file.ts";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ObjectStoreError, isObjectId, readControlJson, type ObjectId } from "./objects.ts";
 import { requireInstances } from "./instances.ts";
@@ -40,18 +41,18 @@ function addresses(value: unknown): ObjectId[] {
   return value;
 }
 
-/** Strict root-path stat: true absence is only proven by ENOENT, never by a broken link. */
-function requireEntry(path: string, refusal: string, kind: "file" | "directory"): boolean {
+/** Strict root-directory stat: true absence is only proven by ENOENT. */
+function requireDirectory(path: string, refusal: string): boolean {
   const stat = lstatSync(path, { throwIfNoEntry: false });
   if (stat === undefined) return false;
-  if (kind === "file" ? !stat.isFile() : !stat.isDirectory()) throw new ObjectStoreError("unsafe_gc_roots", refusal);
+  if (!stat.isDirectory()) throw new ObjectStoreError("unsafe_gc_roots", refusal);
   return true;
 }
 
 /** Inspect all ref namespaces without the display API's tolerant omission of broken refs. */
 function refRoots(path: string, root: string): ObjectId[] {
   const display = `${CONTROL_DIRECTORY}/${relative(root, path).split(sep).join("/")}`;
-  if (!requireEntry(path, `Collection cannot follow a ref directory link: ${display}.`, "directory")) return [];
+  if (!requireDirectory(path, `Collection cannot follow a ref directory link: ${display}.`)) return [];
   const result: ObjectId[] = [];
   for (const entry of readdirSync(path, { withFileTypes: true })) {
     if (entry.name.endsWith(".lock")) continue;
@@ -60,7 +61,7 @@ function refRoots(path: string, root: string): ObjectId[] {
     if (entry.isDirectory()) result.push(...refRoots(target, root));
     else {
       if (!entry.isFile()) throw new ObjectStoreError("unsafe_gc_roots", `Collection cannot follow a ref link: ${name}.`);
-      const id = readFileSync(target, "utf8").trim();
+      const id = readRegularText(target).trim();
       if (!isObjectId(id)) throw new ObjectStoreError("unsafe_gc_roots", `Collection root ${name} is not an object address.`);
       result.push(id);
     }
@@ -71,8 +72,10 @@ function refRoots(path: string, root: string): ObjectId[] {
 /** Keep both sides of every recorded movement, including detached HEAD history; torn logs refuse. */
 function logRoots(control: string): ObjectId[] {
   const path = join(control, "oplog.jsonl");
-  if (!requireEntry(path, "Collection requires a real operation log.", "file")) return [];
-  const text = readFileSync(path, "utf8");
+  const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  if (observed === undefined) return [];
+  if (!observed.isFile()) throw new ObjectStoreError("unsafe_gc_roots", "Collection requires a real operation log.");
+  const text = readRegularText(path, observed);
   const result: ObjectId[] = [];
   try {
     if (text !== "" && !text.endsWith("\n")) throw new Error("Truncated operation log.");
@@ -132,7 +135,7 @@ export function collectGarbage(repository: Repository, apply = false): GcReport 
     let activeLeases = 0;
     const leases = new PublicationLeases(store, shared);
     const directory = join(shared, "leases");
-    if (requireEntry(directory, "Collection requires a real lease directory.", "directory")) {
+    if (requireDirectory(directory, "Collection requires a real lease directory.")) {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
         if (!entry.isFile() || !/^[0-9a-f]{32}\.jsonl$/.test(entry.name)) throw new ObjectStoreError("unsafe_gc_roots", "Collection lease inventory is invalid.");
         const lease = leases.inspect(entry.name.slice(0, 32));

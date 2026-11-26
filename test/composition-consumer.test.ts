@@ -22,7 +22,7 @@ const consumer = `
 import { testEnvironment } from ${JSON.stringify(new URL("./helpers/test-environment.ts", import.meta.url).href)};
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -30,10 +30,10 @@ import { PmClient } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "pm-vcs";
 import { Repository } from "pm-vcs/dist/engine/repo.js";
-import { writeFragmented, writeFragmentedFile, writeFragmentsFromFd, writeCdcFragmented, writeCdcFragmentedFile, writeCdcFragmentsFromFd, readFragmented } from "pm-vcs/dist/engine/fragments.js";
+import { writeFragmented, writeFragmentedFile, writeFragmentsFromFd, writeCdcFragmented, writeCdcFragmentedFile, writeCdcFragmentsFromFd, readFragmented, matchesFragmentedFile } from "pm-vcs/dist/engine/fragments.js";
 import { writeManifest, encodeRecord, migratedFileId } from "pm-vcs/dist/engine/model.js";
 import { mergeTrees } from "pm-vcs/dist/engine/rewrite.js";
-import { buildTree, flattenTree } from "pm-vcs/dist/engine/worktree.js";
+import { buildTree, flattenTree, readWorkingStat } from "pm-vcs/dist/engine/worktree.js";
 import { authorize, encodeLink } from "pm-vcs/dist/engine/composition.js";
 import { cloneFrom, fetchFrom } from "pm-vcs/dist/engine/sync.js";
 import { FileTransport } from "pm-vcs/dist/engine/transport.js";
@@ -303,6 +303,10 @@ for (const cdc of [false, true]) {
   } finally { closeSync(fd); }
 }
 for (const result of fragmentResults) assert.deepEqual(readFragmented(repaired.objects, result.manifestId), fragmentBytes);
+const fragmentObservation = readWorkingStat(process.cwd(), process.argv[2] + ".fragment-source").stat;
+renameSync(fragmentSource, fragmentSource + ".original"); writeFileSync(fragmentSource, fragmentBytes);
+assert.throws(() => matchesFragmentedFile(repaired.objects, fragmentResults[0].manifestId, fragmentSource, fragmentObservation), { code: "worktree_path_changed" });
+renameSync(fragmentSource + ".original", fragmentSource);
 assert.throws(() => writeFragmented(repaired.objects, fragmentBytes, 64, selectedOwner.fileId), { code: "file_obliterated" });
 assert.throws(() => writeCdcFragmented(repaired.objects, selectedBytes, fragmentParams, owner.fileId), { code: "object_obliterated" });
 assert.throws(() => writeFragmented(repaired.objects, fragmentBytes, 64), { code: "unattributed_arrival" });

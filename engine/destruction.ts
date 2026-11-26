@@ -4,6 +4,7 @@ import { constants, fstatSync, lstatSync, mkdirSync, readFileSync, readSync, rea
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { objectFiles, type ObjectFile } from "./object-files.ts";
+import { readRegularText, regularReadFlags } from "./regular-file.ts";
 import { ObjectStoreError, VerificationRefusal, assertVerificationBound, verificationLimits, type VerificationResult } from "./object-error.ts";
 
 /** Primitive implementation is supplied by the one platform-aware durability helper. @internal */
@@ -74,11 +75,11 @@ function digest(path: string, stat: BigIntStats, durable = false): string {
   const hash = createHash("sha256");
   if (stat.isSymbolicLink() || stat.isDirectory()) return hash.update(stat.isSymbolicLink() ? readlinkSync(path) : "directory").digest("hex");
   let file: ObjectFile;
-  try { file = objectFiles.open(path, (durable ? constants.O_RDWR : constants.O_RDONLY) | constants.O_NOFOLLOW); }
-  catch (error) { if (!durable || !["EACCES", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  try { file = objectFiles.open(path, regularReadFlags | (durable ? constants.O_RDWR : 0)); }
+  catch (error) { if (!durable || !["EACCES", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; file = objectFiles.open(path, regularReadFlags); }
   try {
-    if (durable) backend.file(file.fd);
     if (identity(fstatSync(file.fd, { bigint: true })) !== identity(stat)) throw new DestructionRefusal("destructive_target_changed", "A leaf changed before hashing.");
+    if (durable) backend.file(file.fd);
     const buffer = Buffer.alloc(65_536); let offset = 0;
     for (;;) { const count = readSync(file.fd, buffer, 0, buffer.length, offset); if (count === 0) break; hash.update(buffer.subarray(0, count)); offset += count; }
     const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
@@ -110,8 +111,8 @@ function addressFor(path: string, address?: string): string {
 /** A format marker is required before an inferred scope may modify repository-private receipt state. */
 function packageControl(path: string): boolean {
   const directory = lstatSync(path, { throwIfNoEntry: false }); if (!directory?.isDirectory()) return false;
-  const marker = join(path, "format"); const stat = lstatSync(marker, { throwIfNoEntry: false }); if (!stat?.isFile() || stat.size !== 8) return false;
-  try { return readFileSync(marker, "utf8") === "pmvcs-1\n"; } catch { return false; }
+  const marker = join(path, "format"); const stat = lstatSync(marker, { bigint: true, throwIfNoEntry: false }); if (!stat?.isFile() || stat.size !== 8n) return false;
+  try { return readRegularText(marker, stat) === "pmvcs-1\n"; } catch { return false; }
 }
 /** Locate verified native control without treating an arbitrary explicit namespace scope as an object store. @internal */
 export function namespacePublicationContext(address: string, platform: NodeJS.Platform = process.platform): { readonly control: string; readonly destination: string } | undefined {
@@ -222,11 +223,23 @@ function load(path: string, observation = false): Intent | undefined {
     const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false }); if (observed === undefined) return undefined;
     if (observation) assertVerificationBound("receipts", "record_bytes", Number(observed.size), verificationLimits.receiptBytes);
     if (!observed.isFile()) throw new DestructionRefusal("foreign_destructive_intent", "A nonregular intent record was preserved.");
-    const file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try { const before = fstatSync(file.fd, { bigint: true }); bytes = readFileSync(file.fd, "utf8"); const current = lstatSync(path, { bigint: true, throwIfNoEntry: false }); if (identity(before) !== identity(observed) || current === undefined || identity(current) !== identity(before) || identity(fstatSync(file.fd, { bigint: true })) !== identity(before)) throw new DestructionRefusal("destructive_intent_changed", "An intent record changed during its pinned read."); }
+    const file = objectFiles.open(path, regularReadFlags);
+    try {
+      const before = fstatSync(file.fd, { bigint: true });
+      if (identity(before) !== identity(observed)) throw new DestructionRefusal("destructive_intent_changed", "An intent record changed before its pinned read.");
+      bytes = readFileSync(file.fd, "utf8");
+      if (!unchangedRead(path, file.fd, before)) throw new DestructionRefusal("destructive_intent_changed", "An intent record changed during its pinned read.");
+    }
     finally { file.close(); }
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new DestructionRefusal("destructive_intent_changed", "An observed intent disappeared during its pinned read."); throw error; }
   return decodeIntent(bytes);
+}
+
+/** Check that the name and held descriptor still designate the original content observation. */
+function unchangedRead(path: string, fd: number, before: BigIntStats): boolean {
+  const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  const expected = identity(before);
+  return current !== undefined && identity(current) === expected && identity(fstatSync(fd, { bigint: true })) === expected;
 }
 /** Share the complete persisted intent schema between recovery and erasure classification. */
 function decodeIntent(bytes: string): Intent {
@@ -274,7 +287,7 @@ export function assertDestructionStorage(control: string, inspect: (bytes: Buffe
       const path = join(directory, name); const before = lstatSync(path, { bigint: true });
       if (!before.isFile()) refuse();
       assertVerificationBound("receipts", "record_bytes", Number(before.size), verificationLimits.receiptBytes);
-      file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      file = objectFiles.open(path, regularReadFlags);
       if (identity(fstatSync(file.fd, { bigint: true })) !== identity(before)) refuse();
       const bytes = readFileSync(file.fd);
       const record = /^([0-9a-f]{64})(?:\.json|\.([0-9a-f]{32})\.receipt)(?:\.[0-9a-f]{12}\.tmp)?$/.exec(name);
@@ -303,8 +316,7 @@ export function assertDestructionStorage(control: string, inspect: (bytes: Buffe
           || owner[2] !== undefined && String(value.pid) !== owner[2]) refuse();
       } else refuse();
       inspect(bytes, progress !== null);
-      const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-      if (current === undefined || identity(current) !== identity(before) || identity(fstatSync(file.fd, { bigint: true })) !== identity(before)) refuse();
+      if (!unchangedRead(path, file.fd, before)) refuse();
     } catch { refuse(); }
     finally { file?.close(); }
   }
@@ -313,7 +325,8 @@ export function assertDestructionStorage(control: string, inspect: (bytes: Buffe
 }
 /** Read only a fixed header and one state byte; completed intents keep their immutable checkpoint and need no bitmap. */
 function progressState(path: string, intent: Intent, index: number): { status: DestructionEntry["status"]; reason?: string } | undefined {
-  let file: ObjectFile; try { file = objectFiles.open(path, constants.O_RDONLY | constants.O_NOFOLLOW); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  const file = objectFiles.openReadable(path);
+  if (file === undefined) return undefined;
   try {
     verifyProgress(file.fd, intent); const state = Buffer.alloc(1); if (readSync(file.fd, state, 0, 1, PROGRESS_HEADER + index) !== 1 || outcomes[state[0]] === undefined) throw new DestructionRefusal("foreign_destructive_intent", "An unrecognized progress acknowledgment was preserved.");
     return outcomes[state[0]];
@@ -395,7 +408,7 @@ function preparePlan(args: Parameters<typeof prepareDestruction>, beforeSnapshot
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
           const observed = lstatSync(lockPath, { bigint: true, throwIfNoEntry: false }); if (observed === undefined) continue;
           let record: { format?: string; pid?: number; identity?: string; root?: string; rootIdentity?: string; key?: string; cleanup?: string };
-          try { record = JSON.parse(readFileSync(lockPath, "utf8")) as typeof record; } catch { throw new DestructionRefusal("destructive_intent_locked", "An unknown intent owner was preserved."); }
+          try { record = JSON.parse(readRegularText(lockPath, observed)) as typeof record; } catch { throw new DestructionRefusal("destructive_intent_locked", "An unknown intent owner was preserved."); }
           if (record?.format !== "pm-vcs-destruction-lock-1" || record.cleanup !== "unlink-only-this-inode" || record.root !== root || record.rootIdentity !== rootIdentity || record.key !== name || record.identity !== birth(observed) || !Number.isSafeInteger(record.pid) || record.pid! <= 0 || record.pid! > 2_147_483_647) throw new DestructionRefusal("destructive_intent_locked", "A foreign intent owner was preserved.");
           let live = true; try { process.kill(record.pid!, 0); } catch (failure) { if ((failure as NodeJS.ErrnoException).code === "ESRCH") live = false; }
           if (live) throw new DestructionRefusal("destructive_intent_locked", "Another writer owns this intent.");
@@ -737,7 +750,7 @@ export function inspectNamespacePublications(control: string, accepts: (destinat
     if (!stat.isFile() || identity(stat) !== entry.identity || digest(source, stat) !== entry.digest) { bound ??= "namespace_changed"; skip(file.name, "Prepared publication source changed; preserved without adopting replacement roots."); continue; }
     const parent = lstatSync(dirname(source), { bigint: true }); const destinationParent = lstatSync(dirname(destination), { bigint: true });
     if (!parent.isDirectory() || birth(parent) !== entry.parentIdentity || !destinationParent.isDirectory() || birth(destinationParent) !== entry.destinationParentIdentity) throw new VerificationRefusal("receipts", "namespace_changed", "A prepared publication parent changed before retention inspection.");
-    const held = objectFiles.open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const held = objectFiles.open(source, regularReadFlags);
     try {
       if (identity(fstatSync(held.fd, { bigint: true })) !== entry.identity) throw new VerificationRefusal("receipts", "namespace_changed", "A prepared root source changed before retention inspection.");
       inspect(held.fd, destination);

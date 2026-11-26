@@ -1,6 +1,7 @@
 import { prepareNamespaceDestruction } from "./destruction.ts";
 import { durability } from "./durability.ts";
 import { writePrivateJson } from "./composition.ts";
+import { readRegularText } from "./regular-file.ts";
 /** Durable bisect sessions over stable change identities, driven by a recorded PM test. */
 
 import { randomBytes } from "node:crypto";
@@ -191,11 +192,10 @@ export function writeBisectSession(repository: Repository, session: BisectSessio
 }
 
 /** Remove a process receipt only when its owner is provably dead; unknown owners refuse recovery. */
-function recoverOwner(path: string): void {
-  const observed = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+function recoverOwner(path: string, observed = lstatSync(path, { bigint: true, throwIfNoEntry: false }), owner?: string): void {
   if (observed === undefined) return;
   if (!observed.isFile()) throw new ObjectStoreError("bisect_locked", "Unknown bisect lock owner; inspect its namespace entry before recovery.");
-  const pid = Number(readFileSync(path, "utf8"));
+  const pid = Number(owner ?? readRegularText(path, observed));
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new ObjectStoreError("bisect_locked", "Unknown bisect lock owner; inspect the private process receipt before recovery.");
   try {
     process.kill(pid, 0);
@@ -215,9 +215,12 @@ export function recoverBisectWorker(repository: Repository): void {
 export async function withBisectLease<T>(repository: Repository, action: () => Promise<T>): Promise<T> {
   const path = join(repository.controlDirectory, "BISECT_LOCK");
   const lease = repository.objects.withWriteLock(() => {
-    const current = lstatSync(path, { throwIfNoEntry: false });
+    const current = lstatSync(path, { bigint: true, throwIfNoEntry: false });
     // Released versions wrote decimal PID markers; retain their dead-owner recovery.
-    if (current?.isFile() && /^[0-9]+$/.test(readFileSync(path, "utf8"))) recoverOwner(path);
+    if (current?.isFile()) {
+      const owner = readRegularText(path, current);
+      if (/^[0-9]+$/.test(owner)) recoverOwner(path, current, owner);
+    }
     return durability.claim(path, "bisect_locked");
   });
   try { lease.verify(); return await action(); }

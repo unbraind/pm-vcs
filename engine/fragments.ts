@@ -22,10 +22,10 @@ import { durability } from "./durability.ts";
 
 import {
   closeSync,
-  fstatSync,
   openSync,
   mkdtempSync,
   readSync,
+  realpathSync,
   writeSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -34,6 +34,8 @@ import { join } from "node:path";
 import { objectFiles } from "./object-files.ts";
 import { provenanceLimits } from "./derivations.ts";
 import { assertVerificationBound } from "./object-error.ts";
+import { openRegularFile } from "./regular-file.ts";
+import type { IndexStat } from "./worktree.ts";
 
 import {
   hashObject,
@@ -44,6 +46,11 @@ import {
 import type { CdcParams, FileId, FragmentEntry, FragmentManifest, FragmentWriteResult } from "./model.ts";
 
 import { ManifestWriter, manifestFragments, manifestHeader } from "./manifest-pages.ts";
+
+/** A directly supplied source may use a symlink. A staged observation pins the original leaf. */
+function openFragmentSource(path: string, observed?: IndexStat): ReturnType<typeof openRegularFile> {
+  return openRegularFile(observed === undefined ? realpathSync(path) : path, observed);
+}
 
 /** Refuse a known whole-content identity before publishing any partial derived representation. */
 function assertWholeContent(store: ObjectStore, id: ObjectId, digest: string): void {
@@ -126,10 +133,10 @@ function finishContent(store: ObjectStore, writer: ManifestWriter, whole: Object
 }
 
 /** Share one descriptor lifetime and identity observation across fixed and CDC file producers. */
-function manifestFile(store: ObjectStore, sourcePath: string, fileId: FileId | undefined, mode: "fixed" | "cdc", produce: (fd: number, length: number, accept: (entry: FragmentEntry) => void, identified: (id: ObjectId) => void) => void): FragmentWriteResult {
-  const fd = openSync(sourcePath, "r");
+function manifestFile(store: ObjectStore, sourcePath: string, fileId: FileId | undefined, mode: "fixed" | "cdc", produce: (fd: number, length: number, accept: (entry: FragmentEntry) => void, identified: (id: ObjectId) => void) => void, observed?: IndexStat): FragmentWriteResult {
+  const { fd, stat } = openFragmentSource(sourcePath, observed);
   try {
-    const length = fstatSync(fd).size; const writer = new ManifestWriter(store, fileId, mode); let whole: ObjectId | undefined;
+    const length = Number(stat.size); const writer = new ManifestWriter(store, fileId, mode); let whole: ObjectId | undefined;
     produce(fd, length, entry => writer.add(entry), id => { whole = id; });
     return finishContent(store, writer, whole!, fileId);
   } finally { closeSync(fd); }
@@ -145,10 +152,10 @@ export const CDC_STAGING_THRESHOLD = 1 << 20;
 export const STAGING_CDC_PARAMS: CdcParams = { minChunkSize: 65_536, maxChunkSize: 1_048_576, mask: 0x3ffff };
 
 /** Hash a file as one legacy blob using bounded reads, refusing a truncated descriptor. */
-export function blobFileContentId(sourcePath: string): ObjectId {
-  const fd = openSync(sourcePath, "r");
+export function blobFileContentId(sourcePath: string, observed?: IndexStat): ObjectId {
+  const { fd, stat } = openFragmentSource(sourcePath, observed);
   try {
-    let remaining = fstatSync(fd).size;
+    let remaining = Number(stat.size);
     const digest = createHash("sha256").update(`blob ${remaining}\0`);
     const buffer = Buffer.allocUnsafe(65_536);
     while (remaining > 0) {
@@ -162,11 +169,11 @@ export function blobFileContentId(sourcePath: string): ObjectId {
 }
 
 /** Compare a working descriptor to any manifest layout using bounded raw-byte hashing, without reading blob payloads. */
-export function matchesFragmentedFile(store: ObjectStore, id: ObjectId, sourcePath: string): boolean {
+export function matchesFragmentedFile(store: ObjectStore, id: ObjectId, sourcePath: string, observed?: IndexStat): boolean {
   const manifest = manifestHeader(store, id);
-  const fd = openSync(sourcePath, "r");
+  const { fd, stat } = openFragmentSource(sourcePath, observed);
   try {
-    if (fstatSync(fd).size !== manifest.totalLength) return false;
+    if (stat.size !== BigInt(manifest.totalLength)) return false;
     const buffer = Buffer.allocUnsafe(65_536);
     for (const { fragment } of manifestFragments(store, id, 0, manifest.totalLength, manifest)) {
       const digest = createHash("sha256").update(`blob ${fragment.length}\0`);
@@ -758,12 +765,12 @@ function streamCdcChunks(fd: number, totalLength: number, params: CdcParams, sou
 }
 
 /** Name a file's CDC representation without allocating its contents or publishing objects. */
-export function cdcFragmentedFileContentId(sourcePath: string, params: CdcParams = DEFAULT_CDC_PARAMS): ObjectId {
+export function cdcFragmentedFileContentId(sourcePath: string, params: CdcParams = DEFAULT_CDC_PARAMS, observed?: IndexStat): ObjectId {
   assertCdcParams(params, "invalid_cdc_params");
-  const fd = openSync(sourcePath, "r");
+  const { fd, stat } = openFragmentSource(sourcePath, observed);
   try {
     const writer = new ManifestWriter(undefined, undefined, "cdc");
-    streamCdcChunks(fd, fstatSync(fd).size, params, sourcePath, /** Hash uncompressed bytes independently of the storage codec. */ (chunk) => {
+    streamCdcChunks(fd, Number(stat.size), params, sourcePath, /** Hash uncompressed bytes independently of the storage codec. */ (chunk) => {
       writer.add({ id: hashObject("blob", chunk), length: chunk.length });
     });
     return writer.finish().manifestId;
@@ -815,6 +822,7 @@ export function writeCdcFragmented(
  * @param params - CDC parameters. Defaults to {@link DEFAULT_CDC_PARAMS}.
  * @param fileId - Owning stable identity for every fragment and the manifest;
  *   optional before erasure, required after it. Denied encodings still refuse.
+ * @param observed - Prior working-file observation, when staging an identified leaf.
  * @returns The manifest id and bounded root descriptor; interior roots have pages and an empty fragments list.
  * @throws ObjectStoreError When CDC parameters are invalid, or a short read is
  *   encountered on the source file.
@@ -824,10 +832,11 @@ export function writeCdcFragmentedFile(
   sourcePath: string,
   params: CdcParams = DEFAULT_CDC_PARAMS,
   fileId?: FileId,
+  observed?: IndexStat,
 ): FragmentWriteResult {
   assertCdcParams(params, "invalid_cdc_params");
   return store.withWriteLock(/** Keep the streaming descriptor and complete CDC publication under one lease. */ () => {
-    return manifestFile(store, sourcePath, fileId, "cdc", (fd, length, accept, identified) => { writeCdcFragmentsFromFd(store, fd, length, params, sourcePath, fileId, accept, identified); });
+    return manifestFile(store, sourcePath, fileId, "cdc", (fd, length, accept, identified) => { writeCdcFragmentsFromFd(store, fd, length, params, sourcePath, fileId, accept, identified); }, observed);
   });
 }
 

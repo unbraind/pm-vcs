@@ -7,13 +7,12 @@
 // never reach a filesystem call, and one boundary is easier to keep correct than
 // a check at each call site.
 
-import {
+import fs, {
   type BigIntStats,
   type Dirent,
   lstatSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   readlinkSync,
   realpathSync,
   writeFileSync,
@@ -27,6 +26,7 @@ import { hashObject, isObjectId, type ObjectId, type ObjectStore, ObjectStoreErr
 import type { ConflictSummary } from "./conflicts.ts";
 import { WorktreeMutation } from "./worktree-mutation.ts";
 import { RACY_WINDOW_NS } from "./stat-cache.ts";
+import { readRegularFile } from "./regular-file.ts";
 
 export { RACY_WINDOW_NS };
 
@@ -396,26 +396,32 @@ export function listWorkingTree(root: string, controlDirectory: string, rules: I
  *
  * @param root - Absolute repository root.
  * @param path - Canonical repository-relative path.
- * @returns The content, executable state, and stable stat observation when the
- *   file did not change during the read.
+ * @returns The content, the leaf type observed when that content was selected
+ *   (`symbolicLink` comes from the same pre-read stat that chose between
+ *   reading link text and file bytes, so a caller can classify the captured
+ *   bytes without reading the path again), the executable state, and a stable
+ *   stat observation when the file did not change during the read.
  */
 export function readWorkingFile(
   root: string,
   path: string,
   now: () => bigint = () => BigInt(Date.now()) * 1_000_000n,
-): { readonly content: Buffer; readonly executable: boolean; readonly stat?: IndexStat } {
+): { readonly content: Buffer; readonly symbolicLink: boolean; readonly executable: boolean; readonly stat?: IndexStat } {
   const absolute = join(root, ...path.split("/"));
-  const before = readWorkingStat(root, path, now);
-  const content = before.symbolicLink
-    ? Buffer.from(readlinkSync(absolute), "utf8")
-    : readFileSync(absolute);
+  const leaf = fs.lstatSync(absolute, { bigint: true });
+  const before = workingStat(leaf, now());
+  const observed = before.symbolicLink
+    ? { content: readlinkSync(absolute, { encoding: "buffer" }), stat: leaf }
+    : readRegularFile(absolute, leaf);
+  const captured = workingStat(observed.stat, before.stat.observedAtNs);
   const after = readWorkingStat(root, path, now);
   // The owner-execute bit alone decides, so a file's mode does not change with
   // the umask of whichever agent happened to create it.
   return {
-    content,
-    executable: after.executable,
-    ...(sameFileIdentity(before.stat, after.stat) ? { stat: after.stat } : {}),
+    content: observed.content,
+    symbolicLink: captured.symbolicLink,
+    executable: captured.executable,
+    ...(sameFileIdentity(before.stat, captured.stat) && sameFileIdentity(captured.stat, after.stat) ? { stat: after.stat } : {}),
   };
 }
 
@@ -425,7 +431,12 @@ export function readWorkingStat(
   path: string,
   now: () => bigint = () => BigInt(Date.now()) * 1_000_000n,
 ): { readonly stat: IndexStat; readonly executable: boolean; readonly symbolicLink: boolean } {
-  const stats: BigIntStats = lstatSync(join(root, ...path.split("/")), { bigint: true, throwIfNoEntry: true });
+  const stats = fs.lstatSync(join(root, ...path.split("/")), { bigint: true, throwIfNoEntry: true });
+  return workingStat(stats, now());
+}
+
+/** Build cache metadata and classify the exact leaf described by the stat. */
+function workingStat(stats: BigIntStats, observedAtNs: bigint): ReturnType<typeof readWorkingStat> {
   const symbolicLink = stats.isSymbolicLink();
   return {
     stat: {
@@ -434,7 +445,7 @@ export function readWorkingStat(
       ctimeNs: stats.ctimeNs,
       dev: stats.dev,
       ino: stats.ino,
-      observedAtNs: now(),
+      observedAtNs,
     },
     executable: !symbolicLink && (stats.mode & 0o100n) !== 0n,
     symbolicLink,
@@ -660,7 +671,7 @@ export function computeStatus(
   onVerified?: (path: string, stat: IndexStat) => void,
   forceContent: ReadonlySet<string> = new Set(),
   excluded: ReadonlySet<string> = new Set(),
-  matchesFile?: (entry: IndexEntry) => boolean | undefined,
+  matchesFile?: (entry: IndexEntry, observed: IndexStat) => boolean | undefined,
 ): StatusReport {
   const committed = flattenTree(store, headTree);
   const staged = new Map(index.map((entry) => [entry.path, entry]));
@@ -693,7 +704,7 @@ export function computeStatus(
     const observed = readWorkingStat(root, entry.path);
     const expectedMode = observed.executable ? "100755" : "100644";
     if (expectedMode === entry.mode && sameIndexStat(entry.stat, observed.stat) && !forceContent.has(entry.path)) continue;
-    const matches = observed.symbolicLink ? undefined : matchesFile?.(entry);
+    const matches = observed.symbolicLink ? undefined : matchesFile?.(entry, observed.stat);
     let equal: boolean;
     let stat: IndexStat | undefined;
     let mode = expectedMode;

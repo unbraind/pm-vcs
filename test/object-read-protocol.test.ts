@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 import { testDepth, testKinds } from "./support/depth.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Every logical reader shares generation retries, pinned handles and terminal denial enforcement. */
@@ -360,13 +361,34 @@ test("pinned inventory survives external unpack with identical generation and wr
 
 test("pinned inventory rejects in-place same-size mutation and a directory substituted before pinning",async()=>{
   const f=await fixture();const store=f.repo.objects;const path=join(store.storageRoot(),f.live.slice(0,2),f.live.slice(2));
-  const read=fs.readFileSync;let once=false;
+  const read=fs.readFileSync;const observes=watchReadPath(path);let once=false;
   mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{
-    const value=read(...args);if(typeof args[0]==="number"&&!once){once=true;const bytes=read(path);bytes[0]^=1;writeFileSync(path,bytes);fs.utimesSync(path,1,2);}return value;
+    const value=read(...args);if(observes(args[0])&&!once){once=true;const bytes=read(path);bytes[0]^=1;writeFileSync(path,bytes);fs.utimesSync(path,1,2);}return value;
   });syncBuiltinESMExports();assert.throws(()=>store.readInventoryObject(f.live,path),{code:"unsupported_erasure_storage"});mock.restoreAll();syncBuiltinESMExports();
   writeFileSync(path,deflateSync(frameObject("blob",payload)));
   objectReadBoundary.visit=(step)=>{if(step==="generation"){objectReadBoundary.visit=()=>{};fs.unlinkSync(path);mkdirSync(path);}};
   assert.throws(()=>store.readInventoryObject(f.live,path),{code:"unsupported_erasure_storage"});
+});
+
+test("bounded object reads refuse premature EOF on the selected descriptor", async () => {
+  const { repo, live } = await fixture();
+  const store = repo.objects;
+  const path = join(store.storageRoot(), live.slice(0, 2), live.slice(2));
+  const matches = watchReadPath(path);
+  const read = fs.readSync;
+  let interrupted = false;
+  mock.method(fs, "readSync", (...args: Parameters<typeof fs.readSync>) => {
+    if (!interrupted && matches(args[0])) {
+      interrupted = true;
+      return 0;
+    }
+    return read(...args);
+  });
+  syncBuiltinESMExports();
+  assert.throws(() => store.readBoundedTyped(live, "blob"), { code: "corrupt_object" });
+  assert.ok(interrupted);
+  assert.equal(objectFiles.active.size, 0);
+  assert.deepEqual(store.readBoundedTyped(live, "blob"), payload);
 });
 
 

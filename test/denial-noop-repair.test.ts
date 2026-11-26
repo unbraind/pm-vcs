@@ -8,6 +8,7 @@ import { BUNDLE_FORMAT, exportBundle, importBundleObjects, parseBundle } from ".
 import { encodeTombstone, type ErasureDenial } from "../engine/lifecycle.ts";
 import { type Signature } from "../engine/model.ts";
 import { hashObject, ObjectStore, type ObjectId } from "../engine/objects.ts";
+import { regularReadFlags } from "../engine/regular-file.ts";
 import { Repository } from "../engine/repo.ts";
 import { cloneFrom, fetchFrom } from "../engine/sync.ts";
 import { LeasedFileTransport as FileTransport } from "./helpers/publication-consumers.ts";
@@ -53,13 +54,17 @@ test("denial no-op repair retains registry, tombstones and two warmed handles ac
     writes += 1; return persist.call(this, entries);
   });
   mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
-    if (args[0] === join(repo.controlDirectory, "denials.json")) registryReads += 1;
+    // The fixture reads raw bytes for its independent durability comparison.
+    // Count only the production registry descriptor opens.
+    if (args[0] === join(repo.controlDirectory, "denials.json") && args[1] === regularReadFlags) registryReads += 1;
     return open(...args);
   });
   const assertStable = () => {
+    const beforeCachedReads = registryReads;
     assert.deepEqual(durable(repo), before, "no-op transfer must not replace the durable registry or audit");
     assert.equal(repo.objects.denials()[0], firstEntry); assert.equal(second.denials()[0], secondEntry);
     assert.throws(() => second.read(selected.id), { code: "object_obliterated" });
+    assert.equal(registryReads, beforeCachedReads, "both warmed handles reuse their registry");
   };
   for (const bytes of [bundle, bundle, metadata(bundle, undefined), metadata(bundle, [denial])]) {
     assert.deepEqual(importBundleObjects(repo.objects, bytes).added, []); assertStable();
@@ -69,10 +74,11 @@ test("denial no-op repair retains registry, tombstones and two warmed handles ac
   const afterCloneWrites = writes; repo.remotes.add("peer", peer.root); await fetchFrom(repo, "peer", new Date(3000));
   const beforeRepeatFetchReads = registryReads;
   for (let i = 0; i < 2; i += 1) { assert.equal((await fetchFrom(repo, "peer", new Date(3000))).upToDate, true); assertStable(); }
+  assert.equal(registryReads, beforeRepeatFetchReads, "metadata-only fetches do not reopen the receiver registry");
   const transport = new FileTransport(repo.root, repo.root);
   await transport.push(bundle, [{ ref: "refs/heads/main", expected: tip, next: tip }], false, new Date(3000)); assertStable();
   assert.equal(writes, afterCloneWrites, "only the fresh clone persists denial metadata");
-  assert.equal(registryReads - beforeRepeatFetchReads, 3, "two newly opened peer handles and one push handle read their registry once; original handles stay warm");
+  assert.equal(registryReads - beforeRepeatFetchReads, 4, "push proof collection and publication open four fresh receiver handles");
 });
 
 test("denial no-op repair fresh clone persists metadata before objects and reconstructs terminal state", async () => {

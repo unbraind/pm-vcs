@@ -1,20 +1,23 @@
 import "./helpers/isolate-session.ts";
 /** Shared between-step race scenarios plus Linux descriptor-pinned syscall-boundary protection. */
 import assert from "node:assert/strict";
-import fs, { existsSync, mkdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 
 import { parseIgnore } from "../engine/ignore.ts";
 import { writeCommit, type Signature } from "../engine/model.ts";
-import { ObjectStoreError, type ObjectStore } from "../engine/objects.ts";
+import { ObjectStoreError, readControlJson, type ObjectStore } from "../engine/objects.ts";
+import { recoverBisectWorker } from "../engine/bisect.ts";
+import { collectGarbage } from "../engine/gc.ts";
 import { Repository } from "../engine/repo.ts";
 import { buildTree, materializeTree } from "../engine/worktree.ts";
 import { destructionBoundary } from "../engine/destruction.ts";
 import { durability } from "../engine/durability.ts";
 import { WorktreeMutation, worktreeMutationCapabilities } from "../engine/worktree-mutation.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 
 let betweenSteps = false;
 let fixture: ReturnType<typeof makeTempDir> | undefined;
@@ -53,6 +56,110 @@ function setup(control: boolean = false): { repo: Repository; destination: strin
   repo.writeIndex([{ path: "branch/leaf.txt", id, mode: "100755" }]);
   return { repo, destination, tree, tip };
 }
+
+test("native metadata readers validate the opened kind before reading any replacement bytes", () => {
+  const { repo } = setup();
+  const control = repo.controlDirectory;
+  const config = join(control, "capture-fixture.json");
+  const worker = join(control, "BISECT_WORKER");
+  const lease = join(control, "objects.lock");
+  const leaf = join(repo.root, "branch", "leaf.txt");
+  writeFileSync(config, "{}");
+  const log = join(control, "oplog.jsonl");
+  writeFileSync(log, "");
+  const mutation = new WorktreeMutation(repo.root, ".pmvcs", repo.objects);
+  try {
+    const cases: ReadonlyArray<[string, () => unknown]> = [
+      [config, () => readControlJson(config, "invalid_fixture", "fixture")],
+      [join(control, "refs", "heads", "main"), () => repo.refs.list("refs/heads/", true)],
+      [log, () => collectGarbage(repo)],
+      [worker, () => recoverBisectWorker(repo)],
+      [lease, () => repo.objects.recoverWriterLock()],
+      [leaf, () => mutation.inspectForErasure("branch/leaf.txt")],
+    ];
+    for (const [path, operation] of cases) {
+      if (path === worker || path === lease) writeFileSync(path, String(process.pid));
+      const parked = join(fixture!.root, "parked");
+      const open = fs.openSync;
+      const read = fs.readFileSync;
+      let swapped = false;
+      let descriptor: number | undefined;
+      let reads = 0;
+      /** Compare direct paths and the worktree mutation's anchored leaf address. */
+      const matches = (address: unknown): boolean => typeof address === "string"
+        && (address === path || (path === leaf && address.startsWith("/proc/self/fd/") && address.endsWith("/leaf.txt")));
+      /** Swap at the actual open or pathname-read boundary. */
+      const replace = (): void => {
+        if (swapped) return;
+        renameSync(path, parked);
+        mkdirSync(path);
+        swapped = true;
+      };
+      mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+        if (!matches(args[0])) return open(...args);
+        replace();
+        const flags = Number(args[1]);
+        assert.equal(flags & (fs.constants.O_NONBLOCK ?? 0), fs.constants.O_NONBLOCK ?? 0);
+        descriptor = open(...args);
+        return descriptor;
+      });
+      mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+        if (matches(args[0]) || args[0] === descriptor) {
+          replace();
+          reads++;
+        }
+        return read(...args);
+      });
+      syncBuiltinESMExports();
+      try {
+        assert.throws(operation);
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+        if (swapped) {
+          rmdirSync(path);
+          renameSync(parked, path);
+        }
+        if (path === worker || path === lease) fs.unlinkSync(path);
+      }
+      assert.ok(swapped, path);
+      assert.equal(reads, 0, path);
+    }
+  } finally {
+    mutation.close();
+  }
+});
+
+test("native metadata presence and parsed content come from the same read", () => {
+  const { repo } = setup();
+  const cases = [
+    { name: "denials.json", code: "bad_tombstone", run: () => repo.objects.denials() },
+    { name: "unlinked-instances.json", code: "bad_instances", run: () => repo.obliterate("missing", "fixture", "fixture", new Date(1)) },
+  ];
+  for (const { name, code, run } of cases) {
+    const path = join(repo.controlDirectory, name);
+    writeFileSync(path, "null");
+    const matches = watchReadPath(path);
+    const read = fs.readFileSync;
+    let removed = false;
+    mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+      const bytes = read(...args);
+      if (matches(args[0]) && !removed) {
+        removed = true;
+        fs.unlinkSync(path);
+      }
+      return bytes;
+    });
+    syncBuiltinESMExports();
+    try {
+      assert.throws(run, { code });
+      assert.ok(removed);
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  }
+});
 
 /** Hook both descriptor-safe syscalls and their old pathname equivalents for behavioral revert proofs. */
 function intercept(operation: "open" | "mkdir" | "unlink" | "rmdir", leaf: string, swap: () => void | boolean, erasure = false, observation = 0): () => boolean {

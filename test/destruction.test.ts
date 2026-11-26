@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 import { testDepth } from "./support/depth.ts";
 /** Exact-set intents on real filesystems survive every publication/deletion cut and preserve peer data. */
 import { testEnvironment } from "./helpers/test-environment.ts";
@@ -13,6 +14,7 @@ import { durability } from "../engine/durability.ts";
 import { destructionBoundary, prepareDestruction, prepareNamespaceDestruction, inspectDestructions, inspectDestructionCheckpoint, inspectNamespacePublications, resumeNamespaceDirectory, retireNamespace, measureDestructionRevision, DestructionRefusal, type DestructionRequest } from "../engine/destruction.ts";
 import { syncBuiltinESMExports } from "node:module";
 import { objectFiles } from "../engine/object-files.ts";
+import { regularReadFlags } from "../engine/regular-file.ts";
 import { verificationLimits, VerificationRefusal } from "../engine/object-error.ts";
 import { PmClient } from "@unbrained/pm-cli/sdk";
 import { makeTempDir, packageRoot } from "./helpers/tmp.ts";
@@ -375,7 +377,7 @@ test("native deletion and progress-storage faults preserve the durable plan and 
     const unlink = fs.unlinkSync; const open = fs.openSync; let injected = false;
     if (mode === "unlink") { mock.method(fs, "unlinkSync", (target: fs.PathLike) => { if (target === f.paths[0]) { injected = true; throw Object.assign(new Error("blocked"), { code: "EACCES" }); } return unlink(target); }); syncBuiltinESMExports(); }
     else if (mode === "progress-directory") { mkdirSync(progress); injected = true; }
-    else { plan.remove(f.paths[0]); if (mode === "progress-replaced-before-open") { mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => { if (args[0] === progress && args[1] === (fs.constants.O_RDWR | fs.constants.O_NOFOLLOW) && !injected) { injected = true; const bytes = readFileSync(progress); renameSync(progress, `${progress}.old`); writeFileSync(progress, bytes); } return Reflect.apply(open, fs, args) as number; }); syncBuiltinESMExports(); } else destructionBoundary.visit = (step, target) => { if (step === "progress-byte-written" && target === progress && !injected) { injected = true; const bytes = readFileSync(progress); renameSync(progress, `${progress}.old`); writeFileSync(progress, bytes); } }; }
+    else { plan.remove(f.paths[0]); if (mode === "progress-replaced-before-open") { mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => { if (args[0] === progress && args[1] === (fs.constants.O_RDWR | regularReadFlags) && !injected) { injected = true; const bytes = readFileSync(progress); renameSync(progress, `${progress}.old`); writeFileSync(progress, bytes); } return Reflect.apply(open, fs, args) as number; }); syncBuiltinESMExports(); } else destructionBoundary.visit = (step, target) => { if (step === "progress-byte-written" && target === progress && !injected) { injected = true; const bytes = readFileSync(progress); renameSync(progress, `${progress}.old`); writeFileSync(progress, bytes); } }; }
     assert.throws(() => plan.remove(f.paths[mode.startsWith("progress-replaced") ? 1 : 0]), error => error instanceof Error && "code" in error && error.code === (mode === "unlink" ? "EACCES" : mode === "progress-directory" ? "foreign_destructive_intent" : "destructive_operation_pending") && "receipt" in error && (error.receipt as { planned: number }).planned === 3); mock.restoreAll(); syncBuiltinESMExports(); destructionBoundary.visit = () => {}; assert.equal(injected, true); assert.equal(objectFiles.active.size, 0);
     if (mode === "progress-directory") rmSync(progress, { recursive: true }); const receipt = drain(f.control, "native-error", f.paths); assert.equal(receipt.status, "completed"); assert.equal(receipt.deleted + receipt.observedAbsent, 3);
   }
@@ -391,7 +393,7 @@ test("schema validation rejects non-array requests and foreign receipt directori
 test("unrecognized format bytes and unreadable markers never authorize inferred repository control writes", () => {
   for (const mode of ["foreign", "unreadable"]) {
     const f = fixture(); const marker = join(f.control, "format"); writeFileSync(marker, mode === "foreign" ? "foreign\n" : "pmvcs-1\n"); const probe = join(f.control, "probe"); writeFileSync(probe, "owned"); const read = fs.readFileSync;
-    if (mode === "unreadable") { mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => { if (args[0] === marker) throw Object.assign(new Error("marker unreadable"), { code: "EACCES" }); return Reflect.apply(read, fs, args); }); syncBuiltinESMExports(); }
+    if (mode === "unreadable") { const observes = watchReadPath(marker); mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => { if (observes(args[0])) throw Object.assign(new Error("marker unreadable"), { code: "EACCES" }); return Reflect.apply(read, fs, args); }); syncBuiltinESMExports(); }
     assert.equal(retireNamespace({ path: probe }).deleted, 1); assert.equal(existsSync(join(f.control, "destruction")), false); mock.restoreAll(); syncBuiltinESMExports();
   }
 });
@@ -414,6 +416,36 @@ test("a vanished checkpoint between observe and open is refused and read-only in
   const f = fixture(); prepareDestruction(f.control, "vanishing", f.paths.map(path => ({ path }))); const path = recordPath(f.control); const bytes = readFileSync(path); const open = fs.openSync; let injected = false;
   mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => { if (args[0] === path && !injected) { injected = true; rmSync(path); } return Reflect.apply(open, fs, args) as number; }); syncBuiltinESMExports(); assert.throws(() => prepareDestruction(f.control, "vanishing", []), { code: "destructive_intent_changed" }); mock.restoreAll(); syncBuiltinESMExports(); writeFileSync(path, bytes);
   const directory = join(f.control, "destruction"); const vanished = join(directory, `${"f".repeat(64)}.json`); writeFileSync(vanished, bytes); objectFiles.opened = (_file, current) => { if (current === path && existsSync(vanished)) rmSync(vanished); }; assert.equal(inspectDestructions(f.control).pending, 1); objectFiles.opened = (_file, current) => { if (current === path) throw Object.assign(new Error("unreadable"), { code: "EIO" }); }; assert.ok(inspectDestructions(f.control).skipped.some(entry => entry.reason.startsWith("unreadable"))); objectFiles.opened = () => {};
+});
+
+test("intent loading refuses a change after its descriptor read", () => {
+  const f = fixture();
+  const requests = f.paths.map(path => ({ path }));
+  prepareDestruction(f.control, "read-stability", requests);
+  const path = recordPath(f.control);
+  const updated = readFileSync(path, "utf8") + "\n";
+  const matches = watchReadPath(path);
+  const read = fs.readFileSync;
+  let changed = false;
+  mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+    const bytes = read(...args);
+    if (!changed && matches(args[0])) {
+      changed = true;
+      writeFileSync(path, updated);
+    }
+    return bytes;
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => prepareDestruction(f.control, "read-stability", requests), { code: "destructive_intent_changed" });
+    assert.ok(changed);
+    assert.equal(readFileSync(path, "utf8"), updated);
+    assert.ok(f.paths.every(source => existsSync(source)));
+    assert.equal(objectFiles.active.size, 0);
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
 });
 
 test("nested receipt inspection preserves an already typed partial refusal and recursive control cleanup journals outside its own set", () => {
@@ -601,7 +633,7 @@ test("a terminal supersession receipt with null policy is foreign evidence and c
 
 test("native read failures retain the exact deletion set and an absent namespace retry completes its original receipt",()=>{
  const f=fixture();const source=f.paths[0];const plan=prepareDestruction(f.control,"readonly-failure",[{path:source}]);const open=fs.openSync;
- mock.method(fs,"openSync",(...args:Parameters<typeof fs.openSync>)=>{if(args[0]===source&&args[1]===(fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW))throw Object.assign(new Error("native read verification denied"),{code:"EIO"});return open(...args);});syncBuiltinESMExports();
+ mock.method(fs,"openSync",(...args:Parameters<typeof fs.openSync>)=>{if(args[0]===source&&args[1]===regularReadFlags)throw Object.assign(new Error("native read verification denied"),{code:"EIO"});return open(...args);});syncBuiltinESMExports();
  assert.throws(()=>plan.remove(source),{code:"EIO"});assert.equal(readFileSync(source,"utf8"),"owned-a");assert.equal(readFileSync(join(f.tripwire,"guard"),"utf8"),"untouched sentinel");mock.restoreAll();syncBuiltinESMExports();plan.remove(source);assert.equal(plan.finish().status,"completed");
  const second=f.paths[1];let interrupted=false;destructionBoundary.visit=(step,path)=>{if(step==="deleted"&&path==="b"&&!interrupted){interrupted=true;throw new Error("unlink acknowledged before progress");}};assert.throws(()=>durability.unlink(second));destructionBoundary.visit=()=>{};assert.equal(existsSync(second),false);assert.equal(durability.unlink(second).status,"completed");
 });

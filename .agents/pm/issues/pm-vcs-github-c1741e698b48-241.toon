@@ -1,0 +1,69 @@
+id: pm-vcs-github-c1741e698b48-241
+title: Validate opened descriptors before native engine reads
+description: "GH issue #241: https://github.com/unbraind/pm-vcs/issues/241 · author @unbraind · created 2026-11-26T19:05:23Z · updated 2026-11-26T19:05:48Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-vcs#241","github_author:unbraind"
+created_at: "2026-11-26T19:05:23Z"
+updated_at: "2026-11-26T19:35:24.590Z"
+author: pm-github
+comments[4]{created_at,author,text}:
+  "2026-11-26T19:07:23.916Z",codex-agent,"Imported GitHub #241 with the pinned importer. This draft starts from main and carries the engine side of #240: buffered and streaming worktree capture, refs and GC, control JSON, object and pack reads, erasure and destruction records, and publication/recovery metadata. Both branches regenerate the bundle. Review this draft after #240 merges."
+  "2026-11-26T19:13:02.294Z",codex-agent,"Transferred engine revert proofs from the combined branch. Removing descriptor identity validation admitted replaced native working-file bytes in the non-Git staging fixture. Restoring pathname control reads consumed nonregular replacements. Rechecking pathname presence after parsing turned captured JSON null into absence in both native state tests. Removing each pre-read or post-read refusal admitted a changed destruction intent, a nonregular lease audit descriptor, or premature object EOF in separate isolated reverts. The six corresponding cases pass on this independent branch."
+  "2026-11-26T19:33:45.678Z",codex-agent,"The focused engine tests and the pinned PM linked test passed 6/6. After building the fresh worktree, bisect passed 56/56 and the full-depth packed composition consumer passed 6/6 with built and installed Node, Bun 1.3.14, and the real project-installed CLI. Two erasure crash cases selected the default four internal workers during the first sweep. Both cases passed again under one CPU with one internal worker, covering 9 and 25 selected crash cuts."
+  "2026-11-26T19:35:22.672Z",codex-agent,"The targeted sweep passed 923 of 925 with no skips or cancellations. The two failures required the missing built dist in the fresh checkout. Both passed after the build: bisect 56/56 and the packed consumer 6/6. Typecheck, source and test builds, lint, duplication 0%, docstrings, and pack privacy with 369 files and zero findings passed. Exact-head CI is tracked at https://github.com/unbraind/pm-vcs/actions/workflows/ci.yml?query=branch%3Afix%2Fengine-opened-descriptor-reads ."
+files[37]{path,scope}:
+  engine/bisect.ts,project
+  engine/destruction.ts,project
+  engine/durability.ts,project
+  engine/erasure-accountability.ts,project
+  engine/erasure-scan.ts,project
+  engine/erasure.ts,project
+  engine/fragments.ts,project
+  engine/gc.ts,project
+  engine/lifecycle.ts,project
+  engine/object-files.ts,project
+  engine/objects.ts,project
+  engine/packs.ts,project
+  engine/payload-owners.ts,project
+  engine/publication.ts,project
+  engine/refs.ts,project
+  engine/regular-file.ts,project
+  engine/repo.ts,project
+  engine/worktree-mutation.ts,project
+  engine/worktree.ts,project
+  selfhost.bundle,project
+  test/composition-consumer.test.ts,project
+  test/denial-noop-repair.test.ts,project
+  test/destruction.test.ts,project
+  test/destructive-plans.test.ts,project
+  test/erasure-accountability.test.ts,project
+  test/helpers/read-path.ts,project
+  test/layer-null-write-attribution-repair.test.ts,project
+  test/object-read-protocol.test.ts,project
+  test/phase6-staging.test.ts,project
+  test/publication-faults.test.ts,project
+  test/raw-coverage.test.ts,project
+  test/ref-publication-recovery.test.ts,project
+  test/repo.test.ts,project
+  test/review-repair.test.ts,project
+  test/stream-erasure-legacy-fetch-repair.test.ts,project
+  test/verification-bounds.test.ts,project
+  test/worktree-races.test.ts,project
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=1 --test-name-pattern='replaced file in a non-Git|native metadata readers|presence and parsed content|intent loading refuses|erasure refuses a nonregular audit|bounded object reads refuse premature' test/worktree-races.test.ts test/phase6-staging.test.ts test/destruction.test.ts test/review-repair.test.ts test/object-read-protocol.test.ts,project,codex-agent,"2026-11-26T19:08:21.336Z",local_mutation,fix/engine-opened-descriptor-reads
+  PM_TEST_DEPTH=full node --test --test-concurrency=1 test/composition-consumer.test.ts,project,codex-agent,"2026-11-26T19:33:44.599Z",local_mutation,fix/engine-opened-descriptor-reads
+docs[1]{path,scope}:
+  ARCHITECTURE.md,project
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-26T19:05:23Z"
+github_link_only: false
+github_number: 241
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-26T19:05:48Z"
+github_url: "https://github.com/unbraind/pm-vcs/issues/241"
+body: "## Why this exists\n\nThe descriptor work was first developed while reviewing the self-host snapshot reader in #240. It changes the published engine and needs its own review. The script fixes remain with #239.\n\nSeveral reads classify a pathname and later open that name, or read an opened descriptor before checking its type. If the leaf changes between those operations, a native read can consume different bytes from the file it classified or block on a special file.\n\n## Instances and risks\n\n| Area | Existing read and consequence |\n| --- | --- |\n| Working tree and staging | The buffered and streaming paths can classify one leaf and consume another. The captured bytes, executable bit, and stat-cache entry can describe different observations. |\n| Object and pack storage | Loose, packed, and recovery reads need descriptor validation before using data. A substituted leaf can block a reader or make it consume a different object or recovery record. |\n| Refs and garbage collection | Ref values and log roots select which objects remain live. Collection must refuse substituted storage before using its bytes to authorize retirement. |\n| Erasure and destruction | Lease audits, owner records, progress records, and intent files govern authorization and recovery. A changed or nonregular descriptor must be refused before reading or acting on it. |\n| Control metadata and publication | JSON, owner markers, and recovery records are used to identify managed state. The same opened descriptor must supply the validated bytes. A captured JSON null must keep its meaning if the pathname disappears afterward. |\n\n## Acceptance\n\n- Validate regular-file descriptors before reading; tie bytes, mode, and identity to the selected observation where callers rely on them.\n- Preserve supported persisted records, intentional link handling, caller-owned descriptor lifetimes, and existing recovery and write-lock semantics.\n- Exercise replacements, nonregular descriptors, premature EOF, and valid existing reads through the real engine. Include non-Git tracker coverage.\n- Keep the engine PR in draft until #240 merges. Both changes regenerate the committed self-host bundle."

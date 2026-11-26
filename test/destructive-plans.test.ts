@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 /** Invalid destructive requests cannot retire unrelated physical bytes. */
 import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
@@ -234,7 +235,7 @@ test("malformed timestamps and conflicting proposed recovery metadata refuse bef
 
 
 test("revoking a pending purge between preflight and authorization reread preserves all storage bytes", async () => {
- const f=await fixture();const root=f.repo.objects.storageRoot();const id=f.repo.readIndex()[0].fileId!;f.repo.objects.withWriteLock(()=>erasurePurge(f.repo.controlDirectory,id,[root],true).begin(planErasureStorage([root])));const before=treeHash(root);const path=join(f.repo.controlDirectory,"erasure-purge.json");const read=fs.readFileSync;let reads=0;
- mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{if(args[0]===path&&(args[1] as unknown)==="utf8"&&++reads===2)writeFileSync(path,JSON.stringify({format:"pm-vcs-erasure-purge-2",operations:{},plans:{}}));return Reflect.apply(read,fs,args);});syncBuiltinESMExports();
+ const f=await fixture();const root=f.repo.objects.storageRoot();const id=f.repo.readIndex()[0].fileId!;f.repo.objects.withWriteLock(()=>erasurePurge(f.repo.controlDirectory,id,[root],true).begin(planErasureStorage([root])));const before=treeHash(root);const path=join(f.repo.controlDirectory,"erasure-purge.json");const read=fs.readFileSync;const observes=watchReadPath(path);let reads=0;
+ mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{if(observes(args[0])&&(args[1] as unknown)==="utf8"&&++reads===2)writeFileSync(path,JSON.stringify({format:"pm-vcs-erasure-purge-2",operations:{},plans:{}}));return Reflect.apply(read,fs,args);});syncBuiltinESMExports();
  assert.throws(()=>f.repo.obliterate("asset","erase-fixture","incident",new Date(1)),{code:"unverifiable"});mock.restoreAll();syncBuiltinESMExports();assert.equal(reads,2);assert.equal(treeHash(root),before);assert.ok(existsSync(f.foreign));assert.deepEqual(f.repo.objects.denials(),[]);
 });

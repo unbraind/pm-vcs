@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import { watchReadPath } from "./helpers/read-path.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 /** Accountable storage, exact purge receipts and namespace replacement regressions on real non-git trackers. */
 import assert from "node:assert/strict";
@@ -382,9 +383,9 @@ test("an operational diagnostic failure refuses before any denial or selected-fi
 test("purge authorization revoked after complete preflight refuses before deleting the recorded foreign set",async()=>{
  const f=await fixture();const root=f.repo.objects.storageRoot();const foreign=place(root,"revoked-foreign",Buffer.from("foreign bytes retained"));const journal=join(f.repo.controlDirectory,"erasure-purge.json");
  f.repo.objects.withWriteLock(()=>erasurePurge(f.repo.controlDirectory,f.entry.fileId!,[root],true).begin(planErasureStorage([root])));
- const read=fs.readFileSync;const stat=fs.lstatSync;let checked=false;let reads=0;
+ const read=fs.readFileSync;const stat=fs.lstatSync;const observes=watchReadPath(journal);let checked=false;let reads=0;
  mock.method(fs,"lstatSync",(...args:Parameters<typeof fs.lstatSync>)=>{if(args[0]===journal)checked=true;return Reflect.apply(stat,fs,args);});
- mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{if(args[0]===journal&&checked){checked=false;if(++reads===3)writeFileSync(journal,JSON.stringify({format:"pm-vcs-erasure-purge-2",operations:{},plans:{}}));}return Reflect.apply(read,fs,args);});syncBuiltinESMExports();
+ mock.method(fs,"readFileSync",(...args:Parameters<typeof fs.readFileSync>)=>{if(observes(args[0])&&checked){checked=false;if(++reads===3)writeFileSync(journal,JSON.stringify({format:"pm-vcs-erasure-purge-2",operations:{},plans:{}}));}return Reflect.apply(read,fs,args);});syncBuiltinESMExports();
  assert.throws(()=>f.repo.obliterate(f.entry.fileId!,"erase-fixture","incident",new Date(1)),{code:"unverifiable"});mock.restoreAll();syncBuiltinESMExports();assert.equal(reads,3);assert.deepEqual(f.repo.objects.denials(),[]);assert.equal(readFileSync(foreign,"utf8"),"foreign bytes retained");assert.deepEqual(readFileSync(join(f.repo.root,"asset")),f.bytes);
 });
 
