@@ -14,4 +14,4 @@ permissions:
 jobs:
   gated-sync:
     if: github.repository == 'unbraind/pm-vcs'
-    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@8af17958273839d16990f67234d08be673189762 # pm-github 2026.11.16
+    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@3e453a856a0327acf6cc241ad6a15179b5ee9c54 # pm-github 2026.11.25
