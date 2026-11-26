@@ -1,3 +1,4 @@
+import { decodeGitListing, isolatedPathspecEnvironment } from "../git.ts";
 import { durability } from "../engine/durability.ts";
 // The self-hosting gate: pm-vcs versions its own source, and a CI gate proves it.
 //
@@ -27,10 +28,12 @@ import { durability } from "../engine/durability.ts";
 // its legacy (FileId-free) form, so a tree id is a function of content and mode
 // alone and the bundle is reproducible.
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { streamProcess } from "./audit-git-identities.ts";
+import childProcess, { execFileSync, spawnSync } from "node:child_process";
+import fs, { type BigIntStats, lstatSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { isPair, isScalar, parseDocument, visit } from "yaml";
 import { isMainInvocation } from "./main-invocation.ts";
 
@@ -41,7 +44,7 @@ import {
   importBundleObjects,
   parseBundle,
 } from "../engine/bundle.ts";
-import { type ObjectId, ObjectStore } from "../engine/objects.ts";
+import { type ObjectId, ObjectStore, ObjectStoreError } from "../engine/objects.ts";
 import {
   type Commit,
   type FileMode,
@@ -51,10 +54,24 @@ import {
   writeCommit,
 } from "../engine/model.ts";
 import { RefStore } from "../engine/refs.ts";
-import { buildTree, flattenTree, readWorkingFile } from "../engine/worktree.ts";
+import { buildTree, flattenTree, type IndexStat, sameFileIdentity } from "../engine/worktree.ts";
 
 /** Path to the gate's data file, relative to the package root. */
 export const SELF_HOST_CONFIG = "self-host.json";
+
+/**
+ * Views one stat observation in the engine's cache-identity shape.
+ *
+ * The reader reuses the engine's own identity predicate so "the same leaf,
+ * unchanged between two observations" is decided by the same fields
+ * everywhere in the package instead of a second, drifting copy of the rule.
+ *
+ * @param stats - One `lstat` observation, taken with `bigint: true`.
+ * @returns The identity fields {@link sameFileIdentity} compares.
+ */
+function statIdentity(stats: BigIntStats): IndexStat {
+  return { size: stats.size, mtimeNs: stats.mtimeNs, ctimeNs: stats.ctimeNs, dev: stats.dev, ino: stats.ino, observedAtNs: 0n };
+}
 
 /**
  * The one path this gate will ever write, fixed in code rather than configured.
@@ -154,16 +171,58 @@ export interface Verification {
  *
  * @param path - Path to `self-host.json`.
  * @returns The parsed configuration.
- * @throws Error When the file is missing or its shape is not a `SelfHostConfig`.
+ * @throws Error When the file is missing, is not a regular file, its shape is
+ *   not a `SelfHostConfig`, or it changed while being read — bytes whose type
+ *   and identity were not observed together are never parsed.
  */
 export function loadConfig(path: string): SelfHostConfig {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    throw new Error(`self-host: could not read configuration at ${path}.`);
+  return captureWorkingConfig(path).config;
+}
+
+/** Parse the same regular-file observation that the working writer will archive. */
+function captureWorkingConfig(path: string): { config: SelfHostConfig; source: SourceFile } {
+  const before = fs.lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  if (before === undefined || !before.isFile()) {
+    throw new Error("self-host: configuration must be a regular file.");
   }
-  return parseSelfHostConfig(raw);
+  const content = readStableSourceBytes(path, before);
+  if (content === undefined) {
+    throw new Error("self-host: configuration changed while it was being read; run the command again.");
+  }
+  return {
+    config: parseSelfHostConfig(content.toString("utf8")),
+    source: { content, mode: (before.mode & 0o100n) === 0n ? "100644" : "100755" },
+  };
+}
+
+/** Read a regular leaf only after the opened descriptor matches the observed inode. */
+function readRegularFile(path: string, expected: BigIntStats): { content: Buffer; stat: BigIntStats } {
+  const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd, { bigint: true });
+    if (!stat.isFile() || stat.dev !== expected.dev || stat.ino !== expected.ino) {
+      throw new ObjectStoreError("worktree_path_changed", "File changed while it was being read.");
+    }
+    return { content: fs.readFileSync(fd), stat };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Return bytes only if the opened leaf and both pathname observations agree. */
+function readStableSourceBytes(path: string, before: BigIntStats): Buffer | undefined {
+  try {
+    const observed = before.isSymbolicLink()
+      ? { content: fs.readlinkSync(path, { encoding: "buffer" }), stat: before }
+      : readRegularFile(path, before);
+    const after = fs.lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    if (after !== undefined && sameFileIdentity(statIdentity(before), statIdentity(observed.stat))
+        && sameFileIdentity(statIdentity(observed.stat), statIdentity(after))) return observed.content;
+  } catch (error) {
+    if (!(error instanceof ObjectStoreError && error.code === "worktree_path_changed")
+        && !["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+  }
+  return undefined;
 }
 
 /**
@@ -243,10 +302,11 @@ export function parseSelfHostConfig(raw: string): SelfHostConfig {
  *
  * @param root - The repository root.
  * @param bundle - The configured, already lexically validated bundle path.
+ * @param tracked - Whether the captured source selection tracks the bundle.
  * @returns The absolute path to write.
  * @throws Error When the target or an ancestor escapes the repository.
  */
-export function resolveBundleTarget(root: string, bundle: string): string {
+export function resolveBundleTarget(root: string, bundle: string, tracked?: boolean): string {
   const target = join(root, bundle);
   const realRoot = realpathSync(root);
   let realParent: string;
@@ -279,7 +339,7 @@ export function resolveBundleTarget(root: string, bundle: string): string {
   // creates it). An existing untracked file is never a legitimate target, which
   // is exactly what `.git/config` and `.env` are.
   const exists = lstatSync(target, { throwIfNoEntry: false }) !== undefined;
-  if (exists && !listTrackedFiles(root).includes(bundle)) {
+  if (exists && !(tracked ?? listTrackedFiles(root).includes(bundle))) {
     throw new Error(
       `self-host: ${bundle} exists but is not tracked by git. Refusing to overwrite it — `
         + `the bundle must be a tracked file, so this would clobber something else.`,
@@ -704,18 +764,17 @@ export function listTrackedFiles(root: string, environment = process.env): strin
   // delimiter is NUL precisely so no byte of a path needs interpreting.
   const raw = execFileSync("git", ["ls-files", "-z"], {
     cwd: root,
-    encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     env: { ...environment, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
   });
-  return raw.split("\0").filter((line) => line.length > 0);
+  return decodeGitListing(raw).split("\0").filter((line) => line.length > 0);
 }
 
 /** One leaf entry of a git tree listing: its mode, object id and path. */
 export interface TreeEntry {
-  /** Git tree mode: `100644`, `100755`, or `120000` for a symbolic link. */
-  readonly mode: "100644" | "100755" | "120000";
-  /** Object id of the entry's blob, exactly as the tree records it. */
+  /** Raw Git mode, including `160000` for a gitlink that configuration may exclude. */
+  readonly mode: string;
+  /** Object id recorded in the tree, including the commit id of a gitlink. */
   readonly sha: string;
   /** Canonical repository-relative path. */
   readonly path: string;
@@ -723,11 +782,13 @@ export interface TreeEntry {
 
 /** A tree's verification inputs: its configuration, raw blobs and source files. */
 export interface TreeSnapshot {
+  /** Whether the source tree tracks the bundle path, even when its bytes were not requested. */
+  readonly bundleTracked: boolean;
   /** The gate configuration as staged or committed in the tree itself. */
   readonly config: SelfHostConfig;
   /** Every non-excluded source file: raw blob bytes and the tree-recorded mode. */
   readonly files: ReadonlyMap<string, SourceFile>;
-  /** Raw blob bytes for every entry in the tree, keyed by path, before exclusion. */
+  /** Raw bytes of the configuration, included source and requested verification bundle. */
   readonly blobs: ReadonlyMap<string, Buffer>;
 }
 
@@ -736,125 +797,113 @@ export interface TreeSnapshot {
  *
  * NUL-delimited (`-z`) for the same reason {@link listTrackedFiles} is: a
  * newline is a legal byte in a git path, and this listing feeds a byte-exact
- * comparison, so no byte of a path may be read as a delimiter. The listing is
- * also where gitlink entries are rejected: a submodule records a commit id, not
- * content, so no bundle built over it could ever be byte-identical to anything
- * this gate verifies, and failing here names the path instead of letting a
- * checkout materialize an empty directory the reader would only trip over.
+ * comparison, so paths retain all their bytes. The listing
+ * retains unsupported modes until the snapshot configuration selects its inputs.
  *
  * @param root - The repository root.
  * @param treeish - A tree id (from `git write-tree`) or a committish such as `HEAD`.
  * @returns Every leaf entry, in the tree's own order.
- * @throws Error When git cannot list the tree, or the tree carries an entry
- *   that is not an ordinary blob or symbolic link.
+ * @throws Error When git cannot list the tree, or a path cannot be represented losslessly.
  */
-export function listTreeEntries(root: string, treeish: string): TreeEntry[] {
-  // Deliberately NOT `runGit`, which trims: the listing is NUL-delimited, and
-  // trimming the payload would be one more place a path byte gets interpreted.
-  const raw = execFileSync("git", ["ls-tree", "-r", "-z", treeish], {
-    cwd: root,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+export function listTreeEntries(root: string, treeish: string, paths: readonly string[] = []): TreeEntry[] {
+  const result = spawnSync("git", ["--literal-pathspecs", "ls-tree", "-r", "-z", treeish, "--", ...paths], {
+    cwd: root, maxBuffer: 64 * 1024 * 1024,
+    // The literal matching above is the tool's choice, so the child environment
+    // carries no ambient pathspec setting that git would either combine into a
+    // fatal error or substitute for it.
+    env: isolatedPathspecEnvironment(process.env),
   });
+  if (result.error) throw new Error(`self-host: could not run git: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`self-host: git ls-tree failed: ${result.stderr.toString("utf8").trim()}`);
   const entries: TreeEntry[] = [];
-  for (const record of raw.split("\0")) {
+  for (const record of decodeGitListing(result.stdout).split("\0")) {
     if (record.length === 0) continue;
     // git's `-z` format is \`<mode> <type> <sha>\\t<path>\`; the tab is structural.
-    // A malformed record cannot reach here without git itself being broken, and
-    // the blob read below would fail closed on any sha such a record named — so
-    // validation targets the one anomaly a real tree can carry: a gitlink.
     const tab = record.indexOf("\t");
-    const [mode, type, sha] = record.slice(0, tab).split(" ");
+    const [mode, , sha] = record.slice(0, tab).split(" ");
     const path = record.slice(tab + 1);
-    if (mode !== "100644" && mode !== "100755" && mode !== "120000") {
-      throw new Error(
-        `self-host: ${treeish} carries "${path}" as a ${type} entry (mode ${mode}); `
-        + `the bundle covers ordinary blobs, and a gitlink records a commit, not content.`,
-      );
-    }
     entries.push({ mode, sha, path });
   }
   return entries;
 }
 
-/**
- * Parses one `git cat-file --batch` response stream into per-path blob bytes.
- *
- * Split out of `{@link readTreeBlobs}` so every malformed-answer refusal — a
- * truncated stream, a missing object, a mismatched or non-blob answer, a
- * non-numeric or short payload — is exercised against fabricated buffers the
- * way the engine's own parsers are tested. The stream carries one response
- * per request: `<sha> <type> <size>\n<raw bytes>\n`, or `<sha> missing\n`.
- *
- * @param output - The raw stdout of one `git cat-file --batch` run.
- * @param entries - The listing whose requests produced the stream, in order.
- * @returns Raw blob bytes keyed by path, one entry per listing entry.
- * @throws Error When the stream ends early or any answer disagrees with the
- *   request — naming the path and sha at fault.
- */
-export function parseBatchResponse(output: Buffer, entries: readonly TreeEntry[]): Map<string, Buffer> {
-  const blobs = new Map<string, Buffer>();
-  let offset = 0;
-  for (const entry of entries) {
-    const headerEnd = output.indexOf(0x0a, offset);
-    if (headerEnd < 0) {
-      throw new Error(`self-host: git cat-file ended before answering for ${entry.path} (${entry.sha}).`);
-    }
-    const header = output.subarray(offset, headerEnd).toString("utf8");
-    const [sha, type, sizeText] = header.split(" ");
-    const size = Number(sizeText);
-    if (type === "missing" || !Number.isInteger(size) || sha !== entry.sha || type !== "blob"
-      || headerEnd + 1 + size + 1 > output.length) {
-      throw new Error(
-        `self-host: git cat-file did not return ${entry.sha} for ${entry.path} (answered: ${header}).`,
-      );
-    }
-    // Copy out of the response buffer so the map does not pin the whole stream.
-    blobs.set(entry.path, Buffer.from(output.subarray(headerEnd + 1, headerEnd + 1 + size)));
-    offset = headerEnd + 1 + size + 1;
+/** Consume exactly one batch frame per request, retaining only the requested blob contents. */
+class BlobBatch {
+  private readonly blobs = new Map<string, Buffer>();
+  private readonly entries: readonly TreeEntry[];
+  private position = 0;
+  private header = Buffer.alloc(0);
+  private remaining: number | undefined;
+  private chunks: Buffer[] = [];
+
+  /** Bind responses to the ordered object ids in the frozen listing. */
+  constructor(entries: readonly TreeEntry[]) {
+    this.entries = entries;
   }
-  return blobs;
+
+  /** Consume arbitrary transport chunks, including split headers, binary payloads and split separators. */
+  consume(chunk: Buffer): void {
+    while (chunk.length > 0) {
+      const entry = this.entries[this.position];
+      if (!entry) throw new Error("self-host: git cat-file returned unrequested trailing bytes.");
+      if (this.remaining === undefined) {
+        const newline = chunk.indexOf(0x0a);
+        if (newline < 0) {
+          this.header = Buffer.concat([this.header, chunk]);
+          return;
+        }
+        const header = Buffer.concat([this.header, chunk.subarray(0, newline)]).toString("latin1");
+        const fields = header.split(" ");
+        const [sha, type, sizeText] = fields;
+        const size = Number(sizeText);
+        if (fields.length !== 3 || sha !== entry.sha || type !== "blob" || !/^[0-9]+$/u.test(sizeText)
+          || !Number.isSafeInteger(size)) {
+          throw new Error(`self-host: git cat-file returned an invalid header for ${entry.path} (${entry.sha}).`);
+        }
+        this.remaining = size;
+        this.header = Buffer.alloc(0);
+        chunk = chunk.subarray(newline + 1);
+      }
+      const take = Math.min(this.remaining, chunk.length);
+      this.chunks.push(chunk.subarray(0, take));
+      this.remaining -= take;
+      chunk = chunk.subarray(take);
+      if (chunk.length === 0) return;
+      if (chunk[0] !== 0x0a) {
+        throw new Error(`self-host: git cat-file omitted the separator for ${entry.path} (${entry.sha}).`);
+      }
+      this.blobs.set(entry.path, Buffer.concat(this.chunks));
+      this.position++;
+      this.chunks = [];
+      this.remaining = undefined;
+      chunk = chunk.subarray(1);
+    }
+  }
+
+  /** Reject a partial final response or a missing response before exposing any contents. */
+  finish(): Map<string, Buffer> {
+    const pending = this.entries[this.position];
+    if (pending) throw new Error(`self-host: git cat-file ended before answering for ${pending.path} (${pending.sha}).`);
+    return this.blobs;
+  }
 }
 
-/**
- * Reads every entry's blob bytes straight from git's object database.
- *
- * One `git cat-file --batch` process serves the whole tree, and `cat-file`
- * returns stored bytes exactly as git hashes them: it applies none of the
- * checkout conversions — `core.autocrlf`, `eol` attributes, filter drivers —
- * that a working-tree materialization would. That is the whole point. A
- * checkout-based reader (`read-tree -u`, `worktree add`) smudges LF blobs into
- * CRLF on a conversion-enabled host, so the writer would archive bytes the
- * committed tree never stored and the check would read bytes the commit never
- * recorded; the same commit then verified differently on different machines.
- * Reading the object database is the only source whose bytes are identical to
- * what the tree being committed actually is.
- *
- * @param root - The repository root.
- * @param entries - The tree listing to read, from `{@link listTreeEntries}`.
- * @returns Raw blob bytes keyed by path, one entry per listing entry.
- * @throws Error When git cannot be run, reports a nonzero status, or answers
- *   anything other than the requested blob — every refusal names its path.
- */
-export function readTreeBlobs(root: string, entries: readonly TreeEntry[]): Map<string, Buffer> {
-  if (entries.length === 0) return new Map<string, Buffer>();
-  const result = spawnSync("git", ["cat-file", "--batch"], {
-    cwd: root,
-    input: entries.map((entry) => `${entry.sha}\n`).join(""),
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  // `spawnSync` reports a failure to *launch* in `error`, leaving `status` null.
-  // Treating that as an absent object would turn a missing `git` into a clean
-  // verdict about the repository, so it stays a distinct failure.
-  if (result.error) {
-    throw new Error(`self-host: could not run git: ${result.error.message}`);
+/** Parse captured batch data with the same framing checks used on live subprocess chunks. */
+export function parseBatchResponse(output: Buffer | readonly Buffer[], entries: readonly TreeEntry[]): Map<string, Buffer> {
+  const batch = new BlobBatch(entries);
+  for (const chunk of Buffer.isBuffer(output) ? [output] : output) batch.consume(chunk);
+  return batch.finish();
+}
+
+/** Stream the selected object ids through Git without a shared payload buffer or checkout filters. */
+export async function readTreeBlobs(root: string, entries: readonly TreeEntry[]): Promise<Map<string, Buffer>> {
+  const batch = new BlobBatch(entries);
+  if (entries.length > 0) {
+    await streamProcess("git", ["cat-file", "--batch"], {
+      cwd: root, env: { ...process.env }, input: entries.map(entry => entry.sha + "\n").join(""), timeoutMs: 120_000,
+    }, chunk => batch.consume(chunk));
   }
-  if (result.status !== 0) {
-    const detail = (result.stderr as Buffer).toString("utf8").trim();
-    throw new Error(`self-host: git cat-file --batch failed: ${detail}`);
-  }
-  return parseBatchResponse(result.stdout as Buffer, entries);
+  return batch.finish();
 }
 
 /**
@@ -872,86 +921,110 @@ export function readTreeBlobs(root: string, entries: readonly TreeEntry[]): Map<
  *
  * @param root - The repository root.
  * @param treeish - A tree id (from `git write-tree`) or a committish such as `HEAD`.
- * @returns The tree's configuration, source files and raw blobs.
+ * @param includeBundle - Request the archive for verification. The staged writer reuses the archive from HEAD.
+ * @returns The tree's configuration, source files and required raw blobs.
  * @throws Error When the tree cannot be listed, a blob is missing, the tree
  *   does not carry the configuration, or the configuration is invalid.
  */
-export function readTreeSnapshot(root: string, treeish: string): TreeSnapshot {
+export async function readTreeSnapshot(root: string, treeish: string, includeBundle = true): Promise<TreeSnapshot> {
   const entries = listTreeEntries(root, treeish);
-  const blobs = readTreeBlobs(root, entries);
-  const configBytes = blobs.get(SELF_HOST_CONFIG);
-  if (configBytes === undefined) {
+  const configuration = entries.find(entry => entry.path === SELF_HOST_CONFIG);
+  if (!configuration) {
     throw new Error(`self-host: ${treeish} does not carry ${SELF_HOST_CONFIG}; the gate cannot be configured from it.`);
   }
-  const config = parseSelfHostConfig(configBytes.toString("utf8"));
-  const files = new Map<string, SourceFile>();
-  for (const entry of entries) {
-    if (isExcluded(entry.path, config.exclude)) continue;
-    // `readTreeBlobs` sets a blob for every listing entry or throws, so the
-    // lookup cannot miss; it stays a lookup so the map stays the one authority.
-    files.set(entry.path, {
-      content: blobs.get(entry.path)!,
-      mode: entry.mode === "100755" ? "100755" : "100644",
-    });
+  if (configuration.mode !== "100644" && configuration.mode !== "100755") {
+    throw new Error("self-host: configuration must be a regular file.");
   }
-  return { config, files, blobs };
+  const configBlob = (await readTreeBlobs(root, [configuration])).get(SELF_HOST_CONFIG)!;
+  const config = parseSelfHostConfig(configBlob.toString("utf8"));
+  const source = entries.filter(entry => !isExcluded(entry.path, config.exclude));
+  const selected = entries.filter(entry => entry !== configuration && (entry.path === config.bundle
+    ? includeBundle : !isExcluded(entry.path, config.exclude)));
+  for (const entry of selected) {
+    if (entry.mode !== "100644" && entry.mode !== "100755" && entry.mode !== "120000") {
+      throw new Error(`self-host: unsupported mode ${entry.mode} for ${entry.path}; exclude gitlinks explicitly.`);
+    }
+  }
+  const blobs = await readTreeBlobs(root, selected);
+  blobs.set(SELF_HOST_CONFIG, configBlob);
+  const files = new Map<string, SourceFile>();
+  for (const entry of source) {
+    files.set(entry.path, { content: blobs.get(entry.path)!, mode: entry.mode === "100755" ? "100755" : "100644" });
+  }
+  return { config, files, blobs, bundleTracked: entries.some(entry => entry.path === config.bundle) };
 }
 
 /**
  * Reads the committed bytes of a tracked file at `HEAD`, or null when absent.
  *
- * Exported so the `spawnSync` error check and the null-on-absent branch are
- * both exercised by a real git repository.
+ * An empty path lookup means the file is absent. Listing and blob read errors propagate.
  */
-export function readCommittedFile(root: string, path: string): Buffer | null {
-  const result = spawnSync("git", ["cat-file", "blob", `HEAD:${path}`], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
-  // `spawnSync` reports a failure to *launch* in `error`, leaving `status` null.
-  // Treating that as "file absent" would turn a missing `git` into a clean
-  // verdict about the repository, so it has to be told apart from exit != 0.
-  if (result.error) {
-    throw new Error(`self-host: could not run git: ${result.error.message}`);
-  }
-  if (result.status !== 0) return null;
-  return result.stdout as Buffer;
+export async function readCommittedFile(root: string, path: string): Promise<Buffer | null> {
+  const entry = listTreeEntries(root, "HEAD", [path]).find(entry => entry.path === path);
+  return entry ? (await readTreeBlobs(root, [entry])).get(path)! : null;
 }
 
 /**
- * Reads every non-excluded tracked source file from a directory tree, using the
- * engine's own working-tree reader so content and mode are interpreted by the
- * same code that stages any other repository. The working-tree source for the
- * legacy `--write` mode; the staged and committed trees are read from git's
- * object database by `readTreeSnapshot` instead.
+ * Capture each non-excluded working path with its leaf type and mode. Only
+ * regular captured bytes go through Git's clean conversion check; symlinks
+ * contribute their raw link text.
  *
  * @param root - Directory holding the working source.
  * @param tracked - Paths reported by `git ls-files`.
  * @param exclude - The exclusion list.
+ * @param configuration - The configuration the working writer already observed.
  * @returns Path to content and mode for every source file.
  * @throws Error When a tracked, non-excluded path is missing from `root` — the
- *   one way a path silently disappears, surfaced as a failure rather than a skip.
+ *   one way a path silently disappears — or changed while it was being read,
+ *   because bytes captured across a replacement cannot be classified. Converted
+ *   content requires the staged writer.
  */
 export function readSourceFiles(
   root: string,
   tracked: readonly string[],
   exclude: readonly string[],
+  configuration?: SourceFile,
 ): Map<string, SourceFile> {
   const files = new Map<string, SourceFile>();
+  const regular: string[] = [];
   for (const path of tracked) {
-    if (isExcluded(path, exclude)) continue;
-    let observed;
+    if (path === SELF_HOST_CONFIG && configuration !== undefined) {
+      files.set(path, configuration);
+      regular.push(path);
+      continue;
+    }
+    if (path !== SELF_HOST_CONFIG && isExcluded(path, exclude)) continue;
+    const absolute = join(root, ...path.split("/"));
+    let before: BigIntStats;
+    let content: Buffer | undefined;
     try {
-      observed = readWorkingFile(root, path);
+      before = fs.lstatSync(absolute, { bigint: true });
+      content = readStableSourceBytes(absolute, before);
     } catch (error) {
-      // `readWorkingFile` reports this as a bare ENOENT, which explains
-      // nothing. The interesting fact is *why* a path git tracks is missing
-      // from the working tree — a file deleted on disk but not staged is the
-      // usual story — so say that instead.
-      const detail = errorMessage(error);
       throw new Error(
-        `self-host: tracked path ${path} is absent from ${root} (deleted from the working tree?): ${detail}`,
+        `self-host: tracked path ${path} is absent from ${root} (deleted from the working tree?): ${errorMessage(error)}`,
       );
     }
-    files.set(path, { content: observed.content, mode: observed.executable ? "100755" : "100644" });
+    if (content === undefined) {
+      throw new Error(`self-host: tracked path ${path} changed while it was being read; run the write again.`);
+    }
+    const symbolicLink = before.isSymbolicLink();
+    if (!symbolicLink) regular.push(path);
+    const executable = !symbolicLink && (before.mode & 0o100n) !== 0n;
+    files.set(path, { content, mode: executable ? "100755" : "100644" });
   }
+  if (regular.length > 0) {
+    const algorithm = runGit(root, ["rev-parse", "--show-object-format"]);
+    for (const path of regular) {
+      const bytes = files.get(path)!.content;
+      const raw = createHash(algorithm).update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+      const clean = childProcess.execFileSync("git", ["hash-object", "--stdin", `--path=${path}`], {
+        cwd: root, input: bytes, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL", env: { ...process.env },
+      }).trim();
+      if (clean !== raw) throw new Error(`self-host: Git converts ${path}. Stage the candidate and run --write --staged.`);
+    }
+  }
+  if (isExcluded(SELF_HOST_CONFIG, exclude)) files.delete(SELF_HOST_CONFIG);
   return files;
 }
 
@@ -990,13 +1063,15 @@ export function headCommitTimestamp(root: string): number {
  * legacy `--write` mode) or the frozen Git index (`--staged`). The write path
  * itself only ever reads the committed bundle — `HEAD`, through
  * {@link readCommittedFile}, which is already conversion-free — and writes the
- * new artifact at the fixed target.
+ * new artifact at the fixed target. "Unchanged" is decided from one stable
+ * observation of that target, and the write itself lands through a rename so a
+ * replacement at the path is replaced rather than followed.
  */
-function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<string, SourceFile>): void {
+async function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<string, SourceFile>, bundleTracked: boolean): Promise<void> {
   const { store, refs, cleanup } = freshStore();
   try {
     const sourceTreeId = buildSourceTree(store, files);
-    const existingBundle = readCommittedFile(root, config.bundle);
+    const existingBundle = await readCommittedFile(root, config.bundle);
     const headSha = runGit(root, ["rev-parse", "HEAD"]);
     const signature: Signature = {
       ...SELF_HOST_AUTHOR,
@@ -1011,43 +1086,140 @@ function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<
       signature,
       `self-host: source snapshot at ${headSha}\n`,
     );
-    const target = resolveBundleTarget(root, config.bundle);
-    if (lstatSync(target, { throwIfNoEntry: false })?.isFile() && readFileSync(target).equals(bytes)) {
+    const target = resolveBundleTarget(root, config.bundle, bundleTracked);
+    const before = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
+    if (before?.isFile() && readStableSourceBytes(target, before)?.equals(bytes)) {
       console.log(`self-host: ${config.bundle} is unchanged`);
       return;
     }
-    writeFileSync(target, bytes);
+    // Write through a same-directory temporary and rename over the target
+    // through the engine's durability policy: a rename replaces whatever sits
+    // at the path, where a direct write would follow a symbolic link that
+    // landed there after the checks above and corrupt the file it points at.
+    const temporary = join(dirname(target), `.${basename(target)}.pm-vcs-${randomUUID()}`);
+    try {
+      writeFileSync(temporary, bytes);
+      durability.rename(temporary, target);
+    } finally {
+      durability.discardTemporary(temporary);
+    }
     console.log(`self-host: wrote ${config.bundle} (${bytes.length} bytes)`);
   } finally {
     cleanup();
   }
 }
 
+/** Resolve a Git administrative pathname without trimming significant whitespace. */
+function gitPath(root: string, ...args: string[]): string {
+  return execFileSync("git", ["rev-parse", "--path-format=absolute", ...args], {
+    cwd: root, encoding: "utf8", env: { ...process.env },
+  }).replace(/\n$/u, "");
+}
+
+/** Capture a Git index file, allowing Git's ordinary symlink lookup. */
+function captureIndexFile(path: string): Buffer {
+  const resolved = realpathSync(path);
+  const before = lstatSync(resolved, { bigint: true });
+  const bytes = before.isFile() ? readStableSourceBytes(resolved, before) : undefined;
+  if (bytes === undefined) throw new Error("self-host: expected a stable, regular Git index file.");
+  return bytes;
+}
+
 /**
- * Freezes the candidate tree and snapshots it straight from the object database.
+ * Locate the split-index dependency in captured DIRC bytes. Git's
+ * `--shared-index-path` itself needs the base, so it cannot discover it from
+ * the private index before the base is copied. Git still validates the full
+ * index and the split overlay when it writes the tree.
  *
- * `git write-tree` turns the index into a tree object, and the snapshot is
- * then read from that tree with `ls-tree` and `cat-file` — raw stored bytes,
- * no checkout. The earlier design materialized the tree with `read-tree -u`
- * into a scratch work-tree first, which is a checkout and applies the host's
- * conversion rules (`core.autocrlf`, `eol` attributes, filter drivers): with
- * `core.autocrlf=true` the writer archived LF blobs as CRLF and the committed
- * bundle failed the gate on a default checkout of the same commit. Reading
- * the object database cannot record bytes the tree does not store.
+ * @see https://git-scm.com/docs/gitformat-index
  */
-function writeStagedSnapshot(root: string): void {
-  const tree = runGit(root, ["write-tree"]);
-  const snapshot = readTreeSnapshot(root, tree);
-  writeSnapshot(root, snapshot.config, snapshot.files);
+function sharedIndexName(index: Buffer, hashSize: number): string | undefined {
+  const end = index.length - hashSize;
+  const version = index.readUInt32BE(4);
+  const count = index.readUInt32BE(8);
+  if (index.toString("latin1", 0, 4) !== "DIRC" || version < 2 || version > 4) {
+    throw new Error("self-host: unsupported Git index header.");
+  }
+  let offset = 12;
+  for (let entry = 0; entry < count; ++entry) {
+    const flags = index.readUInt16BE(offset + 40 + hashSize);
+    let name = offset + 42 + hashSize + ((flags & 0x4000) === 0 ? 0 : 2);
+    if (version === 4) {
+      // The prefix-reuse count is a varint. Only its byte width matters here.
+      while ((index.readUInt8(name++) & 0x80) !== 0) { /* skip continuation bytes */ }
+    }
+    const nul = index.indexOf(0, name);
+    if (nul < 0 || nul >= end) throw new Error("self-host: unterminated Git index pathname.");
+    const entrySize = nul + 1 - offset;
+    offset += version === 4 ? entrySize : Math.ceil(entrySize / 8) * 8;
+  }
+  while (offset < end) {
+    const signature = index.toString("latin1", offset, offset + 4);
+    const size = index.readUInt32BE(offset + 4);
+    offset += 8;
+    if (offset + size > end || (signature === "link" && size < hashSize)) {
+      throw new Error("self-host: invalid Git index extension length.");
+    }
+    if (signature === "link") {
+      const oid = index.toString("hex", offset, offset + hashSize);
+      return /^0+$/u.test(oid) ? undefined : `sharedindex.${oid}`;
+    }
+    offset += size;
+  }
+  return undefined;
+}
+
+/** Read the one base Git would use, preferring its per-worktree Git directory. */
+function captureSharedIndex(root: string, index: string, base: string): Buffer {
+  const primary = join(gitPath(root, "--absolute-git-dir"), base);
+  try {
+    return captureIndexFile(primary);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return captureIndexFile(join(dirname(index), base));
+  }
+}
+
+/** Freeze the selected index and its required base before reading the tree from Git objects. */
+async function writeStagedSnapshot(root: string): Promise<void> {
+  const index = gitPath(root, "--git-path", "index");
+  const scratch = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-index-"));
+  let tree: string;
+  try {
+    const copy = join(scratch, "index");
+    const bytes = captureIndexFile(index);
+    const hashSize = createHash(runGit(root, ["rev-parse", "--show-object-format"])).digest().length;
+    const base = sharedIndexName(bytes, hashSize);
+    writeFileSync(copy, bytes);
+    const indexEnv = { ...process.env, GIT_INDEX_FILE: copy };
+    if (base !== undefined) {
+      writeFileSync(join(scratch, base), captureSharedIndex(root, index, base));
+      // Git prefers a base in GIT_DIR, so direct its lookup and mtime update
+      // to the captured copy while retaining the original common object store.
+      writeFileSync(join(scratch, "HEAD"), "ref: refs/heads/self-host\n");
+      Object.assign(indexEnv, {
+        GIT_DIR: scratch,
+        GIT_COMMON_DIR: gitPath(root, "--git-common-dir"),
+        GIT_WORK_TREE: root,
+      });
+    }
+    tree = runGit(root, ["-c", "core.splitIndex=false", "write-tree"], indexEnv);
+  } finally {
+    durability.discardTemporary(scratch);
+  }
+  const snapshot = await readTreeSnapshot(root, tree, false);
+  await writeSnapshot(root, snapshot.config, snapshot.files, snapshot.bundleTracked);
 }
 
 /** Verifies committed HEAD by default, or writes from working or staged source. */
-export function main(root: string, args: readonly string[]): void {
+export async function main(root: string, args: readonly string[]): Promise<void> {
   if (args.includes("--write")) {
-    if (args.includes("--staged")) writeStagedSnapshot(root);
+    if (args.includes("--staged")) await writeStagedSnapshot(root);
     else {
-      const config = loadConfig(join(root, SELF_HOST_CONFIG));
-      writeSnapshot(root, config, readSourceFiles(root, listTrackedFiles(root), config.exclude));
+      const tracked = listTrackedFiles(root);
+      if (!tracked.includes(SELF_HOST_CONFIG)) throw new Error("self-host: the configuration must be tracked.");
+      const { config, source } = captureWorkingConfig(join(root, SELF_HOST_CONFIG));
+      await writeSnapshot(root, config, readSourceFiles(root, tracked, config.exclude, source), tracked.includes(config.bundle));
     }
     return;
   }
@@ -1064,7 +1236,7 @@ export function main(root: string, args: readonly string[]): void {
     // as git hashes them: an uncommitted edit, a staged change, or a
     // line-ending preference can no longer move what the gate compares, which
     // is the property this gate advertises that it has.
-    const snapshot = readTreeSnapshot(root, "HEAD");
+    const snapshot = await readTreeSnapshot(root, "HEAD");
     const sourceTreeId = buildSourceTree(store, snapshot.files);
     const bundleBytes = snapshot.blobs.get(snapshot.config.bundle) ?? null;
     if (bundleBytes === null) {
@@ -1088,4 +1260,4 @@ export function main(root: string, args: readonly string[]): void {
   }
 }
 
-if (isMainInvocation(process.argv, import.meta.url)) main(resolve(import.meta.dirname, ".."), process.argv);
+if (isMainInvocation(process.argv, import.meta.url)) await main(resolve(import.meta.dirname, ".."), process.argv);

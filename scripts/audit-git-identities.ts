@@ -68,7 +68,7 @@ export async function streamProcess(
       fail(new Error(`${command} ${arguments_.join(" ")} timed out after ${options.timeoutMs}ms.`));
     }, options.timeoutMs);
     child.on("error", (error) => {
-      fail(new Error(`${command} ${arguments_.join(" ")} failed: ${error.message}`));
+      fail(new Error(`could not run ${command} ${arguments_.join(" ")} (launch failed: ${error.message}).`));
     });
     child.stderr!.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");

@@ -37,7 +37,7 @@ for (const [workflow, job, postScript] of [
       execFileSync(command, args, { cwd: root, env: environment, encoding: "utf8" });
 
     mkdirSync(join(root, "scripts"));
-    for (const path of ["scripts/self-host.ts", "scripts/main-invocation.ts", "self-host.json"]) {
+    for (const path of ["git.ts", "scripts/self-host.ts", "scripts/audit-git-identities.ts", "scripts/main-invocation.ts", "self-host.json"]) {
       copyFileSync(join(packageRoot, path), join(root, path));
     }
     for (const path of ["engine", "node_modules"]) symlinkSync(join(packageRoot, path), join(root, path), "junction");

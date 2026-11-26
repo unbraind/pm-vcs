@@ -10,12 +10,15 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 // inputs. Nothing is mocked: the engine that ships is the engine under test.
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import childProcess, { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs, { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, test } from "node:test";
+import { ModuleMocks } from "./helpers/self-host-mocks.ts";
 
 import { type ObjectArrival } from "../engine/lifecycle.ts";
 import { type ObjectId, ObjectStore } from "../engine/objects.ts";
@@ -54,6 +57,7 @@ import { flattenTree } from "../engine/worktree.ts";
 
 const ref = "refs/heads/self-host";
 const signature: Signature = { name: "self-host test", email: "t@t", timestamp: 1000, timezoneOffsetMinutes: 0 };
+const mock = new ModuleMocks();
 
 /** A scratch object store and ref store sharing a temp directory. */
 interface Scratch {
@@ -679,14 +683,14 @@ interface Fixture {
 }
 
 /** Creates a real git repo, commits some source files, and writes a self-host.json. */
-function fixture(): Fixture {
+function fixture(objectFormat = "sha1"): Fixture {
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-fixture-"));
   const git = (args: string[]): string => execFileSync("git", args, {
     cwd: root,
     encoding: "utf8",
     env: { ...testEnvironment(), NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
   }).trim();
-  git(["init", "-q", "-b", "main"]);
+  git(["init", "-q", "-b", "main", `--object-format=${objectFormat}`]);
   git(["config", "user.email", "test@pm-vcs.local"]);
   git(["config", "user.name", "self-host test"]);
   git(["config", "commit.gpgsign", "false"]);
@@ -757,23 +761,22 @@ function bundledFiles(bytes: Buffer): Map<string, { content: Buffer; mode: strin
 }
 
 /** Asserts the read-only gate passes on `root`, restoring the process exit code. */
-function assertCheckPasses(root: string): void {
+async function assertCheckPasses(root: string): Promise<void> {
   const exitBefore = process.exitCode;
   const origErr = console.error;
   let errs = "";
   console.error = (msg: string) => { errs += `${msg}\n`; };
-  process.exitCode = undefined;
+  process.exitCode = 0;
   try {
-    main(root, ["node", "self-host.ts"]);
+    await main(root, ["node", "self-host.ts"]);
+    assert.equal(process.exitCode, 0, errs);
   } finally {
+    process.exitCode = exitBefore;
     console.error = origErr;
   }
-  const failed = process.exitCode === 1;
-  process.exitCode = exitBefore;
-  assert.equal(failed, false, errs);
 }
 
-test("readTreeSnapshot returns raw committed bytes, modes and the committed bundle", () => {
+test("readTreeSnapshot returns raw committed bytes, modes and the committed bundle", async () => {
   const f = fixture();
   try {
     // The mode is what the tree records — not what a checkout wrote — so the
@@ -782,50 +785,50 @@ test("readTreeSnapshot returns raw committed bytes, modes and the committed bund
     f.git(["add", "-A"]);
     f.git(["update-index", "--chmod=+x", "run.sh"]);
     f.git(["commit", "-qm", "add executable"]);
-    main(f.root, ["node", "self-host.ts", "--write"]);
+    await main(f.root, ["node", "self-host.ts", "--write"]);
     // Stage the bundle explicitly: `git add -A` would re-read `run.sh` from
     // the working tree and reset the executable mode the tree records.
     f.git(["add", "--", "selfhost.bundle"]);
     f.git(["commit", "-qm", "add bundle"]);
     // A conversion-enabled host must not move one byte of the snapshot.
     f.git(["config", "core.autocrlf", "true"]);
-    const snapshot = readTreeSnapshot(f.root, "HEAD");
+    const snapshot = await readTreeSnapshot(f.root, "HEAD");
     assert.equal(snapshot.files.get("run.sh")?.mode, "100755");
-    assert.deepEqual(snapshot.files.get("run.sh")?.content, readCommittedFile(f.root, "run.sh"));
-    assert.deepEqual(snapshot.files.get("README.md")?.content, readCommittedFile(f.root, "README.md"));
+    assert.deepEqual(snapshot.files.get("run.sh")?.content, await readCommittedFile(f.root, "run.sh"));
+    assert.deepEqual(snapshot.files.get("README.md")?.content, await readCommittedFile(f.root, "README.md"));
     assert.equal(snapshot.files.has("selfhost.bundle"), false, "exclusions apply to the source files");
-    assert.deepEqual(snapshot.blobs.get("selfhost.bundle"), readCommittedFile(f.root, "selfhost.bundle"));
+    assert.deepEqual(snapshot.blobs.get("selfhost.bundle"), await readCommittedFile(f.root, "selfhost.bundle"));
   } finally {
     f.cleanup();
   }
 });
 
-test("listTreeEntries keeps a path that contains a newline", () => {
+test("listTreeEntries keeps a path that contains a newline", async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, "lead\ning.md"), "newline in path\n");
     f.git(["add", "-A"]);
     const entries = listTreeEntries(f.root, f.git(["write-tree"]));
     assert.ok(entries.some((entry) => entry.path === "lead\ning.md"));
-    const blobs = readTreeBlobs(f.root, entries);
+    const blobs = await readTreeBlobs(f.root, entries);
     assert.deepEqual(blobs.get("lead\ning.md"), Buffer.from("newline in path\n", "utf8"));
   } finally {
     f.cleanup();
   }
 });
 
-test("readTreeBlobs reads no objects for an empty listing", () => {
+test("readTreeBlobs reads no objects for an empty listing", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pm-vcs-empty-listing-"));
   temps.push(dir);
-  assert.deepEqual([...readTreeBlobs(dir, [])], []);
+  assert.deepEqual([...await readTreeBlobs(dir, [])], []);
 });
 
-test("readTreeSnapshot refuses a tree that carries a gitlink", () => {
+test("readTreeSnapshot refuses a tree that carries a gitlink", async () => {
   const f = fixture();
   try {
     const sha = f.git(["rev-parse", "HEAD"]);
     f.git(["update-index", "--add", "--cacheinfo", `160000,${sha},vendor/sub`]);
-    assert.throws(() => readTreeSnapshot(f.root, f.git(["write-tree"])), /commit entry|gitlink/);
+    await assert.rejects(() => readTreeSnapshot(f.root, f.git(["write-tree"])), /commit entry|gitlink/);
   } finally {
     f.cleanup();
   }
@@ -867,12 +870,12 @@ test("parseBatchResponse refuses every malformed answer", () => {
   }
 });
 
-test("readTreeBlobs throws when git cannot be launched", () => {
+test("readTreeBlobs throws when git cannot be launched", async () => {
   const f = fixture();
   const origPath = process.env.PATH;
   try {
     process.env.PATH = "/nonexistent";
-    assert.throws(
+    await assert.rejects(
       () => readTreeBlobs(f.root, [{ mode: "100644", sha: "a".repeat(40), path: "x" }]),
       /could not run git/,
     );
@@ -882,32 +885,32 @@ test("readTreeBlobs throws when git cannot be launched", () => {
   }
 });
 
-test("readTreeBlobs refuses a directory without a repository", () => {
+test("readTreeBlobs refuses a directory without a repository", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pm-vcs-no-repo-"));
   temps.push(dir);
-  assert.throws(
+  await assert.rejects(
     () => readTreeBlobs(dir, [{ mode: "100644", sha: "a".repeat(40), path: "x" }]),
     /git cat-file --batch failed/,
   );
 });
 
-test("readTreeSnapshot refuses a staged tree that drops the configuration", () => {
+test("readTreeSnapshot refuses a staged tree that drops the configuration", async () => {
   const f = fixture();
   try {
     f.git(["rm", "--cached", "--", "self-host.json"]);
-    assert.throws(() => readTreeSnapshot(f.root, f.git(["write-tree"])), /does not carry self-host\.json/);
+    await assert.rejects(() => readTreeSnapshot(f.root, f.git(["write-tree"])), /does not carry self-host\.json/);
   } finally {
     f.cleanup();
   }
 });
 
 
-test("the staged snapshot keeps a tracked symlink's historical bundle bytes", () => {
+test("the staged snapshot keeps a tracked symlink's historical bundle bytes", async () => {
   const f = fixture();
   try {
     symlinkSync("README.md", join(f.root, "link.md"));
     f.git(["add", "--", "link.md"]);
-    main(f.root, ["node", "self-host.ts", "--write", "--staged"]);
+    await main(f.root, ["node", "self-host.ts", "--write", "--staged"]);
     const bundled = bundledFiles(readFileSync(join(f.root, "selfhost.bundle")));
     // A link records its target text as blob content; the working-tree reader
     // has always bundled exactly those bytes as a non-executable file.
@@ -918,10 +921,10 @@ test("the staged snapshot keeps a tracked symlink's historical bundle bytes", ()
   }
 });
 
-test("readCommittedFile returns the bytes of a tracked file at HEAD", () => {
+test("readCommittedFile returns the bytes of a tracked file at HEAD", async () => {
   const f = fixture();
   try {
-    const bytes = readCommittedFile(f.root, "README.md");
+    const bytes = await readCommittedFile(f.root, "README.md");
     assert.ok(bytes !== null);
     assert.equal(bytes!.toString("utf8"), "hello\n");
   } finally {
@@ -929,10 +932,10 @@ test("readCommittedFile returns the bytes of a tracked file at HEAD", () => {
   }
 });
 
-test("readCommittedFile returns null for a path absent from HEAD", () => {
+test("readCommittedFile returns null for a path absent from HEAD", async () => {
   const f = fixture();
   try {
-    assert.equal(readCommittedFile(f.root, "nonexistent.txt"), null);
+    assert.equal(await readCommittedFile(f.root, "nonexistent.txt"), null);
   } finally {
     f.cleanup();
   }
@@ -985,14 +988,14 @@ test("headCommitTimestamp returns the HEAD commit timestamp in ms", () => {
   }
 });
 
-test("main --write generates a bundle in a real git repo", () => {
+test("main --write generates a bundle in a real git repo", async () => {
   const f = fixture();
   try {
     const origLog = console.log;
     let logged = "";
     console.log = (msg: string) => { logged = msg; };
     try {
-      main(f.root, ["node", "self-host.ts", "--write"]);
+      await main(f.root, ["node", "self-host.ts", "--write"]);
     } finally {
       console.log = origLog;
     }
@@ -1001,18 +1004,18 @@ test("main --write generates a bundle in a real git repo", () => {
     assert.ok(bundleStat.length > 0);
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "add bundle"]);
-    main(f.root, ["node", "self-host.ts"]);
+    await main(f.root, ["node", "self-host.ts"]);
   } finally {
     f.cleanup();
   }
 });
 
-test("staged self-host writing snapshots the pending config, blobs, paths and modes", () => {
+test("staged self-host writing snapshots the pending config, blobs, paths and modes", async () => {
   const f = fixture();
   try {
     const archive = join(f.root, "selfhost.bundle");
     const args = ["node", "self-host.ts", "--write", "--staged"];
-    main(f.root, ["node", "self-host.ts", "--write"]);
+    await main(f.root, ["node", "self-host.ts", "--write"]);
     f.git(["add", "--", "selfhost.bundle"]);
     f.git(["commit", "-qm", "baseline bundle"]);
     const readme = join(f.root, "README.md");
@@ -1031,22 +1034,22 @@ test("staged self-host writing snapshots the pending config, blobs, paths and mo
     const candidate = f.git(["write-tree"]);
     const base = f.git(["rev-parse", "HEAD"]);
 
-    main(f.root, args);
+    await main(f.root, args);
     assert.equal(f.git(["write-tree"]), candidate, "writing must preserve the caller's index");
     assert.equal(f.git(["rev-parse", "HEAD"]), base, "writing must preserve HEAD");
     assert.equal(readFileSync(readme, "utf8"), "unstaged\n");
     assert.equal(readFileSync(join(f.root, "self-host.json"), "utf8"), "unstaged, invalid configuration\n");
     const bytes = readFileSync(archive);
     utimesSync(archive, 1, 1);
-    main(f.root, args);
+    await main(f.root, args);
     assert.equal(statSync(archive).mtimeMs, 1000, "an identical pending snapshot must not be rewritten");
 
     f.git(["add", "--", "selfhost.bundle"]);
     f.git(["commit", "-qm", "commit exactly the staged candidate"]);
     const exitBefore = process.exitCode;
-    main(f.root, ["node", "self-host.ts"]);
+    await main(f.root, ["node", "self-host.ts"]);
     assert.equal(process.exitCode, exitBefore);
-    main(f.root, args);
+    await main(f.root, args);
     assert.deepEqual(readFileSync(archive), bytes);
     assert.equal(statSync(archive).mtimeMs, 1000, "a committed matching snapshot must not be rewritten");
   } finally {
@@ -1054,12 +1057,12 @@ test("staged self-host writing snapshots the pending config, blobs, paths and mo
   }
 });
 
-test("staged self-host writing refuses an unresolved index before replacing the bundle", () => {
+test("staged self-host writing refuses an unresolved index before replacing the bundle", async () => {
   const f = fixture();
   try {
     const archive = join(f.root, "selfhost.bundle");
     const readme = join(f.root, "README.md");
-    main(f.root, ["node", "self-host.ts", "--write"]);
+    await main(f.root, ["node", "self-host.ts", "--write"]);
     f.git(["add", "--", "selfhost.bundle"]);
     f.git(["commit", "-qm", "add the bundle"]);
     const bytes = readFileSync(archive);
@@ -1071,23 +1074,23 @@ test("staged self-host writing refuses an unresolved index before replacing the 
     f.git(["commit", "-qam", "main edit"]);
     assert.throws(() => f.git(["merge", "other"]), /Command failed/);
     assert.match(f.git(["ls-files", "--unmerged"]), /README\.md/);
-    assert.throws(() => main(f.root, ["node", "self-host.ts", "--write", "--staged"]), /unmerged/);
+    await assert.rejects(() => main(f.root, ["node", "self-host.ts", "--write", "--staged"]), /unmerged/);
     assert.deepEqual(readFileSync(archive), bytes);
   } finally {
     f.cleanup();
   }
 });
 
-test("staged self-host writing reports that a plain directory has no Git index", () => {
+test("staged self-host writing reports that a plain directory has no Git index", async () => {
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-no-git-"));
   try {
-    assert.throws(() => main(root, ["node", "self-host.ts", "--write", "--staged"]), /not a git repository/);
+    await assert.rejects(() => main(root, ["node", "self-host.ts", "--write", "--staged"]), /not a git repository/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("staged self-host writing bundles raw object bytes under core.autocrlf=true", () => {
+test("staged self-host writing bundles raw object bytes under core.autocrlf=true", async () => {
   const f = fixture();
   try {
     // The blocking re-review finding: materializing the frozen tree through a
@@ -1097,25 +1100,25 @@ test("staged self-host writing bundles raw object bytes under core.autocrlf=true
     f.git(["config", "core.autocrlf", "true"]);
     writeFileSync(join(f.root, "README.md"), "staged\nsecond\r\n");
     f.git(["add", "--", "README.md"]);
-    main(f.root, ["node", "self-host.ts", "--write", "--staged"]);
+    await main(f.root, ["node", "self-host.ts", "--write", "--staged"]);
     f.git(["add", "--", "selfhost.bundle"]);
     f.git(["commit", "-qm", "staged candidate"]);
     // Byte-level proof against the object database: the bundle carries exactly
     // what the tree stores, whatever this host would check out.
     const bundled = bundledFiles(readFileSync(join(f.root, "selfhost.bundle")));
-    assert.deepEqual(bundled.get("README.md")?.content, readCommittedFile(f.root, "README.md"));
+    assert.deepEqual(bundled.get("README.md")?.content, await readCommittedFile(f.root, "README.md"));
     // A default (no-conversion) checkout of the same commit must verify …
     f.git(["config", "core.autocrlf", "false"]);
-    assertCheckPasses(f.root);
+    await assertCheckPasses(f.root);
     // … and so must the conversion-enabled host that wrote it.
     f.git(["config", "core.autocrlf", "true"]);
-    assertCheckPasses(f.root);
+    await assertCheckPasses(f.root);
   } finally {
     f.cleanup();
   }
 });
 
-test("staged snapshots carry exactly the frozen tree's bytes under every conversion vector", () => {
+test("staged snapshots carry exactly the frozen tree's bytes under every conversion vector", async () => {
   // Property: whatever conversion rules the host would apply on checkout —
   // core.autocrlf, eol attributes — the bundle's bytes for every path equal
   // the frozen tree's stored bytes, because they are read from the object
@@ -1134,42 +1137,42 @@ test("staged snapshots carry exactly the frozen tree's bytes under every convers
       writeFileSync(join(f.root, "README.md"), "one\ntwo\r\nthree\n");
       writeFileSync(join(f.root, "note.txt"), "crlf\r\nonly\n");
       f.git(["add", "-A"]);
-      main(f.root, ["node", "self-host.ts", "--write", "--staged"]);
+      await main(f.root, ["node", "self-host.ts", "--write", "--staged"]);
       f.git(["add", "--", "selfhost.bundle"]);
       f.git(["commit", "-qm", "conversion candidate"]);
       const bundled = bundledFiles(readFileSync(join(f.root, "selfhost.bundle")));
       for (const path of ["README.md", "src/app.ts", "note.txt", ".gitattributes", "self-host.json"]) {
-        assert.deepEqual(bundled.get(path)?.content, readCommittedFile(f.root, path), `${label}: ${path}`);
+        assert.deepEqual(bundled.get(path)?.content, await readCommittedFile(f.root, path), `${label}: ${path}`);
       }
-      assertCheckPasses(f.root);
+      await assertCheckPasses(f.root);
     } finally {
       f.cleanup();
     }
   }
 });
 
-test("main --check passes under core.autocrlf=true because committed bytes are read raw", () => {
+test("main --check passes under core.autocrlf=true because committed bytes are read raw", async () => {
   const f = fixture();
   try {
     // The consumer side of the same class: a conversion-enabled host must not
     // fail a clean repository. The verify path reads HEAD through git's object
     // database, never through a checkout, so the host's line-ending preference
     // cannot move what the gate compares.
-    main(f.root, ["node", "self-host.ts", "--write"]);
+    await main(f.root, ["node", "self-host.ts", "--write"]);
     f.git(["add", "-A"]);
     f.git(["commit", "-qm", "add bundle"]);
     f.git(["config", "core.autocrlf", "true"]);
-    assertCheckPasses(f.root);
+    await assertCheckPasses(f.root);
   } finally {
     f.cleanup();
   }
 });
 
 
-test("main --check fails when the bundle is missing from HEAD", () => {
+test("main --check fails when the bundle is missing from HEAD", async () => {
   const f = fixture();
   try {
-    assert.throws(
+    await assert.rejects(
       () => main(f.root, ["node", "self-host.ts"]),
       /no committed bundle/,
     );
@@ -1178,10 +1181,10 @@ test("main --check fails when the bundle is missing from HEAD", () => {
   }
 });
 
-for (const changedPath of ["README.md", ".agents/pm/tasks/fixture.toon"]) test(`main --check fails when the bundle does not match ${changedPath}`, () => {
+for (const changedPath of ["README.md", ".agents/pm/tasks/fixture.toon"]) test(`main --check fails when the bundle does not match ${changedPath}`, async () => {
   const f = fixture();
   try {
-    main(f.root, ["node", "self-host.ts", "--write"]);
+    await main(f.root, ["node", "self-host.ts", "--write"]);
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "add bundle"]);
     mkdirSync(join(f.root, changedPath, ".."), { recursive: true });
@@ -1194,7 +1197,7 @@ for (const changedPath of ["README.md", ".agents/pm/tasks/fixture.toon"]) test(`
     let errs = "";
     console.error = (msg: string) => { errs += msg + "\n"; };
     try {
-      main(f.root, ["node", "self-host.ts"]);
+      await main(f.root, ["node", "self-host.ts"]);
     } finally {
       console.error = origErr;
     }
@@ -1206,7 +1209,7 @@ for (const changedPath of ["README.md", ".agents/pm/tasks/fixture.toon"]) test(`
   }
 });
 
-test("main --check passes when only an excluded dependency manifest changes", () => {
+test("main --check passes when only an excluded dependency manifest changes", async () => {
   // Regression for the dependabot red-CI defect (pm-vcs-8y72): the bundle
   // versions pm-vcs source, not git-owned dependency manifests. A commit that
   // touches only a manifest listed in `exclude` must pass the gate with no
@@ -1224,7 +1227,7 @@ test("main --check passes when only an excluded dependency manifest changes", ()
     );
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "track manifest and exclude it"]);
-    main(f.root, ["node", "self-host.ts", "--write"]);
+    await main(f.root, ["node", "self-host.ts", "--write"]);
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "add bundle"]);
     writeFileSync(
@@ -1239,7 +1242,7 @@ test("main --check passes when only an excluded dependency manifest changes", ()
     console.log = (msg: string) => { logged += msg + "\n"; };
     try {
       process.exitCode = undefined;
-      main(f.root, ["node", "self-host.ts"]);
+      await main(f.root, ["node", "self-host.ts"]);
     } finally {
       console.log = origLog;
       process.exitCode = origExit;
@@ -1250,7 +1253,7 @@ test("main --check passes when only an excluded dependency manifest changes", ()
   }
 });
 
-test("main --check still fails when a non-excluded source file changes after an excluded manifest bump", () => {
+test("main --check still fails when a non-excluded source file changes after an excluded manifest bump", async () => {
   const f = fixture();
   try {
     writeFileSync(join(f.root, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0" }, null, 2) + "\n");
@@ -1264,7 +1267,7 @@ test("main --check still fails when a non-excluded source file changes after an 
     );
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "track manifest and exclude it"]);
-    main(f.root, ["node", "self-host.ts", "--write"]);
+    await main(f.root, ["node", "self-host.ts", "--write"]);
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "add bundle"]);
     writeFileSync(join(f.root, "README.md"), "drifted\n");
@@ -1277,7 +1280,7 @@ test("main --check still fails when a non-excluded source file changes after an 
     console.error = (msg: string) => { errs += msg + "\n"; };
     try {
       process.exitCode = undefined;
-      main(f.root, ["node", "self-host.ts"]);
+      await main(f.root, ["node", "self-host.ts"]);
     } finally {
       exitAfterMain = process.exitCode;
       console.error = origErr;
@@ -1306,12 +1309,12 @@ test("isMainInvocation returns false when argv[1] is undefined", () => {
   assert.equal(isMainInvocation(["node"], import.meta.url), false);
 });
 
-test("readCommittedFile throws when git cannot be launched", () => {
+test("readCommittedFile throws when git cannot be launched", async () => {
   const f = fixture();
   const origPath = process.env.PATH;
   try {
     process.env.PATH = "/nonexistent";
-    assert.throws(
+    await assert.rejects(
       () => readCommittedFile(f.root, "README.md"),
       /could not run git/,
     );
@@ -1632,4 +1635,775 @@ test("source snapshots publish every blob and tree under one uninterrupted nativ
   assert.equal(f.store.read(tree).type, "tree");
   for (const file of files.values()) assert.ok(f.store.inventory().some(entry => entry.object.payload.equals(file.content)));
  } finally { f.cleanup(); }
+});
+
+test("snapshot paths preserve valid UTF-8 and reject an unrepresentable name", () => {
+  const f = fixture();
+  try {
+    const valid = "\uFEFFcafé-�";
+    writeFileSync(join(f.root, valid), "ordinary source");
+    const marker = "\x01ordinary-path";
+    writeFileSync(join(f.root, marker), "record marker in a path");
+    f.git(["add", "--", valid, marker]);
+    const tree = f.git(["write-tree"]);
+    for (const name of [marker, valid]) {
+      assert.ok(listTrackedFiles(f.root).includes(name));
+      assert.ok(listTreeEntries(f.root, tree).some(entry => entry.path === name));
+    }
+
+    for (const suffix of [0x80, 0x81]) {
+      const name = Buffer.concat([Buffer.from(join(f.root, "name-")), Buffer.from([suffix])]);
+      writeFileSync(name, `distinct source byte ${suffix}`);
+    }
+    f.git(["add", "--", "name-*"]);
+    assert.throws(() => listTreeEntries(f.root, f.git(["write-tree"])), /UTF-8/);
+    assert.throws(() => listTrackedFiles(f.root), /UTF-8/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("batch framing requires an unsigned safe size, exact fields, separators and EOF", () => {
+  const sha = "a".repeat(40);
+  const entry: TreeEntry = { mode: "100644", sha, path: "sample" };
+  for (const answer of [
+    "blob -1\n", "blob \n\n", "blob +1\nx\n", "blob 1.0\nx\n",
+    "blob 1e0\nx\n", "blob 0x1\nx\n", "blob 9007199254740992\n",
+    "blob 1 extra\nx\n", "blob 1\nx!", "blob 1\nx\nextra",
+  ]) {
+    assert.throws(() => parseBatchResponse(Buffer.from(`${sha} ${answer}`), [entry]), /git cat-file/, answer);
+  }
+  assert.deepEqual(parseBatchResponse(Buffer.from(`${sha} blob 0\n\n`), [entry]).get(entry.path), Buffer.alloc(0));
+});
+
+test("tree snapshots fetch only configuration, included source and the verification bundle", async () => {
+  const f = fixture();
+  try {
+    const config = { bundle: "selfhost.bundle", ref, exclude: ["selfhost.bundle", "omitted/"] };
+    mkdirSync(join(f.root, "omitted"));
+    writeFileSync(join(f.root, "omitted", "first"), "excluded object one");
+    writeFileSync(join(f.root, "omitted", "second"), "excluded object two");
+    writeFileSync(join(f.root, "self-host.json"), JSON.stringify(config));
+    f.git(["add", "--", "self-host.json", "omitted"]);
+    const tree = f.git(["write-tree"]);
+    const snapshot = await readTreeSnapshot(f.root, tree);
+    assert.deepEqual([...snapshot.blobs.keys()].sort(), ["README.md", "self-host.json", "src/app.ts"]);
+    // Make both excluded blobs unavailable. Any attempt to fetch them fails, even if later discarded.
+    for (const name of ["first", "second"]) {
+      const sha = f.git(["rev-parse", `${tree}:omitted/${name}`]);
+      rmSync(join(f.root, ".git", "objects", sha.slice(0, 2), sha.slice(2)));
+    }
+    await main(f.root, ["--write", "--staged"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "candidate"]);
+    await assertCheckPasses(f.root);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("working writer handles converted bytes before publishing a bundle", async () => {
+  const f = fixture();
+  try {
+    f.git(["config", "core.autocrlf", "true"]);
+    writeFileSync(join(f.root, "README.md"), "working edit\r\n");
+    const archive = join(f.root, "selfhost.bundle");
+    await assert.rejects(() => main(f.root, ["--write"]), /Git converts README.md.*--staged/);
+    assert.equal(statSync(archive, { throwIfNoEntry: false }), undefined);
+    f.git(["add", "--", "README.md"]);
+    await main(f.root, ["--write", "--staged"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "working snapshot"]);
+    await assertCheckPasses(f.root);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("explicitly excluded gitlinks permit staged writing and committed verification", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, "self-host.json"), JSON.stringify({ bundle: "selfhost.bundle", ref, exclude: ["selfhost.bundle", "vendor/"] }));
+    f.git(["add", "--", "self-host.json"]);
+    f.git(["update-index", "--add", "--cacheinfo", `160000,${f.git(["rev-parse", "HEAD"])},vendor/sub`]);
+    await main(f.root, ["--write", "--staged"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "excluded gitlink"]);
+    await assertCheckPasses(f.root);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("freezing a staged edit leaves the original index byte-identical", async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, "README.md"), "index edit\n");
+    f.git(["add", "--", "README.md"]);
+    const index = join(f.root, ".git", "index");
+    const before = readFileSync(index);
+    await main(f.root, ["--write", "--staged"]);
+    assert.deepEqual(readFileSync(index), before);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("configuration must be a regular file in every selected snapshot", async () => {
+  const f = fixture();
+  try {
+    f.git(["mv", "self-host.json", "config-data.json"]);
+    symlinkSync("config-data.json", join(f.root, "self-host.json"));
+    f.git(["add", "--", "self-host.json"]);
+    f.git(["commit", "-qm", "configuration link"]);
+    for (const args of [["--write"], ["--write", "--staged"], ["--check"]]) {
+      await assert.rejects(() => main(f.root, args), /configuration.*regular/);
+    }
+    assert.equal(statSync(join(f.root, "selfhost.bundle"), { throwIfNoEntry: false }), undefined);
+  } finally {
+    f.cleanup();
+  }
+});
+
+
+test("batch framing is independent of transport chunk boundaries", () => {
+  const entry: TreeEntry = { mode: "100644", sha: "a".repeat(40), path: "binary" };
+  const bytes = Buffer.from([0, 10, 128, 255]);
+  const response = Buffer.concat([Buffer.from(`${entry.sha} blob 4\n`), bytes, Buffer.from("\n")]);
+  const chunks = Array.from(response, byte => Buffer.from([byte]));
+  assert.deepEqual(parseBatchResponse(chunks, [entry]).get(entry.path), bytes);
+});
+
+test("working content checks honor quoted paths, source symlinks and excluded configuration", () => {
+  const f = fixture();
+  try {
+    const name = '"read\nme"';
+    writeFileSync(join(f.root, name), "unchanged bytes");
+    const target = Buffer.from([0x74, 0x80]);
+    symlinkSync(target, join(f.root, "link"));
+    const selected = readSourceFiles(f.root, [name, "link", "self-host.json"], ["self-host.json"]);
+    assert.deepEqual([...selected.keys()], [name, "link"]);
+    assert.deepEqual(selected.get("link")?.content, target);
+    assert.equal(readSourceFiles(f.root, ["link"], []).size, 1);
+    assert.throws(() => listTreeEntries(f.root, "unknown-tree"), /git ls-tree failed/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+
+test("required batch payloads stream across the former aggregate output ceiling", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "large");
+  const size = 33 * 1024 * 1024;
+  writeFileSync(path, "first byte");
+  truncateSync(path, size);
+  f.git(["add", "--", "large"]);
+  const sha = f.git(["rev-parse", ":large"]);
+  const paths = ["large", "second copy"];
+  const blobs = await readTreeBlobs(f.root, paths.map(path => ({ mode: "100644", sha, path })));
+  for (const path of paths) {
+    const blob = blobs.get(path)!;
+    assert.equal(blob.length, size);
+    assert.equal(blob.subarray(0, 10).toString(), "first byte");
+    assert.equal(blob.at(-1), 0);
+  }
+});
+
+test("working writer requires its regular configuration to be tracked", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  f.git(["rm", "--cached", "--", "self-host.json"]);
+  await assert.rejects(() => main(f.root, ["--write"]), /configuration must be tracked/);
+});
+
+test("staged writer preserves an alternate split index", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const index = join(f.root, ".git", "alternate index ");
+  const previous = process.env.GIT_INDEX_FILE;
+  try {
+    process.env.GIT_INDEX_FILE = index;
+    runGit(f.root, ["read-tree", "HEAD"]);
+    writeFileSync(join(f.root, "README.md"), "alternate edit");
+    runGit(f.root, ["add", "--", "README.md"]);
+    runGit(f.root, ["update-index", "--split-index"]);
+    const before = readFileSync(index);
+    await main(f.root, ["--write", "--staged"]);
+    assert.deepEqual(readFileSync(index), before);
+    assert.deepEqual(bundledFiles(readFileSync(join(f.root, "selfhost.bundle"))).get("README.md")?.content, Buffer.from("alternate edit"));
+  } finally {
+    if (previous === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = previous;
+  }
+});
+
+test("staged writer carries a split index's shared base beside the caller's index", async () => {
+  const f = fixture();
+  const indexDirectory = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-base-"));
+  const index = join(indexDirectory, "index");
+  const previous = process.env.GIT_INDEX_FILE;
+  try {
+    process.env.GIT_INDEX_FILE = index;
+    runGit(f.root, ["read-tree", "HEAD"]);
+    writeFileSync(join(f.root, "README.md"), "shared base edit");
+    runGit(f.root, ["add", "--", "README.md"]);
+    runGit(f.root, ["update-index", "--split-index"]);
+    // The selected index is a split index outside `.git`, and its shared base
+    // is moved out of the Git directory to sit only beside that index — the
+    // arrangement where a scratch copy of the index alone cannot resolve the
+    // base and `git write-tree` fails with "index file open failed".
+    const bases = readdirSync(join(f.root, ".git")).filter(name => name.startsWith("sharedindex."));
+    assert.ok(bases.length > 0, "git update-index --split-index must have written a shared base");
+    for (const base of bases) renameSync(join(f.root, ".git", base), join(indexDirectory, base));
+    const before = readFileSync(index);
+    await main(f.root, ["--write", "--staged"]);
+    assert.deepEqual(readFileSync(index), before);
+    assert.deepEqual(bundledFiles(readFileSync(join(f.root, "selfhost.bundle"))).get("README.md")?.content, Buffer.from("shared base edit"));
+  } finally {
+    if (previous === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = previous;
+    rmSync(indexDirectory, { recursive: true, force: true });
+    f.cleanup();
+  }
+});
+
+test("tree lookups keep tool-pinned literal matching under ambient pathspec settings", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, "weird*name.txt"), "literal\n");
+    f.git(["add", "--", "weird*name.txt"]);
+    f.git(["commit", "-q", "-m", "metacharacter path"]);
+    assert.deepEqual(listTreeEntries(f.root, "HEAD", ["weird*name.txt"]).map(entry => entry.path), ["weird*name.txt"]);
+    // The literal lookup is the tool's choice, so a host exporting a global
+    // pathspec magic must not reach the git child: git refuses the combination
+    // ("global 'literal' pathspec setting is incompatible with all other global
+    // pathspec settings") instead of silently preferring either side.
+    for (const setting of ["GIT_GLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
+      const previous = process.env[setting];
+      process.env[setting] = "1";
+      try {
+        const entries = listTreeEntries(f.root, "HEAD", ["weird*name.txt"]);
+        assert.deepEqual(entries.map(entry => entry.path), ["weird*name.txt"]);
+      } finally {
+        if (previous === undefined) delete process.env[setting];
+        else process.env[setting] = previous;
+      }
+    }
+  } finally {
+    f.cleanup();
+  }
+});
+
+/** Run an action after the selected path's bytes are read, including descriptor reads. */
+function afterFileRead(path: string, action: () => void): void {
+  let descriptor: number | undefined;
+  let fired = false;
+  const open = fs.openSync;
+  const read = fs.readFileSync;
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+    const fd = open(...args);
+    if (args[0] === path) descriptor = fd;
+    return fd;
+  });
+  mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+    const bytes = read(...args);
+    if (!fired && (args[0] === path || args[0] === descriptor)) {
+      fired = true;
+      action();
+    }
+    return bytes;
+  });
+  syncBuiltinESMExports();
+}
+
+test("working writer refuses bytes captured across a mid-read replacement", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, "crlf.txt"), "captured\r\n");
+    f.git(["add", "--", "crlf.txt"]);
+    // The reader has captured the regular file's bytes when this runs: swap the
+    // leaf for a link before any second observation can classify what it read.
+    // A split read/classify would bundle the captured (converted) bytes without
+    // the hash-object verification, so the refusal is the fail-closed answer.
+    afterFileRead(join(f.root, "crlf.txt"), () => {
+      rmSync(join(f.root, "crlf.txt"));
+      symlinkSync("README.md", join(f.root, "crlf.txt"));
+    });
+    try {
+      assert.throws(() => readSourceFiles(f.root, ["crlf.txt"], []), /changed while it was being read/);
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("working capture preserves raw link text and refuses a removed or replaced link", () => {
+  const f = fixture();
+  const path = join(f.root, "source-link");
+  const target = Buffer.from([0x61, 0x80]);
+  try {
+    symlinkSync(target, path);
+    assert.deepEqual(readSourceFiles(f.root, ["source-link"], []).get("source-link"), {
+      content: target,
+      mode: "100644",
+    });
+    for (const replace of [false, true]) {
+      if (replace) symlinkSync(target, path);
+      const readlink = fs.readlinkSync;
+      mock.method(fs, "readlinkSync", (...args: Parameters<typeof fs.readlinkSync>) => {
+        const bytes = readlink(...args);
+        if (args[0] === path) {
+          rmSync(path);
+          if (replace) writeFileSync(path, "replacement");
+        }
+        return bytes;
+      });
+      try {
+        assert.throws(() => readSourceFiles(f.root, ["source-link"], []), /changed while it was being read/);
+      } finally {
+        mock.restoreAll();
+      }
+    }
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("configuration bytes are never parsed across a mid-read replacement", () => {
+  const f = fixture();
+  try {
+    // The regular-file check passes, the bytes are read, and then the leaf is
+    // swapped for a link: only an identity re-observation can tell that the
+    // parsed bytes and the type verdict described different leaves.
+    afterFileRead(join(f.root, "self-host.json"), () => {
+      rmSync(join(f.root, "self-host.json"));
+      symlinkSync("README.md", join(f.root, "self-host.json"));
+    });
+    try {
+      assert.throws(() => loadConfig(join(f.root, "self-host.json")), /changed while it was being read/);
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("configuration capture preserves an unexpected descriptor-open error", t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "self-host.json");
+  const open = fs.openSync;
+  const failure = new Error("opening the selected configuration failed");
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+    if (args[0] === path) throw failure;
+    return open(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => loadConfig(path), error => error === failure);
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
+
+test("an unchanged bundle replaced mid-check is rewritten over, never skipped or followed", async () => {
+  const f = fixture();
+  try {
+    await main(f.root, ["--write"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    const expected = readFileSync(join(f.root, "selfhost.bundle"));
+    // The second write produces identical bytes, so an honest unchanged check
+    // would skip. The leaf is swapped for a link after those bytes are read:
+    // the decision must observe the replacement (identity re-check) and the
+    // write must replace the link rather than follow it into another file.
+    afterFileRead(join(f.root, "selfhost.bundle"), () => {
+      rmSync(join(f.root, "selfhost.bundle"));
+      symlinkSync("README.md", join(f.root, "selfhost.bundle"));
+    });
+    try {
+      await main(f.root, ["--write"]);
+      mock.restoreAll();
+      syncBuiltinESMExports();
+      const leaf = lstatSync(join(f.root, "selfhost.bundle"));
+      assert.equal(leaf.isSymbolicLink(), false, "the bundle path must be a regular file after a write");
+      assert.equal(leaf.isFile(), true);
+      assert.deepEqual(readFileSync(join(f.root, "selfhost.bundle")), expected);
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  } finally {
+    f.cleanup();
+  }
+});
+
+for (const name of ["self-host.json", "README.md", "selfhost.bundle"]) {
+  test(`working snapshot reads refuse a different opened leaf for ${name}`, async () => {
+    const f = fixture();
+    try {
+      await main(f.root, ["--write"]);
+      f.git(["add", "--", "selfhost.bundle"]);
+      const target = join(f.root, name);
+      const expected = readFileSync(target);
+      const lstat = fs.lstatSync;
+      const open = fs.openSync;
+      const close = fs.closeSync;
+      const read = fs.readFileSync;
+      let swapped = false;
+      let descriptor: number | undefined;
+      let unsafeReads = 0;
+      mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => {
+        const stat = lstat(...args);
+        if (args[0] === target && args[1]?.bigint && !swapped) {
+          renameSync(target, join(f.root, "parked"));
+          writeFileSync(target, "replacement");
+          swapped = true;
+        }
+        return stat;
+      });
+      mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+        const fd = open(...args);
+        if (args[0] === target && swapped) {
+          descriptor = fd;
+          const flags = Number(args[1]);
+          assert.equal(flags & (fs.constants.O_NONBLOCK ?? 0), fs.constants.O_NONBLOCK ?? 0);
+          assert.equal(flags & (fs.constants.O_NOFOLLOW ?? 0), fs.constants.O_NOFOLLOW ?? 0);
+        }
+        return fd;
+      });
+      mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
+        if (args[0] === target || args[0] === descriptor) unsafeReads++;
+        return read(...args);
+      });
+      mock.method(fs, "closeSync", (fd: number) => {
+        if (fd === descriptor) descriptor = undefined;
+        close(fd);
+      });
+      syncBuiltinESMExports();
+      try {
+        if (name === "selfhost.bundle") await main(f.root, ["--write"]);
+        else await assert.rejects(() => main(f.root, ["--write"]), /changed while it was being read/);
+      } finally {
+        mock.restoreAll();
+        syncBuiltinESMExports();
+      }
+      assert.ok(swapped, name);
+      assert.equal(unsafeReads, 0, name);
+      if (name === "selfhost.bundle") assert.deepEqual(readFileSync(target), expected);
+    } finally {
+      f.cleanup();
+    }
+  });
+}
+
+test("working conversion validates only the captured bytes across a pathname replacement", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "notes.txt");
+  writeFileSync(path, "captured\n");
+  writeFileSync(join(f.root, ".gitattributes"), "*.txt text eol=lf\n");
+  f.git(["add", "--", ".gitattributes", "notes.txt"]);
+  const exec = childProcess.execFileSync;
+  let changed = false;
+  let conversionTimeout: number | undefined;
+  mock.method(childProcess, "execFileSync", (...args: Parameters<typeof execFileSync>) => {
+    if (args[0] === "git" && args[1]?.[0] === "hash-object" &&
+        (args[1].includes("--path=notes.txt") || args[1].includes("--stdin-paths"))) {
+      writeFileSync(path, "late replacement\r\n");
+      changed = true;
+      conversionTimeout = args[2]?.timeout;
+    }
+    return exec(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    await main(f.root, ["--write"]);
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+  assert.ok(changed);
+  assert.ok(conversionTimeout !== undefined && conversionTimeout > 0);
+  assert.deepEqual(bundledFiles(readFileSync(join(f.root, "selfhost.bundle"))).get("notes.txt")?.content, Buffer.from("captured\n"));
+});
+
+test("working selection and archive share one configuration observation", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "self-host.json");
+  chmodSync(path, 0o755);
+  const expectedMode = (statSync(path).mode & 0o100) === 0 ? "100644" : "100755";
+  const original = readFileSync(path);
+  const replacement = JSON.stringify({ ref, bundle: "selfhost.bundle", exclude: ["selfhost.bundle", "README.md"] });
+  const lstat = fs.lstatSync;
+  let observations = 0;
+  mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => {
+    const stat = lstat(...args);
+    if (args[0] === path && ++observations === 2) writeFileSync(path, replacement);
+    return stat;
+  });
+  syncBuiltinESMExports();
+  try {
+    await main(f.root, ["--write"]);
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+  assert.equal(readFileSync(path, "utf8"), replacement);
+  assert.equal(observations, 2);
+  const archived = bundledFiles(readFileSync(join(f.root, "selfhost.bundle")));
+  assert.deepEqual(archived.get("self-host.json")?.content, original);
+  assert.equal(archived.get("self-host.json")?.mode, expectedMode);
+  assert.ok(archived.has("README.md"));
+});
+
+test("staged writer never opens a stale or non-file shared-base sibling", async () => {
+  const f = fixture();
+  const indexDirectory = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-sibling-"));
+  const index = join(indexDirectory, "index");
+  const previous = process.env.GIT_INDEX_FILE;
+  try {
+    process.env.GIT_INDEX_FILE = index;
+    runGit(f.root, ["read-tree", "HEAD"]);
+    writeFileSync(join(f.root, "README.md"), "sibling filter edit");
+    runGit(f.root, ["add", "--", "README.md"]);
+    runGit(f.root, ["update-index", "--split-index"]);
+    const bases = readdirSync(join(f.root, ".git")).filter(name => name.startsWith("sharedindex."));
+    assert.ok(bases.length > 0, "git update-index --split-index must have written a shared base");
+    for (const base of bases) renameSync(join(f.root, ".git", base), join(indexDirectory, base));
+    const directory = join(indexDirectory, `sharedindex.${"e".repeat(40)}`);
+    const stale = join(indexDirectory, `sharedindex.${"f".repeat(40)}`);
+    mkdirSync(directory);
+    writeFileSync(stale, "stale base\n");
+    const attempts: string[] = [];
+    /** Simulate garbage collection when an unrelated file is opened. */
+    const visit = (path: unknown): void => {
+      if (path !== stale && path !== directory) return;
+      attempts.push(basename(path));
+      if (path === stale) rmSync(stale);
+    };
+    const copy = fs.copyFileSync;
+    mock.method(fs, "copyFileSync", (...args: Parameters<typeof fs.copyFileSync>) => {
+      visit(args[0]);
+      return copy(...args);
+    });
+    const open = fs.openSync;
+    mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+      visit(args[0]);
+      return open(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await main(f.root, ["--write", "--staged"]);
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+    assert.deepEqual(attempts, []);
+    assert.deepEqual(bundledFiles(readFileSync(join(f.root, "selfhost.bundle"))).get("README.md")?.content, Buffer.from("sibling filter edit"));
+  } finally {
+    if (previous === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = previous;
+    rmSync(indexDirectory, { recursive: true, force: true });
+    f.cleanup();
+  }
+});
+
+test("staged writer fails loudly when a shared base cannot be copied", async () => {
+  const f = fixture();
+  const indexDirectory = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-sibling-"));
+  const index = join(indexDirectory, "index");
+  const previous = process.env.GIT_INDEX_FILE;
+  try {
+    process.env.GIT_INDEX_FILE = index;
+    runGit(f.root, ["read-tree", "HEAD"]);
+    runGit(f.root, ["update-index", "--split-index"]);
+    const bases = readdirSync(join(f.root, ".git")).filter(name => name.startsWith("sharedindex."));
+    assert.ok(bases.length > 0, "git update-index --split-index must have written a shared base");
+    for (const base of bases) renameSync(join(f.root, ".git", base), join(indexDirectory, base));
+    // An unreadable base is not a stale one: every error other than a vanished
+    // file must stop the write instead of silently dropping the base.
+    let attempts = 0;
+    /** Fail precisely when the selected base is opened. */
+    const denyBase = (path: unknown): void => {
+      if (typeof path === "string" && bases.includes(basename(path))) {
+        attempts++;
+        const failure = new Error("EACCES: permission denied, copy the shared base") as NodeJS.ErrnoException;
+        failure.code = "EACCES";
+        throw failure;
+      }
+    };
+    const copy = fs.copyFileSync;
+    mock.method(fs, "copyFileSync", (...args: Parameters<typeof fs.copyFileSync>) => {
+      denyBase(args[0]);
+      return copy(...args);
+    });
+    const open = fs.openSync;
+    mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+      denyBase(args[0]);
+      return open(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(() => main(f.root, ["--write", "--staged"]), /EACCES: permission denied, copy the shared base/);
+      assert.equal(attempts, 1);
+    } finally {
+      mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = previous;
+    rmSync(indexDirectory, { recursive: true, force: true });
+    f.cleanup();
+  }
+});
+
+test("staged writer ignores unreadable siblings for an unsplit alternate index", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const index = join(f.root, "alternate-index");
+  const stale = join(f.root, `sharedindex.${"f".repeat(40)}`);
+  const previous = process.env.GIT_INDEX_FILE;
+  try {
+    process.env.GIT_INDEX_FILE = index;
+    runGit(f.root, ["read-tree", "HEAD"]);
+    writeFileSync(stale, "unrelated");
+    /** Deny both the former pathname copy and any descriptor reads of the stale sibling. */
+    const denyStale = (path: unknown): void => {
+      if (path === stale) throw Object.assign(new Error("unreadable stale base"), { code: "EACCES" });
+    };
+    const copy = fs.copyFileSync;
+    const open = fs.openSync;
+    mock.method(fs, "copyFileSync", (...args: Parameters<typeof fs.copyFileSync>) => {
+      denyStale(args[0]);
+      return copy(...args);
+    });
+    mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+      denyStale(args[0]);
+      return open(...args);
+    });
+    syncBuiltinESMExports();
+    await main(f.root, ["--write", "--staged"]);
+    assert.deepEqual(bundledFiles(readFileSync(join(f.root, "selfhost.bundle"))).get("README.md")?.content, Buffer.from("hello\n"));
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+    if (previous === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = previous;
+  }
+});
+
+test("staged split snapshots select the Git-readable shared base across index formats", async () => {
+  for (const [format, version] of [["sha1", "4"], ["sha256", "3"]]) {
+    const f = fixture(format);
+    const index = join(f.root, "alternate-index");
+    const output = join(f.root, "selfhost.bundle");
+    const previous = process.env.GIT_INDEX_FILE;
+    try {
+      await main(f.root, ["--write", "--staged"]);
+      f.git(["add", "--", "selfhost.bundle"]);
+      process.env.GIT_INDEX_FILE = index;
+      runGit(f.root, ["read-tree", "HEAD"]);
+      runGit(f.root, ["add", "--", "selfhost.bundle"]);
+      runGit(f.root, ["update-index", "--skip-worktree", "src/app.ts"]);
+      runGit(f.root, ["update-index", "--index-version", version]);
+      runGit(f.root, ["update-index", "--split-index"]);
+      writeFileSync(join(f.root, "README.md"), `index ${format} ${version}\n`);
+      runGit(f.root, ["add", "--", "README.md"]);
+      runGit(f.root, ["update-index", "--skip-worktree", "README.md"]);
+      const base = basename(runGit(f.root, ["rev-parse", "--shared-index-path"]));
+      assert.match(base, /^sharedindex\.[0-9a-f]+$/u);
+      const adjacent = join(f.root, base);
+      const primary = join(f.root, ".git", base);
+      const payload = join(f.root, "shared-base-payload");
+      const before = readFileSync(index);
+      assert.equal(before.readUInt32BE(4), Number(version));
+      renameSync(primary, payload);
+      symlinkSync("shared-base-payload", adjacent);
+      // Git accepts the alternate's symlink when the primary is absent.
+      const expectedTree = runGit(f.root, ["write-tree"]);
+      writeFileSync(index, before);
+      await main(f.root, ["--write", "--staged"]);
+      const archived = bundledFiles(readFileSync(output));
+      assert.deepEqual(archived.get("README.md")?.content, Buffer.from(`index ${format} ${version}\n`));
+      assert.deepEqual(archived.get("src/app.ts")?.content, Buffer.from(runGit(f.root, ["show", `${expectedTree}:src/app.ts`]) + "\n"));
+      assert.deepEqual(readFileSync(index), before);
+
+      // A valid primary takes precedence over an invalid adjacent name.
+      renameSync(payload, primary);
+      rmSync(adjacent);
+      mkdirSync(adjacent);
+      utimesSync(primary, 1, 1);
+      await main(f.root, ["--write", "--staged"]);
+      assert.equal(statSync(primary).mtimeMs, 1000);
+      assert.deepEqual(readFileSync(index), before);
+
+      // An unusable required base keeps the last bundle intact.
+      const last = readFileSync(output);
+      renameSync(primary, payload);
+      rmSync(adjacent, { recursive: true });
+      symlinkSync("shared-base-payload", adjacent);
+      mkdirSync(primary);
+      await assert.rejects(() => main(f.root, ["--write", "--staged"]), /stable, regular Git index file/);
+      rmSync(primary, { recursive: true });
+      rmSync(adjacent);
+      mkdirSync(adjacent);
+      await assert.rejects(() => main(f.root, ["--write", "--staged"]), /stable, regular Git index file/);
+      rmSync(adjacent, { recursive: true });
+      await assert.rejects(() => main(f.root, ["--write", "--staged"]), { code: "ENOENT" });
+      assert.deepEqual(readFileSync(output), last);
+    } finally {
+      if (previous === undefined) delete process.env.GIT_INDEX_FILE;
+      else process.env.GIT_INDEX_FILE = previous;
+      f.cleanup();
+    }
+  }
+});
+
+test("staged index discovery rejects malformed layouts and accepts an empty split link", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const index = join(f.root, ".git", "index");
+  const original = readFileSync(index);
+  const header = Buffer.from("444952430000000200000000", "hex");
+  const oneEntry = Buffer.from(header);
+  oneEntry.writeUInt32BE(1, 8);
+  const malformed: [Buffer, RegExp][] = [
+    [Buffer.concat([Buffer.from("bad!"), header.subarray(4), Buffer.alloc(20)]), /unsupported Git index header/],
+    [Buffer.concat([oneEntry, Buffer.alloc(62), Buffer.alloc(20, 0xff)]), /unterminated Git index pathname/],
+    [Buffer.concat([oneEntry, Buffer.alloc(82)]), /unterminated Git index pathname/],
+    [Buffer.concat([header, Buffer.from("544553540000ffff", "hex"), Buffer.alloc(20)]), /invalid Git index extension length/],
+    [Buffer.concat([header, Buffer.from("6c696e6b00000000", "hex"), Buffer.alloc(20)]), /invalid Git index extension length/],
+  ];
+  for (const [bytes, error] of malformed) {
+    writeFileSync(index, bytes);
+    await assert.rejects(() => main(f.root, ["--write", "--staged"]), error);
+  }
+  const indexWithNullLink = Buffer.concat([
+    original.subarray(0, -20), Buffer.from("6c696e6b00000014", "hex"), Buffer.alloc(20),
+  ]);
+  writeFileSync(index, Buffer.concat([indexWithNullLink, createHash("sha1").update(indexWithNullLink).digest()]));
+  await main(f.root, ["--write", "--staged"]);
+  assert.ok(bundledFiles(readFileSync(join(f.root, "selfhost.bundle"))).has("README.md"));
+});
+
+test("staged index discovery handles multibyte path compression and extended entries", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const long = "a".repeat(170);
+  writeFileSync(join(f.root, long), "long path");
+  f.git(["add", "--", long]);
+  f.git(["update-index", "--skip-worktree", long]);
+  f.git(["update-index", "--index-version", "4"]);
+  await main(f.root, ["--write", "--staged"]);
+  assert.deepEqual(bundledFiles(readFileSync(join(f.root, "selfhost.bundle"))).get(long)?.content, Buffer.from("long path"));
 });
