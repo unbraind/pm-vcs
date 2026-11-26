@@ -137,6 +137,7 @@
   "test/tracker-admission.test.ts": 38.057,
   "test/tracker-capture-races.test.ts": 8.223,
   "test/tracker-lenses.test.ts": 19.078,
+  "test/tracker-self-host-candidate.test.ts": 28,
   "test/transfer-resume.test.ts": 7.942,
   "test/vcs-commands-edges.test.ts": 13.099,
   "test/vcs-commands.test.ts": 10.048,

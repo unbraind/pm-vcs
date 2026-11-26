@@ -20,5 +20,6 @@ jobs:
     uses: unbraind/pm-github/.github/workflows/pm-github-closeout.yml@3e453a856a0327acf6cc241ad6a15179b5ee9c54 # pm-github 2026.11.25
     with:
       npm-project-dir: "." # Use tools/oracle or another contained npm project when needed.
-      post-closeout-script: "changelog:full" # Missing script skips; "" disables it.
+      post-closeout-script: self-host:tracker-candidate
+      generated-paths: selfhost.bundle
       ci-workflows: "ci.yml" # Whitespace-separated workflow filenames; "" disables dispatch.

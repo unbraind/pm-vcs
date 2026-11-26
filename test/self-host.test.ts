@@ -11,7 +11,7 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -835,6 +835,86 @@ test("main --write generates a bundle in a real git repo", () => {
     main(f.root, ["node", "self-host.ts"]);
   } finally {
     f.cleanup();
+  }
+});
+
+test("staged self-host writing snapshots the pending config, blobs, paths and modes", () => {
+  const f = fixture();
+  try {
+    const archive = join(f.root, "selfhost.bundle");
+    const args = ["node", "self-host.ts", "--write", "--staged"];
+    main(f.root, ["node", "self-host.ts", "--write"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "baseline bundle"]);
+    const readme = join(f.root, "README.md");
+    writeFileSync(readme, "staged\n");
+    writeFileSync(join(f.root, "new.txt"), "new path\n");
+    writeFileSync(join(f.root, "self-host.json"), JSON.stringify({
+      bundle: "selfhost.bundle", ref, exclude: ["selfhost.bundle", "excluded.txt"],
+    }));
+    writeFileSync(join(f.root, "excluded.txt"), "excluded by the staged configuration\n");
+    f.git(["rm", "src/app.ts"]);
+    f.git(["add", "--", "README.md", "new.txt", "self-host.json", "excluded.txt"]);
+    f.git(["update-index", "--chmod=+x", "README.md"]);
+    writeFileSync(readme, "unstaged\n");
+    writeFileSync(join(f.root, "private.txt"), "untracked\n");
+    writeFileSync(join(f.root, "self-host.json"), "unstaged, invalid configuration\n");
+    const candidate = f.git(["write-tree"]);
+    const base = f.git(["rev-parse", "HEAD"]);
+
+    main(f.root, args);
+    assert.equal(f.git(["write-tree"]), candidate, "writing must preserve the caller's index");
+    assert.equal(f.git(["rev-parse", "HEAD"]), base, "writing must preserve HEAD");
+    assert.equal(readFileSync(readme, "utf8"), "unstaged\n");
+    assert.equal(readFileSync(join(f.root, "self-host.json"), "utf8"), "unstaged, invalid configuration\n");
+    const bytes = readFileSync(archive);
+    utimesSync(archive, 1, 1);
+    main(f.root, args);
+    assert.equal(statSync(archive).mtimeMs, 1000, "an identical pending snapshot must not be rewritten");
+
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "commit exactly the staged candidate"]);
+    const exitBefore = process.exitCode;
+    main(f.root, ["node", "self-host.ts"]);
+    assert.equal(process.exitCode, exitBefore);
+    main(f.root, args);
+    assert.deepEqual(readFileSync(archive), bytes);
+    assert.equal(statSync(archive).mtimeMs, 1000, "a committed matching snapshot must not be rewritten");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("staged self-host writing refuses an unresolved index before replacing the bundle", () => {
+  const f = fixture();
+  try {
+    const archive = join(f.root, "selfhost.bundle");
+    const readme = join(f.root, "README.md");
+    main(f.root, ["node", "self-host.ts", "--write"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "add the bundle"]);
+    const bytes = readFileSync(archive);
+    f.git(["switch", "-qc", "other"]);
+    writeFileSync(readme, "other\n");
+    f.git(["commit", "-qam", "other edit"]);
+    f.git(["switch", "-q", "main"]);
+    writeFileSync(readme, "main\n");
+    f.git(["commit", "-qam", "main edit"]);
+    assert.throws(() => f.git(["merge", "other"]), /Command failed/);
+    assert.match(f.git(["ls-files", "--unmerged"]), /README\.md/);
+    assert.throws(() => main(f.root, ["node", "self-host.ts", "--write", "--staged"]), /unmerged/);
+    assert.deepEqual(readFileSync(archive), bytes);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("staged self-host writing reports that a plain directory has no Git index", () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-no-git-"));
+  try {
+    assert.throws(() => main(root, ["node", "self-host.ts", "--write", "--staged"]), /not a git repository/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

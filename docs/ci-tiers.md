@@ -49,7 +49,8 @@ smoke cover those paths without another release gate.
 The self-host gate stays in the PR release gate because it guards shipped VCS
 object hashing, import and committed source equality. Depth does not weaken its
 archive verification. After source, docs, tests and tracker changes are staged,
-run `npm run self-host:write` and commit `selfhost.bundle` with those changes.
+run `npm run self-host:write -- --staged`, stage `selfhost.bundle` and commit
+it with those changes.
 Verification never regenerates it.
 
 Deep runs on main pushes, daily at 02:53 UTC and manual dispatch. Release cron

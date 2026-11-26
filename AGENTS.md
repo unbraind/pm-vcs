@@ -10,8 +10,9 @@ lines use full 40-hex commit SHAs and version comments under an explicitly trust
 owner. The action path and every other workflow byte must remain identical.
 Commands, permissions, action replacements, file additions/removals, file modes,
 malformed pins and ordinary source changes still require regenerating and
-committing `selfhost.bundle` with `npm run self-host:write`.
+committing `selfhost.bundle`.
 
-Run that writer after tracker, documentation, test and source changes are staged,
-then commit the bundle with those changes. Dependabot owns dependency refreshes;
+Stage tracker, documentation, test and source changes, then run
+`npm run self-host:write -- --staged`. Stage the bundle, commit it with those
+changes and verify the resulting tip with `npm run accept:self-host`. Dependabot owns dependency refreshes;
 fix recurring CI coupling in the package rather than editing individual bot PRs.

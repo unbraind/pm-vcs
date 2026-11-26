@@ -535,9 +535,8 @@ The concrete artefacts and their contract:
   it compares the tip **tree** id, which is the part that is determined by the source.
 - **`self-host.json`** is the gate's data file. It records the bundle path, names the ref, and
   holds the **exclusion set**: the *tracked* paths deliberately kept out of the history. The
-  exclusion set is data, not scattered literals — the only entry is the bundle file itself,
-  which cannot contain itself, and that entry is **required**, because omitting it makes every
-  regeneration fold the previous bundle into its own source tree.
+  bundle file itself is a **required** exclusion. Omitting it would fold the previous
+  bundle into its own source tree during regeneration.
 
   The bundle path here is **recorded, not obeyed**: it is checked against a constant in
   `scripts/self-host.ts` and rejected if it disagrees. This file ships with the source, so a
@@ -545,11 +544,18 @@ The concrete artefacts and their contract:
   a write primitive aimable at `README.md` or `.git/hooks/pre-commit`. Git-ignored paths (`dist/`, `coverage/`, `node_modules/`) never appear in
   `git ls-files` and need no entry. A tracked path in neither the bundle nor the exclusion set
   fails the gate closed.
-- **`npm run self-host:write`** regenerates the bundle. It snapshots the current source, writes
-  one parentless commit naming that tree when it changed and leaves the committed file
-  untouched when it has not (a stale *shape* — a pre-bounding history bundle or a thin bundle —
-  is regenerated rather than reused, so the bound is an invariant, not a hope), and writes the
-  file. It is the **only** path that writes the bundle.
+- **`npm run self-host:write`** regenerates the bundle from tracked working files.
+  Pass `-- --staged` to freeze the Git index and materialize that tree in an isolated
+  checkout. The staged configuration, additions, deletions and file modes determine
+  the snapshot. Stage the generated bundle, commit it with the candidate and verify
+  the committed tip. Both GitHub tracker callers use `self-host:tracker-candidate`
+  after the reusable workflow stages tracker paths. The hook regenerates and stages
+  the changelog before snapshotting the index. Release preparation and dependency
+  refresh also snapshot their staged candidates.
+
+  The writer stores one parentless commit naming the source tree and skips writing
+  when the artifact bytes already match. An older history bundle or a thin bundle
+  is regenerated to keep the artifact bounded and self-contained.
 - **`npm run accept:self-host`** is the gate, and it **never writes**. It reads the **committed**
   bundle and the **committed** source both straight out of `HEAD` — the bundle through
   `git cat-file`, the source through a detached `git worktree` — so a dirty working tree cannot

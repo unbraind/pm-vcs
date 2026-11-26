@@ -47,7 +47,7 @@ test('a release commit carries the archive generated from its staged metadata', 
       import { execFileSync } from 'node:child_process';
       import { writeFileSync } from 'node:fs';
       import { testEnvironment } from ${JSON.stringify(new URL('./helpers/test-environment.ts', import.meta.url).href)};
-      assert.deepEqual(process.argv.slice(2), []);
+      assert.deepEqual(process.argv.slice(2), ['--staged']);
       writeFileSync('selfhost.bundle', execFileSync('git', ['rev-parse', ':CHANGELOG.md'], { env: testEnvironment() }));
     `);
     const result = spawnSync('npm', ['run', 'release:changelog', '--', '--include-empty'], { cwd: root, env, encoding: 'utf8', timeout: 30000 });

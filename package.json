@@ -48,6 +48,7 @@
     "preaccept:self-host": "npm run build",
     "accept:self-host": "node scripts/self-host.ts",
     "self-host:write": "node scripts/self-host.ts --write",
+    "self-host:tracker-candidate": "npm run changelog:full && git add -- CHANGELOG.md && npm run self-host:write -- --staged",
     "pack:dry-run": "npm pack --dry-run",
     "pack:check": "node scripts/verify-pack-privacy.ts",
     "changelog:full": "pm-changelog --dependency-updates --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-vcs/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg --output-budget --pm-arg 999999 --include-empty",
@@ -63,7 +64,7 @@
     "verify:release-changelog-date": "node scripts/verify-release-changelog-date.ts",
     "verify:release-publish-attestation": "node scripts/verify-release-publish-attestation.ts",
     "release:changelog": "npm run changelog:full -- --include-empty",
-    "postrelease:changelog": "git add -- CHANGELOG.md manifest.json index.ts .agents/pm && (test ! -f .github/pm-release-candidate.json || git add -- .github/pm-release-candidate.json) && (if git ls-files --error-unmatch 'src/' >/dev/null 2>&1; then git add -- src; fi) && (if git ls-files --error-unmatch 'dist/' >/dev/null 2>&1; then git add -- dist; fi) && (if git ls-files --error-unmatch .gitattributes >/dev/null 2>&1; then git restore --source=HEAD --worktree -- .gitattributes; fi) && npm run self-host:write"
+    "postrelease:changelog": "git add -- CHANGELOG.md manifest.json index.ts .agents/pm && (test ! -f .github/pm-release-candidate.json || git add -- .github/pm-release-candidate.json) && (if git ls-files --error-unmatch 'src/' >/dev/null 2>&1; then git add -- src; fi) && (if git ls-files --error-unmatch 'dist/' >/dev/null 2>&1; then git add -- dist; fi) && (if git ls-files --error-unmatch .gitattributes >/dev/null 2>&1; then git restore --source=HEAD --worktree -- .gitattributes; fi) && npm run self-host:write -- --staged"
   },
   "keywords": [
     "pm-cli",

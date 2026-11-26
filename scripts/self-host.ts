@@ -6,9 +6,8 @@ import { durability } from "../engine/durability.ts";
 // with no history behind it. `accept:self-host` (the `--check` mode below) reads
 // the **committed** bundle and the **committed** source, both straight out of
 // `HEAD`, and rejects differences except validated external action revisions.
-// `self-host:write` (the `--write` mode) is the only thing that regenerates the bundle; the gate never writes, so
-// regenerating the bundle from a dirty tree and leaving it uncommitted changes
-// the verdict by exactly nothing.
+// `self-host:write` generates the bundle from tracked working files, or from
+// the Git index with `--staged`. Verification only considers committed bytes.
 //
 // The archive is bounded on purpose. The gate's contract is tip-tree equality —
 // a full history satisfied it too, but every regeneration appended one commit
@@ -25,7 +24,7 @@ import { durability } from "../engine/durability.ts";
 // alone and the bundle is reproducible.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { isPair, isScalar, parseDocument, visit } from "yaml";
@@ -655,12 +654,12 @@ export function writeSelfHostBundle(
  * Exported so the gate's git interactions can be tested against a real
  * repository rather than a mock.
  */
-export function runGit(cwd: string, args: readonly string[]): string {
+export function runGit(cwd: string, args: readonly string[], environment = process.env): string {
   return execFileSync("git", [...args], {
     cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+    env: { ...environment, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
   }).trim();
 }
 
@@ -673,7 +672,7 @@ export function runGit(cwd: string, args: readonly string[]): string {
  * the bundle under the wrong name — a gate that desynchronises its own path
  * list can report a mismatch that is not there, or miss one that is.
  */
-export function listTrackedFiles(root: string): string[] {
+export function listTrackedFiles(root: string, environment = process.env): string[] {
   // Deliberately NOT `runGit`, which trims. `trim()` strips spaces and tabs from
   // the ends of the whole payload but leaves the trailing NUL, so a tracked path
   // like " leading.ts" comes back as "leading.ts" and is then compared against a
@@ -683,7 +682,7 @@ export function listTrackedFiles(root: string): string[] {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+    env: { ...environment, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
   });
   return raw.split("\0").filter((line) => line.length > 0);
 }
@@ -737,8 +736,7 @@ export function readCommittedFile(root: string, path: string): Buffer | null {
  * engine's own working-tree reader so content and mode are interpreted by the
  * same code that stages any other repository.
  *
- * @param root - Directory holding the files (the extracted `HEAD` for the gate,
- *   the real checkout for `--write`).
+ * @param root - Directory holding the working, staged, or committed source.
  * @param tracked - Paths reported by `git ls-files`.
  * @param exclude - The exclusion list.
  * @returns Path to content and mode for every source file.
@@ -800,50 +798,59 @@ export function headCommitTimestamp(root: string): number {
   return seconds * 1000;
 }
 
-/**
- * Entry point: `--check` (default) verifies the committed bundle against the
- * committed source; `--write` regenerates the bundle.
- *
- * @param root - The package root to verify or regenerate against. Required so a
- *   test can never accidentally run the gate against the developer's own
- *   repository (which would register a git worktree in `.git/worktrees` during a
- *   plain `npm test`). The direct-invocation call site at the bottom of this
- *   module passes the real `import.meta.dirname` default.
- * @param args - The argv slice to inspect for `--write`. Required for the same
- *   reason; the direct-invocation call site passes `process.argv`.
- */
-export function main(root: string, args: readonly string[]): void {
-  const write = args.includes("--write");
-
-  if (write) {
-    // The writer snapshots what the developer is about to commit, so it reads
-    // the working tree deliberately. The verifier below must not.
-    const config = loadConfig(join(root, SELF_HOST_CONFIG));
-    const tracked = listTrackedFiles(root);
-    const { store, refs, cleanup } = freshStore();
-    try {
-      const sourceFiles = readSourceFiles(root, tracked, config.exclude);
-      const sourceTreeId = buildSourceTree(store, sourceFiles);
-      const existingBundle = readCommittedFile(root, config.bundle);
-      const headSha = runGit(root, ["rev-parse", "HEAD"]);
-      const signature: Signature = {
-        ...SELF_HOST_AUTHOR,
-        timestamp: headCommitTimestamp(root),
-      };
-      const bytes = writeSelfHostBundle(
-        store,
-        refs,
-        existingBundle,
-        config.ref,
-        sourceTreeId,
-        signature,
-        `self-host: source snapshot at ${headSha}\n`,
-      );
-      writeFileSync(resolveBundleTarget(root, config.bundle), bytes);
-      console.log(`self-host: wrote ${config.bundle} (${bytes.length} bytes)`);
-    } finally {
-      cleanup();
+/** Writes the bundle for the supplied source and skips an identical artifact. */
+function writeSnapshot(root: string, sourceRoot: string, tracked: readonly string[]): void {
+  const config = loadConfig(join(sourceRoot, SELF_HOST_CONFIG));
+  const { store, refs, cleanup } = freshStore();
+  try {
+    const sourceTreeId = buildSourceTree(store, readSourceFiles(sourceRoot, tracked, config.exclude));
+    const existingBundle = readCommittedFile(root, config.bundle);
+    const headSha = runGit(root, ["rev-parse", "HEAD"]);
+    const signature: Signature = {
+      ...SELF_HOST_AUTHOR,
+      timestamp: headCommitTimestamp(root),
+    };
+    const bytes = writeSelfHostBundle(
+      store,
+      refs,
+      existingBundle,
+      config.ref,
+      sourceTreeId,
+      signature,
+      `self-host: source snapshot at ${headSha}\n`,
+    );
+    const target = resolveBundleTarget(root, config.bundle);
+    if (lstatSync(target, { throwIfNoEntry: false })?.isFile() && readFileSync(target).equals(bytes)) {
+      console.log(`self-host: ${config.bundle} is unchanged`);
+      return;
     }
+    writeFileSync(target, bytes);
+    console.log(`self-host: wrote ${config.bundle} (${bytes.length} bytes)`);
+  } finally {
+    cleanup();
+  }
+}
+
+/** Freezes the candidate tree and checks it out through an isolated index. */
+function writeStagedSnapshot(root: string): void {
+  const tree = runGit(root, ["write-tree"]);
+  const scratch = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-index-"));
+  try {
+    const sourceRoot = join(scratch, "source");
+    mkdirSync(sourceRoot);
+    const environment = { ...process.env, GIT_INDEX_FILE: join(scratch, "index") };
+    runGit(root, [`--work-tree=${sourceRoot}`, "read-tree", "--reset", "-u", tree], environment);
+    writeSnapshot(root, sourceRoot, listTrackedFiles(root, environment));
+  } finally {
+    durability.discardTemporary(scratch);
+  }
+}
+
+/** Verifies committed HEAD by default, or writes from working or staged source. */
+export function main(root: string, args: readonly string[]): void {
+  if (args.includes("--write")) {
+    if (args.includes("--staged")) writeStagedSnapshot(root);
+    else writeSnapshot(root, root, listTrackedFiles(root));
     return;
   }
 
@@ -869,10 +876,10 @@ export function main(root: string, args: readonly string[]): void {
     // in for one that never ran.
     const sourceFiles = readSourceFiles(extractDir, tracked, config.exclude);
     const sourceTreeId = buildSourceTree(store, sourceFiles);
-    const bundleBytes = readCommittedFile(root, config.bundle);
+    const bundleBytes = readCommittedFile(extractDir, config.bundle);
     if (bundleBytes === null) {
       throw new Error(
-        `self-host: no committed bundle at HEAD:${config.bundle}. Run \`npm run self-host:write\` and commit ${config.bundle}.`,
+        `self-host: no committed bundle at HEAD:${config.bundle}. Run \`npm run self-host:write -- --staged\` and commit ${config.bundle}.`,
       );
     }
     const result = verifySelfHost(store, bundleBytes, config.ref, sourceTreeId);

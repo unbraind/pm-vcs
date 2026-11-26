@@ -53,8 +53,8 @@ function commandAvailable(command: string): boolean {
   return result.error === undefined && result.status === 0;
 }
 
-/** Execute the actual PR-creation shell block with disposable Git/GitHub doubles. */
-function runCreationStep(failPr: boolean): { status: number | null; calls: string[][]; stderr: string } {
+/** Execute the PR-creation shell block with disposable Git, npm and GitHub doubles. */
+function runCreationStep(failPr: boolean, failSnapshot = false): { status: number | null; calls: string[][]; stderr: string } {
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-refresh-workflow-"));
   try {
     const workflow = readFileSync(new URL("../.github/workflows/dependency-refresh.yml", import.meta.url), "utf8");
@@ -64,11 +64,21 @@ function runCreationStep(failPr: boolean): { status: number | null; calls: strin
     const script = step.slice(step.indexOf(marker) + marker.length).split("\n")
       .map((line) => line.replace(/^          /u, "")).join("\n");
     const log = join(root, "calls.jsonl");
-    writeFileSync(join(root, "git"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(root, "git"), `#!/bin/sh
+if [ "$1" = commit ]; then touch "$CANDIDATE_RECEIPT"; fi
+if [ "$1" = push ] && [ ! -f "$SNAPSHOT_RECEIPT" ]; then exit 24; fi
+exit 0
+`);
+    const npmDouble = `npm() {
+  if [ "$*" != 'run accept:self-host' ] || [ ! -f "$CANDIDATE_RECEIPT" ]; then return 23; fi
+  if [ "$FAIL_SNAPSHOT" = yes ]; then return 19; fi
+  touch "$SNAPSHOT_RECEIPT"
+}
+`;
     writeFileSync(join(root, "date"), "#!/bin/sh\nprintf '%s\\n' '2026-10-04'\n");
     writeFileSync(join(root, "gh"), `#!${process.execPath}\nimport { appendFileSync } from "node:fs";\nappendFileSync(process.env.CALL_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");\nif (process.argv[2] === "pr" && process.env.FAIL_PR === "yes") process.exit(17);\n`);
     for (const name of ["git", "date", "gh"]) chmodSync(join(root, name), 0o755);
-    const result = spawnSync("bash", ["-c", script], {
+    const result = spawnSync("bash", ["-c", npmDouble + script], {
       cwd: root,
       encoding: "utf8",
       env: {
@@ -78,9 +88,12 @@ function runCreationStep(failPr: boolean): { status: number | null; calls: strin
         GITHUB_RUN_ID: "123",
         CALL_LOG: log,
         FAIL_PR: failPr ? "yes" : "no",
+        FAIL_SNAPSHOT: failSnapshot ? "yes" : "no",
+        CANDIDATE_RECEIPT: join(root, "candidate-committed"),
+        SNAPSHOT_RECEIPT: join(root, "snapshot-verified"),
       },
     });
-    const calls = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]) : [];
     return { status: result.status, calls, stderr: result.stderr };
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -104,6 +117,15 @@ test("failed PR creation cannot dispatch CI and retains its failure status", () 
   assert.equal(result.status, 17, result.stderr);
   assert.equal(result.calls.length, 1);
   assert.deepEqual(result.calls[0]?.slice(0, 2), ["pr", "create"]);
+});
+
+test("dependency refresh snapshots staged inputs and refuses publication on failed committed parity", () => {
+  const refresh = gateStep("dependency-refresh.yml", "refresh", "Refresh dependencies");
+  assert.match(refresh.run, /git add -- package\.json package-lock\.json\nnpm run self-host:write -- --staged/u);
+  assert.match(refresh.run, /git diff --quiet HEAD -- package\.json package-lock\.json selfhost\.bundle/u);
+  const result = runCreationStep(false, true);
+  assert.equal(result.status, 19, result.stderr);
+  assert.deepEqual(result.calls, [], "a failed candidate must not create a PR or dispatch CI");
 });
 
 test("manual CI dispatch preserves all four required check names", () => {

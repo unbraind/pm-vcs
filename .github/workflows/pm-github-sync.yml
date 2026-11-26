@@ -1,5 +1,5 @@
 # Gated GitHub issues -> pm tracker sync. The audited pipeline lives in pm-github;
-# this caller only owns the schedule. Requires Settings -> Actions -> "Allow GitHub
+# this caller owns the schedule and generated self-host snapshot. Requires Settings -> Actions -> "Allow GitHub
 # Actions to create and approve pull requests" (enabled by the orchestrator).
 name: Sync GitHub issues into pm
 on:
@@ -15,3 +15,6 @@ jobs:
   gated-sync:
     if: github.repository == 'unbraind/pm-vcs'
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@3e453a856a0327acf6cc241ad6a15179b5ee9c54 # pm-github 2026.11.25
+    with:
+      post-import-script: self-host:tracker-candidate
+      generated-paths: selfhost.bundle
