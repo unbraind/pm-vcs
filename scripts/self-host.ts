@@ -760,11 +760,14 @@ export function listTreeEntries(root: string, treeish: string): TreeEntry[] {
   const entries: TreeEntry[] = [];
   for (const record of raw.split("\0")) {
     if (record.length === 0) continue;
+    // git's `-z` format is \`<mode> <type> <sha>\\t<path>\`; the tab is structural.
+    // A malformed record cannot reach here without git itself being broken, and
+    // the blob read below would fail closed on any sha such a record named — so
+    // validation targets the one anomaly a real tree can carry: a gitlink.
     const tab = record.indexOf("\t");
-    const head = tab < 0 ? "" : record.slice(0, tab);
-    const [mode, type, sha] = head.split(" ");
-    const path = tab < 0 ? "" : record.slice(tab + 1);
-    if (tab < 0 || path.length === 0 || (mode !== "100644" && mode !== "100755" && mode !== "120000")) {
+    const [mode, type, sha] = record.slice(0, tab).split(" ");
+    const path = record.slice(tab + 1);
+    if (mode !== "100644" && mode !== "100755" && mode !== "120000") {
       throw new Error(
         `self-host: ${treeish} carries "${path}" as a ${type} entry (mode ${mode}); `
         + `the bundle covers ordinary blobs, and a gitlink records a commit, not content.`,
@@ -773,6 +776,45 @@ export function listTreeEntries(root: string, treeish: string): TreeEntry[] {
     entries.push({ mode, sha, path });
   }
   return entries;
+}
+
+/**
+ * Parses one `git cat-file --batch` response stream into per-path blob bytes.
+ *
+ * Split out of `{@link readTreeBlobs}` so every malformed-answer refusal — a
+ * truncated stream, a missing object, a mismatched or non-blob answer, a
+ * non-numeric or short payload — is exercised against fabricated buffers the
+ * way the engine's own parsers are tested. The stream carries one response
+ * per request: `<sha> <type> <size>\n<raw bytes>\n`, or `<sha> missing\n`.
+ *
+ * @param output - The raw stdout of one `git cat-file --batch` run.
+ * @param entries - The listing whose requests produced the stream, in order.
+ * @returns Raw blob bytes keyed by path, one entry per listing entry.
+ * @throws Error When the stream ends early or any answer disagrees with the
+ *   request — naming the path and sha at fault.
+ */
+export function parseBatchResponse(output: Buffer, entries: readonly TreeEntry[]): Map<string, Buffer> {
+  const blobs = new Map<string, Buffer>();
+  let offset = 0;
+  for (const entry of entries) {
+    const headerEnd = output.indexOf(0x0a, offset);
+    if (headerEnd < 0) {
+      throw new Error(`self-host: git cat-file ended before answering for ${entry.path} (${entry.sha}).`);
+    }
+    const header = output.subarray(offset, headerEnd).toString("utf8");
+    const [sha, type, sizeText] = header.split(" ");
+    const size = Number(sizeText);
+    if (type === "missing" || !Number.isInteger(size) || sha !== entry.sha || type !== "blob"
+      || headerEnd + 1 + size + 1 > output.length) {
+      throw new Error(
+        `self-host: git cat-file did not return ${entry.sha} for ${entry.path} (answered: ${header}).`,
+      );
+    }
+    // Copy out of the response buffer so the map does not pin the whole stream.
+    blobs.set(entry.path, Buffer.from(output.subarray(headerEnd + 1, headerEnd + 1 + size)));
+    offset = headerEnd + 1 + size + 1;
+  }
+  return blobs;
 }
 
 /**
@@ -790,14 +832,13 @@ export function listTreeEntries(root: string, treeish: string): TreeEntry[] {
  * what the tree being committed actually is.
  *
  * @param root - The repository root.
- * @param entries - The tree listing to read, from {@link listTreeEntries}.
+ * @param entries - The tree listing to read, from `{@link listTreeEntries}`.
  * @returns Raw blob bytes keyed by path, one entry per listing entry.
- * @throws Error When git cannot be run, reports a missing object, or answers
- *   out of order — every one of which names the path at fault.
+ * @throws Error When git cannot be run, reports a nonzero status, or answers
+ *   anything other than the requested blob — every refusal names its path.
  */
 export function readTreeBlobs(root: string, entries: readonly TreeEntry[]): Map<string, Buffer> {
-  const blobs = new Map<string, Buffer>();
-  if (entries.length === 0) return blobs;
+  if (entries.length === 0) return new Map<string, Buffer>();
   const result = spawnSync("git", ["cat-file", "--batch"], {
     cwd: root,
     input: entries.map((entry) => `${entry.sha}\n`).join(""),
@@ -813,25 +854,7 @@ export function readTreeBlobs(root: string, entries: readonly TreeEntry[]): Map<
     const detail = (result.stderr as Buffer).toString("utf8").trim();
     throw new Error(`self-host: git cat-file --batch failed: ${detail}`);
   }
-  const output = result.stdout as Buffer;
-  let offset = 0;
-  for (const entry of entries) {
-    const headerEnd = output.indexOf(0x0a, offset);
-    const header = headerEnd < 0 ? "" : output.subarray(offset, headerEnd).toString("utf8");
-    const [sha, type, sizeText] = header.split(" ");
-    const size = Number(sizeText);
-    if (headerEnd < 0 || type === "missing" || !Number.isInteger(size) || sha !== entry.sha || type !== "blob"
-      || headerEnd + 1 + size + 1 > output.length) {
-      throw new Error(
-        `self-host: git cat-file did not return ${entry.sha} for ${entry.path} `
-        + `(answered: ${header.length === 0 ? "end of stream" : header}).`,
-      );
-    }
-    // Copy out of the response buffer so the map does not pin the whole stream.
-    blobs.set(entry.path, Buffer.from(output.subarray(headerEnd + 1, headerEnd + 1 + size)));
-    offset = headerEnd + 1 + size + 1;
-  }
-  return blobs;
+  return parseBatchResponse(result.stdout as Buffer, entries);
 }
 
 /**

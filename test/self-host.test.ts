@@ -38,6 +38,8 @@ import {
   loadConfig,
   main,
   readCommittedFile,
+  parseBatchResponse,
+  type TreeEntry,
   readSourceFiles,
   readTreeBlobs,
   readTreeSnapshot,
@@ -828,6 +830,77 @@ test("readTreeSnapshot refuses a tree that carries a gitlink", () => {
     f.cleanup();
   }
 });
+
+test("parseBatchResponse parses a well-formed batch stream", () => {
+  const entries: readonly TreeEntry[] = [
+    { mode: "100644", sha: "a".repeat(40), path: "first.md" },
+    { mode: "100755", sha: "b".repeat(40), path: "run.sh" },
+  ];
+  const first = Buffer.from("hello\nworld", "utf8");
+  const second = Buffer.from("#!/bin/sh\n", "utf8");
+  const stream = Buffer.concat([
+    Buffer.from(`${entries[0].sha} blob ${first.length}\n`, "utf8"), first, Buffer.from("\n", "utf8"),
+    Buffer.from(`${entries[1].sha} blob ${second.length}\n`, "utf8"), second, Buffer.from("\n", "utf8"),
+  ]);
+  const blobs = parseBatchResponse(stream, entries);
+  assert.deepEqual(blobs.get("first.md"), first);
+  assert.deepEqual(blobs.get("run.sh"), second);
+});
+
+test("parseBatchResponse refuses every malformed answer", () => {
+  const sha = "c".repeat(40);
+  const entry: TreeEntry = { mode: "100644", sha, path: "one.txt" };
+  // Every refusal names the object and the path it was requested for.
+  assert.throws(
+    () => parseBatchResponse(Buffer.from(`${sha} blob 5`, "utf8"), [entry]),
+    /ended before answering for one\.txt/,
+  );
+  const cases: ReadonlyArray<[string, Buffer]> = [
+    ["missing object", Buffer.from(`${sha} missing\n`, "utf8")],
+    ["non-numeric size", Buffer.from(`${sha} blob five\nhello\n`, "utf8")],
+    ["mismatched sha", Buffer.from(`${"d".repeat(40)} blob 5\nhello\n`, "utf8")],
+    ["non-blob answer", Buffer.from(`${sha} tree 5\nhello\n`, "utf8")],
+    ["short payload", Buffer.from(`${sha} blob 5\nhel\n`, "utf8")],
+  ];
+  for (const [label, stream] of cases) {
+    assert.throws(() => parseBatchResponse(stream, [entry]), new RegExp(sha), `${label} must name the object`);
+  }
+});
+
+test("readTreeBlobs throws when git cannot be launched", () => {
+  const f = fixture();
+  const origPath = process.env.PATH;
+  try {
+    process.env.PATH = "/nonexistent";
+    assert.throws(
+      () => readTreeBlobs(f.root, [{ mode: "100644", sha: "a".repeat(40), path: "x" }]),
+      /could not run git/,
+    );
+  } finally {
+    process.env.PATH = origPath;
+    f.cleanup();
+  }
+});
+
+test("readTreeBlobs refuses a directory without a repository", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-vcs-no-repo-"));
+  temps.push(dir);
+  assert.throws(
+    () => readTreeBlobs(dir, [{ mode: "100644", sha: "a".repeat(40), path: "x" }]),
+    /git cat-file --batch failed/,
+  );
+});
+
+test("readTreeSnapshot refuses a staged tree that drops the configuration", () => {
+  const f = fixture();
+  try {
+    f.git(["rm", "--cached", "--", "self-host.json"]);
+    assert.throws(() => readTreeSnapshot(f.root, f.git(["write-tree"])), /does not carry self-host\.json/);
+  } finally {
+    f.cleanup();
+  }
+});
+
 
 test("the staged snapshot keeps a tracked symlink's historical bundle bytes", () => {
   const f = fixture();
