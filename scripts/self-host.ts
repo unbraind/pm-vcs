@@ -1,4 +1,5 @@
 import { decodeGitListing, isolatedPathspecEnvironment } from "../git.ts";
+import { retireNamespace } from "../engine/destruction.ts";
 import { durability } from "../engine/durability.ts";
 // The self-hosting gate: pm-vcs versions its own source, and a CI gate proves it.
 //
@@ -302,11 +303,10 @@ export function parseSelfHostConfig(raw: string): SelfHostConfig {
  *
  * @param root - The repository root.
  * @param bundle - The configured, already lexically validated bundle path.
- * @param tracked - Whether the captured source selection tracks the bundle.
  * @returns The absolute path to write.
  * @throws Error When the target or an ancestor escapes the repository.
  */
-export function resolveBundleTarget(root: string, bundle: string, tracked?: boolean): string {
+export function resolveBundleTarget(root: string, bundle: string): string {
   const target = join(root, bundle);
   const realRoot = realpathSync(root);
   let realParent: string;
@@ -321,31 +321,30 @@ export function resolveBundleTarget(root: string, bundle: string, tracked?: bool
         + `Refusing to write through a symbolic link.`,
     );
   }
-  if (lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+  const observed = lstatSync(target, { throwIfNoEntry: false });
+  if (observed?.isSymbolicLink() === true) {
     throw new Error(
       `self-host: ${bundle} is a symbolic link. Refusing to write through it — `
         + `the bundle must be a regular file inside the repository.`,
     );
   }
-  // Staying inside the repository is not enough. Every check above still permits
-  // `"bundle": ".git/config"` or `"bundle": ".env"` — lexically relative, not a
-  // link, comfortably inside the tree — and `--write` would overwrite the
-  // maintainer's git configuration, or an ignored local secret, with bundle
-  // bytes. The config arrives with the source, so that is a write primitive a
-  // pull request could aim.
-  //
-  // The real invariant is what the bundle *is*: tracked source. So it must
-  // already be tracked, or not exist yet (the bootstrap case, where this run
-  // creates it). An existing untracked file is never a legitimate target, which
-  // is exactly what `.git/config` and `.env` are.
-  const exists = lstatSync(target, { throwIfNoEntry: false }) !== undefined;
-  if (exists && !(tracked ?? listTrackedFiles(root).includes(bundle))) {
+  assertBundleMayReplace(root, bundle, observed !== undefined);
+  return target;
+}
+
+/** Require a live index entry to replace an existing bundle. A missing bundle can be bootstrapped. */
+function assertBundleMayReplace(root: string, bundle: string, exists: boolean): void {
+  if (exists && !listTrackedFiles(root, [bundle]).includes(bundle)) {
     throw new Error(
       `self-host: ${bundle} exists but is not tracked by git. Refusing to overwrite it — `
         + `the bundle must be a tracked file, so this would clobber something else.`,
     );
   }
-  return target;
+}
+
+/** Preserve permission bits from a regular bundle observation. */
+function bundleMode(stat: BigIntStats | undefined): number | undefined {
+  return stat?.isFile() ? Number(stat.mode & 0o7777n) : undefined;
 }
 
 /**
@@ -748,7 +747,7 @@ export function runGit(cwd: string, args: readonly string[], environment = proce
 }
 
 /**
- * Enumerates the git-tracked source: every path `git ls-files` reports.
+ * Enumerates the caller's index without letting Git refresh its shared base.
  *
  * NUL-delimited (`-z`) rather than newline-delimited, because a newline is a
  * legal character in a git path. Splitting on `"\n"` would silently cut such a
@@ -756,17 +755,17 @@ export function runGit(cwd: string, args: readonly string[], environment = proce
  * the bundle under the wrong name — a gate that desynchronises its own path
  * list can report a mismatch that is not there, or miss one that is.
  */
-export function listTrackedFiles(root: string, environment = process.env): string[] {
+export function listTrackedFiles(root: string, paths: readonly string[] = []): string[] {
   // Deliberately NOT `runGit`, which trims. `trim()` strips spaces and tabs from
   // the ends of the whole payload but leaves the trailing NUL, so a tracked path
   // like " leading.ts" comes back as "leading.ts" and is then compared against a
   // file that does not exist. Same class of bug as splitting on "\n": the
   // delimiter is NUL precisely so no byte of a path needs interpreting.
-  const raw = execFileSync("git", ["ls-files", "-z"], {
+  const raw = withCapturedIndex(root, environment => execFileSync("git", ["--literal-pathspecs", "ls-files", "-z", "--", ...paths], {
     cwd: root,
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...environment, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
-  });
+    env: { ...isolatedPathspecEnvironment(environment), GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+  }));
   return decodeGitListing(raw).split("\0").filter((line) => line.length > 0);
 }
 
@@ -782,8 +781,6 @@ export interface TreeEntry {
 
 /** A tree's verification inputs: its configuration, raw blobs and source files. */
 export interface TreeSnapshot {
-  /** Whether the source tree tracks the bundle path, even when its bytes were not requested. */
-  readonly bundleTracked: boolean;
   /** The gate configuration as staged or committed in the tree itself. */
   readonly config: SelfHostConfig;
   /** Every non-excluded source file: raw blob bytes and the tree-recorded mode. */
@@ -951,7 +948,7 @@ export async function readTreeSnapshot(root: string, treeish: string, includeBun
   for (const entry of source) {
     files.set(entry.path, { content: blobs.get(entry.path)!, mode: entry.mode === "100755" ? "100755" : "100644" });
   }
-  return { config, files, blobs, bundleTracked: entries.some(entry => entry.path === config.bundle) };
+  return { config, files, blobs };
 }
 
 /**
@@ -1060,14 +1057,13 @@ export function headCommitTimestamp(root: string): number {
  * Writes the bundle for the supplied source and skips an identical artifact.
  *
  * The caller decides where the source bytes come from: the working tree (the
- * legacy `--write` mode) or the frozen Git index (`--staged`). The write path
- * itself only ever reads the committed bundle — `HEAD`, through
- * {@link readCommittedFile}, which is already conversion-free — and writes the
- * new artifact at the fixed target. "Unchanged" is decided from one stable
+ * legacy `--write` mode) or the frozen Git index (`--staged`). The previous
+ * snapshot comes from the committed bundle through {@link readCommittedFile}.
+ * Publication uses the live index for replacement permission. "Unchanged" is decided from one stable
  * observation of that target, and the write itself lands through a rename so a
  * replacement at the path is replaced rather than followed.
  */
-async function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<string, SourceFile>, bundleTracked: boolean): Promise<void> {
+async function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<string, SourceFile>): Promise<void> {
   const { store, refs, cleanup } = freshStore();
   try {
     const sourceTreeId = buildSourceTree(store, files);
@@ -1086,7 +1082,7 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
       signature,
       `self-host: source snapshot at ${headSha}\n`,
     );
-    const target = resolveBundleTarget(root, config.bundle, bundleTracked);
+    const target = resolveBundleTarget(root, config.bundle);
     const before = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
     if (before?.isFile() && readStableSourceBytes(target, before)?.equals(bytes)) {
       console.log(`self-host: ${config.bundle} is unchanged`);
@@ -1097,9 +1093,30 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
     // at the path, where a direct write would follow a symbolic link that
     // landed there after the checks above and corrupt the file it points at.
     const temporary = join(dirname(target), `.${basename(target)}.pm-vcs-${randomUUID()}`);
+    const mode = bundleMode(before);
+    const fd = fs.openSync(temporary, "wx", mode === undefined ? undefined : 0o600);
     try {
-      writeFileSync(temporary, bytes);
-      durability.rename(temporary, target);
+      let expected: BigIntStats;
+      try {
+        writeFileSync(fd, bytes);
+        if (mode !== undefined) fs.fchmodSync(fd, mode);
+        expected = fs.fstatSync(fd, { bigint: true });
+      } finally {
+        fs.closeSync(fd);
+      }
+      /** Recheck publication authority before the journal starts and at the rename boundary. */
+      const validate = (): void => {
+        const current = lstatSync(target, { bigint: true, throwIfNoEntry: false });
+        assertBundleMayReplace(root, config.bundle, current !== undefined);
+        const modeAtPublication = bundleMode(current);
+        if (modeAtPublication !== undefined && modeAtPublication !== mode) {
+          throw new Error(`self-host: ${config.bundle} permissions changed before publication. Run the write again.`);
+        }
+      };
+      validate();
+      // The namespace journal can flush an already read-only source. The
+      // durability.rename convenience method first reopens its source for writing.
+      retireNamespace({ path: temporary, destination: target, expected }, false, validate);
     } finally {
       durability.discardTemporary(temporary);
     }
@@ -1180,18 +1197,18 @@ function captureSharedIndex(root: string, index: string, base: string): Buffer {
   }
 }
 
-/** Freeze the selected index and its required base before reading the tree from Git objects. */
-async function writeStagedSnapshot(root: string): Promise<void> {
+/** Run a Git operation against a private copy of the selected index and required split base. */
+function withCapturedIndex<T>(root: string, action: (environment: NodeJS.ProcessEnv) => T): T {
   const index = gitPath(root, "--git-path", "index");
   const scratch = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-index-"));
-  let tree: string;
   try {
     const copy = join(scratch, "index");
+    const indexEnv = { ...process.env, GIT_INDEX_FILE: copy };
+    if (lstatSync(index, { throwIfNoEntry: false }) === undefined) return action(indexEnv);
     const bytes = captureIndexFile(index);
     const hashSize = createHash(runGit(root, ["rev-parse", "--show-object-format"])).digest().length;
     const base = sharedIndexName(bytes, hashSize);
     writeFileSync(copy, bytes);
-    const indexEnv = { ...process.env, GIT_INDEX_FILE: copy };
     if (base !== undefined) {
       writeFileSync(join(scratch, base), captureSharedIndex(root, index, base));
       // Git prefers a base in GIT_DIR, so direct its lookup and mtime update
@@ -1203,12 +1220,17 @@ async function writeStagedSnapshot(root: string): Promise<void> {
         GIT_WORK_TREE: root,
       });
     }
-    tree = runGit(root, ["-c", "core.splitIndex=false", "write-tree"], indexEnv);
+    return action(indexEnv);
   } finally {
     durability.discardTemporary(scratch);
   }
+}
+
+/** Freeze the selected index before reading the staged tree from Git objects. */
+async function writeStagedSnapshot(root: string): Promise<void> {
+  const tree = withCapturedIndex(root, environment => runGit(root, ["-c", "core.splitIndex=false", "write-tree"], environment));
   const snapshot = await readTreeSnapshot(root, tree, false);
-  await writeSnapshot(root, snapshot.config, snapshot.files, snapshot.bundleTracked);
+  await writeSnapshot(root, snapshot.config, snapshot.files);
 }
 
 /** Verifies committed HEAD by default, or writes from working or staged source. */
@@ -1219,7 +1241,7 @@ export async function main(root: string, args: readonly string[]): Promise<void>
       const tracked = listTrackedFiles(root);
       if (!tracked.includes(SELF_HOST_CONFIG)) throw new Error("self-host: the configuration must be tracked.");
       const { config, source } = captureWorkingConfig(join(root, SELF_HOST_CONFIG));
-      await writeSnapshot(root, config, readSourceFiles(root, tracked, config.exclude, source), tracked.includes(config.bundle));
+      await writeSnapshot(root, config, readSourceFiles(root, tracked, config.exclude, source));
     }
     return;
   }

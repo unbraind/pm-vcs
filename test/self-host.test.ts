@@ -1057,6 +1057,100 @@ test("staged self-host writing snapshots the pending config, blobs, paths and mo
   }
 });
 
+test("staged self-host publication honors intent-to-add and refuses a late index removal", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = "selfhost.bundle";
+  const archive = join(f.root, path);
+  const index = join(f.root, ".git", "index");
+  const args = ["--write", "--staged"];
+  writeFileSync(archive, "intent-to-add placeholder\n");
+  f.git(["add", "-N", "--", path]);
+  assert.equal(f.git(["ls-tree", f.git(["write-tree"]), "--", path]), "");
+  const indexBefore = readFileSync(index);
+  await main(f.root, args);
+  const original = readFileSync(archive);
+  assert.ok(bundledFiles(original).has("README.md"));
+  assert.deepEqual(readFileSync(index), indexBefore);
+
+  f.git(["add", "--", path]);
+  writeFileSync(join(f.root, "README.md"), "staged replacement\n");
+  f.git(["add", "--", "README.md"]);
+  const open = fs.openSync;
+  let removed = false;
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+    if (!removed && typeof args[0] === "string" && args[0].startsWith(join(f.root, ".selfhost.bundle.pm-vcs-"))) {
+      removed = true;
+      f.git(["rm", "-f", "--cached", "--", path]);
+    }
+    return open(...args);
+  });
+  try {
+    await assert.rejects(() => main(f.root, args), /not tracked by git/);
+  } finally {
+    mock.restoreAll();
+  }
+  assert.ok(removed);
+  assert.equal(f.git(["ls-files", "--", path]), "");
+  assert.deepEqual(readFileSync(archive), original);
+  assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
+  rmSync(index);
+  assert.throws(() => resolveBundleTarget(f.root, path), /not tracked by git/);
+});
+
+test("bundle regeneration preserves its existing mode across different umasks", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  const previousMask = process.umask(0o022);
+  const rename = fs.renameSync;
+  let publishingMode: number | undefined;
+  mock.method(fs, "renameSync", (source: Parameters<typeof rename>[0], target: Parameters<typeof rename>[1]) => {
+    if (target === path) publishingMode = statSync(source).mode & 0o777;
+    rename(source, target);
+  });
+  try {
+    await main(f.root, ["--write"]);
+    assert.equal(statSync(path).mode & 0o777, 0o644, "a new bundle uses the default creation mode");
+    f.git(["add", "--", "selfhost.bundle"]);
+    for (const [mode, mask, args] of [
+      [0o600, 0o022, ["--write"]],
+      [0o640, 0o077, ["--write", "--staged"]],
+      [0o444, 0o022, ["--write", "--staged"]],
+    ] as const) {
+      chmodSync(path, mode);
+      process.umask(mask);
+      const content = `source under ${mode.toString(8)}\n`;
+      writeFileSync(join(f.root, "README.md"), content);
+      f.git(["add", "--", "README.md"]);
+      publishingMode = undefined;
+      await main(f.root, args);
+      assert.equal(publishingMode, mode, "the existing mode must be set before publication");
+      assert.equal(statSync(path).mode & 0o777, mode);
+      assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from(content));
+    }
+
+    const original = readFileSync(path);
+    writeFileSync(join(f.root, "README.md"), "unpublished replacement\n");
+    const open = fs.openSync;
+    let changedMode = false;
+    mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+      if (!changedMode && typeof args[0] === "string" && args[0].startsWith(join(f.root, ".selfhost.bundle.pm-vcs-"))) {
+        changedMode = true;
+        chmodSync(path, 0o400);
+      }
+      return open(...args);
+    });
+    await assert.rejects(() => main(f.root, ["--write"]), /permissions changed before publication/);
+    assert.ok(changedMode);
+    assert.equal(statSync(path).mode & 0o777, 0o400);
+    assert.deepEqual(readFileSync(path), original);
+  } finally {
+    mock.restoreAll();
+    process.umask(previousMask);
+  }
+});
+
 test("staged self-host writing refuses an unresolved index before replacing the bundle", async () => {
   const f = fixture();
   try {
@@ -2344,6 +2438,9 @@ test("staged split snapshots select the Git-readable shared base across index fo
       mkdirSync(adjacent);
       utimesSync(primary, 1, 1);
       await main(f.root, ["--write", "--staged"]);
+      assert.equal(statSync(primary).mtimeMs, 1000);
+      assert.deepEqual(readFileSync(index), before);
+      await main(f.root, ["--write"]);
       assert.equal(statSync(primary).mtimeMs, 1000);
       assert.deepEqual(readFileSync(index), before);
 
