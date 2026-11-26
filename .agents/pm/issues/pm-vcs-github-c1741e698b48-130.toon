@@ -1,0 +1,24 @@
+id: pm-vcs-github-c1741e698b48-130
+title: Dependency Refresh fails before PR creation because Bun is absent
+description: "GH issue #130: https://github.com/unbraind/pm-vcs/issues/130 · author @unbraind · state reason completed · created 2026-10-19T10:06:33Z · updated 2026-10-23T15:59:54Z"
+type: Issue
+status: closed
+priority: 2
+tags[2]: "gh:unbraind/pm-vcs#130","github_author:unbraind"
+created_at: "2026-10-19T10:06:33Z"
+updated_at: "2026-11-26T09:32:02.976Z"
+closed_at: "2026-10-23T15:59:54Z"
+completed_at: "2026-10-23T15:59:54Z"
+author: pm-github
+close_reason: "Closed on GitHub as completed on 2026-10-23T15:59:54Z; closing PR https://github.com/unbraind/pm-vcs/pull/146 (\"Fix dependency refresh Bun provisioning\")"
+github_close_reason: "Closed on GitHub as completed on 2026-10-23T15:59:54Z; closing PR https://github.com/unbraind/pm-vcs/pull/146 (\"Fix dependency refresh Bun provisioning\")"
+github_closed_at: "2026-10-23T15:59:54Z"
+github_created_at: "2026-10-19T10:06:33Z"
+github_link_only: false
+github_number: 130
+github_release: ""
+github_state: closed
+github_state_reason: completed
+github_updated_at: "2026-10-23T15:59:54Z"
+github_url: "https://github.com/unbraind/pm-vcs/issues/130"
+body: "## Observed behavior\nThe scheduled Dependency Refresh job fails during `npm run release:check` because the test gate requires Bun, while this job only sets up Node.\n\n- [2026-10-19 run 39226644176, job 117974435386](https://github.com/unbraind/pm-vcs/actions/runs/39226644176/job/117974435386), checkout `7609e6c6198010bd7c7971a01d015ddec8d0ca62`\n- 1,667 tests: 1,662 pass, 2 fail, 3 skip\n- The packed conflicted-change CLI test fails with `spawnSync bun ENOENT`\n- The packed global served CLI Bun test fails with `Bun is required on CI`\n- The job stops before the dependency-refresh PR creation step\n\nThe same missing-runtime prerequisite already failed in the [2026-10-12 job 114778470548](https://github.com/unbraind/pm-vcs/actions/runs/38239545329/job/114778470548) on an earlier checkout. That run had a different suite size and one different failing Bun consumer test, but the same ENOENT and explicit CI-required failure signatures. This is a recurring blocker, not evidence that the October 19 change introduced it.\n\n## Configuration\n[dependency-refresh.yml at the captured head](https://github.com/unbraind/pm-vcs/blob/7609e6c6198010bd7c7971a01d015ddec8d0ca62/.github/workflows/dependency-refresh.yml#L28-L56) installs Node 22 and runs the release gate without setting up Bun.\n\n## Expected result\nProvision the supported Bun runtime before this job executes the unchanged release gate. Preserve the gate's required Bun coverage and failure behavior.\n\n## Acceptance\n- The refresh job explicitly provisions the supported Bun runtime before release checks\n- The existing Bun-required-in-CI checks execute with Bun available; no missing-runtime failures, new skip conditions, or weakened assertions\n- Verification identifies the exact candidate head and separately records the release-gate result; clearing this prerequisite alone does not prove every later gate or PR-event requirement is fixed\n\n## Scope and related work\nThe canonical certification work is [pm-vcs-bcgs, currently blocked](https://github.com/unbraind/pm-vcs/blob/7609e6c6198010bd7c7971a01d015ddec8d0ca62/.agents/pm/chores/pm-vcs-bcgs.toon). Its SDK/dispatch scope does not record this missing-runtime blocker. [pm-vcs-17li, closed](https://github.com/unbraind/pm-vcs/blob/7609e6c6198010bd7c7971a01d015ddec8d0ca62/.agents/pm/issues/pm-vcs-17li.toon) owns the original self-host bundle/dependency-refresh work.\n\n[pm-vcs-dispatch104](https://github.com/unbraind/pm-vcs/blob/7609e6c6198010bd7c7971a01d015ddec8d0ca62/.agents/pm/issues/pm-vcs-dispatch104.toon) tracks the later issue of which workflow events satisfy required PR checks. This blocker occurs earlier, before a refresh PR exists.\n\nRead-only diagnosis used the existing job logs and exact workflow bytes. No workflow rerun, dependency install, implementation change, or release was performed."

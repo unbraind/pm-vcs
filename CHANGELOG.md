@@ -176,8 +176,16 @@
 
 ### Closed
 
+- Closed: Tracker capture can publish external item/history bytes after a symlink replacement race ([pm-vcs-github-c1741e698b48-187](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-github-c1741e698b48-187.toon))
+- Closed: served-defects test delivers its expected refusals to production Sentry and blocked the pm-cli daily release ([pm-vcs-github-c1741e698b48-176](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-github-c1741e698b48-176.toon))
+- Closed: Node 22 Bun-invoked release gate stops bisect crash/resume test during npm pack setup ([pm-vcs-github-c1741e698b48-175](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-github-c1741e698b48-175.toon))
+- Closed: Dependency Refresh fails before PR creation because Bun is absent ([pm-vcs-github-c1741e698b48-130](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-github-c1741e698b48-130.toon))
+- Closed: Text-conflict annotation borrows an unrelated identical line's origin ([pm-vcs-github-c1741e698b48-127](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-github-c1741e698b48-127.toon))
+- Closed: Overlapping recorded text contenders resolve with stale ranges and lose alternatives ([pm-vcs-github-c1741e698b48-124](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-github-c1741e698b48-124.toon))
+- Closed: Recorded conflict metadata masks new delete/edit and mode conflicts ([pm-vcs-github-c1741e698b48-123](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-github-c1741e698b48-123.toon))
 - Closed: Propagate the docstring gate entry guard fix ([pm-vcs-anfk](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-anfk.toon))
 - Closed: Fix release publish-before-protected-main-push ordering ([pm-vcs-m4xr](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-m4xr.toon))
+- Closed: A conflicted merge is committed into history, --fail-on-conflict exits 0, and status then reports the repository clean ([pm-vcs-github-c1741e698b48-26](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-github-c1741e698b48-26.toon))
 - Closed: Release bot identity absent from the allowlist would break the audit on the first release ([pm-vcs-gehh](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-gehh.toon))
 - Closed: The 100 percent branch gate rested on an incidental execution, so an unrelated change failed CI on Node 26 only ([pm-vcs-8e8k](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-8e8k.toon))
 - Closed: A VCS with no ignore mechanism can stage and then overwrite another VCS's control directory ([pm-vcs-aujy](https://github.com/unbraind/pm-vcs/blob/main/.agents/pm/issues/pm-vcs-aujy.toon))

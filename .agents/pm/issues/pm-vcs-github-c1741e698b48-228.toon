@@ -1,0 +1,21 @@
+id: pm-vcs-github-c1741e698b48-228
+title: Issue-sync PRs can leave the committed self-host bundle stale
+description: "GH issue #228: https://github.com/unbraind/pm-vcs/issues/228 · author @unbraind · created 2026-11-22T08:32:17Z · updated 2026-11-26T06:25:03Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-vcs#228","github_author:unbraind"
+created_at: "2026-11-22T08:32:17Z"
+updated_at: "2026-11-26T09:32:04.794Z"
+author: pm-github
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-22T08:32:17Z"
+github_link_only: false
+github_number: 228
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-26T06:25:03Z"
+github_url: "https://github.com/unbraind/pm-vcs/issues/228"
+body: "## Evidence\n\nGenerated issue-sync [#217](https://github.com/unbraind/pm-vcs/pull/217), exact head `17d9b32deb98876916e64235f495e7a8b804c49c` on `84b97b6a6c4c91430d41140e93fd7a1699f21006`, adds 22 tracked PM item/history files and edits `CHANGELOG.md` without updating `selfhost.bundle`. The checked source and committed bundle no longer match. This is not a default-branch failure demonstrated here.\n\n[Dedicated release gate](https://github.com/unbraind/pm-vcs/actions/runs/45000735724/job/137141619059) reports 22 included paths absent from the bundle and differing changelog bytes. [Node 22 quick](https://github.com/unbraind/pm-vcs/actions/runs/45000735724/job/137141619276) and [Node 26 coverage](https://github.com/unbraind/pm-vcs/actions/runs/45000735724/job/137141619221) independently fail the operational CLI acceptance at `test/exact-gates.test.ts:183–188` on that same parity check. The sync workflow generating the PR succeeded; this is distinct from the old provenance refusal. The [previous native issue-sync repair](https://github.com/unbraind/pm-vcs/blob/84b97b6a6c4c91430d41140e93fd7a1699f21006/.agents/pm/issues/pm-vcs-issue-sync-1116.toon) also recorded a stale bundle during its repair and corrected the snapshot by regeneration.\n\n## Acceptance\n\nOn a sync that changes included tracker paths or the changelog, generate and commit the bundle from the final candidate contents, or leave an explicit failure before presenting a merge-ready candidate. Prefer an idempotent no-op on unchanged input. Verify the final committed tip with `npm run accept:self-host` and the real CLI gate on Node 22 and 26; do not relax byte parity, the path policy, or the existing test coverage requirements. A PM VCS-owned hook may be sufficient; no evidence yet that a central workflow change is required.\n\n---\n\n### GitHub comments (1)\n\n> **@coderabbitai[bot]** (2026-11-22T08:32:37Z)\n>\n> <!-- coderabbit-ai-generated:v1 -->\n> \n> <!-- This is an auto-generated issue plan by CodeRabbit -->\n> <details>\n> <summary>🔗 Related PRs</summary>\n> <dl>\n> <dd>\n> <br>\n> \n> unbraind/pm-vcs#208 - Pin pm-github 2026.11.15 to fix issue ownership planning and bound CI dispatch [merged]\n> </dd>\n> </dl>\n> </details>\n> \n> ---\n> <details>\n> <summary>📝 Issue Planner</summary>\n> <dl>\n> <dd>\n> <br>\n> \n> <sub>Check the box below or use the `@coderabbitai plan` command to generate an implementation plan and prompts that you can use with your favorite coding assistant.</sub>\n> \n> - [ ] <!-- {\"checkboxId\":\"8d4f2b9c-3e1a-4f7c-a9b2-d5e8f1c4a7b9\"} --> Create Plan\n> </dd>\n> </dl>\n> </details>\n> \n> \n> ---\n> <details>\n> <summary> 🧪 Issue enrichment is currently in open beta.</summary>\n> <dl>\n> <dd>\n> <br>\n> \n> \n> You can configure auto-planning by selecting labels in the issue_enrichment configuration.\n> \n> To disable automatic issue enrichment, add the following to your `.coderabbit.yaml`:\n> ```yaml\n> issue_enrichment:\n>   auto_enrich:\n>     enabled: false\n> ```\n> </dd>\n> </dl>\n> </details>\n> \n> 💬 Have feedback or questions? Drop into our [discord](https://discord.gg/coderabbit)!"
