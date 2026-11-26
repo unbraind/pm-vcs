@@ -11,7 +11,7 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -29,23 +29,28 @@ import {
   errorMessage,
   type SelfHostConfig,
   type SourceFile,
-  extractHead,
   freshStore,
   headCommitTimestamp,
   isExcluded,
   isMainInvocation,
   listTrackedFiles,
+  listTreeEntries,
   loadConfig,
   main,
   readCommittedFile,
-  resolveBundleTarget,
+  parseBatchResponse,
+  type TreeEntry,
   readSourceFiles,
+  readTreeBlobs,
+  readTreeSnapshot,
+  resolveBundleTarget,
   runGit,
   snapshotIsUnchanged,
   sameWorkflowExceptActionRevisions,
   verifySelfHost,
   writeSelfHostBundle,
 } from "../scripts/self-host.ts";
+import { flattenTree } from "../engine/worktree.ts";
 
 const ref = "refs/heads/self-host";
 const signature: Signature = { name: "self-host test", email: "t@t", timestamp: 1000, timezoneOffsetMinutes: 0 };
@@ -734,17 +739,181 @@ test("listTrackedFiles returns NUL-delimited tracked paths", () => {
   }
 });
 
-test("extractHead materializes the committed tree in a fresh directory", () => {
-  const f = fixture();
-  const into = mkdtempSync(join(tmpdir(), "pm-vcs-extract-test-"));
-  let cleanupWorktree: () => void = () => {};
+/** Reads every file a bundle carries, keyed by path, from a scratch import. */
+function bundledFiles(bytes: Buffer): Map<string, { content: Buffer; mode: string }> {
+  const { store, cleanup } = own();
   try {
-    cleanupWorktree = extractHead(f.root, into);
-    assert.equal(readFileSync(join(into, "README.md"), "utf8"), "hello\n");
-    assert.equal(readFileSync(join(into, "src", "app.ts"), "utf8"), "export const x = 1;\n");
+    const imported = importBundleObjects(store, bytes);
+    const tip = imported.header.refs[ref];
+    const flat = flattenTree(store, readCommit(store, tip).tree);
+    const files = new Map<string, { content: Buffer; mode: string }>();
+    for (const [path, entry] of flat) {
+      files.set(path, { content: store.readTyped(entry.id, "blob"), mode: entry.mode });
+    }
+    return files;
   } finally {
-    cleanupWorktree();
-    rmSync(into, { recursive: true, force: true });
+    cleanup();
+  }
+}
+
+/** Asserts the read-only gate passes on `root`, restoring the process exit code. */
+function assertCheckPasses(root: string): void {
+  const exitBefore = process.exitCode;
+  const origErr = console.error;
+  let errs = "";
+  console.error = (msg: string) => { errs += `${msg}\n`; };
+  process.exitCode = undefined;
+  try {
+    main(root, ["node", "self-host.ts"]);
+  } finally {
+    console.error = origErr;
+  }
+  const failed = process.exitCode === 1;
+  process.exitCode = exitBefore;
+  assert.equal(failed, false, errs);
+}
+
+test("readTreeSnapshot returns raw committed bytes, modes and the committed bundle", () => {
+  const f = fixture();
+  try {
+    // The mode is what the tree records — not what a checkout wrote — so the
+    // executable bit needs no filesystem materialization at all.
+    writeFileSync(join(f.root, "run.sh"), "#!/bin/sh\necho hi\n");
+    f.git(["add", "-A"]);
+    f.git(["update-index", "--chmod=+x", "run.sh"]);
+    f.git(["commit", "-qm", "add executable"]);
+    main(f.root, ["node", "self-host.ts", "--write"]);
+    // Stage the bundle explicitly: `git add -A` would re-read `run.sh` from
+    // the working tree and reset the executable mode the tree records.
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "add bundle"]);
+    // A conversion-enabled host must not move one byte of the snapshot.
+    f.git(["config", "core.autocrlf", "true"]);
+    const snapshot = readTreeSnapshot(f.root, "HEAD");
+    assert.equal(snapshot.files.get("run.sh")?.mode, "100755");
+    assert.deepEqual(snapshot.files.get("run.sh")?.content, readCommittedFile(f.root, "run.sh"));
+    assert.deepEqual(snapshot.files.get("README.md")?.content, readCommittedFile(f.root, "README.md"));
+    assert.equal(snapshot.files.has("selfhost.bundle"), false, "exclusions apply to the source files");
+    assert.deepEqual(snapshot.blobs.get("selfhost.bundle"), readCommittedFile(f.root, "selfhost.bundle"));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("listTreeEntries keeps a path that contains a newline", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.root, "lead\ning.md"), "newline in path\n");
+    f.git(["add", "-A"]);
+    const entries = listTreeEntries(f.root, f.git(["write-tree"]));
+    assert.ok(entries.some((entry) => entry.path === "lead\ning.md"));
+    const blobs = readTreeBlobs(f.root, entries);
+    assert.deepEqual(blobs.get("lead\ning.md"), Buffer.from("newline in path\n", "utf8"));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("readTreeBlobs reads no objects for an empty listing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-vcs-empty-listing-"));
+  temps.push(dir);
+  assert.deepEqual([...readTreeBlobs(dir, [])], []);
+});
+
+test("readTreeSnapshot refuses a tree that carries a gitlink", () => {
+  const f = fixture();
+  try {
+    const sha = f.git(["rev-parse", "HEAD"]);
+    f.git(["update-index", "--add", "--cacheinfo", `160000,${sha},vendor/sub`]);
+    assert.throws(() => readTreeSnapshot(f.root, f.git(["write-tree"])), /commit entry|gitlink/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("parseBatchResponse parses a well-formed batch stream", () => {
+  const entries: readonly TreeEntry[] = [
+    { mode: "100644", sha: "a".repeat(40), path: "first.md" },
+    { mode: "100755", sha: "b".repeat(40), path: "run.sh" },
+  ];
+  const first = Buffer.from("hello\nworld", "utf8");
+  const second = Buffer.from("#!/bin/sh\n", "utf8");
+  const stream = Buffer.concat([
+    Buffer.from(`${entries[0].sha} blob ${first.length}\n`, "utf8"), first, Buffer.from("\n", "utf8"),
+    Buffer.from(`${entries[1].sha} blob ${second.length}\n`, "utf8"), second, Buffer.from("\n", "utf8"),
+  ]);
+  const blobs = parseBatchResponse(stream, entries);
+  assert.deepEqual(blobs.get("first.md"), first);
+  assert.deepEqual(blobs.get("run.sh"), second);
+});
+
+test("parseBatchResponse refuses every malformed answer", () => {
+  const sha = "c".repeat(40);
+  const entry: TreeEntry = { mode: "100644", sha, path: "one.txt" };
+  // Every refusal names the object and the path it was requested for.
+  assert.throws(
+    () => parseBatchResponse(Buffer.from(`${sha} blob 5`, "utf8"), [entry]),
+    /ended before answering for one\.txt/,
+  );
+  const cases: ReadonlyArray<[string, Buffer]> = [
+    ["missing object", Buffer.from(`${sha} missing\n`, "utf8")],
+    ["non-numeric size", Buffer.from(`${sha} blob five\nhello\n`, "utf8")],
+    ["mismatched sha", Buffer.from(`${"d".repeat(40)} blob 5\nhello\n`, "utf8")],
+    ["non-blob answer", Buffer.from(`${sha} tree 5\nhello\n`, "utf8")],
+    ["short payload", Buffer.from(`${sha} blob 5\nhel\n`, "utf8")],
+  ];
+  for (const [label, stream] of cases) {
+    assert.throws(() => parseBatchResponse(stream, [entry]), new RegExp(sha), `${label} must name the object`);
+  }
+});
+
+test("readTreeBlobs throws when git cannot be launched", () => {
+  const f = fixture();
+  const origPath = process.env.PATH;
+  try {
+    process.env.PATH = "/nonexistent";
+    assert.throws(
+      () => readTreeBlobs(f.root, [{ mode: "100644", sha: "a".repeat(40), path: "x" }]),
+      /could not run git/,
+    );
+  } finally {
+    process.env.PATH = origPath;
+    f.cleanup();
+  }
+});
+
+test("readTreeBlobs refuses a directory without a repository", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-vcs-no-repo-"));
+  temps.push(dir);
+  assert.throws(
+    () => readTreeBlobs(dir, [{ mode: "100644", sha: "a".repeat(40), path: "x" }]),
+    /git cat-file --batch failed/,
+  );
+});
+
+test("readTreeSnapshot refuses a staged tree that drops the configuration", () => {
+  const f = fixture();
+  try {
+    f.git(["rm", "--cached", "--", "self-host.json"]);
+    assert.throws(() => readTreeSnapshot(f.root, f.git(["write-tree"])), /does not carry self-host\.json/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+
+test("the staged snapshot keeps a tracked symlink's historical bundle bytes", () => {
+  const f = fixture();
+  try {
+    symlinkSync("README.md", join(f.root, "link.md"));
+    f.git(["add", "--", "link.md"]);
+    main(f.root, ["node", "self-host.ts", "--write", "--staged"]);
+    const bundled = bundledFiles(readFileSync(join(f.root, "selfhost.bundle")));
+    // A link records its target text as blob content; the working-tree reader
+    // has always bundled exactly those bytes as a non-executable file.
+    assert.deepEqual(bundled.get("link.md")?.content, Buffer.from("README.md", "utf8"));
+    assert.equal(bundled.get("link.md")?.mode, "100644");
+  } finally {
     f.cleanup();
   }
 });
@@ -787,7 +956,7 @@ test("readSourceFiles throws when a tracked non-excluded path is missing", () =>
   try {
     assert.throws(
       () => readSourceFiles(f.root, ["phantom.txt"], []),
-      /phantom\.txt.*uncommitted addition/,
+      /phantom\.txt.*deleted from the working tree/,
     );
   } finally {
     f.cleanup();
@@ -837,6 +1006,165 @@ test("main --write generates a bundle in a real git repo", () => {
     f.cleanup();
   }
 });
+
+test("staged self-host writing snapshots the pending config, blobs, paths and modes", () => {
+  const f = fixture();
+  try {
+    const archive = join(f.root, "selfhost.bundle");
+    const args = ["node", "self-host.ts", "--write", "--staged"];
+    main(f.root, ["node", "self-host.ts", "--write"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "baseline bundle"]);
+    const readme = join(f.root, "README.md");
+    writeFileSync(readme, "staged\n");
+    writeFileSync(join(f.root, "new.txt"), "new path\n");
+    writeFileSync(join(f.root, "self-host.json"), JSON.stringify({
+      bundle: "selfhost.bundle", ref, exclude: ["selfhost.bundle", "excluded.txt"],
+    }));
+    writeFileSync(join(f.root, "excluded.txt"), "excluded by the staged configuration\n");
+    f.git(["rm", "src/app.ts"]);
+    f.git(["add", "--", "README.md", "new.txt", "self-host.json", "excluded.txt"]);
+    f.git(["update-index", "--chmod=+x", "README.md"]);
+    writeFileSync(readme, "unstaged\n");
+    writeFileSync(join(f.root, "private.txt"), "untracked\n");
+    writeFileSync(join(f.root, "self-host.json"), "unstaged, invalid configuration\n");
+    const candidate = f.git(["write-tree"]);
+    const base = f.git(["rev-parse", "HEAD"]);
+
+    main(f.root, args);
+    assert.equal(f.git(["write-tree"]), candidate, "writing must preserve the caller's index");
+    assert.equal(f.git(["rev-parse", "HEAD"]), base, "writing must preserve HEAD");
+    assert.equal(readFileSync(readme, "utf8"), "unstaged\n");
+    assert.equal(readFileSync(join(f.root, "self-host.json"), "utf8"), "unstaged, invalid configuration\n");
+    const bytes = readFileSync(archive);
+    utimesSync(archive, 1, 1);
+    main(f.root, args);
+    assert.equal(statSync(archive).mtimeMs, 1000, "an identical pending snapshot must not be rewritten");
+
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "commit exactly the staged candidate"]);
+    const exitBefore = process.exitCode;
+    main(f.root, ["node", "self-host.ts"]);
+    assert.equal(process.exitCode, exitBefore);
+    main(f.root, args);
+    assert.deepEqual(readFileSync(archive), bytes);
+    assert.equal(statSync(archive).mtimeMs, 1000, "a committed matching snapshot must not be rewritten");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("staged self-host writing refuses an unresolved index before replacing the bundle", () => {
+  const f = fixture();
+  try {
+    const archive = join(f.root, "selfhost.bundle");
+    const readme = join(f.root, "README.md");
+    main(f.root, ["node", "self-host.ts", "--write"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "add the bundle"]);
+    const bytes = readFileSync(archive);
+    f.git(["switch", "-qc", "other"]);
+    writeFileSync(readme, "other\n");
+    f.git(["commit", "-qam", "other edit"]);
+    f.git(["switch", "-q", "main"]);
+    writeFileSync(readme, "main\n");
+    f.git(["commit", "-qam", "main edit"]);
+    assert.throws(() => f.git(["merge", "other"]), /Command failed/);
+    assert.match(f.git(["ls-files", "--unmerged"]), /README\.md/);
+    assert.throws(() => main(f.root, ["node", "self-host.ts", "--write", "--staged"]), /unmerged/);
+    assert.deepEqual(readFileSync(archive), bytes);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("staged self-host writing reports that a plain directory has no Git index", () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-no-git-"));
+  try {
+    assert.throws(() => main(root, ["node", "self-host.ts", "--write", "--staged"]), /not a git repository/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staged self-host writing bundles raw object bytes under core.autocrlf=true", () => {
+  const f = fixture();
+  try {
+    // The blocking re-review finding: materializing the frozen tree through a
+    // checkout (read-tree -u) smudges LF blobs into CRLF on a conversion-enabled
+    // host, so the writer archived bytes the tree never stored and the committed
+    // bundle failed the gate on a default checkout of the same commit.
+    f.git(["config", "core.autocrlf", "true"]);
+    writeFileSync(join(f.root, "README.md"), "staged\nsecond\r\n");
+    f.git(["add", "--", "README.md"]);
+    main(f.root, ["node", "self-host.ts", "--write", "--staged"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    f.git(["commit", "-qm", "staged candidate"]);
+    // Byte-level proof against the object database: the bundle carries exactly
+    // what the tree stores, whatever this host would check out.
+    const bundled = bundledFiles(readFileSync(join(f.root, "selfhost.bundle")));
+    assert.deepEqual(bundled.get("README.md")?.content, readCommittedFile(f.root, "README.md"));
+    // A default (no-conversion) checkout of the same commit must verify …
+    f.git(["config", "core.autocrlf", "false"]);
+    assertCheckPasses(f.root);
+    // … and so must the conversion-enabled host that wrote it.
+    f.git(["config", "core.autocrlf", "true"]);
+    assertCheckPasses(f.root);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("staged snapshots carry exactly the frozen tree's bytes under every conversion vector", () => {
+  // Property: whatever conversion rules the host would apply on checkout —
+  // core.autocrlf, eol attributes — the bundle's bytes for every path equal
+  // the frozen tree's stored bytes, because they are read from the object
+  // database and never materialized. Both conversion vectors are active at
+  // once in the second case, so any checkout-based reader fails this.
+  const cases: ReadonlyArray<readonly [string, string, string]> = [
+    ["core.autocrlf", "true", ""],
+    ["core.autocrlf", "true", "README.md eol=crlf\n* text=auto\n"],
+  ];
+  for (const [key, value, attribute] of cases) {
+    const label = `${key}=${value} + ${JSON.stringify(attribute)}`;
+    const f = fixture();
+    try {
+      f.git(["config", key, value]);
+      writeFileSync(join(f.root, ".gitattributes"), attribute);
+      writeFileSync(join(f.root, "README.md"), "one\ntwo\r\nthree\n");
+      writeFileSync(join(f.root, "note.txt"), "crlf\r\nonly\n");
+      f.git(["add", "-A"]);
+      main(f.root, ["node", "self-host.ts", "--write", "--staged"]);
+      f.git(["add", "--", "selfhost.bundle"]);
+      f.git(["commit", "-qm", "conversion candidate"]);
+      const bundled = bundledFiles(readFileSync(join(f.root, "selfhost.bundle")));
+      for (const path of ["README.md", "src/app.ts", "note.txt", ".gitattributes", "self-host.json"]) {
+        assert.deepEqual(bundled.get(path)?.content, readCommittedFile(f.root, path), `${label}: ${path}`);
+      }
+      assertCheckPasses(f.root);
+    } finally {
+      f.cleanup();
+    }
+  }
+});
+
+test("main --check passes under core.autocrlf=true because committed bytes are read raw", () => {
+  const f = fixture();
+  try {
+    // The consumer side of the same class: a conversion-enabled host must not
+    // fail a clean repository. The verify path reads HEAD through git's object
+    // database, never through a checkout, so the host's line-ending preference
+    // cannot move what the gate compares.
+    main(f.root, ["node", "self-host.ts", "--write"]);
+    f.git(["add", "-A"]);
+    f.git(["commit", "-qm", "add bundle"]);
+    f.git(["config", "core.autocrlf", "true"]);
+    assertCheckPasses(f.root);
+  } finally {
+    f.cleanup();
+  }
+});
+
 
 test("main --check fails when the bundle is missing from HEAD", () => {
   const f = fixture();
@@ -1070,9 +1398,8 @@ test("readSourceFiles detects an executable file's mode", () => {
     // Create an executable file, commit it. The mode is derived from git
     // (`update-index --chmod=+x`), not from the filesystem, so no `chmod` spawn
     // is needed — the gate depends only on `git`. `git checkout HEAD -- run.sh`
-    // lets git restore the executable bit onto the working tree, which is what
-    // `extractHead` does for the real gate (the worktree checkout writes the
-    // tree's mode onto the filesystem, and `readSourceFiles` reads that).
+    // lets git restore the executable bit onto the working tree, which the
+    // legacy `--write` mode then reads through `readSourceFiles`.
     writeFileSync(join(f.root, "run.sh"), "#!/bin/sh\necho hi\n");
     f.git(["add", "-A"]);
     f.git(["update-index", "--chmod=+x", "run.sh"]);

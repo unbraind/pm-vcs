@@ -47,8 +47,9 @@ jobs:
           set -euo pipefail
           npm update --save
           npm run build
-          npm run self-host:write
-          if git diff --quiet -- package.json package-lock.json selfhost.bundle; then
+          git add -- package.json package-lock.json
+          npm run self-host:write -- --staged
+          if git diff --quiet HEAD -- package.json package-lock.json selfhost.bundle; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No dependency changes detected; exiting successfully."
           else
@@ -87,6 +88,7 @@ jobs:
           Automated weekly dependency refresh. The lockfile and the
           self-host bundle are updated together so the accept:self-host
           gate stays green at this commit."
+          npm run accept:self-host
           git push -u origin "$branch"
           gh pr create \
             -R "$GITHUB_REPOSITORY" \

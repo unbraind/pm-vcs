@@ -147,7 +147,7 @@ authorized destination and attempts to smuggle writes through read grants.
 Timing checks use a tolerance for scheduler noise; they establish comparable
 local response classes, rather than cryptographic constant-time HTTP behavior.
 
-For delivery, stage new files before `self-host:write`, generate the full
-changelog after tracker writes, commit source and bundle together, then verify
-`accept:self-host` against committed `HEAD`. Both release checks retain the
+For delivery, generate the full changelog after tracker writes and stage all
+candidate changes. Run `npm run self-host:write -- --staged` and stage the
+bundle. Commit them together and run `npm run accept:self-host` at that tip. Both release checks retain the
 repository's per-file 100% coverage and all lint, duplicate and docstring gates.

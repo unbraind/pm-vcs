@@ -535,9 +535,8 @@ The concrete artefacts and their contract:
   it compares the tip **tree** id, which is the part that is determined by the source.
 - **`self-host.json`** is the gate's data file. It records the bundle path, names the ref, and
   holds the **exclusion set**: the *tracked* paths deliberately kept out of the history. The
-  exclusion set is data, not scattered literals — the only entry is the bundle file itself,
-  which cannot contain itself, and that entry is **required**, because omitting it makes every
-  regeneration fold the previous bundle into its own source tree.
+  bundle file itself is a **required** exclusion. Omitting it would fold the previous
+  bundle into its own source tree during regeneration.
 
   The bundle path here is **recorded, not obeyed**: it is checked against a constant in
   `scripts/self-host.ts` and rejected if it disagrees. This file ships with the source, so a
@@ -545,23 +544,36 @@ The concrete artefacts and their contract:
   a write primitive aimable at `README.md` or `.git/hooks/pre-commit`. Git-ignored paths (`dist/`, `coverage/`, `node_modules/`) never appear in
   `git ls-files` and need no entry. A tracked path in neither the bundle nor the exclusion set
   fails the gate closed.
-- **`npm run self-host:write`** regenerates the bundle. It snapshots the current source, writes
-  one parentless commit naming that tree when it changed and leaves the committed file
-  untouched when it has not (a stale *shape* — a pre-bounding history bundle or a thin bundle —
-  is regenerated rather than reused, so the bound is an invariant, not a hope), and writes the
-  file. It is the **only** path that writes the bundle.
+- **`npm run self-host:write`** regenerates the bundle from tracked working files.
+  Pass `-- --staged` to freeze the Git index and read that tree straight from git's
+  object database (`ls-tree` plus `cat-file`). The staged configuration, additions,
+  deletions and file modes determine the snapshot, and no checkout ever stands
+  between the tree being committed and the bytes the bundle records, so a host's
+  `core.autocrlf` or `eol` attributes cannot smuggle converted bytes into the
+  archive. Stage the generated bundle, commit it with the candidate and verify
+  the committed tip. Both GitHub tracker callers use `self-host:tracker-candidate`
+  after the reusable workflow stages tracker paths. The hook regenerates and stages
+  the changelog before snapshotting the index. Release preparation and dependency
+  refresh also snapshot their staged candidates.
+
+  The writer stores one parentless commit naming the source tree and skips writing
+  when the artifact bytes already match. An older history bundle or a thin bundle
+  is regenerated to keep the artifact bounded and self-contained.
 - **`npm run accept:self-host`** is the gate, and it **never writes**. It reads the **committed**
-  bundle and the **committed** source both straight out of `HEAD` — the bundle through
-  `git cat-file`, the source through a detached `git worktree` — so a dirty working tree cannot
-  affect the verdict and regenerating the bundle without committing it changes nothing. The
-  configuration and the tracked-path list are read from that extracted worktree too, not from the
-  checkout: an uncommitted edit to `self-host.json` could otherwise exclude a committed path, and
-  a staged add or delete could move `git ls-files` without moving the extracted tree. `git` is the
+  bundle and the **committed** source both straight out of `HEAD`'s object database —
+  `ls-tree` for the paths and modes, `cat-file` for the raw blob bytes — so a dirty working
+  tree cannot affect the verdict and regenerating the bundle without committing it changes
+  nothing. The configuration is parsed from the bytes the committed tree carries, not from the
+  working file: an uncommitted edit to `self-host.json` could otherwise exclude a committed
+  path. Reading the object database also makes the verdict host-independent: a checkout —
+  the earlier `git worktree` extraction — applies `core.autocrlf`, `eol` attributes and
+  filter drivers, so the same commit could read as CRLF on one machine and as LF on another
+  and a clean repository could fail on a conversion-enabled host. `git` is the
   only external binary involved; an earlier `git archive | tar` pipe was removed because nothing
   on Windows exercised it while the gate sits inside `release:check` and `prepublishOnly`.
 
-  It enumerates the source with `git ls-files -z` (NUL-delimited, because a newline is legal in a
-  path), drops the exclusion set, rebuilds the source tree through the engine's `buildTree`, and
+  It enumerates the source with `git ls-tree -r -z` (NUL-delimited, because a newline is
+  legal in a path), drops the exclusion set, rebuilds the source tree through the engine's `buildTree`, and
   imports the bundle through `importBundleObjects` — **into an object store of its own**. That
   isolation is the self-containment proof: sharing a store with the source side would let a
   bundle missing an object borrow the bytes from the source and still resolve. The full ancestry
