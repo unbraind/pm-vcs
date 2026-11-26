@@ -9,7 +9,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: read
+  issues: write # the failure alert job opens, updates and closes its tracking issue
   actions: write
 jobs:
   gated-sync:
