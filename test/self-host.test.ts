@@ -19,6 +19,7 @@ import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, test } from "node:test";
 import { ModuleMocks } from "./helpers/self-host-mocks.ts";
+import { isolatedPathspecEnvironment } from "../git.ts";
 
 import { type ObjectArrival } from "../engine/lifecycle.ts";
 import { type ObjectId, ObjectStore } from "../engine/objects.ts";
@@ -1151,6 +1152,76 @@ test("bundle regeneration preserves its existing mode across different umasks", 
   }
 });
 
+test("bundle regeneration preserves its group before applying the mode", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  await main(f.root, ["--write"]);
+  f.git(["add", "--", "selfhost.bundle"]);
+  const { gid: defaultGroup, uid } = statSync(path);
+  const alternateGroup = process.getgroups?.().find(gid => gid !== defaultGroup);
+  const group = alternateGroup ?? defaultGroup;
+  if (alternateGroup !== undefined) fs.chownSync(path, uid, group);
+  chmodSync(path, 0o640);
+  const original = readFileSync(path);
+  writeFileSync(join(f.root, "README.md"), "regenerated for the existing group\n");
+
+  const open = fs.openSync;
+  const stat = fs.fstatSync;
+  const chown = fs.fchownSync;
+  const chmod = fs.fchmodSync;
+  const denied = Object.assign(new Error("group change denied"), { code: "EPERM" });
+  const calls: string[] = [];
+  let temporary: number | undefined;
+  let reportedDifferentGroup = false;
+  let refuse = true;
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+    const fd = open(...args);
+    if (typeof args[0] === "string" && args[0].startsWith(join(f.root, ".selfhost.bundle.pm-vcs-"))) {
+      temporary = fd;
+      reportedDifferentGroup = false;
+    }
+    return fd;
+  });
+  mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => {
+    const result = stat(...args);
+    // A runner with only one available group still exercises the reassignment.
+    if (alternateGroup === undefined && args[0] === temporary && !reportedDifferentGroup) {
+      reportedDifferentGroup = true;
+      return Object.assign(result, { gid: BigInt(group) + 1n });
+    }
+    return result;
+  });
+  mock.method(fs, "fchownSync", (fd: number, owner: number, gid: number) => {
+    assert.deepEqual([fd, owner, gid], [temporary, uid, group]);
+    calls.push("group");
+    if (refuse) throw denied;
+    chown(fd, uid, gid);
+  });
+  mock.method(fs, "fchmodSync", (fd: number, mode: number) => {
+    if (fd === temporary) calls.push("mode");
+    chmod(fd, mode);
+  });
+  try {
+    await assert.rejects(() => main(f.root, ["--write"]), error => error === denied);
+    assert.deepEqual(calls, ["group"]);
+    assert.deepEqual(readFileSync(path), original);
+    assert.equal(statSync(path).gid, group);
+    assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
+
+    calls.length = 0;
+    refuse = false;
+    await main(f.root, ["--write"]);
+    const published = statSync(path);
+    assert.deepEqual(calls, ["group", "mode"]);
+    assert.equal(published.gid, group);
+    assert.equal(published.mode & 0o777, 0o640);
+    assert.notDeepEqual(readFileSync(path), original);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
 test("staged self-host writing refuses an unresolved index before replacing the bundle", async () => {
   const f = fixture();
   try {
@@ -1963,6 +2034,24 @@ test("staged writer carries a split index's shared base beside the caller's inde
   }
 });
 
+test("Git pathspec isolation matches Windows keys case-insensitively and POSIX keys exactly", () => {
+  const base = {
+    git_glob_pathspecs: "1",
+    Git_Literal_Pathspecs: "1",
+    git_icase_pathspecs: "1",
+    GIT_NOGLOB_PATHSPECS: "1",
+    GIT_INDEX_FILE: "fixture-index",
+    git_glob_pathspecs_suffix: "keep",
+  };
+  assert.deepEqual(isolatedPathspecEnvironment(base, "win32"), {
+    GIT_INDEX_FILE: "fixture-index",
+    git_glob_pathspecs_suffix: "keep",
+  });
+  const { GIT_NOGLOB_PATHSPECS: _removed, ...posix } = base;
+  assert.deepEqual(isolatedPathspecEnvironment(base, "linux"), posix);
+  assert.equal(base.GIT_NOGLOB_PATHSPECS, "1");
+});
+
 test("tree lookups keep tool-pinned literal matching under ambient pathspec settings", () => {
   const f = fixture();
   try {
@@ -2391,6 +2480,85 @@ test("staged writer ignores unreadable siblings for an unsplit alternate index",
   } finally {
     mock.restoreAll();
     syncBuiltinESMExports();
+    if (previous === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = previous;
+  }
+});
+
+test("Git administrative paths reject invalid UTF-8 and preserve significant whitespace", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const gitDir = join(f.root, ".git");
+  const index = join(f.root, "shared index é \t\n");
+  const previous = process.env.GIT_INDEX_FILE;
+  try {
+    writeFileSync(index, readFileSync(join(gitDir, "index")));
+    process.env.GIT_INDEX_FILE = index;
+    await main(f.root, ["--write", "--staged"]);
+    runGit(f.root, ["add", "--", "selfhost.bundle"]);
+    const rawIndex = Buffer.concat([Buffer.from(join(f.root, "index-")), Buffer.from([0x80])]);
+    renameSync(index, rawIndex);
+    try {
+      symlinkSync(rawIndex, index);
+      await main(f.root, ["--write", "--staged"]);
+    } finally {
+      rmSync(index, { force: true });
+      renameSync(rawIndex, index);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = previous;
+  }
+  const archive = join(f.root, "selfhost.bundle");
+  const original = readFileSync(archive);
+  f.git(["add", "--", "selfhost.bundle"]);
+  const rawGitDir = Buffer.concat([Buffer.from(join(f.root, "git-admin-")), Buffer.from([0x80])]);
+  renameSync(gitDir, rawGitDir);
+  try {
+    writeFileSync(gitDir, Buffer.concat([Buffer.from("gitdir: "), rawGitDir, Buffer.from("\n")]));
+    assert.equal(f.git(["ls-files", "--", "README.md"]), "README.md");
+    await assert.rejects(() => main(f.root, ["--write", "--staged"]), { code: "invalid_git_path" });
+    assert.deepEqual(readFileSync(archive), original);
+  } finally {
+    rmSync(gitDir);
+    renameSync(rawGitDir, gitDir);
+  }
+});
+
+test("split-index fallback resolves the shared base beside the selected index symlink", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const index = join(f.root, "actual-index", "index");
+  const selection = join(f.root, "physical", "selected-index");
+  const nested = join(f.root, "physical", "nested");
+  const outer = join(f.root, "outer");
+  const previous = process.env.GIT_INDEX_FILE;
+  mkdirSync(dirname(index));
+  mkdirSync(selection, { recursive: true });
+  mkdirSync(nested);
+  mkdirSync(outer);
+  try {
+    process.env.GIT_INDEX_FILE = index;
+    runGit(f.root, ["read-tree", "HEAD"]);
+    runGit(f.root, ["update-index", "--split-index"]);
+    const base = basename(runGit(f.root, ["rev-parse", "--shared-index-path"]));
+    const shared = join(selection, base);
+    renameSync(join(f.root, ".git", base), shared);
+    symlinkSync(index, join(selection, "index"));
+    symlinkSync(nested, join(outer, "jump"), "dir");
+    process.env.GIT_INDEX_FILE = "outer/jump/../selected-index/index";
+    assert.equal(runGit(f.root, ["ls-files", "--", "README.md"]), "README.md");
+    utimesSync(shared, 1, 1);
+    const indexBefore = readFileSync(index);
+
+    await main(f.root, ["--write", "--staged"]);
+
+    const archived = bundledFiles(readFileSync(join(f.root, "selfhost.bundle")));
+    assert.deepEqual(archived.get("README.md")?.content, Buffer.from("hello\n"));
+    assert.deepEqual(readFileSync(index), indexBefore);
+    assert.equal(statSync(shared).mtimeMs, 1000);
+    assert.ok(lstatSync(join(selection, "index")).isSymbolicLink());
+  } finally {
     if (previous === undefined) delete process.env.GIT_INDEX_FILE;
     else process.env.GIT_INDEX_FILE = previous;
   }

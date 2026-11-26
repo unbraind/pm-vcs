@@ -83,14 +83,16 @@ export function decodeGitListing(bytes: Buffer): string {
 }
 
 /** Ambient git variables that silently replace or conflict with the pathspec semantics a command pins itself. */
-const PATHSPEC_ENVIRONMENT_KEYS = [
+const PATHSPEC_ENVIRONMENT_KEYS = new Set([
   "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
-] as const;
+]);
 
 /** Copy the child environment while keeping pathspec matching under the caller's control. */
-export function isolatedPathspecEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function isolatedPathspecEnvironment(base: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
   const isolated = { ...base };
-  for (const name of PATHSPEC_ENVIRONMENT_KEYS) delete isolated[name];
+  for (const name of Object.keys(isolated)) {
+    if (PATHSPEC_ENVIRONMENT_KEYS.has(platform === "win32" ? name.toUpperCase() : name)) delete isolated[name];
+  }
   return isolated;
 }
 

@@ -34,7 +34,7 @@ import { streamProcess } from "./audit-git-identities.ts";
 import childProcess, { execFileSync, spawnSync } from "node:child_process";
 import fs, { type BigIntStats, lstatSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { isPair, isScalar, parseDocument, visit } from "yaml";
 import { isMainInvocation } from "./main-invocation.ts";
 
@@ -197,8 +197,9 @@ function captureWorkingConfig(path: string): { config: SelfHostConfig; source: S
 }
 
 /** Read a regular leaf only after the opened descriptor matches the observed inode. */
-function readRegularFile(path: string, expected: BigIntStats): { content: Buffer; stat: BigIntStats } {
-  const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+function readRegularFile(path: string, expected: BigIntStats, followLink: boolean): { content: Buffer; stat: BigIntStats } {
+  const noFollow = followLink ? 0 : fs.constants.O_NOFOLLOW;
+  const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | noFollow);
   try {
     const stat = fs.fstatSync(fd, { bigint: true });
     if (!stat.isFile() || stat.dev !== expected.dev || stat.ino !== expected.ino) {
@@ -211,12 +212,13 @@ function readRegularFile(path: string, expected: BigIntStats): { content: Buffer
 }
 
 /** Return bytes only if the opened leaf and both pathname observations agree. */
-function readStableSourceBytes(path: string, before: BigIntStats): Buffer | undefined {
+function readStableSourceBytes(path: string, before: BigIntStats, followLink = false): Buffer | undefined {
   try {
     const observed = before.isSymbolicLink()
       ? { content: fs.readlinkSync(path, { encoding: "buffer" }), stat: before }
-      : readRegularFile(path, before);
-    const after = fs.lstatSync(path, { bigint: true, throwIfNoEntry: false });
+      : readRegularFile(path, before, followLink);
+    const stat = followLink ? fs.statSync : fs.lstatSync;
+    const after = stat(path, { bigint: true, throwIfNoEntry: false });
     if (after !== undefined && sameFileIdentity(statIdentity(before), statIdentity(observed.stat))
         && sameFileIdentity(statIdentity(observed.stat), statIdentity(after))) return observed.content;
   } catch (error) {
@@ -342,9 +344,9 @@ function assertBundleMayReplace(root: string, bundle: string, exists: boolean): 
   }
 }
 
-/** Preserve permission bits from a regular bundle observation. */
-function bundleMode(stat: BigIntStats | undefined): number | undefined {
-  return stat?.isFile() ? Number(stat.mode & 0o7777n) : undefined;
+/** Preserve the group and permission bits from one regular bundle observation. */
+function bundlePermissions(stat: BigIntStats | undefined): { mode: number; gid: bigint } | undefined {
+  return stat?.isFile() ? { mode: Number(stat.mode & 0o7777n), gid: stat.gid } : undefined;
 }
 
 /**
@@ -1093,13 +1095,17 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
     // at the path, where a direct write would follow a symbolic link that
     // landed there after the checks above and corrupt the file it points at.
     const temporary = join(dirname(target), `.${basename(target)}.pm-vcs-${randomUUID()}`);
-    const mode = bundleMode(before);
-    const fd = fs.openSync(temporary, "wx", mode === undefined ? undefined : 0o600);
+    const permissions = bundlePermissions(before);
+    const fd = fs.openSync(temporary, "wx", permissions === undefined ? undefined : 0o600);
     try {
       let expected: BigIntStats;
       try {
         writeFileSync(fd, bytes);
-        if (mode !== undefined) fs.fchmodSync(fd, mode);
+        if (permissions !== undefined) {
+          const { uid, gid } = fs.fstatSync(fd, { bigint: true });
+          if (gid !== permissions.gid) fs.fchownSync(fd, Number(uid), Number(permissions.gid));
+          fs.fchmodSync(fd, permissions.mode);
+        }
         expected = fs.fstatSync(fd, { bigint: true });
       } finally {
         fs.closeSync(fd);
@@ -1108,8 +1114,8 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
       const validate = (): void => {
         const current = lstatSync(target, { bigint: true, throwIfNoEntry: false });
         assertBundleMayReplace(root, config.bundle, current !== undefined);
-        const modeAtPublication = bundleMode(current);
-        if (modeAtPublication !== undefined && modeAtPublication !== mode) {
+        const atPublication = bundlePermissions(current);
+        if (atPublication !== undefined && (atPublication.mode !== permissions?.mode || atPublication.gid !== permissions.gid)) {
           throw new Error(`self-host: ${config.bundle} permissions changed before publication. Run the write again.`);
         }
       };
@@ -1126,18 +1132,16 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
   }
 }
 
-/** Resolve a Git administrative pathname without trimming significant whitespace. */
+/** Read a Git administrative pathname losslessly, keeping any significant whitespace. */
 function gitPath(root: string, ...args: string[]): string {
-  return execFileSync("git", ["rev-parse", "--path-format=absolute", ...args], {
-    cwd: root, encoding: "utf8", env: { ...process.env },
-  }).replace(/\n$/u, "");
+  const bytes = execFileSync("git", ["rev-parse", ...args], { cwd: root, env: { ...process.env } });
+  return decodeGitListing(bytes).replace(/\n$/u, "");
 }
 
 /** Capture a Git index file, allowing Git's ordinary symlink lookup. */
 function captureIndexFile(path: string): Buffer {
-  const resolved = realpathSync(path);
-  const before = lstatSync(resolved, { bigint: true });
-  const bytes = before.isFile() ? readStableSourceBytes(resolved, before) : undefined;
+  const before = fs.statSync(path, { bigint: true });
+  const bytes = before.isFile() ? readStableSourceBytes(path, before, true) : undefined;
   if (bytes === undefined) throw new Error("self-host: expected a stable, regular Git index file.");
   return bytes;
 }
@@ -1193,13 +1197,16 @@ function captureSharedIndex(root: string, index: string, base: string): Buffer {
     return captureIndexFile(primary);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return captureIndexFile(join(dirname(index), base));
+    return captureIndexFile(`${dirname(index)}${sep}${base}`);
   }
 }
 
 /** Run a Git operation against a private copy of the selected index and required split base. */
 function withCapturedIndex<T>(root: string, action: (environment: NodeJS.ProcessEnv) => T): T {
-  const index = gitPath(root, "--git-path", "index");
+  // Git's default spelling preserves the selected index symlink. Its directory
+  // is the base fallback, even when opening the index follows the link elsewhere.
+  const selected = gitPath(root, "--git-path", "index");
+  const index = isAbsolute(selected) ? selected : `${root}${sep}${selected}`;
   const scratch = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-index-"));
   try {
     const copy = join(scratch, "index");
@@ -1216,7 +1223,7 @@ function withCapturedIndex<T>(root: string, action: (environment: NodeJS.Process
       writeFileSync(join(scratch, "HEAD"), "ref: refs/heads/self-host\n");
       Object.assign(indexEnv, {
         GIT_DIR: scratch,
-        GIT_COMMON_DIR: gitPath(root, "--git-common-dir"),
+        GIT_COMMON_DIR: gitPath(root, "--path-format=absolute", "--git-common-dir"),
         GIT_WORK_TREE: root,
       });
     }
