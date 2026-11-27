@@ -1,5 +1,5 @@
 import { decodeGitListing, isolatedPathspecEnvironment } from "../git.ts";
-import { retireNamespace } from "../engine/destruction.ts";
+import { inspectNamespacePublications, namespacePublicationContext, retireNamespace } from "../engine/destruction.ts";
 import { durability } from "../engine/durability.ts";
 // The self-hosting gate: pm-vcs versions its own source, and a CI gate proves it.
 //
@@ -957,13 +957,14 @@ export async function readTreeSnapshot(root: string, treeish: string, includeBun
 }
 
 /**
- * Reads the committed bytes of a tracked file at `HEAD`, or null when absent.
+ * Reads the committed bytes of a tracked file at `HEAD`, or null when absent
+ * or when the prior entry is a gitlink with no reusable archive.
  *
  * An empty path lookup means the file is absent. Listing and blob read errors propagate.
  */
 export async function readCommittedFile(root: string, path: string): Promise<Buffer | null> {
   const entry = listTreeEntries(root, "HEAD", [path]).find(entry => entry.path === path);
-  return entry ? (await readTreeBlobs(root, [entry])).get(path)! : null;
+  return entry && entry.mode !== "160000" ? (await readTreeBlobs(root, [entry])).get(path)! : null;
 }
 
 /**
@@ -1058,6 +1059,44 @@ export function headCommitTimestamp(root: string): number {
   return seconds * 1000;
 }
 
+/** Replay an interrupted bootstrap with a receipt for the exact candidate that moved. */
+function recoverBootstrapBundle(target: string): BigIntStats | undefined {
+  const directory = dirname(target);
+  const control = realpathSync(namespacePublicationContext(target)?.control ?? directory);
+  const destination = join(realpathSync(directory), basename(target));
+  const prefix = `.${basename(target)}.pm-vcs-`;
+  let candidate: { path: string; expected: BigIntStats } | undefined;
+  inspectNamespacePublications(control, path => path === destination, fd => {
+    const prepared = fs.fstatSync(fd, { bigint: true });
+    // The inventory pins the recorded source. Find its same-directory name
+    // by identity so replay can return the receipt through retireNamespace.
+    if (prepared.nlink !== 1n) return;
+    for (const name of fs.readdirSync(directory)) {
+      if (!name.startsWith(prefix)) continue;
+      const path = join(directory, name);
+      const expected = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+      if (expected?.isFile() && sameFileIdentity(statIdentity(expected), statIdentity(prepared))) {
+        candidate = { path, expected };
+        break;
+      }
+    }
+  });
+  if (candidate === undefined) {
+    durability.recoverPublication(target);
+    return undefined;
+  }
+  const receipt = retireNamespace({ ...candidate, destination: target });
+  const published = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
+  if (!published?.isFile() || receipt.status !== "completed") return undefined;
+  const source = join(dirname(destination), basename(candidate.path));
+  // Rename can change ctime. The other identity fields still name the moved inode.
+  const movedIdentity = [published.dev, published.ino, published.birthtimeNs, published.size, published.mtimeNs].join(":");
+  return receipt.entries.some(entry => entry.kind === "rename" && entry.status === "moved"
+    && entry.destination !== undefined && resolve(control, entry.destination) === destination
+    && resolve(control, entry.path) === source
+    && entry.identity.split(":").slice(0, 5).join(":") === movedIdentity) ? published : undefined;
+}
+
 /**
  * Writes the bundle for the supplied source and skips an identical artifact.
  *
@@ -1093,14 +1132,15 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
     const target = resolveBundleTarget(root, config.bundle);
     // A previous write can stop after its journal records the rename but before
     // the file moves: the target stays absent while the pending publication
-    // still holds that earlier candidate, and a plain retry would let the
-    // engine publish the stale candidate behind the retry's own validation.
-    // Recover it first; only a target that was absent can have been surfaced
-    // by that recovery, so a present target keeps its one stable observation.
+    // still holds that earlier candidate. Recovery must prove it moved that
+    // candidate before the retry can use the untracked-file exception.
     const beforeRecovery = lstatSync(target, { bigint: true, throwIfNoEntry: false });
-    durability.recoverPublication(target);
+    const publication = beforeRecovery === undefined ? recoverBootstrapBundle(target) : undefined;
+    if (beforeRecovery !== undefined) durability.recoverPublication(target);
     const before = beforeRecovery ?? fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
-    const recovered = beforeRecovery === undefined && before !== undefined;
+    const recovered = publication !== undefined && before !== undefined
+      && sameFileIdentity(statIdentity(publication), statIdentity(before));
+    assertBundleMayReplace(root, config.bundle, before !== undefined, recovered);
     if (before?.isFile() && readStableSourceBytes(target, before)?.equals(bytes)) {
       console.log(recovered
         ? `self-host: recovered a pending publication of ${config.bundle} (${bytes.length} bytes)`
@@ -1128,6 +1168,11 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
           fs.fchmodSync(fd, permissions.mode);
         }
         expected = fs.fstatSync(fd, { bigint: true });
+        const applied = bundlePermissions(expected);
+        if (permissions !== undefined && (applied?.mode !== permissions.mode
+          || applied?.uid !== permissions.uid || applied?.gid !== permissions.gid)) {
+          throw new Error(`self-host: could not preserve the permissions of ${config.bundle}. The existing bundle was left in place.`);
+        }
       } finally {
         fs.closeSync(fd);
       }

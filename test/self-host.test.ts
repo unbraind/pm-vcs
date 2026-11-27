@@ -1292,6 +1292,43 @@ test("bundle regeneration preserves its owner before applying the mode", { skip:
   }
 });
 
+test("bundle publication refuses a temporary with silently altered permissions", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  await main(f.root, ["--write"]);
+  f.git(["add", "--", "selfhost.bundle"]);
+  chmodSync(path, 0o640);
+  const original = readFileSync(path);
+  writeFileSync(join(f.root, "README.md"), "new source with unchanged bundle permissions\n");
+
+  const chmod = fs.fchmodSync;
+  const fstat = fs.fstatSync;
+  for (const changed of ["mode", "uid", "gid"] as const) {
+    let temporary: number | undefined;
+    mock.method(fs, "fchmodSync", (fd: number, mode: number) => {
+      chmod(fd, changed === "mode" && mode === 0o640 ? 0o600 : mode);
+      if (mode === 0o640) temporary = fd;
+    });
+    mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => {
+      const observed = fstat(...args);
+      if (args[0] === temporary && changed !== "mode") {
+        temporary = undefined;
+        return Object.assign(observed, { [changed]: BigInt(observed[changed]) + 1n });
+      }
+      return observed;
+    });
+    try {
+      await assert.rejects(() => main(f.root, ["--write"]), /could not preserve the permissions of selfhost\.bundle/, changed);
+      assert.deepEqual(readFileSync(path), original);
+      assert.equal(statSync(path).mode & 0o777, 0o640);
+      assert.ok(!readdirSync(f.root).some(name => name.startsWith(".selfhost.bundle.pm-vcs-")));
+    } finally {
+      mock.restoreAll();
+    }
+  }
+});
+
 test("a completed retirement without a move fails the write and keeps the previous bundle", async t => {
   const f = fixture();
   t.after(f.cleanup);
@@ -1315,6 +1352,63 @@ test("a completed retirement without a move fails the write and keeps the previo
     assert.ok(removed);
     assert.deepEqual(readFileSync(path), original);
     assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
+  } finally {
+    destructionBoundary.visit = () => {};
+  }
+});
+
+test("first publication refuses an untracked bundle that appears during recovery", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  const foreign = Buffer.from("another process owns this untracked file\n");
+  const lstat = fs.lstatSync;
+  let appeared = false;
+  mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => {
+    const observed = lstat(...args);
+    if (!appeared && observed === undefined && args[0] === path && args[1]?.bigint) {
+      writeFileSync(path, foreign, { flag: "wx" });
+      appeared = true;
+    }
+    return observed;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(() => main(f.root, ["--write"]), /selfhost\.bundle exists but is not tracked/);
+    assert.ok(appeared);
+    assert.deepEqual(readFileSync(path), foreign);
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+
+  rmSync(path);
+  const stale = join(f.root, ".selfhost.bundle.pm-vcs-00000000000000000000000000000002");
+  writeFileSync(stale, "interrupted bootstrap bytes\n");
+  destructionBoundary.visit = (step: string, entryPath: string) => {
+    if (step === "before-delete" && entryPath === basename(stale)) {
+      throw Object.assign(new Error("interrupt before bootstrap rename"), { code: "EINJECTED" });
+    }
+  };
+  try {
+    const expected = lstatSync(stale, { bigint: true });
+    assert.throws(() => retireNamespace({ path: stale, destination: path, expected }), /interrupt before bootstrap rename/);
+  } finally {
+    destructionBoundary.visit = () => {};
+  }
+  const peer = join(f.root, "peer.bundle");
+  writeFileSync(peer, foreign);
+  let displaced = false;
+  destructionBoundary.visit = (step: string) => {
+    if (step === "receipt-persisted" && !displaced && lstatSync(path, { throwIfNoEntry: false }) !== undefined) {
+      renameSync(peer, path);
+      displaced = true;
+    }
+  };
+  try {
+    await assert.rejects(() => main(f.root, ["--write"]), /selfhost\.bundle exists but is not tracked/);
+    assert.ok(displaced);
+    assert.deepEqual(readFileSync(path), foreign);
   } finally {
     destructionBoundary.visit = () => {};
   }
@@ -1383,6 +1477,21 @@ test("a retry replaces a recovered stale candidate with the current bytes", asyn
   assert.notEqual(published.ino, staleInode);
   assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("a fresher snapshot\n"));
   assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
+});
+
+test("staged self-host writing repairs a bundle path that was a gitlink in HEAD", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const commit = f.git(["rev-parse", "HEAD"]);
+  f.git(["update-index", "--add", "--cacheinfo", `160000,${commit},selfhost.bundle`]);
+  f.git(["commit", "-qm", "record a gitlink at the bundle path"]);
+  await assert.rejects(() => main(f.root, ["--check"]), /unsupported mode 160000 for selfhost\.bundle/);
+
+  f.git(["rm", "--cached", "--", "selfhost.bundle"]);
+  await main(f.root, ["--write", "--staged"]);
+  f.git(["add", "--", "selfhost.bundle"]);
+  f.git(["commit", "-qm", "replace the gitlink with a bundle"]);
+  await main(f.root, ["--check"]);
 });
 
 test("staged self-host writing refuses an unresolved index before replacing the bundle", async () => {
@@ -2112,7 +2221,18 @@ test("batch framing is independent of transport chunk boundaries", () => {
   assert.deepEqual(parseBatchResponse(chunks, [entry]).get(entry.path), bytes);
 });
 
-test("working content checks honor source symlinks and excluded configuration", () => {
+test("working content checks honor excluded configuration", () => {
+  const f = fixture();
+  try {
+    const selected = readSourceFiles(f.root, ["README.md", "self-host.json"], ["self-host.json"]);
+    assert.deepEqual([...selected.keys()], ["README.md"]);
+    assert.throws(() => listTreeEntries(f.root, "unknown-tree"), /git ls-tree failed/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("working content checks honor raw-byte source symlinks", { skip: process.platform === "win32" }, () => {
   const f = fixture();
   try {
     const target = Buffer.from([0x74, 0x80]);
@@ -2121,7 +2241,6 @@ test("working content checks honor source symlinks and excluded configuration", 
     assert.deepEqual([...selected.keys()], ["link"]);
     assert.deepEqual(selected.get("link")?.content, target);
     assert.equal(readSourceFiles(f.root, ["link"], []).size, 1);
-    assert.throws(() => listTreeEntries(f.root, "unknown-tree"), /git ls-tree failed/);
   } finally {
     f.cleanup();
   }
@@ -2313,7 +2432,7 @@ test("working writer refuses bytes captured across a mid-read replacement", () =
   }
 });
 
-test("working capture preserves raw link text and refuses a removed or replaced link", () => {
+test("working capture preserves raw link text and refuses a removed or replaced link", { skip: process.platform === "win32" }, () => {
   const f = fixture();
   const path = join(f.root, "source-link");
   const target = Buffer.from([0x61, 0x80]);
