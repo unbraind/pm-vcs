@@ -1382,35 +1382,49 @@ test("first publication refuses an untracked bundle that appears during recovery
     syncBuiltinESMExports();
   }
 
-  rmSync(path);
-  const stale = join(f.root, ".selfhost.bundle.pm-vcs-00000000000000000000000000000002");
-  writeFileSync(stale, "interrupted bootstrap bytes\n");
-  destructionBoundary.visit = (step: string, entryPath: string) => {
-    if (step === "before-delete" && entryPath === basename(stale)) {
-      throw Object.assign(new Error("interrupt before bootstrap rename"), { code: "EINJECTED" });
+  for (const peer of ["regular", "directory", "hardlink"] as const) {
+    rmSync(path, { recursive: true });
+    const stale = join(f.root, `.selfhost.bundle.pm-vcs-recovery-${peer}`);
+    const candidateBytes = Buffer.from("interrupted bootstrap bytes\n");
+    writeFileSync(stale, candidateBytes);
+    const peerPath = join(f.root, "peer.bundle");
+    if (peer === "hardlink") fs.linkSync(stale, peerPath);
+    else if (peer === "regular") writeFileSync(peerPath, foreign);
+    destructionBoundary.visit = (step: string, entryPath: string) => {
+      if (step === "before-delete" && entryPath === basename(stale)) {
+        throw Object.assign(new Error("interrupt before bootstrap rename"), { code: "EINJECTED" });
+      }
+    };
+    try {
+      const expected = lstatSync(stale, { bigint: true });
+      assert.throws(() => retireNamespace({ path: stale, destination: path, expected }), /interrupt before bootstrap rename/);
+    } finally {
+      destructionBoundary.visit = () => {};
     }
-  };
-  try {
-    const expected = lstatSync(stale, { bigint: true });
-    assert.throws(() => retireNamespace({ path: stale, destination: path, expected }), /interrupt before bootstrap rename/);
-  } finally {
-    destructionBoundary.visit = () => {};
-  }
-  const peer = join(f.root, "peer.bundle");
-  writeFileSync(peer, foreign);
-  let displaced = false;
-  destructionBoundary.visit = (step: string) => {
-    if (step === "receipt-persisted" && !displaced && lstatSync(path, { throwIfNoEntry: false }) !== undefined) {
-      renameSync(peer, path);
+    let displaced = false;
+    destructionBoundary.visit = (step: string) => {
+      if (peer === "hardlink" || step !== "receipt-persisted" || displaced
+        || lstatSync(path, { throwIfNoEntry: false }) === undefined) return;
+      if (peer === "regular") renameSync(peerPath, path);
+      else {
+        rmSync(path);
+        mkdirSync(path);
+        writeFileSync(join(path, "peer.txt"), foreign);
+      }
       displaced = true;
+    };
+    try {
+      await assert.rejects(() => main(f.root, ["--write"]), /selfhost\.bundle exists but is not tracked/, peer);
+      if (peer === "hardlink") {
+        assert.equal(statSync(path).ino, statSync(peerPath).ino);
+        assert.deepEqual(readFileSync(path), candidateBytes);
+      } else {
+        assert.ok(displaced);
+        assert.deepEqual(readFileSync(peer === "directory" ? join(path, "peer.txt") : path), foreign);
+      }
+    } finally {
+      destructionBoundary.visit = () => {};
     }
-  };
-  try {
-    await assert.rejects(() => main(f.root, ["--write"]), /selfhost\.bundle exists but is not tracked/);
-    assert.ok(displaced);
-    assert.deepEqual(readFileSync(path), foreign);
-  } finally {
-    destructionBoundary.visit = () => {};
   }
 });
 
@@ -1418,6 +1432,11 @@ test("a retry completes a pending bootstrap publication without writing a second
   const f = fixture();
   t.after(f.cleanup);
   const path = join(f.root, "selfhost.bundle");
+  // A Git checkout can also carry engine metadata. Recovery must look for
+  // the journal in the native scope that originally recorded the move.
+  const control = join(f.root, ".pmvcs");
+  mkdirSync(control);
+  writeFileSync(join(control, "format"), "pmvcs-1\n");
   // Produce the exact bytes a retry would request again from the same HEAD.
   await main(f.root, ["--write"]);
   const requested = readFileSync(path);
@@ -1427,7 +1446,7 @@ test("a retry completes a pending bootstrap publication without writing a second
   const stale = join(f.root, ".selfhost.bundle.pm-vcs-00000000000000000000000000000000");
   renameSync(path, stale);
   const expected = lstatSync(stale, { bigint: true });
-  const recorded = basename(stale);
+  const recorded = join("..", basename(stale));
   destructionBoundary.visit = (step: string, entryPath: string) => {
     if (step === "before-delete" && entryPath === recorded) {
       throw Object.assign(new Error("interrupt the first publication"), { code: "EINJECTED" });
