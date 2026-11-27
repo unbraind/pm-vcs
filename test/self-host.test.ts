@@ -26,6 +26,7 @@ import { type ObjectId, ObjectStore } from "../engine/objects.ts";
 import { type Signature, readCommit, writeCommit } from "../engine/model.ts";
 import { RefStore } from "../engine/refs.ts";
 import { exportBundle, importBundleObjects, parseBundle } from "../engine/bundle.ts";
+import { destructionBoundary, retireNamespace } from "../engine/destruction.ts";
 
 import {
   buildSourceTree,
@@ -1222,6 +1223,168 @@ test("bundle regeneration preserves its group before applying the mode", { skip:
   }
 });
 
+test("bundle regeneration preserves its owner before applying the mode", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  await main(f.root, ["--write"]);
+  f.git(["add", "--", "selfhost.bundle"]);
+  const { uid, gid } = statSync(path);
+  chmodSync(path, 0o600);
+  const original = readFileSync(path);
+  writeFileSync(join(f.root, "README.md"), "regenerated for the existing owner\n");
+
+  const open = fs.openSync;
+  const stat = fs.fstatSync;
+  const chown = fs.fchownSync;
+  const chmod = fs.fchmodSync;
+  const denied = Object.assign(new Error("owner change denied"), { code: "EPERM" });
+  const calls: string[] = [];
+  let temporary: number | undefined;
+  let reportedForeignOwner = false;
+  let refuse = true;
+  mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+    const fd = open(...args);
+    if (typeof args[0] === "string" && args[0].startsWith(join(f.root, ".selfhost.bundle.pm-vcs-"))) {
+      temporary = fd;
+      reportedForeignOwner = false;
+    }
+    return fd;
+  });
+  mock.method(fs, "fstatSync", (...args: Parameters<typeof fs.fstatSync>) => {
+    const result = stat(...args);
+    // A privileged regenerator writes the temporary under its own identity, so
+    // the first observation reports a foreign owner that must be replaced.
+    if (args[0] === temporary && !reportedForeignOwner) {
+      reportedForeignOwner = true;
+      return Object.assign(result, { uid: BigInt(uid) + 1n });
+    }
+    return result;
+  });
+  mock.method(fs, "fchownSync", (fd: number, owner: number, group: number) => {
+    assert.deepEqual([fd, owner, group], [temporary, uid, gid]);
+    calls.push("owner");
+    if (refuse) throw denied;
+    chown(fd, owner, group);
+  });
+  mock.method(fs, "fchmodSync", (fd: number, mode: number) => {
+    if (fd === temporary) calls.push("mode");
+    chmod(fd, mode);
+  });
+  try {
+    await assert.rejects(() => main(f.root, ["--write"]), error => error === denied);
+    assert.deepEqual(calls, ["owner"]);
+    assert.deepEqual(readFileSync(path), original);
+    assert.equal(statSync(path).uid, uid);
+    assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
+
+    calls.length = 0;
+    refuse = false;
+    await main(f.root, ["--write"]);
+    const published = statSync(path);
+    assert.deepEqual(calls, ["owner", "mode"]);
+    assert.equal(published.uid, uid);
+    assert.equal(published.gid, gid);
+    assert.equal(published.mode & 0o777, 0o600);
+    assert.notDeepEqual(readFileSync(path), original);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test("a completed retirement without a move fails the write and keeps the previous bundle", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  await main(f.root, ["--write"]);
+  f.git(["add", "--", "selfhost.bundle"]);
+  const original = readFileSync(path);
+  writeFileSync(join(f.root, "README.md"), "an edit that must not be reported as written\n");
+  // The journal has captured the temporary when the engine reaches the rename
+  // boundary: a cleanup that removes the temporary exactly there leaves the old
+  // bundle in place, and the receipt records an absent source with no move.
+  let removed = false;
+  destructionBoundary.visit = (step: string, entryPath: string) => {
+    if (step === "before-delete" && !removed && entryPath.startsWith(".selfhost.bundle.pm-vcs-")) {
+      removed = true;
+      rmSync(join(f.root, entryPath));
+    }
+  };
+  try {
+    await assert.rejects(() => main(f.root, ["--write"]), /publication of selfhost\.bundle did not complete/);
+    assert.ok(removed);
+    assert.deepEqual(readFileSync(path), original);
+    assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
+  } finally {
+    destructionBoundary.visit = () => {};
+  }
+});
+
+test("a retry completes a pending bootstrap publication without writing a second candidate", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  // Produce the exact bytes a retry would request again from the same HEAD.
+  await main(f.root, ["--write"]);
+  const requested = readFileSync(path);
+  // Simulate the interrupted write: the journal recorded the rename, the file
+  // never moved, and the earlier candidate is still on disk under the
+  // temporary name while the bundle path itself stays absent.
+  const stale = join(f.root, ".selfhost.bundle.pm-vcs-00000000000000000000000000000000");
+  renameSync(path, stale);
+  const expected = lstatSync(stale, { bigint: true });
+  const recorded = basename(stale);
+  destructionBoundary.visit = (step: string, entryPath: string) => {
+    if (step === "before-delete" && entryPath === recorded) {
+      throw Object.assign(new Error("interrupt the first publication"), { code: "EINJECTED" });
+    }
+  };
+  try {
+    assert.throws(() => retireNamespace({ path: stale, destination: path, expected }), /interrupt the first publication/);
+  } finally {
+    destructionBoundary.visit = () => {};
+  }
+  assert.equal(lstatSync(path, { throwIfNoEntry: false }), undefined);
+  const recoveredInode = statSync(stale).ino;
+  await main(f.root, ["--write"]);
+  // The retry reports the recovered candidate itself rather than refusing the
+  // now-untracked bundle: the published file is the recovered inode, not a
+  // freshly written replacement.
+  const published = statSync(path);
+  assert.equal(published.ino, recoveredInode);
+  assert.deepEqual(readFileSync(path), requested);
+  assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
+});
+
+test("a retry replaces a recovered stale candidate with the current bytes", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  await main(f.root, ["--write"]);
+  const stale = join(f.root, ".selfhost.bundle.pm-vcs-00000000000000000000000000000001");
+  renameSync(path, stale);
+  const expected = lstatSync(stale, { bigint: true });
+  const recorded = basename(stale);
+  destructionBoundary.visit = (step: string, entryPath: string) => {
+    if (step === "before-delete" && entryPath === recorded) {
+      throw Object.assign(new Error("interrupt the first publication"), { code: "EINJECTED" });
+    }
+  };
+  try {
+    assert.throws(() => retireNamespace({ path: stale, destination: path, expected }), /interrupt the first publication/);
+  } finally {
+    destructionBoundary.visit = () => {};
+  }
+  // The source moves on after the interruption, so the pending candidate is stale.
+  writeFileSync(join(f.root, "README.md"), "a fresher snapshot\n");
+  const staleInode = statSync(stale).ino;
+  await main(f.root, ["--write"]);
+  const published = statSync(path);
+  assert.notEqual(published.ino, staleInode);
+  assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("a fresher snapshot\n"));
+  assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
+});
+
 test("staged self-host writing refuses an unresolved index before replacing the bundle", async () => {
   const f = fixture();
   try {
@@ -1802,19 +1965,29 @@ test("source snapshots publish every blob and tree under one uninterrupted nativ
  } finally { f.cleanup(); }
 });
 
-test("snapshot paths preserve valid UTF-8 and reject an unrepresentable name", () => {
+test("snapshot paths preserve valid UTF-8", () => {
   const f = fixture();
   try {
     const valid = "\uFEFFcafé-�";
     writeFileSync(join(f.root, valid), "ordinary source");
+    f.git(["add", "--", valid]);
+    const tree = f.git(["write-tree"]);
+    assert.ok(listTrackedFiles(f.root).includes(valid));
+    assert.ok(listTreeEntries(f.root, tree).some(entry => entry.path === valid));
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("snapshot paths keep control characters and reject an unrepresentable name", { skip: process.platform === "win32" }, () => {
+  const f = fixture();
+  try {
     const marker = "\x01ordinary-path";
     writeFileSync(join(f.root, marker), "record marker in a path");
-    f.git(["add", "--", valid, marker]);
+    f.git(["add", "--", marker]);
     const tree = f.git(["write-tree"]);
-    for (const name of [marker, valid]) {
-      assert.ok(listTrackedFiles(f.root).includes(name));
-      assert.ok(listTreeEntries(f.root, tree).some(entry => entry.path === name));
-    }
+    assert.ok(listTrackedFiles(f.root).includes(marker));
+    assert.ok(listTreeEntries(f.root, tree).some(entry => entry.path === marker));
 
     for (const suffix of [0x80, 0x81]) {
       const name = Buffer.concat([Buffer.from(join(f.root, "name-")), Buffer.from([suffix])]);
@@ -1939,18 +2112,28 @@ test("batch framing is independent of transport chunk boundaries", () => {
   assert.deepEqual(parseBatchResponse(chunks, [entry]).get(entry.path), bytes);
 });
 
-test("working content checks honor quoted paths, source symlinks and excluded configuration", () => {
+test("working content checks honor source symlinks and excluded configuration", () => {
+  const f = fixture();
+  try {
+    const target = Buffer.from([0x74, 0x80]);
+    symlinkSync(target, join(f.root, "link"));
+    const selected = readSourceFiles(f.root, ["link", "self-host.json"], ["self-host.json"]);
+    assert.deepEqual([...selected.keys()], ["link"]);
+    assert.deepEqual(selected.get("link")?.content, target);
+    assert.equal(readSourceFiles(f.root, ["link"], []).size, 1);
+    assert.throws(() => listTreeEntries(f.root, "unknown-tree"), /git ls-tree failed/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("working content checks honor quoted paths", { skip: process.platform === "win32" }, () => {
   const f = fixture();
   try {
     const name = '"read\nme"';
     writeFileSync(join(f.root, name), "unchanged bytes");
-    const target = Buffer.from([0x74, 0x80]);
-    symlinkSync(target, join(f.root, "link"));
-    const selected = readSourceFiles(f.root, [name, "link", "self-host.json"], ["self-host.json"]);
-    assert.deepEqual([...selected.keys()], [name, "link"]);
-    assert.deepEqual(selected.get("link")?.content, target);
-    assert.equal(readSourceFiles(f.root, ["link"], []).size, 1);
-    assert.throws(() => listTreeEntries(f.root, "unknown-tree"), /git ls-tree failed/);
+    const selected = readSourceFiles(f.root, [name], []);
+    assert.deepEqual([...selected.keys()], [name]);
   } finally {
     f.cleanup();
   }
@@ -2055,10 +2238,15 @@ test("Git pathspec isolation matches Windows keys case-insensitively and POSIX k
 test("tree lookups keep tool-pinned literal matching under ambient pathspec settings", () => {
   const f = fixture();
   try {
-    writeFileSync(join(f.root, "weird*name.txt"), "literal\n");
-    f.git(["add", "--", "weird*name.txt"]);
-    f.git(["commit", "-q", "-m", "metacharacter path"]);
-    assert.deepEqual(listTreeEntries(f.root, "HEAD", ["weird*name.txt"]).map(entry => entry.path), ["weird*name.txt"]);
+    // A metacharacter name cannot exist as a working file on every host, so the
+    // tree is assembled straight in Git's object database: the lookup needs the
+    // tree entry, not a checkout that some platforms would refuse to create.
+    writeFileSync(join(f.root, "safe-name.txt"), "literal\n");
+    const blob = f.git(["hash-object", "-w", "--", "safe-name.txt"]);
+    rmSync(join(f.root, "safe-name.txt"));
+    f.git(["update-index", "--add", "--cacheinfo", `100644,${blob},weird*name.txt`]);
+    const tree = f.git(["write-tree"]);
+    assert.deepEqual(listTreeEntries(f.root, tree, ["weird*name.txt"]).map(entry => entry.path), ["weird*name.txt"]);
     // The literal lookup is the tool's choice, so a host exporting a global
     // pathspec magic must not reach the git child: git refuses the combination
     // ("global 'literal' pathspec setting is incompatible with all other global
@@ -2067,7 +2255,7 @@ test("tree lookups keep tool-pinned literal matching under ambient pathspec sett
       const previous = process.env[setting];
       process.env[setting] = "1";
       try {
-        const entries = listTreeEntries(f.root, "HEAD", ["weird*name.txt"]);
+        const entries = listTreeEntries(f.root, tree, ["weird*name.txt"]);
         assert.deepEqual(entries.map(entry => entry.path), ["weird*name.txt"]);
       } finally {
         if (previous === undefined) delete process.env[setting];

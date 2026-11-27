@@ -1,0 +1,11 @@
+id: pm-vcs-gm4m
+title: Guard real-file symlink fixtures in the self-host suite for win32 privilege-free runs
+description: "The PR #240 win32 fixture guard (thread PRRT_kwDOToJT7M68vvUN) split the POSIX-only filename fixtures, but the same suite still creates real symlinks (symlinkSync) in tests that are not win32-guarded: on Windows without developer mode those fixtures fail during setup for privilege reasons rather than exercising reader behavior. Same defect class as the guarded filenames (fixture setup failing before the code under test runs), but outside the flagged thread's scope and consistent with the suite's existing convention, so recorded for a dedicated pass over the suite's fixture portability."
+type: Issue
+status: open
+priority: 3
+tags[2]: follow-up,testing
+created_at: "2026-11-27T14:52:01.587Z"
+updated_at: "2026-11-27T14:52:01.587Z"
+author: pi-glm
+body: ""

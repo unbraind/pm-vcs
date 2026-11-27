@@ -334,9 +334,12 @@ export function resolveBundleTarget(root: string, bundle: string): string {
   return target;
 }
 
-/** Require a live index entry to replace an existing bundle. A missing bundle can be bootstrapped. */
-function assertBundleMayReplace(root: string, bundle: string, exists: boolean): void {
-  if (exists && !listTrackedFiles(root, [bundle]).includes(bundle)) {
+/**
+ * Require a live index entry to replace an existing bundle. A missing bundle can be bootstrapped,
+ * and a retry may replace exactly the file that its own recovery just republished.
+ */
+function assertBundleMayReplace(root: string, bundle: string, exists: boolean, recoveredReplacement = false): void {
+  if (exists && !recoveredReplacement && !listTrackedFiles(root, [bundle]).includes(bundle)) {
     throw new Error(
       `self-host: ${bundle} exists but is not tracked by git. Refusing to overwrite it — `
         + `the bundle must be a tracked file, so this would clobber something else.`,
@@ -344,9 +347,9 @@ function assertBundleMayReplace(root: string, bundle: string, exists: boolean): 
   }
 }
 
-/** Preserve the group and permission bits from one regular bundle observation. */
-function bundlePermissions(stat: BigIntStats | undefined): { mode: number; gid: bigint } | undefined {
-  return stat?.isFile() ? { mode: Number(stat.mode & 0o7777n), gid: stat.gid } : undefined;
+/** Preserve the owner, group and permission bits from one regular bundle observation. */
+function bundlePermissions(stat: BigIntStats | undefined): { mode: number; uid: bigint; gid: bigint } | undefined {
+  return stat?.isFile() ? { mode: Number(stat.mode & 0o7777n), uid: stat.uid, gid: stat.gid } : undefined;
 }
 
 /**
@@ -1063,7 +1066,10 @@ export function headCommitTimestamp(root: string): number {
  * snapshot comes from the committed bundle through {@link readCommittedFile}.
  * Publication uses the live index for replacement permission. "Unchanged" is decided from one stable
  * observation of that target, and the write itself lands through a rename so a
- * replacement at the path is replaced rather than followed.
+ * replacement at the path is replaced rather than followed. A pending publication
+ * left by an interrupted write is recovered before the target is observed, so a
+ * retry decides on the recovered state instead of publishing a stale candidate
+ * behind its own validation.
  */
 async function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<string, SourceFile>): Promise<void> {
   const { store, refs, cleanup } = freshStore();
@@ -1085,9 +1091,20 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
       `self-host: source snapshot at ${headSha}\n`,
     );
     const target = resolveBundleTarget(root, config.bundle);
-    const before = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
+    // A previous write can stop after its journal records the rename but before
+    // the file moves: the target stays absent while the pending publication
+    // still holds that earlier candidate, and a plain retry would let the
+    // engine publish the stale candidate behind the retry's own validation.
+    // Recover it first; only a target that was absent can have been surfaced
+    // by that recovery, so a present target keeps its one stable observation.
+    const beforeRecovery = lstatSync(target, { bigint: true, throwIfNoEntry: false });
+    durability.recoverPublication(target);
+    const before = beforeRecovery ?? fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
+    const recovered = beforeRecovery === undefined && before !== undefined;
     if (before?.isFile() && readStableSourceBytes(target, before)?.equals(bytes)) {
-      console.log(`self-host: ${config.bundle} is unchanged`);
+      console.log(recovered
+        ? `self-host: recovered a pending publication of ${config.bundle} (${bytes.length} bytes)`
+        : `self-host: ${config.bundle} is unchanged`);
       return;
     }
     // Write through a same-directory temporary and rename over the target
@@ -1103,7 +1120,11 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
         writeFileSync(fd, bytes);
         if (permissions !== undefined) {
           const { uid, gid } = fs.fstatSync(fd, { bigint: true });
-          if (gid !== permissions.gid) fs.fchownSync(fd, Number(uid), Number(permissions.gid));
+          // A privileged regenerator owns the temporary as itself; restoring
+          // only the group would leave the bundle owned by that identity, so
+          // both ids move back before the mode. A refusal propagates and the
+          // original bundle stays in place.
+          if (uid !== permissions.uid || gid !== permissions.gid) fs.fchownSync(fd, Number(permissions.uid), Number(permissions.gid));
           fs.fchmodSync(fd, permissions.mode);
         }
         expected = fs.fstatSync(fd, { bigint: true });
@@ -1113,16 +1134,27 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
       /** Recheck publication authority before the journal starts and at the rename boundary. */
       const validate = (): void => {
         const current = lstatSync(target, { bigint: true, throwIfNoEntry: false });
-        assertBundleMayReplace(root, config.bundle, current !== undefined);
+        // Only the file this run's own recovery republished may be replaced
+        // while untracked; any other untracked file at the target stays refused.
+        const replacesRecovery = recovered && before !== undefined && current !== undefined
+          && sameFileIdentity(statIdentity(current), statIdentity(before));
+        assertBundleMayReplace(root, config.bundle, current !== undefined, replacesRecovery);
         const atPublication = bundlePermissions(current);
-        if (atPublication !== undefined && (atPublication.mode !== permissions?.mode || atPublication.gid !== permissions.gid)) {
+        if (atPublication !== undefined && (atPublication.mode !== permissions?.mode || atPublication.uid !== permissions?.uid || atPublication.gid !== permissions.gid)) {
           throw new Error(`self-host: ${config.bundle} permissions changed before publication. Run the write again.`);
         }
       };
       validate();
       // The namespace journal can flush an already read-only source. The
       // durability.rename convenience method first reopens its source for writing.
-      retireNamespace({ path: temporary, destination: target, expected }, false, validate);
+      const receipt = retireNamespace({ path: temporary, destination: target, expected }, false, validate);
+      // A completed receipt with no move means the temporary vanished without
+      // the rename landing — for example a cleanup race after the journal
+      // captured the source. The previous bundle is then still in place, and
+      // reporting a write would hide the failure.
+      if (!receipt.entries.some(entry => entry.status === "moved")) {
+        throw new Error(`self-host: publication of ${config.bundle} did not complete; ${config.bundle} keeps its previous bytes. Run the write again.`);
+      }
     } finally {
       durability.discardTemporary(temporary);
     }
