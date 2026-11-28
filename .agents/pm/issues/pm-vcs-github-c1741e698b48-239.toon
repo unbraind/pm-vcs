@@ -7,9 +7,9 @@ status: open
 priority: 2
 tags[2]: "gh:unbraind/pm-vcs#239","github_author:unbraind"
 created_at: "2026-11-26T10:16:11Z"
-updated_at: "2026-11-28T07:38:23.353Z"
+updated_at: "2026-11-28T08:02:34.117Z"
 author: pm-github
-comments[63]{created_at,author,text}:
+comments[66]{created_at,author,text}:
   "2026-11-26T10:19:50.183Z",codex-agent,PR #236 links the #228 tracker item. Its merge commit 1504164 is the base of this work. Checking each reader contract on this base before changing the implementation.
   "2026-11-26T10:21:49.569Z",codex-agent,"Baseline 1504164 failed all seven new contract tests (0/7). First isolated reverts: restoring listTreeEntries accepted an unrepresentable name and failed its rejection assertion. Restoring parseBatchResponse accepted a signed size and failed its framing assertion. Restoring the fixes passed both regressions (2/2). Valid Unicode, the literal replacement character, and zero-byte objects remain supported."
   "2026-11-26T10:29:01.212Z",codex-agent,"The separate #228 tracker-link repair, PR #238, is now on origin/main at ebf9157. Fast-forwarded to it before bundle regeneration. PR #236 was the reader implementation used for the initial reproductions."
@@ -73,6 +73,9 @@ comments[63]{created_at,author,text}:
   "2026-11-28T07:31:42.800Z",codex-agent,"PRRT_kwDOToJT7M69BQEK revert proof: restoring either symlink setup independently fails the format and precedence test under injected EPERM. The fixed SHA-1 v4 and SHA-256 v3 cases use regular bases, and an independent real-symlink test exercises Git fallback where the platform grants permission."
   "2026-11-28T07:38:16.987Z",codex-agent,"Round 10 fixed regressions passed 12/12 each on Node 22.18.0, pinned Bun 1.3.14 and the linked PM run on Node 26. The final cross-runtime UID fixture still fails on the diagnostic-only revert. Typecheck, test build, lint, zero duplication and docstrings passed. The isolated self-host coverage probe hit every changed branch. The existing standalone audit subprocess timeout is tracked in pm-vcs-selfhost-audit-budget. The committed bundle and release gates will run at the final head with fresh Git configuration and the workflow's tmpfs option for crash and audit fixtures. Exact-head checks: https://github.com/unbraind/pm-vcs/pull/240/checks."
   "2026-11-28T07:38:19.578Z",codex-agent,"Follow-up candidates retain their existing scope: pm-vcs-timj covers another crash after recovery has consumed the pending record, pm-vcs-gm4m covers remaining privilege-sensitive Windows symlink fixtures, and a separate portability pass can address the older metacharacter fixture. Engine work remains in draft PR #242."
+  "2026-11-28T07:58:47.023Z",codex-agent,"Round 10 bootstrap correction after the first push: the engine can replay a saved move acknowledgment without reading the destination. This is part of PRRT_kwDOToJT7M69BQEG's exact-match requirement. The script will compare the present bundle's streamed digest to the pending record before asking the engine to acknowledge it. The test will preserve an in-place edit after saved progress."
+  "2026-11-28T08:02:29.324Z",codex-agent,"PRRT_kwDOToJT7M69BQEG additional revert proof. The saved-progress regression on 6863751 and on an isolated digest-only revert both fail with Missing expected rejection. Restoring the streamed digest check passes and preserves the edited bundle inode, bytes and pending journal. The exact original bundle is accepted both before and after the progress acknowledgment with the same inode and completed receipt."
+  "2026-11-28T08:02:31.964Z",codex-agent,"The corrected round passed all 14 linked cases on Node 26, Node 22.18.0 and native Bun 1.3.14. Typecheck, test build, lint, zero duplication and docstrings pass. The script hashes only the identified current bundle using fixed-size reads on its opened descriptor. Final-head CI is available at https://github.com/unbraind/pm-vcs/pull/240/checks."
 files[9]{path,scope}:
   git.ts,project
   scripts/audit-git-identities.ts,project

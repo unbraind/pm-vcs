@@ -198,7 +198,7 @@ function captureWorkingConfig(path: string): { config: SelfHostConfig; source: S
 }
 
 /** Read a regular leaf only after the opened descriptor matches the observed inode. */
-function readRegularFile(path: string, expected: BigIntStats, followLink: boolean): { content: Buffer; stat: BigIntStats } {
+function readRegularFile<T>(path: string, expected: BigIntStats, followLink: boolean, read: (fd: number) => T): { content: T; stat: BigIntStats } {
   const noFollow = followLink ? 0 : fs.constants.O_NOFOLLOW;
   const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | noFollow);
   try {
@@ -206,7 +206,7 @@ function readRegularFile(path: string, expected: BigIntStats, followLink: boolea
     if (!stat.isFile() || stat.dev !== expected.dev || stat.ino !== expected.ino) {
       throw new ObjectStoreError("worktree_path_changed", "File changed while it was being read.");
     }
-    return { content: fs.readFileSync(fd), stat };
+    return { content: read(fd), stat };
   } finally {
     fs.closeSync(fd);
   }
@@ -217,7 +217,7 @@ function readStableSourceBytes(path: string, before: BigIntStats, followLink = f
   try {
     const observed = before.isSymbolicLink()
       ? { content: fs.readlinkSync(path, { encoding: "buffer" }), stat: before }
-      : readRegularFile(path, before, followLink);
+      : readRegularFile(path, before, followLink, fd => fs.readFileSync(fd));
     const stat = followLink ? fs.statSync : fs.lstatSync;
     const after = stat(path, { bigint: true, throwIfNoEntry: false });
     if (after !== undefined && sameFileIdentity(statIdentity(before), statIdentity(observed.stat))
@@ -1100,6 +1100,15 @@ function movedPublicationIdentity(identity: string): string {
   return identity.split(":").slice(0, 5).join(":");
 }
 
+/** Hash the published bundle through its pinned descriptor with fixed-size reads. */
+function hashPublishedBundle(fd: number): string {
+  const hash = createHash("sha256");
+  const chunk = Buffer.alloc(64 * 1024);
+  let count: number;
+  while ((count = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) hash.update(chunk.subarray(0, count));
+  return hash.digest("hex");
+}
+
 /** Locate the exact pending journal and its candidate, which may already be at the destination. */
 function selectBootstrapPublication(control: string, destination: string, bundle: BigIntStats | undefined) {
   const directory = dirname(destination);
@@ -1129,10 +1138,13 @@ function selectBootstrapPublication(control: string, destination: string, bundle
         || entry.destination === undefined || resolve(control, entry.destination) !== destination) return undefined;
     const path = resolve(control, entry.path);
     if (bundle !== undefined) {
-      const moved = bundle.isFile() && bundle.nlink === 1n && entry.target === "absent"
+      const matches = bundle.isFile() && bundle.nlink === 1n && entry.target === "absent"
         && dirname(path) === directory && basename(path).startsWith(prefix)
         && movedPublicationIdentity(publicationIdentity(bundle)) === movedPublicationIdentity(entry.identity);
-      return moved ? { journal, observed, id: record.id, path, expected: undefined } : undefined;
+      // A saved move records the outcome at the rename boundary. Verify the
+      // current bytes before using it to authorize replacement of an untracked file.
+      if (!matches || readRegularFile(destination, bundle, false, hashPublishedBundle).content !== entry.digest) return undefined;
+      return { journal, observed, id: record.id, path, expected: undefined };
     }
     const expected = candidates.get(path);
     return expected !== undefined && publicationIdentity(expected) === entry.identity

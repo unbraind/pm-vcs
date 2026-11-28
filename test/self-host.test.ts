@@ -1505,8 +1505,8 @@ test("a retry replaces a recovered stale candidate with the current bytes", asyn
   assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
 });
 
-/** Leave a candidate in the engine's pending publication journal. */
-function interruptBootstrap(root: string, candidate: string) {
+/** Interrupt a real engine publication before the move or after its progress was saved. */
+function interruptBootstrap(root: string, candidate: string, boundary = "before-delete") {
   const directory = fs.realpathSync(root);
   const path = join(directory, "selfhost.bundle");
   const control = namespacePublicationContext(path)?.control ?? directory;
@@ -1514,7 +1514,7 @@ function interruptBootstrap(root: string, candidate: string) {
   let journal = "";
   destructionBoundary.visit = (step, entryPath) => {
     if (step === "intent-persisted") journal = entryPath;
-    if (step === "before-delete" && entryPath === relative(control, candidate)) {
+    if (step === boundary && entryPath === relative(control, candidate)) {
       throw Object.assign(new Error("interrupt bootstrap"), { code: "EINJECTED" });
     }
   };
@@ -1534,29 +1534,31 @@ function interruptSparseBootstrap(root: string, size: number) {
   return interruptBootstrap(root, candidate);
 }
 
-test("bootstrap retry acknowledges a rename that already landed", async t => {
-  const f = fixture();
-  t.after(f.cleanup);
-  const path = join(f.root, "selfhost.bundle");
-  const candidate = join(fs.realpathSync(f.root), ".selfhost.bundle.pm-vcs-interrupted");
-  await main(f.root, ["--write"]);
-  const bytes = readFileSync(path);
-  renameSync(path, candidate);
-  const { expected, journal } = interruptBootstrap(f.root, candidate);
-  renameSync(candidate, path);
-  assert.equal(JSON.parse(readFileSync(journal, "utf8")).status, "pending");
+for (const boundary of ["before-delete", "progress-persisted"] as const) {
+  test(`bootstrap retry acknowledges a rename that already landed (${boundary})`, async t => {
+    const f = fixture();
+    t.after(f.cleanup);
+    const path = join(f.root, "selfhost.bundle");
+    const candidate = join(fs.realpathSync(f.root), ".selfhost.bundle.pm-vcs-interrupted");
+    await main(f.root, ["--write"]);
+    const bytes = readFileSync(path);
+    renameSync(path, candidate);
+    const { expected, journal } = interruptBootstrap(f.root, candidate, boundary);
+    if (boundary === "before-delete") renameSync(candidate, path);
+    assert.equal(JSON.parse(readFileSync(journal, "utf8")).status, "pending");
 
-  await main(f.root, ["--write"]);
+    await main(f.root, ["--write"]);
 
-  const receipt = JSON.parse(readFileSync(journal, "utf8"));
-  assert.equal(receipt.status, "completed");
-  assert.equal(receipt.entries[0].status, "moved");
-  assert.equal(lstatSync(path, { bigint: true }).ino, expected.ino);
-  assert.deepEqual(readFileSync(path), bytes);
-  assert.equal(lstatSync(candidate, { throwIfNoEntry: false }), undefined);
-});
+    const receipt = JSON.parse(readFileSync(journal, "utf8"));
+    assert.equal(receipt.status, "completed");
+    assert.equal(receipt.entries[0].status, "moved");
+    assert.equal(lstatSync(path, { bigint: true }).ino, expected.ino);
+    assert.deepEqual(readFileSync(path), bytes);
+    assert.equal(lstatSync(candidate, { throwIfNoEntry: false }), undefined);
+  });
+}
 
-for (const scenario of ["other inode", "directory", "hard link", "replacement intent", "other source name", "other source directory", "changed content"]) {
+for (const scenario of ["other inode", "directory", "hard link", "replacement intent", "other source name", "other source directory", "changed content", "changed content after progress"]) {
   test(`bootstrap retry refuses an untracked destination without an exact move (${scenario})`, async t => {
     const f = fixture();
     t.after(f.cleanup);
@@ -1571,12 +1573,13 @@ for (const scenario of ["other inode", "directory", "hard link", "replacement in
     if (scenario === "replacement intent") writeFileSync(path, "original\n");
     writeFileSync(candidate, "candidate\n");
     utimesSync(candidate, 1, 1);
-    const { journal } = interruptBootstrap(root, candidate);
+    const savedProgress = scenario === "changed content after progress";
+    const { journal } = interruptBootstrap(root, candidate, savedProgress ? "progress-persisted" : "before-delete");
     if (scenario === "directory") mkdirSync(path);
     else if (scenario === "other inode") writeFileSync(path, "candidate\n");
-    else renameSync(candidate, path);
+    else if (!savedProgress) renameSync(candidate, path);
     if (scenario === "hard link") fs.linkSync(path, join(root, "alias.bundle"));
-    if (scenario === "changed content") {
+    if (scenario.startsWith("changed content")) {
       writeFileSync(path, "different\n");
       utimesSync(path, 1, 1);
     }
@@ -1589,11 +1592,7 @@ for (const scenario of ["other inode", "directory", "hard link", "replacement in
     const after = lstatSync(path, { bigint: true });
     assert.deepEqual([after.ino, after.mode, after.ctimeNs], [before.ino, before.mode, before.ctimeNs]);
     if (bytes !== undefined) assert.deepEqual(readFileSync(path), bytes);
-    if (scenario === "changed content") {
-      assert.equal(JSON.parse(readFileSync(journal, "utf8")).entries[0].status, "absent");
-    } else {
-      assert.deepEqual(readFileSync(journal), pending);
-    }
+    assert.deepEqual(readFileSync(journal), pending);
   });
 }
 
