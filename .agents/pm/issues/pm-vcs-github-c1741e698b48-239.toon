@@ -7,9 +7,9 @@ status: in_progress
 priority: 2
 tags[2]: "gh:unbraind/pm-vcs#239","github_author:unbraind"
 created_at: "2026-11-26T10:16:11Z"
-updated_at: "2026-11-28T14:35:58.956Z"
+updated_at: "2026-11-28T14:58:42.795Z"
 author: pm-github
-comments[94]{created_at,author,text}:
+comments[98]{created_at,author,text}:
   "2026-11-26T10:19:50.183Z",codex-agent,PR #236 links the #228 tracker item. Its merge commit 1504164 is the base of this work. Checking each reader contract on this base before changing the implementation.
   "2026-11-26T10:21:49.569Z",codex-agent,"Baseline 1504164 failed all seven new contract tests (0/7). First isolated reverts: restoring listTreeEntries accepted an unrepresentable name and failed its rejection assertion. Restoring parseBatchResponse accepted a signed size and failed its framing assertion. Restoring the fixes passed both regressions (2/2). Valid Unicode, the literal replacement character, and zero-byte objects remain supported."
   "2026-11-26T10:29:01.212Z",codex-agent,"The separate #228 tracker-link repair, PR #238, is now on origin/main at ebf9157. Fast-forwarded to it before bundle regeneration. PR #236 was the reader implementation used for the initial reproductions."
@@ -104,6 +104,10 @@ comments[94]{created_at,author,text}:
   "2026-11-28T14:33:53.450Z",codex-agent,PRRT_kwDOToJT7M69EfF0 revert proof. Bypassing the test hook leaves the original bundle and its target unchanged. The new assertion fails because the swap never ran. Removing only that assertion makes the injected case pass.
   "2026-11-28T14:33:57.792Z",codex-agent,"The isolated mutations confirmed all eight changes, and the linked pinned-PM run passed 8 of 8 on Node 26. The package test-result tracking policy is disabled. Existing engine follow-ups: draft PR #242 and pm-vcs-timj cover replacement lineage. Separate portability candidates are alias-sensitive native scratch roots and the generic Git root fixture's physical-path expectation. Those cases are outside the round's script changes."
   "2026-11-28T14:35:54.723Z",codex-agent,"Node 22 self-host suite passed all 150 named cases with a linked ambient temporary directory and the physical fixture scope. The linked PM command and pinned native Bun 1.3.14 each passed 8 of 8 regressions. The linked-directory run also reproduced the unrelated Git fixture path expectation. Release validation uses clean Git configuration, a transport clone for object identity, and unchanged thresholds. Exact-head status and run links are at https://github.com/unbraind/pm-vcs/pull/240/checks."
+  "2026-11-28T14:51:41.664Z",codex-agent,Exact-head Greptile review of a78b73b identified a compatibility regression within PRRT_kwDOToJT7M69EfFE. A required clean filter that refers to Git objects must retain read access to the caller's store while hash-object writes only to scratch. Reproducing with a real history-aware required filter and a caller-provided alternate before correcting the conversion probe.
+  "2026-11-28T14:57:14.518Z",codex-agent,"PRRT_kwDOToJT7M69EfFE compatibility follow-through. Git write-mode validation now makes the caller's object directory readable via a C-quoted alternate and preserves the caller's existing alternate list. In a real Git fixture a required filter successfully stages changed bytes and reads a checkout-only HEAD and a separate alternate-only blob. Reverting the object-directory visibility, dropping the existing alternate, or using an unquoted delimiter-bearing path each fails in the writer's required filter. The updated native Bun and linked PM cases pass 9 of 9, and neither caller object store gains blobs. A separate synthetic Git probe confirmed that write mode can refresh timestamps of existing alternate objects. That metadata behavior is a follow-up candidate."
+  "2026-11-28T14:57:16.463Z",codex-agent,"The second commit preserves the conversion finding's expected compatibility. It retains the other seven fixes and both engine deferrals. The changelog and committed self-host checks are rerun, and exact-head results are monitored at https://github.com/unbraind/pm-vcs/pull/240/checks."
+  "2026-11-28T14:58:42.786Z",codex-agent,"Final targeted Node 22 run passed 195 of 195 across the self-host, Git, identity, tracker-candidate, and test-environment suites. The linked PM and pinned Bun regression runs each passed 9 of 9, including the required filter that can read repository history and a separate caller alternate."
 files[9]:
   - path: git.ts
     scope: project
@@ -218,12 +222,12 @@ tests[14]:
       created_at: "2026-11-28T10:58:27.420Z"
       source_kind: local_mutation
       source_ref: fix/self-host-reader-post-merge-review
-  - command: node --test --test-concurrency=1 --test-name-pattern='batch framing bounds|failed Git encoding conversion|bootstrap retry checks ledger ownership|fixture cleanup removes|first publication writes inside|main --write generates a bundle|journal changed during capture|unchanged bundle replaced mid-check' test/self-host.test.ts
+  - command: node --test --test-concurrency=1 --test-name-pattern='batch framing bounds|failed Git encoding conversion|bootstrap retry checks ledger ownership|fixture cleanup removes|first publication writes inside|main --write generates a bundle|journal changed during capture|unchanged bundle replaced mid-check|preserves Git history' test/self-host.test.ts
     scope: project
     timeout_seconds: 240
     provenance:
       author: codex-agent
-      created_at: "2026-11-28T14:30:31.776Z"
+      created_at: "2026-11-28T14:54:09.533Z"
       source_kind: local_mutation
       source_ref: fix/self-host-reader-post-merge-review
 docs[4]:

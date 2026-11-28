@@ -34,7 +34,7 @@ import { streamProcess } from "./audit-git-identities.ts";
 import childProcess, { execFileSync, spawnSync } from "node:child_process";
 import fs, { type BigIntStats, lstatSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { isPair, isScalar, parseDocument, visit } from "yaml";
 import { isMainInvocation } from "./main-invocation.ts";
 
@@ -1044,6 +1044,10 @@ export function readSourceFiles(
 /** Ask Git to apply staging-time conversion checks to the captured bytes. */
 function assertUnconvertedFiles(root: string, paths: readonly string[], files: ReadonlyMap<string, SourceFile>): void {
   const algorithm = runGit(root, ["rev-parse", "--show-object-format"]);
+  const originalObjects = gitPath(root, "--path-format=absolute", "--git-path", "objects");
+  // Quote the path as one Git alternate even when it contains the list separator.
+  const originalAlternate = '"' + originalObjects.replaceAll("\\", "\\\\").replaceAll('"', '\\"') + '"';
+  const alternates = [originalAlternate, process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES].filter(Boolean).join(delimiter);
   const objects = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-git-objects-"));
   try {
     for (const path of paths) {
@@ -1052,7 +1056,7 @@ function assertUnconvertedFiles(root: string, paths: readonly string[], files: R
       // Without -w, Git can report a conversion error and hash the raw bytes.
       const clean = childProcess.execFileSync("git", ["hash-object", "-w", "--stdin", `--path=${path}`], {
         cwd: root, input: bytes, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL",
-        env: { ...process.env, GIT_OBJECT_DIRECTORY: objects },
+        env: { ...process.env, GIT_OBJECT_DIRECTORY: objects, GIT_ALTERNATE_OBJECT_DIRECTORIES: alternates },
       }).trim();
       if (clean !== raw) throw new Error(`self-host: Git converts ${path}. Stage the candidate and run --write --staged.`);
     }

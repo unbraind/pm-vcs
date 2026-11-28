@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import fs, { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, delimiter, dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, test, type TestContext } from "node:test";
 import { ModuleMocks } from "./helpers/self-host-mocks.ts";
@@ -2614,6 +2614,40 @@ test("working writer refuses failed Git encoding conversion without writing call
   await main(f.root, ["--write"]);
   assert.deepEqual(bundledFiles(readFileSync(archive)).get("notes.txt")?.content, valid);
   assert.equal(f.git(["count-objects", "-v"]), objects);
+});
+
+test("working writer preserves Git history and existing alternates for required clean filters", async t => {
+  const parent = mkdtempSync(join(tmpdir(), `pm-vcs-clean-filter${delimiter}`));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const f = fixture("sha1", parent);
+  t.after(f.cleanup);
+  f.git(["commit", "--allow-empty", "-qm", "only in the checkout's history"]);
+  const alternate = fixture();
+  t.after(alternate.cleanup);
+  const object = alternate.git(["hash-object", "-w", "--stdin"], Buffer.from("only in the caller's alternate"));
+  writeFileSync(join(f.root, ".gitattributes"), "README.md filter=history\n");
+  f.git(["add", "--", ".gitattributes"]);
+  f.git(["config", "filter.history.clean", `git cat-file -e HEAD && git cat-file -e ${object} && cat`]);
+  f.git(["config", "filter.history.required", "true"]);
+
+  const setting = "GIT_ALTERNATE_OBJECT_DIRECTORIES";
+  const previous = process.env[setting];
+  process.env[setting] = join(alternate.root, ".git", "objects");
+  try {
+    writeFileSync(join(f.root, "README.md"), "an edit accepted by ordinary staging\n");
+    runGit(f.root, ["add", "--", "README.md"]);
+    const objects = f.git(["count-objects", "-v"]);
+    const alternateObjects = alternate.git(["count-objects", "-v"]);
+    const content = Buffer.from("accepted through the history-aware clean filter\n");
+    writeFileSync(join(f.root, "README.md"), content);
+    await main(f.root, ["--write"]);
+    assert.deepEqual(bundledFiles(readFileSync(join(f.root, "selfhost.bundle"))).get("README.md")?.content, content);
+    assert.equal(f.git(["count-objects", "-v"]), objects);
+    assert.equal(alternate.git(["count-objects", "-v"]), alternateObjects);
+  } finally {
+    if (previous === undefined) delete process.env[setting];
+    else process.env[setting] = previous;
+  }
 });
 
 test("explicitly excluded gitlinks permit staged writing and committed verification", async () => {
