@@ -1,5 +1,5 @@
 import { decodeGitListing, isolatedPathspecEnvironment } from "../git.ts";
-import { type DestructionReceipt, namespacePublicationContext, retireNamespace } from "../engine/destruction.ts";
+import { type DestructionReceipt, DestructionRefusal, namespacePublicationContext, retireNamespace } from "../engine/destruction.ts";
 import { durability } from "../engine/durability.ts";
 // The self-hosting gate: pm-vcs versions its own source, and a CI gate proves it.
 //
@@ -310,6 +310,13 @@ export function parseSelfHostConfig(raw: string): SelfHostConfig {
  * @throws Error When the target or an ancestor escapes the repository.
  */
 export function resolveBundleTarget(root: string, bundle: string): string {
+  const { target, observed } = resolveConfinedBundleTarget(root, bundle);
+  assertBundleMayReplace(root, bundle, observed !== undefined);
+  return target;
+}
+
+/** Check path confinement and leaf type before consulting publication recovery. */
+function resolveConfinedBundleTarget(root: string, bundle: string): { target: string; observed: BigIntStats | undefined } {
   const target = join(root, bundle);
   const realRoot = realpathSync(root);
   let realParent: string;
@@ -324,23 +331,27 @@ export function resolveBundleTarget(root: string, bundle: string): string {
         + `Refusing to write through a symbolic link.`,
     );
   }
-  const observed = lstatSync(target, { throwIfNoEntry: false });
+  const observed = lstatSync(target, { bigint: true, throwIfNoEntry: false });
   if (observed?.isSymbolicLink() === true) {
     throw new Error(
       `self-host: ${bundle} is a symbolic link. Refusing to write through it — `
         + `the bundle must be a regular file inside the repository.`,
     );
   }
-  assertBundleMayReplace(root, bundle, observed !== undefined);
-  return target;
+  return { target, observed };
+}
+
+/** Read replacement authority from the live Git index. */
+function bundleIsTracked(root: string, bundle: string): boolean {
+  return listTrackedFiles(root, [bundle]).includes(bundle);
 }
 
 /**
  * Require a live index entry to replace an existing bundle. A missing bundle can be bootstrapped,
- * and a retry may replace exactly the file that its own recovery just republished.
+ * and a retry may replace the exact file confirmed by its own recovery.
  */
 function assertBundleMayReplace(root: string, bundle: string, exists: boolean, recoveredReplacement = false): void {
-  if (exists && !recoveredReplacement && !listTrackedFiles(root, [bundle]).includes(bundle)) {
+  if (exists && !recoveredReplacement && !bundleIsTracked(root, bundle)) {
     throw new Error(
       `self-host: ${bundle} exists but is not tracked by git. Refusing to overwrite it — `
         + `the bundle must be a tracked file, so this would clobber something else.`,
@@ -1084,13 +1095,18 @@ function publicationIdentity(stat: BigIntStats): string {
   return [stat.dev, stat.ino, stat.birthtimeNs, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 }
 
-/** Locate the exact pending journal and same-directory candidate without reading the bundle. */
-function selectBootstrapPublication(control: string, destination: string) {
+/** Compare the five fields that survive a rename. */
+function movedPublicationIdentity(identity: string): string {
+  return identity.split(":").slice(0, 5).join(":");
+}
+
+/** Locate the exact pending journal and its candidate, which may already be at the destination. */
+function selectBootstrapPublication(control: string, destination: string, bundle: BigIntStats | undefined) {
   const directory = dirname(destination);
   const prefix = `.${basename(destination)}.pm-vcs-`;
   const candidates = new Map<string, BigIntStats>();
   const keys = [`publication:${destination}`];
-  for (const name of fs.readdirSync(directory)) {
+  for (const name of bundle === undefined ? fs.readdirSync(directory) : []) {
     if (!name.startsWith(prefix)) continue;
     const path = join(directory, name);
     const expected = lstatSync(path, { bigint: true, throwIfNoEntry: false });
@@ -1112,6 +1128,12 @@ function selectBootstrapPublication(control: string, destination: string) {
     if (record.status !== "pending" || entry?.kind !== "rename" || entry.status !== "planned"
         || entry.destination === undefined || resolve(control, entry.destination) !== destination) return undefined;
     const path = resolve(control, entry.path);
+    if (bundle !== undefined) {
+      const moved = bundle.isFile() && bundle.nlink === 1n && entry.target === "absent"
+        && dirname(path) === directory && basename(path).startsWith(prefix)
+        && movedPublicationIdentity(publicationIdentity(bundle)) === movedPublicationIdentity(entry.identity);
+      return moved ? { journal, observed, id: record.id, path, expected: undefined } : undefined;
+    }
     const expected = candidates.get(path);
     return expected !== undefined && publicationIdentity(expected) === entry.identity
       ? { journal, observed, id: record.id, path, expected } : undefined;
@@ -1120,13 +1142,13 @@ function selectBootstrapPublication(control: string, destination: string) {
 }
 
 /** Replay an interrupted bootstrap with a receipt for the exact candidate that moved. */
-function recoverBootstrapBundle(target: string): BigIntStats | undefined {
+function recoverBootstrapBundle(target: string, bundle: BigIntStats | undefined): BigIntStats | undefined {
   const directory = dirname(target);
   const control = realpathSync(namespacePublicationContext(target)?.control ?? directory);
   const destination = join(realpathSync(directory), basename(target));
-  const candidate = selectBootstrapPublication(control, destination);
+  const candidate = selectBootstrapPublication(control, destination, bundle);
   if (candidate === undefined) {
-    durability.recoverPublication(target);
+    if (bundle === undefined) durability.recoverPublication(target);
     return undefined;
   }
   // Keep the selected journal pinned through the engine's lease and rename
@@ -1141,11 +1163,26 @@ function recoverBootstrapBundle(target: string): BigIntStats | undefined {
   const published = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
   if (!published?.isFile() || receipt.status !== "completed" || receipt.id !== candidate.id) return undefined;
   // Rename can change ctime. The other identity fields still name the moved inode.
-  const movedIdentity = publicationIdentity(published).split(":").slice(0, 5).join(":");
+  const movedIdentity = movedPublicationIdentity(publicationIdentity(published));
   return receipt.entries.some(entry => entry.kind === "rename" && entry.status === "moved"
     && entry.destination !== undefined && resolve(control, entry.destination) === destination
     && resolve(control, entry.path) === candidate.path
-    && entry.identity.split(":").slice(0, 5).join(":") === movedIdentity) ? published : undefined;
+    && movedPublicationIdentity(entry.identity) === movedIdentity) ? published : undefined;
+}
+
+/** Recover under the engine's private ledger ownership rules and give operators a retry path. */
+function recoverBundlePublication(root: string, bundle: string, target: string, observed: BigIntStats | undefined): BigIntStats | undefined {
+  try {
+    if (observed === undefined || !bundleIsTracked(root, bundle)) return recoverBootstrapBundle(target, observed);
+    durability.recoverPublication(target);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof DestructionRefusal) || error.code !== "foreign_destructive_intent") throw error;
+    throw Object.assign(new Error(
+      `self-host: ${error.message} If another user owns the publication ledger, run regeneration as the ledger-owning UID.`,
+      { cause: error },
+    ), { code: error.code });
+  }
 }
 
 /**
@@ -1157,9 +1194,8 @@ function recoverBootstrapBundle(target: string): BigIntStats | undefined {
  * Publication uses the live index for replacement permission. "Unchanged" is decided from one stable
  * observation of that target, and the write itself lands through a rename so a
  * replacement at the path is replaced rather than followed. A pending publication
- * left by an interrupted write is recovered before the target is observed, so a
- * retry decides on the recovered state instead of publishing a stale candidate
- * behind its own validation.
+ * left by an interrupted write is reconciled before a new candidate is created.
+ * Regeneration uses the UID that owns the private publication ledger.
  */
 async function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<string, SourceFile>): Promise<void> {
   const { store, refs, cleanup } = freshStore();
@@ -1180,14 +1216,10 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
       signature,
       `self-host: source snapshot at ${headSha}\n`,
     );
-    const target = resolveBundleTarget(root, config.bundle);
-    // A previous write can stop after its journal records the rename but before
-    // the file moves: the target stays absent while the pending publication
-    // still holds that earlier candidate. Recovery must prove it moved that
-    // candidate before the retry can use the untracked-file exception.
-    const beforeRecovery = lstatSync(target, { bigint: true, throwIfNoEntry: false });
-    const publication = beforeRecovery === undefined ? recoverBootstrapBundle(target) : undefined;
-    if (beforeRecovery !== undefined) durability.recoverPublication(target);
+    const { target, observed: beforeRecovery } = resolveConfinedBundleTarget(root, config.bundle);
+    // An interrupted bootstrap can leave the candidate at either name. Only a
+    // completed receipt for that inode permits the untracked-file exception.
+    const publication = recoverBundlePublication(root, config.bundle, target, beforeRecovery);
     const before = beforeRecovery ?? fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
     const recovered = publication !== undefined && before !== undefined
       && sameFileIdentity(statIdentity(publication), statIdentity(before));
@@ -1230,7 +1262,7 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
       /** Recheck publication authority before the journal starts and at the rename boundary. */
       const validate = (): void => {
         const current = lstatSync(target, { bigint: true, throwIfNoEntry: false });
-        // Only the file this run's own recovery republished may be replaced
+        // Only the file this run's own recovery confirmed may be replaced
         // while untracked; any other untracked file at the target stays refused.
         const replacesRecovery = recovered && before !== undefined && current !== undefined
           && sameFileIdentity(statIdentity(current), statIdentity(before));

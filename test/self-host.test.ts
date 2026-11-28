@@ -15,9 +15,9 @@ import { createHash } from "node:crypto";
 import fs, { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, test } from "node:test";
+import { afterEach, test, type TestContext } from "node:test";
 import { ModuleMocks } from "./helpers/self-host-mocks.ts";
 import { isolatedPathspecEnvironment } from "../git.ts";
 
@@ -26,7 +26,8 @@ import { type ObjectId, ObjectStore } from "../engine/objects.ts";
 import { type Signature, readCommit, writeCommit } from "../engine/model.ts";
 import { RefStore } from "../engine/refs.ts";
 import { exportBundle, importBundleObjects, parseBundle } from "../engine/bundle.ts";
-import { destructionBoundary, retireNamespace } from "../engine/destruction.ts";
+import { destructionBoundary, namespacePublicationContext, retireNamespace } from "../engine/destruction.ts";
+import { durability } from "../engine/durability.ts";
 
 import {
   buildSourceTree,
@@ -1504,28 +1505,140 @@ test("a retry replaces a recovered stale candidate with the current bytes", asyn
   assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
 });
 
-/** Leave an ordinary sparse bootstrap candidate in the engine's pending journal. */
-function interruptSparseBootstrap(root: string, size: number) {
-  const control = fs.realpathSync(root);
-  const path = join(control, "selfhost.bundle");
-  const candidate = join(control, ".selfhost.bundle.pm-vcs-sparse");
-  writeFileSync(candidate, "");
-  truncateSync(candidate, size);
+/** Leave a candidate in the engine's pending publication journal. */
+function interruptBootstrap(root: string, candidate: string) {
+  const directory = fs.realpathSync(root);
+  const path = join(directory, "selfhost.bundle");
+  const control = namespacePublicationContext(path)?.control ?? directory;
   const expected = lstatSync(candidate, { bigint: true });
   let journal = "";
   destructionBoundary.visit = (step, entryPath) => {
     if (step === "intent-persisted") journal = entryPath;
-    if (step === "before-delete" && entryPath === basename(candidate)) {
-      throw Object.assign(new Error("interrupt sparse bootstrap"), { code: "EINJECTED" });
+    if (step === "before-delete" && entryPath === relative(control, candidate)) {
+      throw Object.assign(new Error("interrupt bootstrap"), { code: "EINJECTED" });
     }
   };
   try {
-    assert.throws(() => retireNamespace({ path: candidate, destination: path, expected }), /interrupt sparse bootstrap/);
+    assert.throws(() => retireNamespace({ path: candidate, destination: path, expected }), /interrupt bootstrap/);
   } finally {
     destructionBoundary.visit = () => {};
   }
   return { control, path, candidate, expected, journal };
 }
+
+/** Record a pending publication without allocating memory for the sparse payload. */
+function interruptSparseBootstrap(root: string, size: number) {
+  const candidate = join(fs.realpathSync(root), ".selfhost.bundle.pm-vcs-sparse");
+  writeFileSync(candidate, "");
+  truncateSync(candidate, size);
+  return interruptBootstrap(root, candidate);
+}
+
+test("bootstrap retry acknowledges a rename that already landed", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  const candidate = join(fs.realpathSync(f.root), ".selfhost.bundle.pm-vcs-interrupted");
+  await main(f.root, ["--write"]);
+  const bytes = readFileSync(path);
+  renameSync(path, candidate);
+  const { expected, journal } = interruptBootstrap(f.root, candidate);
+  renameSync(candidate, path);
+  assert.equal(JSON.parse(readFileSync(journal, "utf8")).status, "pending");
+
+  await main(f.root, ["--write"]);
+
+  const receipt = JSON.parse(readFileSync(journal, "utf8"));
+  assert.equal(receipt.status, "completed");
+  assert.equal(receipt.entries[0].status, "moved");
+  assert.equal(lstatSync(path, { bigint: true }).ino, expected.ino);
+  assert.deepEqual(readFileSync(path), bytes);
+  assert.equal(lstatSync(candidate, { throwIfNoEntry: false }), undefined);
+});
+
+for (const scenario of ["other inode", "directory", "hard link", "replacement intent", "other source name", "other source directory", "changed content"]) {
+  test(`bootstrap retry refuses an untracked destination without an exact move (${scenario})`, async t => {
+    const f = fixture();
+    t.after(f.cleanup);
+    const root = fs.realpathSync(f.root);
+    const path = join(root, "selfhost.bundle");
+    const directory = scenario === "other source directory" ? join(root, "src") : root;
+    const candidate = join(directory, scenario === "other source name" ? "foreign.bundle" : ".selfhost.bundle.pm-vcs-interrupted");
+    if (scenario === "other source directory") {
+      mkdirSync(join(root, ".pmvcs"));
+      writeFileSync(join(root, ".pmvcs", "format"), "pmvcs-1\n");
+    }
+    if (scenario === "replacement intent") writeFileSync(path, "original\n");
+    writeFileSync(candidate, "candidate\n");
+    utimesSync(candidate, 1, 1);
+    const { journal } = interruptBootstrap(root, candidate);
+    if (scenario === "directory") mkdirSync(path);
+    else if (scenario === "other inode") writeFileSync(path, "candidate\n");
+    else renameSync(candidate, path);
+    if (scenario === "hard link") fs.linkSync(path, join(root, "alias.bundle"));
+    if (scenario === "changed content") {
+      writeFileSync(path, "different\n");
+      utimesSync(path, 1, 1);
+    }
+    const bytes = lstatSync(path).isFile() ? readFileSync(path) : undefined;
+    const before = lstatSync(path, { bigint: true });
+    const pending = readFileSync(journal);
+
+    await assert.rejects(() => main(root, ["--write"]), /selfhost\.bundle exists but is not tracked/);
+
+    const after = lstatSync(path, { bigint: true });
+    assert.deepEqual([after.ino, after.mode, after.ctimeNs], [before.ino, before.mode, before.ctimeNs]);
+    if (bytes !== undefined) assert.deepEqual(readFileSync(path), bytes);
+    if (scenario === "changed content") {
+      assert.equal(JSON.parse(readFileSync(journal, "utf8")).entries[0].status, "absent");
+    } else {
+      assert.deepEqual(readFileSync(journal), pending);
+    }
+  });
+}
+
+test("bundle regeneration requires the publication ledger's owning UID", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const path = join(f.root, "selfhost.bundle");
+  const control = fs.realpathSync(f.root);
+  const ledger = join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(control).digest("hex")}`);
+  await main(f.root, ["--write"]);
+  f.git(["add", "--", "selfhost.bundle"]);
+  chmodSync(path, 0o640);
+  const original = readFileSync(path);
+  const before = lstatSync(path, { bigint: true });
+  const permissions = lstatSync(ledger, { bigint: true });
+  writeFileSync(join(f.root, "README.md"), "regeneration under the ledger owner\n");
+
+  const recover = durability.recoverPublication;
+  mock.method(durability, "recoverPublication", (destination: string) => {
+    if (destination !== path) return recover(destination);
+    const identity = new ModuleMocks();
+    identity.method(process, "getuid", () => Number(permissions.uid) + 1);
+    try {
+      recover(destination);
+    } finally {
+      identity.restoreAll();
+    }
+  });
+  try {
+    await assert.rejects(() => main(f.root, ["--write"]), {
+      code: "foreign_destructive_intent",
+      message: /run regeneration as the ledger-owning UID/,
+    });
+    assert.deepEqual(lstatSync(path, { bigint: true }), before);
+    assert.deepEqual(readFileSync(path), original);
+    assert.ok(!readdirSync(f.root).some(name => name.startsWith(".selfhost.bundle.pm-vcs-")));
+  } finally {
+    mock.restoreAll();
+  }
+  assert.deepEqual(lstatSync(ledger, { bigint: true }), permissions);
+  await main(f.root, ["--write"]);
+  const after = lstatSync(path, { bigint: true });
+  assert.deepEqual([after.uid, after.gid, after.mode], [before.uid, before.gid, before.mode]);
+  assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("regeneration under the ledger owner\n"));
+});
 
 test("bootstrap recovery bounds the journal rather than a sparse candidate over 64 MiB", { timeout: 30_000 }, async t => {
   for (const journalKey of ["current", "legacy", "stamped"] as const) {
@@ -2436,7 +2549,8 @@ test("working writer requires its regular configuration to be tracked", async t 
 test("staged writer preserves an alternate split index", async t => {
   const f = fixture();
   t.after(f.cleanup);
-  const index = join(f.root, ".git", "alternate index ");
+  const index = join(f.root, ".git", "alternate index");
+  assert.doesNotMatch(basename(index), /[ .]$/u, "the fixture needs a Windows-portable index basename");
   const previous = process.env.GIT_INDEX_FILE;
   try {
     process.env.GIT_INDEX_FILE = index;
@@ -2454,7 +2568,8 @@ test("staged writer preserves an alternate split index", async t => {
   }
 });
 
-test("staged writer carries a split index's shared base beside the caller's index", async () => {
+/** Capture a shared base beside the caller's index, optionally through a file symlink. */
+async function checkAdjacentSharedBase(t: TestContext, symlink: boolean): Promise<void> {
   const f = fixture();
   const indexDirectory = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-base-"));
   const index = join(indexDirectory, "index");
@@ -2471,7 +2586,21 @@ test("staged writer carries a split index's shared base beside the caller's inde
     // base and `git write-tree` fails with "index file open failed".
     const bases = readdirSync(join(f.root, ".git")).filter(name => name.startsWith("sharedindex."));
     assert.ok(bases.length > 0, "git update-index --split-index must have written a shared base");
-    for (const base of bases) renameSync(join(f.root, ".git", base), join(indexDirectory, base));
+    for (const base of bases) {
+      const adjacent = join(indexDirectory, base);
+      const payload = symlink ? adjacent + ".payload" : adjacent;
+      renameSync(join(f.root, ".git", base), payload);
+      if (symlink) {
+        try {
+          symlinkSync(payload, adjacent, "file");
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (process.platform !== "win32" || !["EPERM", "EACCES"].includes(code ?? "")) throw error;
+          t.skip("Windows denied creation of a file symlink");
+          return;
+        }
+      }
+    }
     const before = readFileSync(index);
     await main(f.root, ["--write", "--staged"]);
     assert.deepEqual(readFileSync(index), before);
@@ -2482,7 +2611,10 @@ test("staged writer carries a split index's shared base beside the caller's inde
     rmSync(indexDirectory, { recursive: true, force: true });
     f.cleanup();
   }
-});
+}
+
+test("staged writer carries a split index's shared base beside the caller's index", t => checkAdjacentSharedBase(t, false));
+test("staged writer follows a Git-readable shared-base symlink beside the caller's index", t => checkAdjacentSharedBase(t, true));
 
 test("Git pathspec isolation matches Windows keys case-insensitively and POSIX keys exactly", () => {
   const base = {
@@ -3019,7 +3151,15 @@ test("split-index fallback resolves the shared base beside the selected index sy
   }
 });
 
-test("staged split snapshots select the Git-readable shared base across index formats", async () => {
+test("staged split snapshots select the Git-readable shared base across index formats without symlink privileges", async t => {
+  mock.method(fs, "symlinkSync", () => {
+    throw Object.assign(new Error("split-index format fixtures must work when symlink creation is denied"), { code: "EPERM" });
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+  });
   for (const [format, version] of [["sha1", "4"], ["sha256", "3"]]) {
     const f = fixture(format);
     const index = join(f.root, "alternate-index");
@@ -3041,12 +3181,10 @@ test("staged split snapshots select the Git-readable shared base across index fo
       assert.match(base, /^sharedindex\.[0-9a-f]+$/u);
       const adjacent = join(f.root, base);
       const primary = join(f.root, ".git", base);
-      const payload = join(f.root, "shared-base-payload");
       const before = readFileSync(index);
       assert.equal(before.readUInt32BE(4), Number(version));
-      renameSync(primary, payload);
-      symlinkSync("shared-base-payload", adjacent);
-      // Git accepts the alternate's symlink when the primary is absent.
+      renameSync(primary, adjacent);
+      // Git reads the adjacent base when the primary is absent.
       const expectedTree = runGit(f.root, ["write-tree"]);
       writeFileSync(index, before);
       await main(f.root, ["--write", "--staged"]);
@@ -3056,8 +3194,7 @@ test("staged split snapshots select the Git-readable shared base across index fo
       assert.deepEqual(readFileSync(index), before);
 
       // A valid primary takes precedence over an invalid adjacent name.
-      renameSync(payload, primary);
-      rmSync(adjacent);
+      renameSync(adjacent, primary);
       mkdirSync(adjacent);
       utimesSync(primary, 1, 1);
       await main(f.root, ["--write", "--staged"]);
@@ -3069,9 +3206,8 @@ test("staged split snapshots select the Git-readable shared base across index fo
 
       // An unusable required base keeps the last bundle intact.
       const last = readFileSync(output);
-      renameSync(primary, payload);
       rmSync(adjacent, { recursive: true });
-      symlinkSync("shared-base-payload", adjacent);
+      renameSync(primary, adjacent);
       mkdirSync(primary);
       await assert.rejects(() => main(f.root, ["--write", "--staged"]), /stable, regular Git index file/);
       rmSync(primary, { recursive: true });
