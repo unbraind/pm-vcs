@@ -808,12 +808,18 @@ test("readTreeSnapshot returns raw committed bytes, modes and the committed bund
 test("listTreeEntries keeps a path that contains a newline", async () => {
   const f = fixture();
   try {
-    writeFileSync(join(f.root, "lead\ning.md"), "newline in path\n");
-    f.git(["add", "-A"]);
+    const name = "lead\ning.md";
+    const content = Buffer.from("newline in path\n");
+    writeFileSync(join(f.root, "portable.txt"), content);
+    const blob = f.git(["hash-object", "-w", "--", "portable.txt"]);
+    // Git for Windows also checks names on index-only writes. Relax that
+    // check for this command in the disposable repository.
+    f.git(["-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", `100644,${blob},${name}`]);
+    assert.equal(readdirSync(f.root).includes(name), false);
     const entries = listTreeEntries(f.root, f.git(["write-tree"]));
-    assert.ok(entries.some((entry) => entry.path === "lead\ning.md"));
+    assert.ok(entries.some((entry) => entry.path === name));
     const blobs = await readTreeBlobs(f.root, entries);
-    assert.deepEqual(blobs.get("lead\ning.md"), Buffer.from("newline in path\n", "utf8"));
+    assert.deepEqual(blobs.get(name), content);
   } finally {
     f.cleanup();
   }
@@ -1496,6 +1502,109 @@ test("a retry replaces a recovered stale candidate with the current bytes", asyn
   assert.notEqual(published.ino, staleInode);
   assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("a fresher snapshot\n"));
   assert.ok(!readdirSync(f.root).some(entry => entry.startsWith(".selfhost.bundle.pm-vcs-")));
+});
+
+/** Leave an ordinary sparse bootstrap candidate in the engine's pending journal. */
+function interruptSparseBootstrap(root: string, size: number) {
+  const control = fs.realpathSync(root);
+  const path = join(control, "selfhost.bundle");
+  const candidate = join(control, ".selfhost.bundle.pm-vcs-sparse");
+  writeFileSync(candidate, "");
+  truncateSync(candidate, size);
+  const expected = lstatSync(candidate, { bigint: true });
+  let journal = "";
+  destructionBoundary.visit = (step, entryPath) => {
+    if (step === "intent-persisted") journal = entryPath;
+    if (step === "before-delete" && entryPath === basename(candidate)) {
+      throw Object.assign(new Error("interrupt sparse bootstrap"), { code: "EINJECTED" });
+    }
+  };
+  try {
+    assert.throws(() => retireNamespace({ path: candidate, destination: path, expected }), /interrupt sparse bootstrap/);
+  } finally {
+    destructionBoundary.visit = () => {};
+  }
+  return { control, path, candidate, expected, journal };
+}
+
+test("bootstrap recovery bounds the journal rather than a sparse candidate over 64 MiB", { timeout: 30_000 }, async t => {
+  for (const journalKey of ["current", "legacy", "stamped"] as const) {
+    const f = fixture();
+    t.after(f.cleanup);
+    const size = journalKey === "current" ? 64 * 1024 * 1024 + 1 : 64;
+    const { control, path, candidate, expected, journal } = interruptSparseBootstrap(f.root, size);
+    const body = readFileSync(journal);
+    if (journalKey === "current") {
+      truncateSync(journal, size);
+      await assert.rejects(() => main(control, ["--write"]), /record_bytes/);
+      assert.equal(lstatSync(candidate).size, size);
+      assert.equal(lstatSync(path, { throwIfNoEntry: false }), undefined);
+      writeFileSync(journal, body);
+
+    } else {
+      const record = JSON.parse(body.toString("utf8")) as { entries: [{ identity: string }] };
+      const stamp = journalKey === "stamped" ? `:${record.entries[0].identity}` : "";
+      const key = `rename:${candidate}:${path}${stamp}`;
+      const name = createHash("sha256").update(`${control}\0${key}`).digest("hex");
+      renameSync(journal, join(dirname(journal), `${name}.json`));
+    }
+    let recovered = false;
+    destructionBoundary.visit = (step) => {
+      if (step === "receipt-persisted" && lstatSync(path, { bigint: true, throwIfNoEntry: false })?.ino === expected.ino) {
+        assert.equal(lstatSync(path).size, size);
+        recovered = true;
+      }
+    };
+    try {
+      await main(control, ["--write"]);
+    } finally {
+      destructionBoundary.visit = () => {};
+    }
+    assert.ok(recovered, journalKey);
+    assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("hello\n"));
+    assert.equal(lstatSync(candidate, { throwIfNoEntry: false }), undefined);
+    if (journalKey === "current") {
+      rmSync(path);
+      await main(control, ["--write"]);
+      assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("hello\n"));
+    }
+  }
+});
+
+test("bootstrap recovery refuses a journal changed during capture or before the replay lease", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const { control, path, candidate, expected, journal } = interruptSparseBootstrap(f.root, 64);
+  const body = readFileSync(journal);
+  const open = fs.openSync;
+  const read = fs.readSync;
+  for (const race of ["before it was read", "while it was read", "before recovery"]) {
+    let journalFd: number | undefined;
+    mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+      if (args[0] !== journal || journalFd !== undefined) return open(...args);
+      journalFd = open(...args);
+      if (race === "before it was read") fs.appendFileSync(journal, "\n");
+      return journalFd;
+    });
+    mock.method(fs, "readSync", (fd: number, ...args: unknown[]) => {
+      const count = Reflect.apply(read, fs, [fd, ...args]) as number;
+      return race === "while it was read" && fd === journalFd ? count - 1 : count;
+    });
+    destructionBoundary.visit = (step, entryPath) => {
+      if (race === "before recovery" && step === "owner-published" && entryPath === `${journal}.lock`) {
+        fs.appendFileSync(journal, "\n");
+      }
+    };
+    try {
+      await assert.rejects(() => main(control, ["--write"]), new RegExp(`journal changed ${race}`));
+      assert.equal(lstatSync(candidate, { bigint: true }).ino, expected.ino);
+      assert.equal(lstatSync(path, { throwIfNoEntry: false }), undefined);
+    } finally {
+      mock.restoreAll();
+      destructionBoundary.visit = () => {};
+      writeFileSync(journal, body);
+    }
+  }
 });
 
 test("staged self-host writing repairs a bundle path that was a gitlink in HEAD", async t => {
@@ -2215,16 +2324,36 @@ test("freezing a staged edit leaves the original index byte-identical", async ()
   }
 });
 
-test("configuration must be a regular file in every selected snapshot", async () => {
+test("configuration must be a regular file in the staged and committed snapshots", async () => {
   const f = fixture();
   try {
-    f.git(["mv", "self-host.json", "config-data.json"]);
-    symlinkSync("config-data.json", join(f.root, "self-host.json"));
-    f.git(["add", "--", "self-host.json"]);
+    const link = join(f.root, "config-link.txt");
+    writeFileSync(link, "config-data.json");
+    const blob = f.git(["hash-object", "-w", "--", "config-link.txt"]);
+    f.git(["update-index", "--cacheinfo", `120000,${blob},self-host.json`]);
+    assert.ok(lstatSync(join(f.root, "self-host.json")).isFile());
     f.git(["commit", "-qm", "configuration link"]);
-    for (const args of [["--write"], ["--write", "--staged"], ["--check"]]) {
+    for (const args of [["--write", "--staged"], ["--check"]]) {
       await assert.rejects(() => main(f.root, args), /configuration.*regular/);
     }
+    assert.equal(statSync(join(f.root, "selfhost.bundle"), { throwIfNoEntry: false }), undefined);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("configuration must be a regular file in the working snapshot", async t => {
+  const f = fixture();
+  try {
+    renameSync(join(f.root, "self-host.json"), join(f.root, "config-data.json"));
+    try {
+      symlinkSync("config-data.json", join(f.root, "self-host.json"));
+    } catch (error) {
+      if (process.platform !== "win32" || !["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      t.skip("Creating a working-tree symlink requires Windows privileges.");
+      return;
+    }
+    await assert.rejects(() => main(f.root, ["--write"]), /configuration.*regular/);
     assert.equal(statSync(join(f.root, "selfhost.bundle"), { throwIfNoEntry: false }), undefined);
   } finally {
     f.cleanup();

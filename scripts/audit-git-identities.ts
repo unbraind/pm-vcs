@@ -12,7 +12,7 @@
  * ```
  */
 
-import { spawn } from "node:child_process";
+import childProcess from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isMainInvocation } from "./main-invocation.ts";
@@ -50,7 +50,7 @@ export async function streamProcess(
   consume: (chunk: Buffer) => void,
 ): Promise<void> {
   await new Promise<void>((resolvePromise, reject) => {
-    const child = spawn(command, arguments_, {
+    const child = childProcess.spawn(command, arguments_, {
       cwd: options.cwd,
       env: options.env,
       stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
@@ -70,10 +70,10 @@ export async function streamProcess(
     child.on("error", (error) => {
       fail(new Error(`could not run ${command} ${arguments_.join(" ")} (launch failed: ${error.message}).`));
     });
-    child.stderr!.on("data", (chunk: Buffer) => {
+    child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
     });
-    child.stdout!.on("data", (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       try {
         consume(chunk);
       } catch (error) {
@@ -94,10 +94,10 @@ export async function streamProcess(
       resolvePromise();
     });
     if (options.input !== undefined) {
-      child.stdin!.on("error", (error) => {
+      child.stdin?.on("error", (error) => {
         fail(new Error(`${command} ${arguments_.join(" ")} stdin failed: ${error.message}`));
       });
-      child.stdin!.end(options.input);
+      child.stdin?.end(options.input);
     }
   });
 }

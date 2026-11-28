@@ -1,5 +1,5 @@
 import { decodeGitListing, isolatedPathspecEnvironment } from "../git.ts";
-import { inspectNamespacePublications, namespacePublicationContext, retireNamespace } from "../engine/destruction.ts";
+import { type DestructionReceipt, namespacePublicationContext, retireNamespace } from "../engine/destruction.ts";
 import { durability } from "../engine/durability.ts";
 // The self-hosting gate: pm-vcs versions its own source, and a CI gate proves it.
 //
@@ -46,6 +46,7 @@ import {
   parseBundle,
 } from "../engine/bundle.ts";
 import { type ObjectId, ObjectStore, ObjectStoreError } from "../engine/objects.ts";
+import { assertVerificationBound, verificationLimits } from "../engine/object-error.ts";
 import {
   type Commit,
   type FileMode,
@@ -1059,41 +1060,91 @@ export function headCommitTimestamp(root: string): number {
   return seconds * 1000;
 }
 
+/** Read a fixed-size journal observation. The engine still parses and authorizes the replay. */
+function readBootstrapJournal(path: string, observed: BigIntStats): Pick<DestructionReceipt, "id" | "status" | "entries"> {
+  assertVerificationBound("receipts", "record_bytes", Number(observed.size), verificationLimits.receiptBytes);
+  const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const opened = fs.fstatSync(fd, { bigint: true });
+    if (!opened.isFile() || !sameFileIdentity(statIdentity(opened), statIdentity(observed))) {
+      throw new Error("self-host: the bootstrap journal changed before it was read.");
+    }
+    const bytes = Buffer.alloc(Number(observed.size));
+    if (fs.readSync(fd, bytes) !== bytes.length || !sameFileIdentity(statIdentity(opened), statIdentity(fs.fstatSync(fd, { bigint: true })))) {
+      throw new Error("self-host: the bootstrap journal changed while it was read.");
+    }
+    return JSON.parse(bytes.toString("utf8")) as Pick<DestructionReceipt, "id" | "status" | "entries">;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Use the namespace journal's inode stamp, whose last field may change across a rename. */
+function publicationIdentity(stat: BigIntStats): string {
+  return [stat.dev, stat.ino, stat.birthtimeNs, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+/** Locate the exact pending journal and same-directory candidate without reading the bundle. */
+function selectBootstrapPublication(control: string, destination: string) {
+  const directory = dirname(destination);
+  const prefix = `.${basename(destination)}.pm-vcs-`;
+  const candidates = new Map<string, BigIntStats>();
+  const keys = [`publication:${destination}`];
+  for (const name of fs.readdirSync(directory)) {
+    if (!name.startsWith(prefix)) continue;
+    const path = join(directory, name);
+    const expected = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    if (!expected?.isFile() || expected.nlink !== 1n) continue;
+    candidates.set(path, expected);
+    const legacy = `rename:${path}:${destination}`;
+    keys.push(`${legacy}:${publicationIdentity(expected)}`, legacy);
+  }
+  // The engine keeps publication journals outside the repository and keys
+  // them by the canonical namespace root and destination (older keys name
+  // the source as well). Read only those exact record names.
+  const ledger = join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(control).digest("hex")}`, "destruction");
+  for (const key of keys) {
+    const journal = join(ledger, `${createHash("sha256").update(`${control}\0${key}`).digest("hex")}.json`);
+    const observed = lstatSync(journal, { bigint: true, throwIfNoEntry: false });
+    if (observed === undefined) continue;
+    const record = readBootstrapJournal(journal, observed);
+    const entry = record.entries?.[0];
+    if (record.status !== "pending" || entry?.kind !== "rename" || entry.status !== "planned"
+        || entry.destination === undefined || resolve(control, entry.destination) !== destination) return undefined;
+    const path = resolve(control, entry.path);
+    const expected = candidates.get(path);
+    return expected !== undefined && publicationIdentity(expected) === entry.identity
+      ? { journal, observed, id: record.id, path, expected } : undefined;
+  }
+  return undefined;
+}
+
 /** Replay an interrupted bootstrap with a receipt for the exact candidate that moved. */
 function recoverBootstrapBundle(target: string): BigIntStats | undefined {
   const directory = dirname(target);
   const control = realpathSync(namespacePublicationContext(target)?.control ?? directory);
   const destination = join(realpathSync(directory), basename(target));
-  const prefix = `.${basename(target)}.pm-vcs-`;
-  let candidate: { path: string; expected: BigIntStats } | undefined;
-  inspectNamespacePublications(control, path => path === destination, fd => {
-    const prepared = fs.fstatSync(fd, { bigint: true });
-    // The inventory pins the recorded source. Find its same-directory name
-    // by identity so replay can return the receipt through retireNamespace.
-    if (prepared.nlink !== 1n) return;
-    for (const name of fs.readdirSync(directory)) {
-      if (!name.startsWith(prefix)) continue;
-      const path = join(directory, name);
-      const expected = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-      if (expected?.isFile() && sameFileIdentity(statIdentity(expected), statIdentity(prepared))) {
-        candidate = { path, expected };
-        break;
-      }
-    }
-  });
+  const candidate = selectBootstrapPublication(control, destination);
   if (candidate === undefined) {
     durability.recoverPublication(target);
     return undefined;
   }
-  const receipt = retireNamespace({ ...candidate, destination: target });
+  // Keep the selected journal pinned through the engine's lease and rename
+  // validation. The engine checks the recovered candidate's identity and
+  // streaming digest against the journal independently of its byte limit.
+  const receipt = retireNamespace({ path: candidate.path, expected: candidate.expected, destination: target }, false, () => {
+    const current = lstatSync(candidate.journal, { bigint: true, throwIfNoEntry: false });
+    if (current === undefined || !sameFileIdentity(statIdentity(current), statIdentity(candidate.observed))) {
+      throw new Error("self-host: the bootstrap journal changed before recovery.");
+    }
+  });
   const published = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
-  if (!published?.isFile() || receipt.status !== "completed") return undefined;
-  const source = join(dirname(destination), basename(candidate.path));
+  if (!published?.isFile() || receipt.status !== "completed" || receipt.id !== candidate.id) return undefined;
   // Rename can change ctime. The other identity fields still name the moved inode.
-  const movedIdentity = [published.dev, published.ino, published.birthtimeNs, published.size, published.mtimeNs].join(":");
+  const movedIdentity = publicationIdentity(published).split(":").slice(0, 5).join(":");
   return receipt.entries.some(entry => entry.kind === "rename" && entry.status === "moved"
     && entry.destination !== undefined && resolve(control, entry.destination) === destination
-    && resolve(control, entry.path) === source
+    && resolve(control, entry.path) === candidate.path
     && entry.identity.split(":").slice(0, 5).join(":") === movedIdentity) ? published : undefined;
 }
 
@@ -1141,7 +1192,7 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
     const recovered = publication !== undefined && before !== undefined
       && sameFileIdentity(statIdentity(publication), statIdentity(before));
     assertBundleMayReplace(root, config.bundle, before !== undefined, recovered);
-    if (before?.isFile() && readStableSourceBytes(target, before)?.equals(bytes)) {
+    if (before?.isFile() && before.size === BigInt(bytes.length) && readStableSourceBytes(target, before)?.equals(bytes)) {
       console.log(recovered
         ? `self-host: recovered a pending publication of ${config.bundle} (${bytes.length} bytes)`
         : `self-host: ${config.bundle} is unchanged`);
