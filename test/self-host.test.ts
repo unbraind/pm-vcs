@@ -1,4 +1,5 @@
 import "./helpers/isolate-session.ts";
+import "./helpers/tmp.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 // Real tests for the self-hosting gate.
 //
@@ -685,9 +686,14 @@ interface Fixture {
   cleanup(): void;
 }
 
+/** Locate the sibling ledger for a fixture's standalone or native control scope. */
+function fixtureLedger(control: string): string {
+  return join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(control).digest("hex")}`);
+}
+
 /** Creates a real git repo, commits some source files, and writes a self-host.json. */
-function fixture(objectFormat = "sha1"): Fixture {
-  const root = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-fixture-"));
+function fixture(objectFormat = "sha1", parent = tmpdir()): Fixture {
+  const root = fs.realpathSync(mkdtempSync(join(parent, "pm-vcs-self-host-fixture-")));
   const git = (args: string[], input?: Buffer): string => execFileSync("git", args, {
     cwd: root,
     encoding: "utf8",
@@ -713,6 +719,8 @@ function fixture(objectFormat = "sha1"): Fixture {
     git,
     cleanup(): void {
       rmSync(root, { recursive: true, force: true });
+      rmSync(fixtureLedger(root), { recursive: true, force: true });
+      rmSync(fixtureLedger(join(root, ".pmvcs")), { recursive: true, force: true });
     },
   };
 }
@@ -1014,7 +1022,7 @@ test("main --write generates a bundle in a real git repo", async () => {
     assert.ok(bundleStat.length > 0);
     f.git(["add", "-A"]);
     f.git(["commit", "-q", "-m", "add bundle"]);
-    await main(f.root, ["node", "self-host.ts"]);
+    await assertCheckPasses(f.root);
   } finally {
     f.cleanup();
   }
@@ -1437,12 +1445,15 @@ test("first publication refuses an untracked bundle that appears during recovery
 });
 
 test("first publication writes inside the checkout opened through a linked parent", async t => {
-  const f = fixture();
-  t.after(f.cleanup);
-  const directory = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-linked-parent-"));
+  const directory = fs.realpathSync(mkdtempSync(join(tmpdir(), "pm-vcs-self-host-linked-parent-")));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const physical = join(directory, "physical");
+  mkdirSync(physical);
   const link = join(directory, "checkout-parent");
-  symlinkSync(dirname(f.root), link, "junction");
+  symlinkSync(physical, link, "junction");
+  const f = fixture("sha1", link);
+  t.after(f.cleanup);
+  assert.equal(dirname(f.root), physical, "publication mocks must use the physical checkout path");
   const checkout = join(link, basename(f.root));
 
   await main(checkout, ["--write"]);
@@ -1695,7 +1706,7 @@ test("bundle regeneration requires the publication ledger's owning UID", { skip:
   t.after(f.cleanup);
   const path = join(f.root, "selfhost.bundle");
   const control = fs.realpathSync(f.root);
-  const ledger = join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(control).digest("hex")}`);
+  const ledger = fixtureLedger(control);
   await main(f.root, ["--write"]);
   f.git(["add", "--", "selfhost.bundle"]);
   chmodSync(path, 0o640);
@@ -1731,6 +1742,62 @@ test("bundle regeneration requires the publication ledger's owning UID", { skip:
   const after = lstatSync(path, { bigint: true });
   assert.deepEqual([after.uid, after.gid, after.mode], [before.uid, before.gid, before.mode]);
   assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("regeneration under the ledger owner\n"));
+});
+
+test("bootstrap retry checks ledger ownership before inspecting a private journal", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const { control, path, candidate, journal, expected } = interruptSparseBootstrap(f.root, 64);
+  const ledger = fixtureLedger(control);
+  const before = readFileSync(journal);
+  renameSync(candidate, path);
+  const denied = Object.assign(new Error("could not inspect the journal"), { code: "EACCES" });
+  const lstat = fs.lstatSync;
+  try {
+    for (const scenario of ["foreign owner", "shared writable", "non-directory", "unrelated EACCES", "no UID support"]) {
+      mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => {
+        if (args[0] === journal) throw denied;
+        if (args[0] !== ledger) return lstat(...args);
+        const stat = lstat(ledger);
+        if (scenario === "foreign owner") stat.uid++;
+        if (scenario === "shared writable") stat.mode |= 0o020;
+        if (scenario === "non-directory") stat.isDirectory = () => false;
+        if (scenario === "no UID support") mock.method(process, "getuid", undefined);
+        return stat;
+      });
+      await assert.rejects(() => main(f.root, ["--write"]), ["unrelated EACCES", "no UID support"].includes(scenario)
+        ? error => error === denied
+        : { code: "foreign_destructive_intent", message: /run regeneration as the ledger-owning UID/ });
+      mock.restoreAll();
+    }
+  } finally {
+    mock.restoreAll();
+  }
+  assert.equal(lstatSync(path, { bigint: true }).ino, expected.ino);
+  assert.deepEqual(readFileSync(path), Buffer.alloc(64));
+  assert.deepEqual(readFileSync(journal), before);
+  await main(f.root, ["--write"]);
+  assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("hello\n"));
+});
+
+test("fixture cleanup removes both publication ledger scopes", async () => {
+  const f = fixture();
+  const path = join(f.root, "selfhost.bundle");
+  const control = join(f.root, ".pmvcs");
+  const ledgers = [fixtureLedger(f.root), fixtureLedger(control)];
+  try {
+    await main(f.root, ["--write"]);
+    f.git(["add", "--", "selfhost.bundle"]);
+    mkdirSync(control);
+    writeFileSync(join(control, "format"), "pmvcs-1\n");
+    writeFileSync(join(f.root, "README.md"), "publish under the native scope\n");
+    await main(f.root, ["--write"]);
+    assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("publish under the native scope\n"));
+    for (const ledger of ledgers) assert.ok(lstatSync(ledger).isDirectory());
+  } finally {
+    f.cleanup();
+  }
+  for (const ledger of ledgers) assert.equal(lstatSync(ledger, { throwIfNoEntry: false }), undefined);
 });
 
 test("bootstrap recovery bounds the journal rather than a sparse candidate over 64 MiB", { timeout: 30_000 }, async t => {
@@ -1784,8 +1851,9 @@ test("bootstrap recovery refuses a journal changed during capture or before the 
   const body = readFileSync(journal);
   const open = fs.openSync;
   const read = fs.readSync;
-  for (const race of ["before it was read", "while it was read", "before recovery"]) {
+  for (const race of ["before it was read", "while it was read", "short read", "before recovery"]) {
     let journalFd: number | undefined;
+    let appended = false;
     mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
       if (args[0] !== journal || journalFd !== undefined) return open(...args);
       journalFd = open(...args);
@@ -1794,7 +1862,11 @@ test("bootstrap recovery refuses a journal changed during capture or before the 
     });
     mock.method(fs, "readSync", (fd: number, ...args: unknown[]) => {
       const count = Reflect.apply(read, fs, [fd, ...args]) as number;
-      return race === "while it was read" && fd === journalFd ? count - 1 : count;
+      if (fd === journalFd && race === "while it was read" && !appended) {
+        fs.appendFileSync(journal, "\n");
+        appended = true;
+      }
+      return fd === journalFd && race === "short read" ? count - 1 : count;
     });
     destructionBoundary.visit = (step, entryPath) => {
       if (race === "before recovery" && step === "owner-published" && entryPath === `${journal}.lock`) {
@@ -1802,7 +1874,8 @@ test("bootstrap recovery refuses a journal changed during capture or before the 
       }
     };
     try {
-      await assert.rejects(() => main(control, ["--write"]), new RegExp(`journal changed ${race}`));
+      const diagnostic = race === "short read" ? "while it was read" : race;
+      await assert.rejects(() => main(control, ["--write"]), new RegExp(`journal changed ${diagnostic}`));
       assert.equal(lstatSync(candidate, { bigint: true }).ino, expected.ino);
       assert.equal(lstatSync(path, { throwIfNoEntry: false }), undefined);
     } finally {
@@ -2459,6 +2532,21 @@ test("batch framing requires an unsigned safe size, exact fields, separators and
   assert.deepEqual(parseBatchResponse(Buffer.from(`${sha} blob 0\n\n`), [entry]).get(entry.path), Buffer.alloc(0));
 });
 
+test("batch framing bounds a split header before buffering excess bytes", () => {
+  for (const width of [40, 64]) {
+    const sha = "a".repeat(width);
+    const entry: TreeEntry = { mode: "100644", sha, path: "sample" };
+    const prefix = Buffer.from(`${sha} blob 9007199254740991`);
+    assert.throws(() => parseBatchResponse([prefix, Buffer.from("\n")], [entry]), /ended before answering/);
+    for (const excess of [Buffer.from("0"), Buffer.from("0\n")]) {
+      assert.throws(() => parseBatchResponse([prefix, excess], [entry]), /oversized header/);
+    }
+    const payload = Buffer.alloc(256, 0x61);
+    const frame = Buffer.concat([Buffer.from(`${sha} blob ${payload.length}\n`), payload, Buffer.from("\n")]);
+    assert.deepEqual(parseBatchResponse([frame.subarray(0, width), frame.subarray(width)], [entry]).get(entry.path), payload);
+  }
+});
+
 test("tree snapshots fetch only configuration, included source and the verification bundle", async () => {
   const f = fixture();
   try {
@@ -2501,6 +2589,31 @@ test("working writer handles converted bytes before publishing a bundle", async 
   } finally {
     f.cleanup();
   }
+});
+
+test("working writer refuses failed Git encoding conversion without writing caller objects", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const source = join(f.root, "notes.txt");
+  const attributes = join(f.root, ".gitattributes");
+  const archive = join(f.root, "selfhost.bundle");
+  writeFileSync(attributes, "notes.txt working-tree-encoding=UTF-16LE\n");
+  writeFileSync(source, Buffer.from("valid notes\n", "utf16le"));
+  f.git(["add", "--", ".gitattributes", "notes.txt"]);
+  writeFileSync(join(f.root, "README.md"), "an edit that belongs in the scratch object store\n");
+  writeFileSync(source, Buffer.from("\uFEFFinvalid notes\n", "utf16le"));
+  const objects = f.git(["count-objects", "-v"]);
+  assert.throws(() => f.git(["add", "--", "notes.txt"]), /BOM/);
+  await assert.rejects(() => main(f.root, ["--write"]), /BOM/);
+  assert.equal(lstatSync(archive, { throwIfNoEntry: false }), undefined);
+  assert.equal(f.git(["count-objects", "-v"]), objects);
+
+  const valid = Buffer.from("unconverted notes\n");
+  writeFileSync(attributes, "");
+  writeFileSync(source, valid);
+  await main(f.root, ["--write"]);
+  assert.deepEqual(bundledFiles(readFileSync(archive)).get("notes.txt")?.content, valid);
+  assert.equal(f.git(["count-objects", "-v"]), objects);
 });
 
 test("explicitly excluded gitlinks permit staged writing and committed verification", async () => {
@@ -2912,14 +3025,17 @@ test("an unchanged bundle replaced mid-check is rewritten over, never skipped or
     // would skip. The leaf is swapped for a link after those bytes are read:
     // the decision must observe the replacement (identity re-check) and the
     // write must replace the link rather than follow it into another file.
+    let swapped = false;
     afterFileRead(path, () => {
       rmSync(path);
       renameSync(replacement, path);
+      swapped = true;
     });
     try {
       await main(f.root, ["--write"]);
       mock.restoreAll();
       syncBuiltinESMExports();
+      assert.ok(swapped, "the unchanged check must exercise the bundle swap");
       const leaf = lstatSync(path);
       assert.equal(leaf.isSymbolicLink(), false, "the bundle path must be a regular file after a write");
       assert.equal(leaf.isFile(), true);

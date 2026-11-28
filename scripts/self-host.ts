@@ -863,6 +863,11 @@ class BlobBatch {
       if (!entry) throw new Error("self-host: git cat-file returned unrequested trailing bytes.");
       if (this.remaining === undefined) {
         const newline = chunk.indexOf(0x0a);
+        const headerBytes = newline < 0 ? chunk.length : newline;
+        // The longest valid header ends with the decimal form of a safe integer.
+        if (this.header.length + headerBytes > entry.sha.length + " blob ".length + String(Number.MAX_SAFE_INTEGER).length) {
+          throw new Error(`self-host: git cat-file returned an oversized header for ${entry.path} (${entry.sha}).`);
+        }
         if (newline < 0) {
           this.header = Buffer.concat([this.header, chunk]);
           return;
@@ -1030,18 +1035,30 @@ export function readSourceFiles(
     files.set(path, { content, mode: executable ? "100755" : "100644" });
   }
   if (regular.length > 0) {
-    const algorithm = runGit(root, ["rev-parse", "--show-object-format"]);
-    for (const path of regular) {
-      const bytes = files.get(path)!.content;
-      const raw = createHash(algorithm).update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-      const clean = childProcess.execFileSync("git", ["hash-object", "--stdin", `--path=${path}`], {
-        cwd: root, input: bytes, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL", env: { ...process.env },
-      }).trim();
-      if (clean !== raw) throw new Error(`self-host: Git converts ${path}. Stage the candidate and run --write --staged.`);
-    }
+    assertUnconvertedFiles(root, regular, files);
   }
   if (isExcluded(SELF_HOST_CONFIG, exclude)) files.delete(SELF_HOST_CONFIG);
   return files;
+}
+
+/** Ask Git to apply staging-time conversion checks to the captured bytes. */
+function assertUnconvertedFiles(root: string, paths: readonly string[], files: ReadonlyMap<string, SourceFile>): void {
+  const algorithm = runGit(root, ["rev-parse", "--show-object-format"]);
+  const objects = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-git-objects-"));
+  try {
+    for (const path of paths) {
+      const bytes = files.get(path)!.content;
+      const raw = createHash(algorithm).update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+      // Without -w, Git can report a conversion error and hash the raw bytes.
+      const clean = childProcess.execFileSync("git", ["hash-object", "-w", "--stdin", `--path=${path}`], {
+        cwd: root, input: bytes, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL",
+        env: { ...process.env, GIT_OBJECT_DIRECTORY: objects },
+      }).trim();
+      if (clean !== raw) throw new Error(`self-host: Git converts ${path}. Stage the candidate and run --write --staged.`);
+    }
+  } finally {
+    durability.discardTemporary(objects);
+  }
 }
 
 /**
@@ -1128,10 +1145,17 @@ function selectBootstrapPublication(control: string, destination: string, bundle
   // The engine keeps publication journals outside the repository and keys
   // them by the canonical namespace root and destination (older keys name
   // the source as well). Read only those exact record names.
-  const ledger = join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(control).digest("hex")}`, "destruction");
+  const ledger = join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(control).digest("hex")}`);
+  // The engine applies the same ownership rule on replay. Check the outer
+  // directory first because a foreign private ledger blocks its child lookup.
+  const owner = fs.lstatSync(ledger, { throwIfNoEntry: false });
+  if (owner !== undefined && (!owner.isDirectory()
+      || typeof process.getuid === "function" && (owner.uid !== process.getuid() || (owner.mode & 0o022) !== 0))) {
+    throw new DestructionRefusal("foreign_destructive_intent", "An unowned or shared-writable namespace ledger was preserved.");
+  }
   for (const key of keys) {
-    const journal = join(ledger, `${createHash("sha256").update(`${control}\0${key}`).digest("hex")}.json`);
-    const observed = lstatSync(journal, { bigint: true, throwIfNoEntry: false });
+    const journal = join(ledger, "destruction", `${createHash("sha256").update(`${control}\0${key}`).digest("hex")}.json`);
+    const observed = fs.lstatSync(journal, { bigint: true, throwIfNoEntry: false });
     if (observed === undefined) continue;
     const record = readBootstrapJournal(journal, observed);
     const entry = record.entries?.[0];
