@@ -1436,6 +1436,22 @@ test("first publication refuses an untracked bundle that appears during recovery
   }
 });
 
+test("first publication writes inside the checkout opened through a linked parent", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const directory = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-linked-parent-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const link = join(directory, "checkout-parent");
+  symlinkSync(dirname(f.root), link, "junction");
+  const checkout = join(link, basename(f.root));
+
+  await main(checkout, ["--write"]);
+
+  const path = join(fs.realpathSync(f.root), "selfhost.bundle");
+  assert.equal(fs.realpathSync(join(checkout, "selfhost.bundle")), path);
+  assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, Buffer.from("hello\n"));
+});
+
 test("a retry completes a pending bootstrap publication without writing a second candidate", async t => {
   const f = fixture();
   t.after(f.cleanup);
@@ -1526,6 +1542,83 @@ function interruptBootstrap(root: string, candidate: string, boundary = "before-
   }
   return { control, path, candidate, expected, journal };
 }
+
+for (const operation of ["open", "write"] as const) {
+  test(`bootstrap retry survives ENOSPC during replacement ${operation}`, async t => {
+    const f = fixture();
+    t.after(f.cleanup);
+    const root = fs.realpathSync(f.root);
+    const candidate = join(root, ".selfhost.bundle.pm-vcs-interrupted");
+    const stale = Buffer.from("stale candidate\n");
+    writeFileSync(candidate, stale);
+    const { path, expected, journal } = interruptBootstrap(root, candidate);
+    const latest = Buffer.from("source edited after the interruption\n");
+    writeFileSync(join(root, "README.md"), latest);
+
+    const full = Object.assign(new Error("replacement ran out of space"), { code: "ENOSPC" });
+    const open = fs.openSync;
+    const write = fs.writeFileSync;
+    let replacementFd: number | undefined;
+    mock.method(fs, "openSync", (...args: Parameters<typeof fs.openSync>) => {
+      if (typeof args[0] !== "string" || !args[0].startsWith(join(root, ".selfhost.bundle.pm-vcs-"))
+          || args[1] !== "wx") return open(...args);
+      assert.equal(lstatSync(path, { bigint: true }).ino, expected.ino);
+      if (operation === "open") throw full;
+      replacementFd = open(...args);
+      return replacementFd;
+    });
+    mock.method(fs, "writeFileSync", (...args: Parameters<typeof fs.writeFileSync>) => {
+      if (args[0] === replacementFd) throw full;
+      return write(...args);
+    });
+    try {
+      await assert.rejects(() => main(root, ["--write"]), error => error === full);
+    } finally {
+      mock.restoreAll();
+    }
+
+    assert.equal(lstatSync(path, { bigint: true }).ino, expected.ino);
+    assert.deepEqual(readFileSync(path), stale);
+    assert.equal(f.git(["ls-files", "--", "selfhost.bundle"]), "");
+    const receipt = JSON.parse(readFileSync(journal, "utf8"));
+    assert.equal(receipt.status, "completed");
+    assert.equal(receipt.entries[0].status, "moved");
+    assert.ok(!readdirSync(root).some(name => name.startsWith(".selfhost.bundle.pm-vcs-")));
+
+    await main(root, ["--write"]);
+
+    assert.notEqual(lstatSync(path, { bigint: true }).ino, expected.ino);
+    assert.deepEqual(bundledFiles(readFileSync(path)).get("README.md")?.content, latest);
+  });
+}
+
+test("a completed bootstrap receipt refuses a reused temporary or edited destination", async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const root = fs.realpathSync(f.root);
+  const candidate = join(root, ".selfhost.bundle.pm-vcs-interrupted");
+  const stale = Buffer.from("stale candidate\n");
+  writeFileSync(candidate, stale);
+  utimesSync(candidate, 1, 1);
+  const { path, expected, journal } = interruptBootstrap(root, candidate);
+  assert.equal(retireNamespace({ path: candidate, destination: path, expected }).moved, 1);
+  const completed = readFileSync(journal);
+
+  const foreign = Buffer.from("a peer reused the old temporary name\n");
+  writeFileSync(candidate, foreign);
+  await assert.rejects(() => main(root, ["--write"]), /bootstrap temporary reappeared/);
+  assert.deepEqual(readFileSync(path), stale);
+  assert.deepEqual(readFileSync(candidate), foreign);
+  rmSync(candidate);
+
+  const edited = Buffer.from("stale candIdate\n");
+  writeFileSync(path, edited);
+  utimesSync(path, 1, 1);
+  await assert.rejects(() => main(root, ["--write"]), /not tracked by git/);
+  assert.equal(lstatSync(path, { bigint: true }).ino, expected.ino);
+  assert.deepEqual(readFileSync(path), edited);
+  assert.deepEqual(readFileSync(journal), completed);
+});
 
 /** Record a pending publication without allocating memory for the sparse payload. */
 function interruptSparseBootstrap(root: string, size: number) {

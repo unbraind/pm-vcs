@@ -301,8 +301,8 @@ export function parseSelfHostConfig(raw: string): SelfHostConfig {
  *
  * Resolution therefore happens against the filesystem: the containing directory
  * is fully resolved and must sit inside the resolved repository root, and the
- * target itself must not be a link. Nothing here is normalised away — a link is
- * refused rather than silently followed to wherever it happens to point.
+ * target itself must not be a link. The returned path uses the physical parent
+ * so publication and recovery use the same namespace.
  *
  * @param root - The repository root.
  * @param bundle - The configured, already lexically validated bundle path.
@@ -331,14 +331,15 @@ function resolveConfinedBundleTarget(root: string, bundle: string): { target: st
         + `Refusing to write through a symbolic link.`,
     );
   }
-  const observed = lstatSync(target, { bigint: true, throwIfNoEntry: false });
+  const physicalTarget = join(realParent, basename(target));
+  const observed = lstatSync(physicalTarget, { bigint: true, throwIfNoEntry: false });
   if (observed?.isSymbolicLink() === true) {
     throw new Error(
       `self-host: ${bundle} is a symbolic link. Refusing to write through it — `
         + `the bundle must be a regular file inside the repository.`,
     );
   }
-  return { target, observed };
+  return { target: physicalTarget, observed };
 }
 
 /** Read replacement authority from the live Git index. */
@@ -1109,7 +1110,7 @@ function hashPublishedBundle(fd: number): string {
   return hash.digest("hex");
 }
 
-/** Locate the exact pending journal and its candidate, which may already be at the destination. */
+/** Locate an exact bootstrap journal and its candidate, which may already be at the destination. */
 function selectBootstrapPublication(control: string, destination: string, bundle: BigIntStats | undefined) {
   const directory = dirname(destination);
   const prefix = `.${basename(destination)}.pm-vcs-`;
@@ -1134,8 +1135,11 @@ function selectBootstrapPublication(control: string, destination: string, bundle
     if (observed === undefined) continue;
     const record = readBootstrapJournal(journal, observed);
     const entry = record.entries?.[0];
-    if (record.status !== "pending" || entry?.kind !== "rename" || entry.status !== "planned"
-        || entry.destination === undefined || resolve(control, entry.destination) !== destination) return undefined;
+    // Staging a replacement can fail after recovery has completed the move.
+    // Keep that receipt usable while the exact bootstrap inode is still here.
+    if (entry?.kind !== "rename" || entry.destination === undefined || resolve(control, entry.destination) !== destination
+        || !(record.status === "pending" && entry.status === "planned"
+          || bundle !== undefined && record.status === "completed" && entry.status === "moved")) return undefined;
     const path = resolve(control, entry.path);
     if (bundle !== undefined) {
       const matches = bundle.isFile() && bundle.nlink === 1n && entry.target === "absent"
@@ -1153,7 +1157,7 @@ function selectBootstrapPublication(control: string, destination: string, bundle
   return undefined;
 }
 
-/** Replay an interrupted bootstrap with a receipt for the exact candidate that moved. */
+/** Replay or acknowledge a bootstrap with a receipt for the exact candidate that moved. */
 function recoverBootstrapBundle(target: string, bundle: BigIntStats | undefined): BigIntStats | undefined {
   const directory = dirname(target);
   const control = realpathSync(namespacePublicationContext(target)?.control ?? directory);
@@ -1170,6 +1174,9 @@ function recoverBootstrapBundle(target: string, bundle: BigIntStats | undefined)
     const current = lstatSync(candidate.journal, { bigint: true, throwIfNoEntry: false });
     if (current === undefined || !sameFileIdentity(statIdentity(current), statIdentity(candidate.observed))) {
       throw new Error("self-host: the bootstrap journal changed before recovery.");
+    }
+    if (bundle !== undefined && lstatSync(candidate.path, { throwIfNoEntry: false }) !== undefined) {
+      throw new Error("self-host: the bootstrap temporary reappeared before recovery.");
     }
   });
   const published = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
@@ -1229,8 +1236,8 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
       `self-host: source snapshot at ${headSha}\n`,
     );
     const { target, observed: beforeRecovery } = resolveConfinedBundleTarget(root, config.bundle);
-    // An interrupted bootstrap can leave the candidate at either name. Only a
-    // completed receipt for that inode permits the untracked-file exception.
+    // An interrupted bootstrap can leave the candidate at either name. A
+    // receipt for that exact inode can also survive a failed replacement.
     const publication = recoverBundlePublication(root, config.bundle, target, beforeRecovery);
     const before = beforeRecovery ?? fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
     const recovered = publication !== undefined && before !== undefined
@@ -1238,7 +1245,7 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
     assertBundleMayReplace(root, config.bundle, before !== undefined, recovered);
     if (before?.isFile() && before.size === BigInt(bytes.length) && readStableSourceBytes(target, before)?.equals(bytes)) {
       console.log(recovered
-        ? `self-host: recovered a pending publication of ${config.bundle} (${bytes.length} bytes)`
+        ? `self-host: recovered publication of ${config.bundle} (${bytes.length} bytes)`
         : `self-host: ${config.bundle} is unchanged`);
       return;
     }
@@ -1252,7 +1259,7 @@ async function writeSnapshot(root: string, config: SelfHostConfig, files: Readon
     try {
       let expected: BigIntStats;
       try {
-        writeFileSync(fd, bytes);
+        fs.writeFileSync(fd, bytes);
         if (permissions !== undefined) {
           const { uid, gid } = fs.fstatSync(fd, { bigint: true });
           // A privileged regenerator owns the temporary as itself; restoring
