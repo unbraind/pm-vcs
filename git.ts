@@ -18,6 +18,7 @@
  *   line-splitting silently lossy for exactly the paths hardest to notice.
  */
 
+import { isUtf8 } from "node:buffer";
 import { spawnSync } from "node:child_process";
 
 /**
@@ -70,6 +71,29 @@ export class VcsError extends Error {
     this.code = code;
     this.remediation = remediation;
   }
+}
+
+/** Decode a Git path listing only if every byte is representable in a JavaScript string. */
+export function decodeGitListing(bytes: Buffer): string {
+  if (!isUtf8(bytes)) {
+    throw new VcsError("invalid_git_path", "Git returned a path listing containing invalid UTF-8.",
+      "Rename paths that cannot be represented losslessly before reading this snapshot.");
+  }
+  return bytes.toString("utf8");
+}
+
+/** Ambient git variables that silently replace or conflict with the pathspec semantics a command pins itself. */
+const PATHSPEC_ENVIRONMENT_KEYS = new Set([
+  "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
+]);
+
+/** Copy the child environment while keeping pathspec matching under the caller's control. */
+export function isolatedPathspecEnvironment(base: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  const isolated = { ...base };
+  for (const name of Object.keys(isolated)) {
+    if (PATHSPEC_ENVIRONMENT_KEYS.has(platform === "win32" ? name.toUpperCase() : name)) delete isolated[name];
+  }
+  return isolated;
 }
 
 /**

@@ -1,0 +1,11 @@
+id: pm-vcs-timj
+title: Self-host bootstrap retry can strand a recovered candidate when the retry itself crashes mid-replacement
+description: "Fixing PRRT_kwDOToJT7M68vvUL's heavy-lift companion in PR #240 exposed a residual corner: the explicit recovery consumes the pending publication, so a crash between that recovery and the replacement rename leaves the recovered (possibly stale) candidate sitting untracked at the bundle path with no pending intent left; a later write then refuses the untracked bundle until it is removed by hand. A pending-publication inspection or cancellation seam in the engine would let the script distinguish its own stranded candidate from a foreign untracked file. Engine-side work stays in draft PR #242."
+type: Issue
+status: open
+priority: 3
+tags[2]: follow-up,self-host
+created_at: "2026-11-27T14:51:55.190Z"
+updated_at: "2026-11-27T14:51:55.190Z"
+author: pi-glm
+body: ""

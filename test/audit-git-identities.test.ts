@@ -1,7 +1,8 @@
 import "./helpers/isolate-session.ts";
 import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
@@ -18,6 +19,7 @@ import {
   type GitObject,
 } from "../scripts/audit-git-identities.ts";
 import { makeTempDir } from "./helpers/tmp.ts";
+import { ModuleMocks } from "./helpers/self-host-mocks.ts";
 
 /**
  * The maintainer's approved public authoring identity, as checked in.
@@ -358,6 +360,27 @@ test("stream transport reports a real broken stdin pipe", async () => {
     ),
     /stdin failed/,
   );
+});
+
+test("stream transport preserves a launch error when spawn returns without pipes", async () => {
+  dir = makeTempDir();
+  const mocks = new ModuleMocks();
+  for (const code of ["EMFILE", "ENFILE"]) {
+    const child = Object.assign(new EventEmitter(), { stdin: null, stdout: null, stderr: null, kill: () => false });
+    mocks.method(childProcess, "spawn", () => {
+      process.nextTick(() => child.emit("error", Object.assign(new Error(`spawn ${code}`), { code })));
+      return child;
+    });
+    try {
+      await assert.rejects(streamProcess("git", ["cat-file", "--batch"], {
+        cwd: dir.root,
+        input: "object-id\n",
+        timeoutMs: 1000,
+      }, () => assert.fail("a failed launch emits no output")), new RegExp(`could not run git .*launch failed: spawn ${code}`));
+    } finally {
+      mocks.restoreAll();
+    }
+  }
 });
 
 test("main invocation detection resolves matching, different, and absent scripts", () => {

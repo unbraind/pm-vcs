@@ -1,3 +1,5 @@
+import { decodeGitListing, isolatedPathspecEnvironment } from "../git.ts";
+import { type DestructionReceipt, DestructionRefusal, namespacePublicationContext, retireNamespace } from "../engine/destruction.ts";
 import { durability } from "../engine/durability.ts";
 // The self-hosting gate: pm-vcs versions its own source, and a CI gate proves it.
 //
@@ -27,10 +29,12 @@ import { durability } from "../engine/durability.ts";
 // its legacy (FileId-free) form, so a tree id is a function of content and mode
 // alone and the bundle is reproducible.
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { streamProcess } from "./audit-git-identities.ts";
+import childProcess, { execFileSync, spawnSync } from "node:child_process";
+import fs, { type BigIntStats, lstatSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { isPair, isScalar, parseDocument, visit } from "yaml";
 import { isMainInvocation } from "./main-invocation.ts";
 
@@ -41,7 +45,8 @@ import {
   importBundleObjects,
   parseBundle,
 } from "../engine/bundle.ts";
-import { type ObjectId, ObjectStore } from "../engine/objects.ts";
+import { type ObjectId, ObjectStore, ObjectStoreError } from "../engine/objects.ts";
+import { assertVerificationBound, verificationLimits } from "../engine/object-error.ts";
 import {
   type Commit,
   type FileMode,
@@ -51,10 +56,24 @@ import {
   writeCommit,
 } from "../engine/model.ts";
 import { RefStore } from "../engine/refs.ts";
-import { buildTree, flattenTree, readWorkingFile } from "../engine/worktree.ts";
+import { buildTree, flattenTree, type IndexStat, sameFileIdentity } from "../engine/worktree.ts";
 
 /** Path to the gate's data file, relative to the package root. */
 export const SELF_HOST_CONFIG = "self-host.json";
+
+/**
+ * Views one stat observation in the engine's cache-identity shape.
+ *
+ * The reader reuses the engine's own identity predicate so "the same leaf,
+ * unchanged between two observations" is decided by the same fields
+ * everywhere in the package instead of a second, drifting copy of the rule.
+ *
+ * @param stats - One `lstat` observation, taken with `bigint: true`.
+ * @returns The identity fields {@link sameFileIdentity} compares.
+ */
+function statIdentity(stats: BigIntStats): IndexStat {
+  return { size: stats.size, mtimeNs: stats.mtimeNs, ctimeNs: stats.ctimeNs, dev: stats.dev, ino: stats.ino, observedAtNs: 0n };
+}
 
 /**
  * The one path this gate will ever write, fixed in code rather than configured.
@@ -154,16 +173,60 @@ export interface Verification {
  *
  * @param path - Path to `self-host.json`.
  * @returns The parsed configuration.
- * @throws Error When the file is missing or its shape is not a `SelfHostConfig`.
+ * @throws Error When the file is missing, is not a regular file, its shape is
+ *   not a `SelfHostConfig`, or it changed while being read — bytes whose type
+ *   and identity were not observed together are never parsed.
  */
 export function loadConfig(path: string): SelfHostConfig {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    throw new Error(`self-host: could not read configuration at ${path}.`);
+  return captureWorkingConfig(path).config;
+}
+
+/** Parse the same regular-file observation that the working writer will archive. */
+function captureWorkingConfig(path: string): { config: SelfHostConfig; source: SourceFile } {
+  const before = fs.lstatSync(path, { bigint: true, throwIfNoEntry: false });
+  if (before === undefined || !before.isFile()) {
+    throw new Error("self-host: configuration must be a regular file.");
   }
-  return parseSelfHostConfig(raw);
+  const content = readStableSourceBytes(path, before);
+  if (content === undefined) {
+    throw new Error("self-host: configuration changed while it was being read; run the command again.");
+  }
+  return {
+    config: parseSelfHostConfig(content.toString("utf8")),
+    source: { content, mode: (before.mode & 0o100n) === 0n ? "100644" : "100755" },
+  };
+}
+
+/** Read a regular leaf only after the opened descriptor matches the observed inode. */
+function readRegularFile<T>(path: string, expected: BigIntStats, followLink: boolean, read: (fd: number) => T): { content: T; stat: BigIntStats } {
+  const noFollow = followLink ? 0 : fs.constants.O_NOFOLLOW;
+  const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | noFollow);
+  try {
+    const stat = fs.fstatSync(fd, { bigint: true });
+    if (!stat.isFile() || stat.dev !== expected.dev || stat.ino !== expected.ino) {
+      throw new ObjectStoreError("worktree_path_changed", "File changed while it was being read.");
+    }
+    return { content: read(fd), stat };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Return bytes only if the opened leaf and both pathname observations agree. */
+function readStableSourceBytes(path: string, before: BigIntStats, followLink = false): Buffer | undefined {
+  try {
+    const observed = before.isSymbolicLink()
+      ? { content: fs.readlinkSync(path, { encoding: "buffer" }), stat: before }
+      : readRegularFile(path, before, followLink, fd => fs.readFileSync(fd));
+    const stat = followLink ? fs.statSync : fs.lstatSync;
+    const after = stat(path, { bigint: true, throwIfNoEntry: false });
+    if (after !== undefined && sameFileIdentity(statIdentity(before), statIdentity(observed.stat))
+        && sameFileIdentity(statIdentity(observed.stat), statIdentity(after))) return observed.content;
+  } catch (error) {
+    if (!(error instanceof ObjectStoreError && error.code === "worktree_path_changed")
+        && !["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+  }
+  return undefined;
 }
 
 /**
@@ -238,8 +301,8 @@ export function parseSelfHostConfig(raw: string): SelfHostConfig {
  *
  * Resolution therefore happens against the filesystem: the containing directory
  * is fully resolved and must sit inside the resolved repository root, and the
- * target itself must not be a link. Nothing here is normalised away — a link is
- * refused rather than silently followed to wherever it happens to point.
+ * target itself must not be a link. The returned path uses the physical parent
+ * so publication and recovery use the same namespace.
  *
  * @param root - The repository root.
  * @param bundle - The configured, already lexically validated bundle path.
@@ -247,6 +310,13 @@ export function parseSelfHostConfig(raw: string): SelfHostConfig {
  * @throws Error When the target or an ancestor escapes the repository.
  */
 export function resolveBundleTarget(root: string, bundle: string): string {
+  const { target, observed } = resolveConfinedBundleTarget(root, bundle);
+  assertBundleMayReplace(root, bundle, observed !== undefined);
+  return target;
+}
+
+/** Check path confinement and leaf type before consulting publication recovery. */
+function resolveConfinedBundleTarget(root: string, bundle: string): { target: string; observed: BigIntStats | undefined } {
   const target = join(root, bundle);
   const realRoot = realpathSync(root);
   let realParent: string;
@@ -261,31 +331,38 @@ export function resolveBundleTarget(root: string, bundle: string): string {
         + `Refusing to write through a symbolic link.`,
     );
   }
-  if (lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink() === true) {
+  const physicalTarget = join(realParent, basename(target));
+  const observed = lstatSync(physicalTarget, { bigint: true, throwIfNoEntry: false });
+  if (observed?.isSymbolicLink() === true) {
     throw new Error(
       `self-host: ${bundle} is a symbolic link. Refusing to write through it — `
         + `the bundle must be a regular file inside the repository.`,
     );
   }
-  // Staying inside the repository is not enough. Every check above still permits
-  // `"bundle": ".git/config"` or `"bundle": ".env"` — lexically relative, not a
-  // link, comfortably inside the tree — and `--write` would overwrite the
-  // maintainer's git configuration, or an ignored local secret, with bundle
-  // bytes. The config arrives with the source, so that is a write primitive a
-  // pull request could aim.
-  //
-  // The real invariant is what the bundle *is*: tracked source. So it must
-  // already be tracked, or not exist yet (the bootstrap case, where this run
-  // creates it). An existing untracked file is never a legitimate target, which
-  // is exactly what `.git/config` and `.env` are.
-  const exists = lstatSync(target, { throwIfNoEntry: false }) !== undefined;
-  if (exists && !listTrackedFiles(root).includes(bundle)) {
+  return { target: physicalTarget, observed };
+}
+
+/** Read replacement authority from the live Git index. */
+function bundleIsTracked(root: string, bundle: string): boolean {
+  return listTrackedFiles(root, [bundle]).includes(bundle);
+}
+
+/**
+ * Require a live index entry to replace an existing bundle. A missing bundle can be bootstrapped,
+ * and a retry may replace the exact file confirmed by its own recovery.
+ */
+function assertBundleMayReplace(root: string, bundle: string, exists: boolean, recoveredReplacement = false): void {
+  if (exists && !recoveredReplacement && !bundleIsTracked(root, bundle)) {
     throw new Error(
       `self-host: ${bundle} exists but is not tracked by git. Refusing to overwrite it — `
         + `the bundle must be a tracked file, so this would clobber something else.`,
     );
   }
-  return target;
+}
+
+/** Preserve the owner, group and permission bits from one regular bundle observation. */
+function bundlePermissions(stat: BigIntStats | undefined): { mode: number; uid: bigint; gid: bigint } | undefined {
+  return stat?.isFile() ? { mode: Number(stat.mode & 0o7777n), uid: stat.uid, gid: stat.gid } : undefined;
 }
 
 /**
@@ -688,7 +765,7 @@ export function runGit(cwd: string, args: readonly string[], environment = proce
 }
 
 /**
- * Enumerates the git-tracked source: every path `git ls-files` reports.
+ * Enumerates the caller's index without letting Git refresh its shared base.
  *
  * NUL-delimited (`-z`) rather than newline-delimited, because a newline is a
  * legal character in a git path. Splitting on `"\n"` would silently cut such a
@@ -696,26 +773,25 @@ export function runGit(cwd: string, args: readonly string[], environment = proce
  * the bundle under the wrong name — a gate that desynchronises its own path
  * list can report a mismatch that is not there, or miss one that is.
  */
-export function listTrackedFiles(root: string, environment = process.env): string[] {
+export function listTrackedFiles(root: string, paths: readonly string[] = []): string[] {
   // Deliberately NOT `runGit`, which trims. `trim()` strips spaces and tabs from
   // the ends of the whole payload but leaves the trailing NUL, so a tracked path
   // like " leading.ts" comes back as "leading.ts" and is then compared against a
   // file that does not exist. Same class of bug as splitting on "\n": the
   // delimiter is NUL precisely so no byte of a path needs interpreting.
-  const raw = execFileSync("git", ["ls-files", "-z"], {
+  const raw = withCapturedIndex(root, environment => execFileSync("git", ["--literal-pathspecs", "ls-files", "-z", "--", ...paths], {
     cwd: root,
-    encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...environment, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
-  });
-  return raw.split("\0").filter((line) => line.length > 0);
+    env: { ...isolatedPathspecEnvironment(environment), GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+  }));
+  return decodeGitListing(raw).split("\0").filter((line) => line.length > 0);
 }
 
 /** One leaf entry of a git tree listing: its mode, object id and path. */
 export interface TreeEntry {
-  /** Git tree mode: `100644`, `100755`, or `120000` for a symbolic link. */
-  readonly mode: "100644" | "100755" | "120000";
-  /** Object id of the entry's blob, exactly as the tree records it. */
+  /** Raw Git mode, including `160000` for a gitlink that configuration may exclude. */
+  readonly mode: string;
+  /** Object id recorded in the tree, including the commit id of a gitlink. */
   readonly sha: string;
   /** Canonical repository-relative path. */
   readonly path: string;
@@ -727,7 +803,7 @@ export interface TreeSnapshot {
   readonly config: SelfHostConfig;
   /** Every non-excluded source file: raw blob bytes and the tree-recorded mode. */
   readonly files: ReadonlyMap<string, SourceFile>;
-  /** Raw blob bytes for every entry in the tree, keyed by path, before exclusion. */
+  /** Raw bytes of the configuration, included source and requested verification bundle. */
   readonly blobs: ReadonlyMap<string, Buffer>;
 }
 
@@ -736,125 +812,118 @@ export interface TreeSnapshot {
  *
  * NUL-delimited (`-z`) for the same reason {@link listTrackedFiles} is: a
  * newline is a legal byte in a git path, and this listing feeds a byte-exact
- * comparison, so no byte of a path may be read as a delimiter. The listing is
- * also where gitlink entries are rejected: a submodule records a commit id, not
- * content, so no bundle built over it could ever be byte-identical to anything
- * this gate verifies, and failing here names the path instead of letting a
- * checkout materialize an empty directory the reader would only trip over.
+ * comparison, so paths retain all their bytes. The listing
+ * retains unsupported modes until the snapshot configuration selects its inputs.
  *
  * @param root - The repository root.
  * @param treeish - A tree id (from `git write-tree`) or a committish such as `HEAD`.
  * @returns Every leaf entry, in the tree's own order.
- * @throws Error When git cannot list the tree, or the tree carries an entry
- *   that is not an ordinary blob or symbolic link.
+ * @throws Error When git cannot list the tree, or a path cannot be represented losslessly.
  */
-export function listTreeEntries(root: string, treeish: string): TreeEntry[] {
-  // Deliberately NOT `runGit`, which trims: the listing is NUL-delimited, and
-  // trimming the payload would be one more place a path byte gets interpreted.
-  const raw = execFileSync("git", ["ls-tree", "-r", "-z", treeish], {
-    cwd: root,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+export function listTreeEntries(root: string, treeish: string, paths: readonly string[] = []): TreeEntry[] {
+  const result = spawnSync("git", ["--literal-pathspecs", "ls-tree", "-r", "-z", treeish, "--", ...paths], {
+    cwd: root, maxBuffer: 64 * 1024 * 1024,
+    // The literal matching above is the tool's choice, so the child environment
+    // carries no ambient pathspec setting that git would either combine into a
+    // fatal error or substitute for it.
+    env: isolatedPathspecEnvironment(process.env),
   });
+  if (result.error) throw new Error(`self-host: could not run git: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`self-host: git ls-tree failed: ${result.stderr.toString("utf8").trim()}`);
   const entries: TreeEntry[] = [];
-  for (const record of raw.split("\0")) {
+  for (const record of decodeGitListing(result.stdout).split("\0")) {
     if (record.length === 0) continue;
     // git's `-z` format is \`<mode> <type> <sha>\\t<path>\`; the tab is structural.
-    // A malformed record cannot reach here without git itself being broken, and
-    // the blob read below would fail closed on any sha such a record named — so
-    // validation targets the one anomaly a real tree can carry: a gitlink.
     const tab = record.indexOf("\t");
-    const [mode, type, sha] = record.slice(0, tab).split(" ");
+    const [mode, , sha] = record.slice(0, tab).split(" ");
     const path = record.slice(tab + 1);
-    if (mode !== "100644" && mode !== "100755" && mode !== "120000") {
-      throw new Error(
-        `self-host: ${treeish} carries "${path}" as a ${type} entry (mode ${mode}); `
-        + `the bundle covers ordinary blobs, and a gitlink records a commit, not content.`,
-      );
-    }
     entries.push({ mode, sha, path });
   }
   return entries;
 }
 
-/**
- * Parses one `git cat-file --batch` response stream into per-path blob bytes.
- *
- * Split out of `{@link readTreeBlobs}` so every malformed-answer refusal — a
- * truncated stream, a missing object, a mismatched or non-blob answer, a
- * non-numeric or short payload — is exercised against fabricated buffers the
- * way the engine's own parsers are tested. The stream carries one response
- * per request: `<sha> <type> <size>\n<raw bytes>\n`, or `<sha> missing\n`.
- *
- * @param output - The raw stdout of one `git cat-file --batch` run.
- * @param entries - The listing whose requests produced the stream, in order.
- * @returns Raw blob bytes keyed by path, one entry per listing entry.
- * @throws Error When the stream ends early or any answer disagrees with the
- *   request — naming the path and sha at fault.
- */
-export function parseBatchResponse(output: Buffer, entries: readonly TreeEntry[]): Map<string, Buffer> {
-  const blobs = new Map<string, Buffer>();
-  let offset = 0;
-  for (const entry of entries) {
-    const headerEnd = output.indexOf(0x0a, offset);
-    if (headerEnd < 0) {
-      throw new Error(`self-host: git cat-file ended before answering for ${entry.path} (${entry.sha}).`);
-    }
-    const header = output.subarray(offset, headerEnd).toString("utf8");
-    const [sha, type, sizeText] = header.split(" ");
-    const size = Number(sizeText);
-    if (type === "missing" || !Number.isInteger(size) || sha !== entry.sha || type !== "blob"
-      || headerEnd + 1 + size + 1 > output.length) {
-      throw new Error(
-        `self-host: git cat-file did not return ${entry.sha} for ${entry.path} (answered: ${header}).`,
-      );
-    }
-    // Copy out of the response buffer so the map does not pin the whole stream.
-    blobs.set(entry.path, Buffer.from(output.subarray(headerEnd + 1, headerEnd + 1 + size)));
-    offset = headerEnd + 1 + size + 1;
+/** Consume exactly one batch frame per request, retaining only the requested blob contents. */
+class BlobBatch {
+  private readonly blobs = new Map<string, Buffer>();
+  private readonly entries: readonly TreeEntry[];
+  private position = 0;
+  private header = Buffer.alloc(0);
+  private remaining: number | undefined;
+  private chunks: Buffer[] = [];
+
+  /** Bind responses to the ordered object ids in the frozen listing. */
+  constructor(entries: readonly TreeEntry[]) {
+    this.entries = entries;
   }
-  return blobs;
+
+  /** Consume arbitrary transport chunks, including split headers, binary payloads and split separators. */
+  consume(chunk: Buffer): void {
+    while (chunk.length > 0) {
+      const entry = this.entries[this.position];
+      if (!entry) throw new Error("self-host: git cat-file returned unrequested trailing bytes.");
+      if (this.remaining === undefined) {
+        const newline = chunk.indexOf(0x0a);
+        const headerBytes = newline < 0 ? chunk.length : newline;
+        // The longest valid header ends with the decimal form of a safe integer.
+        if (this.header.length + headerBytes > entry.sha.length + " blob ".length + String(Number.MAX_SAFE_INTEGER).length) {
+          throw new Error(`self-host: git cat-file returned an oversized header for ${entry.path} (${entry.sha}).`);
+        }
+        if (newline < 0) {
+          this.header = Buffer.concat([this.header, chunk]);
+          return;
+        }
+        const header = Buffer.concat([this.header, chunk.subarray(0, newline)]).toString("latin1");
+        const fields = header.split(" ");
+        const [sha, type, sizeText] = fields;
+        const size = Number(sizeText);
+        if (fields.length !== 3 || sha !== entry.sha || type !== "blob" || !/^[0-9]+$/u.test(sizeText)
+          || !Number.isSafeInteger(size)) {
+          throw new Error(`self-host: git cat-file returned an invalid header for ${entry.path} (${entry.sha}).`);
+        }
+        this.remaining = size;
+        this.header = Buffer.alloc(0);
+        chunk = chunk.subarray(newline + 1);
+      }
+      const take = Math.min(this.remaining, chunk.length);
+      this.chunks.push(chunk.subarray(0, take));
+      this.remaining -= take;
+      chunk = chunk.subarray(take);
+      if (chunk.length === 0) return;
+      if (chunk[0] !== 0x0a) {
+        throw new Error(`self-host: git cat-file omitted the separator for ${entry.path} (${entry.sha}).`);
+      }
+      this.blobs.set(entry.path, Buffer.concat(this.chunks));
+      this.position++;
+      this.chunks = [];
+      this.remaining = undefined;
+      chunk = chunk.subarray(1);
+    }
+  }
+
+  /** Reject a partial final response or a missing response before exposing any contents. */
+  finish(): Map<string, Buffer> {
+    const pending = this.entries[this.position];
+    if (pending) throw new Error(`self-host: git cat-file ended before answering for ${pending.path} (${pending.sha}).`);
+    return this.blobs;
+  }
 }
 
-/**
- * Reads every entry's blob bytes straight from git's object database.
- *
- * One `git cat-file --batch` process serves the whole tree, and `cat-file`
- * returns stored bytes exactly as git hashes them: it applies none of the
- * checkout conversions — `core.autocrlf`, `eol` attributes, filter drivers —
- * that a working-tree materialization would. That is the whole point. A
- * checkout-based reader (`read-tree -u`, `worktree add`) smudges LF blobs into
- * CRLF on a conversion-enabled host, so the writer would archive bytes the
- * committed tree never stored and the check would read bytes the commit never
- * recorded; the same commit then verified differently on different machines.
- * Reading the object database is the only source whose bytes are identical to
- * what the tree being committed actually is.
- *
- * @param root - The repository root.
- * @param entries - The tree listing to read, from `{@link listTreeEntries}`.
- * @returns Raw blob bytes keyed by path, one entry per listing entry.
- * @throws Error When git cannot be run, reports a nonzero status, or answers
- *   anything other than the requested blob — every refusal names its path.
- */
-export function readTreeBlobs(root: string, entries: readonly TreeEntry[]): Map<string, Buffer> {
-  if (entries.length === 0) return new Map<string, Buffer>();
-  const result = spawnSync("git", ["cat-file", "--batch"], {
-    cwd: root,
-    input: entries.map((entry) => `${entry.sha}\n`).join(""),
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  // `spawnSync` reports a failure to *launch* in `error`, leaving `status` null.
-  // Treating that as an absent object would turn a missing `git` into a clean
-  // verdict about the repository, so it stays a distinct failure.
-  if (result.error) {
-    throw new Error(`self-host: could not run git: ${result.error.message}`);
+/** Parse captured batch data with the same framing checks used on live subprocess chunks. */
+export function parseBatchResponse(output: Buffer | readonly Buffer[], entries: readonly TreeEntry[]): Map<string, Buffer> {
+  const batch = new BlobBatch(entries);
+  for (const chunk of Buffer.isBuffer(output) ? [output] : output) batch.consume(chunk);
+  return batch.finish();
+}
+
+/** Stream the selected object ids through Git without a shared payload buffer or checkout filters. */
+export async function readTreeBlobs(root: string, entries: readonly TreeEntry[]): Promise<Map<string, Buffer>> {
+  const batch = new BlobBatch(entries);
+  if (entries.length > 0) {
+    await streamProcess("git", ["cat-file", "--batch"], {
+      cwd: root, env: { ...process.env }, input: entries.map(entry => entry.sha + "\n").join(""), timeoutMs: 120_000,
+    }, chunk => batch.consume(chunk));
   }
-  if (result.status !== 0) {
-    const detail = (result.stderr as Buffer).toString("utf8").trim();
-    throw new Error(`self-host: git cat-file --batch failed: ${detail}`);
-  }
-  return parseBatchResponse(result.stdout as Buffer, entries);
+  return batch.finish();
 }
 
 /**
@@ -872,87 +941,128 @@ export function readTreeBlobs(root: string, entries: readonly TreeEntry[]): Map<
  *
  * @param root - The repository root.
  * @param treeish - A tree id (from `git write-tree`) or a committish such as `HEAD`.
- * @returns The tree's configuration, source files and raw blobs.
+ * @param includeBundle - Request the archive for verification. The staged writer reuses the archive from HEAD.
+ * @returns The tree's configuration, source files and required raw blobs.
  * @throws Error When the tree cannot be listed, a blob is missing, the tree
  *   does not carry the configuration, or the configuration is invalid.
  */
-export function readTreeSnapshot(root: string, treeish: string): TreeSnapshot {
+export async function readTreeSnapshot(root: string, treeish: string, includeBundle = true): Promise<TreeSnapshot> {
   const entries = listTreeEntries(root, treeish);
-  const blobs = readTreeBlobs(root, entries);
-  const configBytes = blobs.get(SELF_HOST_CONFIG);
-  if (configBytes === undefined) {
+  const configuration = entries.find(entry => entry.path === SELF_HOST_CONFIG);
+  if (!configuration) {
     throw new Error(`self-host: ${treeish} does not carry ${SELF_HOST_CONFIG}; the gate cannot be configured from it.`);
   }
-  const config = parseSelfHostConfig(configBytes.toString("utf8"));
+  if (configuration.mode !== "100644" && configuration.mode !== "100755") {
+    throw new Error("self-host: configuration must be a regular file.");
+  }
+  const configBlob = (await readTreeBlobs(root, [configuration])).get(SELF_HOST_CONFIG)!;
+  const config = parseSelfHostConfig(configBlob.toString("utf8"));
+  const source = entries.filter(entry => !isExcluded(entry.path, config.exclude));
+  const selected = entries.filter(entry => entry !== configuration && (entry.path === config.bundle
+    ? includeBundle : !isExcluded(entry.path, config.exclude)));
+  for (const entry of selected) {
+    if (entry.mode !== "100644" && entry.mode !== "100755" && entry.mode !== "120000") {
+      throw new Error(`self-host: unsupported mode ${entry.mode} for ${entry.path}; exclude gitlinks explicitly.`);
+    }
+  }
+  const blobs = await readTreeBlobs(root, selected);
+  blobs.set(SELF_HOST_CONFIG, configBlob);
   const files = new Map<string, SourceFile>();
-  for (const entry of entries) {
-    if (isExcluded(entry.path, config.exclude)) continue;
-    // `readTreeBlobs` sets a blob for every listing entry or throws, so the
-    // lookup cannot miss; it stays a lookup so the map stays the one authority.
-    files.set(entry.path, {
-      content: blobs.get(entry.path)!,
-      mode: entry.mode === "100755" ? "100755" : "100644",
-    });
+  for (const entry of source) {
+    files.set(entry.path, { content: blobs.get(entry.path)!, mode: entry.mode === "100755" ? "100755" : "100644" });
   }
   return { config, files, blobs };
 }
 
 /**
- * Reads the committed bytes of a tracked file at `HEAD`, or null when absent.
+ * Reads the committed bytes of a tracked file at `HEAD`, or null when absent
+ * or when the prior entry is a gitlink with no reusable archive.
  *
- * Exported so the `spawnSync` error check and the null-on-absent branch are
- * both exercised by a real git repository.
+ * An empty path lookup means the file is absent. Listing and blob read errors propagate.
  */
-export function readCommittedFile(root: string, path: string): Buffer | null {
-  const result = spawnSync("git", ["cat-file", "blob", `HEAD:${path}`], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
-  // `spawnSync` reports a failure to *launch* in `error`, leaving `status` null.
-  // Treating that as "file absent" would turn a missing `git` into a clean
-  // verdict about the repository, so it has to be told apart from exit != 0.
-  if (result.error) {
-    throw new Error(`self-host: could not run git: ${result.error.message}`);
-  }
-  if (result.status !== 0) return null;
-  return result.stdout as Buffer;
+export async function readCommittedFile(root: string, path: string): Promise<Buffer | null> {
+  const entry = listTreeEntries(root, "HEAD", [path]).find(entry => entry.path === path);
+  return entry && entry.mode !== "160000" ? (await readTreeBlobs(root, [entry])).get(path)! : null;
 }
 
 /**
- * Reads every non-excluded tracked source file from a directory tree, using the
- * engine's own working-tree reader so content and mode are interpreted by the
- * same code that stages any other repository. The working-tree source for the
- * legacy `--write` mode; the staged and committed trees are read from git's
- * object database by `readTreeSnapshot` instead.
+ * Capture each non-excluded working path with its leaf type and mode. Only
+ * regular captured bytes go through Git's clean conversion check; symlinks
+ * contribute their raw link text.
  *
  * @param root - Directory holding the working source.
  * @param tracked - Paths reported by `git ls-files`.
  * @param exclude - The exclusion list.
+ * @param configuration - The configuration the working writer already observed.
  * @returns Path to content and mode for every source file.
  * @throws Error When a tracked, non-excluded path is missing from `root` — the
- *   one way a path silently disappears, surfaced as a failure rather than a skip.
+ *   one way a path silently disappears — or changed while it was being read,
+ *   because bytes captured across a replacement cannot be classified. Converted
+ *   content requires the staged writer.
  */
 export function readSourceFiles(
   root: string,
   tracked: readonly string[],
   exclude: readonly string[],
+  configuration?: SourceFile,
 ): Map<string, SourceFile> {
   const files = new Map<string, SourceFile>();
+  const regular: string[] = [];
   for (const path of tracked) {
-    if (isExcluded(path, exclude)) continue;
-    let observed;
+    if (path === SELF_HOST_CONFIG && configuration !== undefined) {
+      files.set(path, configuration);
+      regular.push(path);
+      continue;
+    }
+    if (path !== SELF_HOST_CONFIG && isExcluded(path, exclude)) continue;
+    const absolute = join(root, ...path.split("/"));
+    let before: BigIntStats;
+    let content: Buffer | undefined;
     try {
-      observed = readWorkingFile(root, path);
+      before = fs.lstatSync(absolute, { bigint: true });
+      content = readStableSourceBytes(absolute, before);
     } catch (error) {
-      // `readWorkingFile` reports this as a bare ENOENT, which explains
-      // nothing. The interesting fact is *why* a path git tracks is missing
-      // from the working tree — a file deleted on disk but not staged is the
-      // usual story — so say that instead.
-      const detail = errorMessage(error);
       throw new Error(
-        `self-host: tracked path ${path} is absent from ${root} (deleted from the working tree?): ${detail}`,
+        `self-host: tracked path ${path} is absent from ${root} (deleted from the working tree?): ${errorMessage(error)}`,
       );
     }
-    files.set(path, { content: observed.content, mode: observed.executable ? "100755" : "100644" });
+    if (content === undefined) {
+      throw new Error(`self-host: tracked path ${path} changed while it was being read; run the write again.`);
+    }
+    const symbolicLink = before.isSymbolicLink();
+    if (!symbolicLink) regular.push(path);
+    const executable = !symbolicLink && (before.mode & 0o100n) !== 0n;
+    files.set(path, { content, mode: executable ? "100755" : "100644" });
   }
+  if (regular.length > 0) {
+    assertUnconvertedFiles(root, regular, files);
+  }
+  if (isExcluded(SELF_HOST_CONFIG, exclude)) files.delete(SELF_HOST_CONFIG);
   return files;
+}
+
+/** Ask Git to apply staging-time conversion checks to the captured bytes. */
+function assertUnconvertedFiles(root: string, paths: readonly string[], files: ReadonlyMap<string, SourceFile>): void {
+  const algorithm = runGit(root, ["rev-parse", "--show-object-format"]);
+  const originalObjects = gitPath(root, "--path-format=absolute", "--git-path", "objects");
+  // Quote the path as one Git alternate even when it contains the list separator.
+  const originalAlternate = '"' + originalObjects.replaceAll("\\", "\\\\").replaceAll('"', '\\"') + '"';
+  const alternates = [originalAlternate, process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES].filter(Boolean).join(delimiter);
+  const objects = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-git-objects-"));
+  try {
+    for (const path of paths) {
+      const bytes = files.get(path)!.content;
+      const raw = createHash(algorithm).update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+      // Without -w, Git can report a conversion error and hash the raw bytes.
+      const clean = childProcess.execFileSync("git", ["hash-object", "-w", "--stdin", `--path=${path}`], {
+        cwd: root, input: bytes, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL",
+        env: { ...process.env, GIT_OBJECT_DIRECTORY: objects, GIT_ALTERNATE_OBJECT_DIRECTORIES: alternates },
+      }).trim();
+      if (clean !== raw) throw new Error(`self-host: Git converts ${path}. Stage the candidate and run --write --staged.`);
+    }
+  } finally {
+    durability.discardTemporary(objects);
+  }
 }
 
 /**
@@ -983,20 +1093,162 @@ export function headCommitTimestamp(root: string): number {
   return seconds * 1000;
 }
 
+/** Read a fixed-size journal observation. The engine still parses and authorizes the replay. */
+function readBootstrapJournal(path: string, observed: BigIntStats): Pick<DestructionReceipt, "id" | "status" | "entries"> {
+  assertVerificationBound("receipts", "record_bytes", Number(observed.size), verificationLimits.receiptBytes);
+  const fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const opened = fs.fstatSync(fd, { bigint: true });
+    if (!opened.isFile() || !sameFileIdentity(statIdentity(opened), statIdentity(observed))) {
+      throw new Error("self-host: the bootstrap journal changed before it was read.");
+    }
+    const bytes = Buffer.alloc(Number(observed.size));
+    if (fs.readSync(fd, bytes) !== bytes.length || !sameFileIdentity(statIdentity(opened), statIdentity(fs.fstatSync(fd, { bigint: true })))) {
+      throw new Error("self-host: the bootstrap journal changed while it was read.");
+    }
+    return JSON.parse(bytes.toString("utf8")) as Pick<DestructionReceipt, "id" | "status" | "entries">;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Use the namespace journal's inode stamp, whose last field may change across a rename. */
+function publicationIdentity(stat: BigIntStats): string {
+  return [stat.dev, stat.ino, stat.birthtimeNs, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+/** Compare the five fields that survive a rename. */
+function movedPublicationIdentity(identity: string): string {
+  return identity.split(":").slice(0, 5).join(":");
+}
+
+/** Hash the published bundle through its pinned descriptor with fixed-size reads. */
+function hashPublishedBundle(fd: number): string {
+  const hash = createHash("sha256");
+  const chunk = Buffer.alloc(64 * 1024);
+  let count: number;
+  while ((count = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) hash.update(chunk.subarray(0, count));
+  return hash.digest("hex");
+}
+
+/** Locate an exact bootstrap journal and its candidate, which may already be at the destination. */
+function selectBootstrapPublication(control: string, destination: string, bundle: BigIntStats | undefined) {
+  const directory = dirname(destination);
+  const prefix = `.${basename(destination)}.pm-vcs-`;
+  const candidates = new Map<string, BigIntStats>();
+  const keys = [`publication:${destination}`];
+  for (const name of bundle === undefined ? fs.readdirSync(directory) : []) {
+    if (!name.startsWith(prefix)) continue;
+    const path = join(directory, name);
+    const expected = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    if (!expected?.isFile() || expected.nlink !== 1n) continue;
+    candidates.set(path, expected);
+    const legacy = `rename:${path}:${destination}`;
+    keys.push(`${legacy}:${publicationIdentity(expected)}`, legacy);
+  }
+  // The engine keeps publication journals outside the repository and keys
+  // them by the canonical namespace root and destination (older keys name
+  // the source as well). Read only those exact record names.
+  const ledger = join(tmpdir(), `pm-vcs-namespace-${createHash("sha256").update(control).digest("hex")}`);
+  // The engine applies the same ownership rule on replay. Check the outer
+  // directory first because a foreign private ledger blocks its child lookup.
+  const owner = fs.lstatSync(ledger, { throwIfNoEntry: false });
+  if (owner !== undefined && (!owner.isDirectory()
+      || typeof process.getuid === "function" && (owner.uid !== process.getuid() || (owner.mode & 0o022) !== 0))) {
+    throw new DestructionRefusal("foreign_destructive_intent", "An unowned or shared-writable namespace ledger was preserved.");
+  }
+  for (const key of keys) {
+    const journal = join(ledger, "destruction", `${createHash("sha256").update(`${control}\0${key}`).digest("hex")}.json`);
+    const observed = fs.lstatSync(journal, { bigint: true, throwIfNoEntry: false });
+    if (observed === undefined) continue;
+    const record = readBootstrapJournal(journal, observed);
+    const entry = record.entries?.[0];
+    // Staging a replacement can fail after recovery has completed the move.
+    // Keep that receipt usable while the exact bootstrap inode is still here.
+    if (entry?.kind !== "rename" || entry.destination === undefined || resolve(control, entry.destination) !== destination
+        || !(record.status === "pending" && entry.status === "planned"
+          || bundle !== undefined && record.status === "completed" && entry.status === "moved")) return undefined;
+    const path = resolve(control, entry.path);
+    if (bundle !== undefined) {
+      const matches = bundle.isFile() && bundle.nlink === 1n && entry.target === "absent"
+        && dirname(path) === directory && basename(path).startsWith(prefix)
+        && movedPublicationIdentity(publicationIdentity(bundle)) === movedPublicationIdentity(entry.identity);
+      // A saved move records the outcome at the rename boundary. Verify the
+      // current bytes before using it to authorize replacement of an untracked file.
+      if (!matches || readRegularFile(destination, bundle, false, hashPublishedBundle).content !== entry.digest) return undefined;
+      return { journal, observed, id: record.id, path, expected: undefined };
+    }
+    const expected = candidates.get(path);
+    return expected !== undefined && publicationIdentity(expected) === entry.identity
+      ? { journal, observed, id: record.id, path, expected } : undefined;
+  }
+  return undefined;
+}
+
+/** Replay or acknowledge a bootstrap with a receipt for the exact candidate that moved. */
+function recoverBootstrapBundle(target: string, bundle: BigIntStats | undefined): BigIntStats | undefined {
+  const directory = dirname(target);
+  const control = realpathSync(namespacePublicationContext(target)?.control ?? directory);
+  const destination = join(realpathSync(directory), basename(target));
+  const candidate = selectBootstrapPublication(control, destination, bundle);
+  if (candidate === undefined) {
+    if (bundle === undefined) durability.recoverPublication(target);
+    return undefined;
+  }
+  // Keep the selected journal pinned through the engine's lease and rename
+  // validation. The engine checks the recovered candidate's identity and
+  // streaming digest against the journal independently of its byte limit.
+  const receipt = retireNamespace({ path: candidate.path, expected: candidate.expected, destination: target }, false, () => {
+    const current = lstatSync(candidate.journal, { bigint: true, throwIfNoEntry: false });
+    if (current === undefined || !sameFileIdentity(statIdentity(current), statIdentity(candidate.observed))) {
+      throw new Error("self-host: the bootstrap journal changed before recovery.");
+    }
+    if (bundle !== undefined && lstatSync(candidate.path, { throwIfNoEntry: false }) !== undefined) {
+      throw new Error("self-host: the bootstrap temporary reappeared before recovery.");
+    }
+  });
+  const published = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
+  if (!published?.isFile() || receipt.status !== "completed" || receipt.id !== candidate.id) return undefined;
+  // Rename can change ctime. The other identity fields still name the moved inode.
+  const movedIdentity = movedPublicationIdentity(publicationIdentity(published));
+  return receipt.entries.some(entry => entry.kind === "rename" && entry.status === "moved"
+    && entry.destination !== undefined && resolve(control, entry.destination) === destination
+    && resolve(control, entry.path) === candidate.path
+    && movedPublicationIdentity(entry.identity) === movedIdentity) ? published : undefined;
+}
+
+/** Recover under the engine's private ledger ownership rules and give operators a retry path. */
+function recoverBundlePublication(root: string, bundle: string, target: string, observed: BigIntStats | undefined): BigIntStats | undefined {
+  try {
+    if (observed === undefined || !bundleIsTracked(root, bundle)) return recoverBootstrapBundle(target, observed);
+    durability.recoverPublication(target);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof DestructionRefusal) || error.code !== "foreign_destructive_intent") throw error;
+    throw Object.assign(new Error(
+      `self-host: ${error.message} If another user owns the publication ledger, run regeneration as the ledger-owning UID.`,
+      { cause: error },
+    ), { code: error.code });
+  }
+}
+
 /**
  * Writes the bundle for the supplied source and skips an identical artifact.
  *
  * The caller decides where the source bytes come from: the working tree (the
- * legacy `--write` mode) or the frozen Git index (`--staged`). The write path
- * itself only ever reads the committed bundle — `HEAD`, through
- * {@link readCommittedFile}, which is already conversion-free — and writes the
- * new artifact at the fixed target.
+ * legacy `--write` mode) or the frozen Git index (`--staged`). The previous
+ * snapshot comes from the committed bundle through {@link readCommittedFile}.
+ * Publication uses the live index for replacement permission. "Unchanged" is decided from one stable
+ * observation of that target, and the write itself lands through a rename so a
+ * replacement at the path is replaced rather than followed. A pending publication
+ * left by an interrupted write is reconciled before a new candidate is created.
+ * Regeneration uses the UID that owns the private publication ledger.
  */
-function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<string, SourceFile>): void {
+async function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<string, SourceFile>): Promise<void> {
   const { store, refs, cleanup } = freshStore();
   try {
     const sourceTreeId = buildSourceTree(store, files);
-    const existingBundle = readCommittedFile(root, config.bundle);
+    const existingBundle = await readCommittedFile(root, config.bundle);
     const headSha = runGit(root, ["rev-parse", "HEAD"]);
     const signature: Signature = {
       ...SELF_HOST_AUTHOR,
@@ -1011,43 +1263,199 @@ function writeSnapshot(root: string, config: SelfHostConfig, files: ReadonlyMap<
       signature,
       `self-host: source snapshot at ${headSha}\n`,
     );
-    const target = resolveBundleTarget(root, config.bundle);
-    if (lstatSync(target, { throwIfNoEntry: false })?.isFile() && readFileSync(target).equals(bytes)) {
-      console.log(`self-host: ${config.bundle} is unchanged`);
+    const { target, observed: beforeRecovery } = resolveConfinedBundleTarget(root, config.bundle);
+    // An interrupted bootstrap can leave the candidate at either name. A
+    // receipt for that exact inode can also survive a failed replacement.
+    const publication = recoverBundlePublication(root, config.bundle, target, beforeRecovery);
+    const before = beforeRecovery ?? fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
+    const recovered = publication !== undefined && before !== undefined
+      && sameFileIdentity(statIdentity(publication), statIdentity(before));
+    assertBundleMayReplace(root, config.bundle, before !== undefined, recovered);
+    if (before?.isFile() && before.size === BigInt(bytes.length) && readStableSourceBytes(target, before)?.equals(bytes)) {
+      console.log(recovered
+        ? `self-host: recovered publication of ${config.bundle} (${bytes.length} bytes)`
+        : `self-host: ${config.bundle} is unchanged`);
       return;
     }
-    writeFileSync(target, bytes);
+    // Write through a same-directory temporary and rename over the target
+    // through the engine's durability policy: a rename replaces whatever sits
+    // at the path, where a direct write would follow a symbolic link that
+    // landed there after the checks above and corrupt the file it points at.
+    const temporary = join(dirname(target), `.${basename(target)}.pm-vcs-${randomUUID()}`);
+    const permissions = bundlePermissions(before);
+    const fd = fs.openSync(temporary, "wx", permissions === undefined ? undefined : 0o600);
+    try {
+      let expected: BigIntStats;
+      try {
+        fs.writeFileSync(fd, bytes);
+        if (permissions !== undefined) {
+          const { uid, gid } = fs.fstatSync(fd, { bigint: true });
+          // A privileged regenerator owns the temporary as itself; restoring
+          // only the group would leave the bundle owned by that identity, so
+          // both ids move back before the mode. A refusal propagates and the
+          // original bundle stays in place.
+          if (uid !== permissions.uid || gid !== permissions.gid) fs.fchownSync(fd, Number(permissions.uid), Number(permissions.gid));
+          fs.fchmodSync(fd, permissions.mode);
+        }
+        expected = fs.fstatSync(fd, { bigint: true });
+        const applied = bundlePermissions(expected);
+        if (permissions !== undefined && (applied?.mode !== permissions.mode
+          || applied?.uid !== permissions.uid || applied?.gid !== permissions.gid)) {
+          throw new Error(`self-host: could not preserve the permissions of ${config.bundle}. The existing bundle was left in place.`);
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+      /** Recheck publication authority before the journal starts and at the rename boundary. */
+      const validate = (): void => {
+        const current = lstatSync(target, { bigint: true, throwIfNoEntry: false });
+        // Only the file this run's own recovery confirmed may be replaced
+        // while untracked; any other untracked file at the target stays refused.
+        const replacesRecovery = recovered && before !== undefined && current !== undefined
+          && sameFileIdentity(statIdentity(current), statIdentity(before));
+        assertBundleMayReplace(root, config.bundle, current !== undefined, replacesRecovery);
+        const atPublication = bundlePermissions(current);
+        if (atPublication !== undefined && (atPublication.mode !== permissions?.mode || atPublication.uid !== permissions?.uid || atPublication.gid !== permissions.gid)) {
+          throw new Error(`self-host: ${config.bundle} permissions changed before publication. Run the write again.`);
+        }
+      };
+      validate();
+      // The namespace journal can flush an already read-only source. The
+      // durability.rename convenience method first reopens its source for writing.
+      const receipt = retireNamespace({ path: temporary, destination: target, expected }, false, validate);
+      // A completed receipt with no move means the temporary vanished without
+      // the rename landing — for example a cleanup race after the journal
+      // captured the source. The previous bundle is then still in place, and
+      // reporting a write would hide the failure.
+      if (!receipt.entries.some(entry => entry.status === "moved")) {
+        throw new Error(`self-host: publication of ${config.bundle} did not complete; ${config.bundle} keeps its previous bytes. Run the write again.`);
+      }
+    } finally {
+      durability.discardTemporary(temporary);
+    }
     console.log(`self-host: wrote ${config.bundle} (${bytes.length} bytes)`);
   } finally {
     cleanup();
   }
 }
 
+/** Read a Git administrative pathname losslessly, keeping any significant whitespace. */
+function gitPath(root: string, ...args: string[]): string {
+  const bytes = execFileSync("git", ["rev-parse", ...args], { cwd: root, env: { ...process.env } });
+  return decodeGitListing(bytes).replace(/\n$/u, "");
+}
+
+/** Capture a Git index file, allowing Git's ordinary symlink lookup. */
+function captureIndexFile(path: string): Buffer {
+  const before = fs.statSync(path, { bigint: true });
+  const bytes = before.isFile() ? readStableSourceBytes(path, before, true) : undefined;
+  if (bytes === undefined) throw new Error("self-host: expected a stable, regular Git index file.");
+  return bytes;
+}
+
 /**
- * Freezes the candidate tree and snapshots it straight from the object database.
+ * Locate the split-index dependency in captured DIRC bytes. Git's
+ * `--shared-index-path` itself needs the base, so it cannot discover it from
+ * the private index before the base is copied. Git still validates the full
+ * index and the split overlay when it writes the tree.
  *
- * `git write-tree` turns the index into a tree object, and the snapshot is
- * then read from that tree with `ls-tree` and `cat-file` — raw stored bytes,
- * no checkout. The earlier design materialized the tree with `read-tree -u`
- * into a scratch work-tree first, which is a checkout and applies the host's
- * conversion rules (`core.autocrlf`, `eol` attributes, filter drivers): with
- * `core.autocrlf=true` the writer archived LF blobs as CRLF and the committed
- * bundle failed the gate on a default checkout of the same commit. Reading
- * the object database cannot record bytes the tree does not store.
+ * @see https://git-scm.com/docs/gitformat-index
  */
-function writeStagedSnapshot(root: string): void {
-  const tree = runGit(root, ["write-tree"]);
-  const snapshot = readTreeSnapshot(root, tree);
-  writeSnapshot(root, snapshot.config, snapshot.files);
+function sharedIndexName(index: Buffer, hashSize: number): string | undefined {
+  const end = index.length - hashSize;
+  const version = index.readUInt32BE(4);
+  const count = index.readUInt32BE(8);
+  if (index.toString("latin1", 0, 4) !== "DIRC" || version < 2 || version > 4) {
+    throw new Error("self-host: unsupported Git index header.");
+  }
+  let offset = 12;
+  for (let entry = 0; entry < count; ++entry) {
+    const flags = index.readUInt16BE(offset + 40 + hashSize);
+    let name = offset + 42 + hashSize + ((flags & 0x4000) === 0 ? 0 : 2);
+    if (version === 4) {
+      // The prefix-reuse count is a varint. Only its byte width matters here.
+      while ((index.readUInt8(name++) & 0x80) !== 0) { /* skip continuation bytes */ }
+    }
+    const nul = index.indexOf(0, name);
+    if (nul < 0 || nul >= end) throw new Error("self-host: unterminated Git index pathname.");
+    const entrySize = nul + 1 - offset;
+    offset += version === 4 ? entrySize : Math.ceil(entrySize / 8) * 8;
+  }
+  while (offset < end) {
+    const signature = index.toString("latin1", offset, offset + 4);
+    const size = index.readUInt32BE(offset + 4);
+    offset += 8;
+    if (offset + size > end || (signature === "link" && size < hashSize)) {
+      throw new Error("self-host: invalid Git index extension length.");
+    }
+    if (signature === "link") {
+      const oid = index.toString("hex", offset, offset + hashSize);
+      return /^0+$/u.test(oid) ? undefined : `sharedindex.${oid}`;
+    }
+    offset += size;
+  }
+  return undefined;
+}
+
+/** Read the one base Git would use, preferring its per-worktree Git directory. */
+function captureSharedIndex(root: string, index: string, base: string): Buffer {
+  const primary = join(gitPath(root, "--absolute-git-dir"), base);
+  try {
+    return captureIndexFile(primary);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return captureIndexFile(`${dirname(index)}${sep}${base}`);
+  }
+}
+
+/** Run a Git operation against a private copy of the selected index and required split base. */
+function withCapturedIndex<T>(root: string, action: (environment: NodeJS.ProcessEnv) => T): T {
+  // Git's default spelling preserves the selected index symlink. Its directory
+  // is the base fallback, even when opening the index follows the link elsewhere.
+  const selected = gitPath(root, "--git-path", "index");
+  const index = isAbsolute(selected) ? selected : `${root}${sep}${selected}`;
+  const scratch = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-index-"));
+  try {
+    const copy = join(scratch, "index");
+    const indexEnv = { ...process.env, GIT_INDEX_FILE: copy };
+    if (lstatSync(index, { throwIfNoEntry: false }) === undefined) return action(indexEnv);
+    const bytes = captureIndexFile(index);
+    const hashSize = createHash(runGit(root, ["rev-parse", "--show-object-format"])).digest().length;
+    const base = sharedIndexName(bytes, hashSize);
+    writeFileSync(copy, bytes);
+    if (base !== undefined) {
+      writeFileSync(join(scratch, base), captureSharedIndex(root, index, base));
+      // Git prefers a base in GIT_DIR, so direct its lookup and mtime update
+      // to the captured copy while retaining the original common object store.
+      writeFileSync(join(scratch, "HEAD"), "ref: refs/heads/self-host\n");
+      Object.assign(indexEnv, {
+        GIT_DIR: scratch,
+        GIT_COMMON_DIR: gitPath(root, "--path-format=absolute", "--git-common-dir"),
+        GIT_WORK_TREE: root,
+      });
+    }
+    return action(indexEnv);
+  } finally {
+    durability.discardTemporary(scratch);
+  }
+}
+
+/** Freeze the selected index before reading the staged tree from Git objects. */
+async function writeStagedSnapshot(root: string): Promise<void> {
+  const tree = withCapturedIndex(root, environment => runGit(root, ["-c", "core.splitIndex=false", "write-tree"], environment));
+  const snapshot = await readTreeSnapshot(root, tree, false);
+  await writeSnapshot(root, snapshot.config, snapshot.files);
 }
 
 /** Verifies committed HEAD by default, or writes from working or staged source. */
-export function main(root: string, args: readonly string[]): void {
+export async function main(root: string, args: readonly string[]): Promise<void> {
   if (args.includes("--write")) {
-    if (args.includes("--staged")) writeStagedSnapshot(root);
+    if (args.includes("--staged")) await writeStagedSnapshot(root);
     else {
-      const config = loadConfig(join(root, SELF_HOST_CONFIG));
-      writeSnapshot(root, config, readSourceFiles(root, listTrackedFiles(root), config.exclude));
+      const tracked = listTrackedFiles(root);
+      if (!tracked.includes(SELF_HOST_CONFIG)) throw new Error("self-host: the configuration must be tracked.");
+      const { config, source } = captureWorkingConfig(join(root, SELF_HOST_CONFIG));
+      await writeSnapshot(root, config, readSourceFiles(root, tracked, config.exclude, source));
     }
     return;
   }
@@ -1064,7 +1472,7 @@ export function main(root: string, args: readonly string[]): void {
     // as git hashes them: an uncommitted edit, a staged change, or a
     // line-ending preference can no longer move what the gate compares, which
     // is the property this gate advertises that it has.
-    const snapshot = readTreeSnapshot(root, "HEAD");
+    const snapshot = await readTreeSnapshot(root, "HEAD");
     const sourceTreeId = buildSourceTree(store, snapshot.files);
     const bundleBytes = snapshot.blobs.get(snapshot.config.bundle) ?? null;
     if (bundleBytes === null) {
@@ -1088,4 +1496,4 @@ export function main(root: string, args: readonly string[]): void {
   }
 }
 
-if (isMainInvocation(process.argv, import.meta.url)) main(resolve(import.meta.dirname, ".."), process.argv);
+if (isMainInvocation(process.argv, import.meta.url)) await main(resolve(import.meta.dirname, ".."), process.argv);

@@ -545,7 +545,12 @@ The concrete artefacts and their contract:
   `git ls-files` and need no entry. A tracked path in neither the bundle nor the exclusion set
   fails the gate closed.
 - **`npm run self-host:write`** regenerates the bundle from tracked working files.
-  Pass `-- --staged` to freeze the Git index and read that tree straight from git's
+  The working writer checks Git's clean-filter result against the captured bytes for every
+  included regular file. One read of `self-host.json` supplies both exclusions and archive bytes.
+  When Git converts bytes, stage the candidate and use `-- --staged`. Both writers
+  require a regular `self-host.json` in the selected snapshot.
+  Pass `-- --staged` to freeze a private copy of the selected Git index and its referenced
+  shared base, if any, and read that tree straight from git's
   object database (`ls-tree` plus `cat-file`). The staged configuration, additions,
   deletions and file modes determine the snapshot, and no checkout ever stands
   between the tree being committed and the bytes the bundle records, so a host's
@@ -573,7 +578,9 @@ The concrete artefacts and their contract:
   on Windows exercised it while the gate sits inside `release:check` and `prepublishOnly`.
 
   It enumerates the source with `git ls-tree -r -z` (NUL-delimited, because a newline is
-  legal in a path), drops the exclusion set, rebuilds the source tree through the engine's `buildTree`, and
+  legal in a path) and requires lossless UTF-8 path names. It reads the configuration
+  first, then streams only the included blobs and the committed bundle. Gitlinks
+  require an explicit exclusion. The gate rebuilds the source tree through the engine's `buildTree`, and
   imports the bundle through `importBundleObjects` — **into an object store of its own**. That
   isolation is the self-containment proof: sharing a store with the source side would let a
   bundle missing an object borrow the bytes from the source and still resolve. The full ancestry

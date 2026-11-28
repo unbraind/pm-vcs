@@ -255,7 +255,8 @@ test("the direct self-host entry point accepts action bumps but requires committ
     { cwd: fixture.root, encoding: "utf8", timeout: 60_000, env },
   );
   try {
-    for (const script of ["self-host.ts", "main-invocation.ts"]) {
+    copyFileSync(join(packageRoot, "git.ts"), join(fixture.root, "git.ts"));
+    for (const script of ["self-host.ts", "audit-git-identities.ts", "main-invocation.ts"]) {
       source(fixture.root, `scripts/${script}`, readFileSync(join(packageRoot, "scripts", script), "utf8"));
     }
     symlinkSync(join(packageRoot, "engine"), join(fixture.root, "engine"), "dir");
