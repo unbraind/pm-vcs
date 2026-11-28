@@ -12,7 +12,7 @@ import { testEnvironment } from "./helpers/test-environment.ts";
 import assert from "node:assert/strict";
 import childProcess, { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import fs, { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
@@ -681,16 +681,17 @@ test("importBundleObjects re-verifies every object against its own id", () => {
 interface Fixture {
   readonly root: string;
   /** Runs git in the fixture repo with the pinned env overrides. */
-  git(args: string[]): string;
+  git(args: string[], input?: Buffer): string;
   cleanup(): void;
 }
 
 /** Creates a real git repo, commits some source files, and writes a self-host.json. */
 function fixture(objectFormat = "sha1"): Fixture {
   const root = mkdtempSync(join(tmpdir(), "pm-vcs-self-host-fixture-"));
-  const git = (args: string[]): string => execFileSync("git", args, {
+  const git = (args: string[], input?: Buffer): string => execFileSync("git", args, {
     cwd: root,
     encoding: "utf8",
+    input,
     env: { ...testEnvironment(), NODE_V8_COVERAGE: "/dev/null", GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
   }).trim();
   git(["init", "-q", "-b", "main", `--object-format=${objectFormat}`]);
@@ -1731,7 +1732,7 @@ test("staged self-host writing repairs a bundle path that was a gitlink in HEAD"
   await main(f.root, ["--write", "--staged"]);
   f.git(["add", "--", "selfhost.bundle"]);
   f.git(["commit", "-qm", "replace the gitlink with a bundle"]);
-  await main(f.root, ["--check"]);
+  await assertCheckPasses(f.root);
 });
 
 test("staged self-host writing refuses an unresolved index before replacing the bundle", async () => {
@@ -2328,21 +2329,23 @@ test("snapshot paths preserve valid UTF-8", () => {
   }
 });
 
-test("snapshot paths keep control characters and reject an unrepresentable name", { skip: process.platform === "win32" }, () => {
+test("snapshot paths keep control characters and reject an unrepresentable name", () => {
   const f = fixture();
   try {
     const marker = "\x01ordinary-path";
-    writeFileSync(join(f.root, marker), "record marker in a path");
-    f.git(["add", "--", marker]);
+    const markerBlob = f.git(["hash-object", "-w", "--stdin"], Buffer.from("record marker in a path"));
+    f.git(["-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", `100644,${markerBlob},${marker}`]);
     const tree = f.git(["write-tree"]);
     assert.ok(listTrackedFiles(f.root).includes(marker));
     assert.ok(listTreeEntries(f.root, tree).some(entry => entry.path === marker));
 
-    for (const suffix of [0x80, 0x81]) {
-      const name = Buffer.concat([Buffer.from(join(f.root, "name-")), Buffer.from([suffix])]);
-      writeFileSync(name, `distinct source byte ${suffix}`);
-    }
-    f.git(["add", "--", "name-*"]);
+    // NUL-delimited stdin keeps the raw bytes intact without a checkout or a string argv.
+    const entries = [0x80, 0x81].map(suffix => {
+      const blob = f.git(["hash-object", "-w", "--stdin"], Buffer.from(`distinct source byte ${suffix}`));
+      return Buffer.concat([Buffer.from(`100644 ${blob}\tname-`), Buffer.from([suffix, 0])]);
+    });
+    f.git(["update-index", "-z", "--index-info"], Buffer.concat(entries));
+    assert.equal(readdirSync(f.root).some(name => name.startsWith("name-")), false, "invalid names belong only in Git");
     assert.throws(() => listTreeEntries(f.root, f.git(["write-tree"])), /UTF-8/);
     assert.throws(() => listTrackedFiles(f.root), /UTF-8/);
   } finally {
@@ -2642,7 +2645,7 @@ test("tree lookups keep tool-pinned literal matching under ambient pathspec sett
     writeFileSync(join(f.root, "safe-name.txt"), "literal\n");
     const blob = f.git(["hash-object", "-w", "--", "safe-name.txt"]);
     rmSync(join(f.root, "safe-name.txt"));
-    f.git(["update-index", "--add", "--cacheinfo", `100644,${blob},weird*name.txt`]);
+    f.git(["-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", `100644,${blob},weird*name.txt`]);
     const tree = f.git(["write-tree"]);
     assert.deepEqual(listTreeEntries(f.root, tree, ["weird*name.txt"]).map(entry => entry.path), ["weird*name.txt"]);
     // The literal lookup is the tool's choice, so a host exporting a global
@@ -2687,18 +2690,33 @@ function afterFileRead(path: string, action: () => void): void {
   syncBuiltinESMExports();
 }
 
-test("working writer refuses bytes captured across a mid-read replacement", () => {
+/** Prepare the link before a race can remove a file. */
+function prepareReplacementLink(t: TestContext, root: string): string | undefined {
+  const replacement = join(root, ".replacement-link");
+  try {
+    symlinkSync("README.md", replacement, "file");
+    return replacement;
+  } catch (error) {
+    if (process.platform !== "win32" || !["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    t.skip("Creating a file symlink requires Windows privileges.");
+  }
+}
+
+test("working writer refuses bytes captured across a mid-read replacement", t => {
   const f = fixture();
   try {
-    writeFileSync(join(f.root, "crlf.txt"), "captured\r\n");
+    const path = join(f.root, "crlf.txt");
+    writeFileSync(path, "captured\r\n");
     f.git(["add", "--", "crlf.txt"]);
+    const replacement = prepareReplacementLink(t, f.root);
+    if (replacement === undefined) return;
     // The reader has captured the regular file's bytes when this runs: swap the
     // leaf for a link before any second observation can classify what it read.
     // A split read/classify would bundle the captured (converted) bytes without
     // the hash-object verification, so the refusal is the fail-closed answer.
-    afterFileRead(join(f.root, "crlf.txt"), () => {
-      rmSync(join(f.root, "crlf.txt"));
-      symlinkSync("README.md", join(f.root, "crlf.txt"));
+    afterFileRead(path, () => {
+      rmSync(path);
+      renameSync(replacement, path);
     });
     try {
       assert.throws(() => readSourceFiles(f.root, ["crlf.txt"], []), /changed while it was being read/);
@@ -2743,18 +2761,21 @@ test("working capture preserves raw link text and refuses a removed or replaced 
   }
 });
 
-test("configuration bytes are never parsed across a mid-read replacement", () => {
+test("configuration bytes are never parsed across a mid-read replacement", t => {
   const f = fixture();
   try {
+    const path = join(f.root, "self-host.json");
+    const replacement = prepareReplacementLink(t, f.root);
+    if (replacement === undefined) return;
     // The regular-file check passes, the bytes are read, and then the leaf is
     // swapped for a link: only an identity re-observation can tell that the
     // parsed bytes and the type verdict described different leaves.
-    afterFileRead(join(f.root, "self-host.json"), () => {
-      rmSync(join(f.root, "self-host.json"));
-      symlinkSync("README.md", join(f.root, "self-host.json"));
+    afterFileRead(path, () => {
+      rmSync(path);
+      renameSync(replacement, path);
     });
     try {
-      assert.throws(() => loadConfig(join(f.root, "self-host.json")), /changed while it was being read/);
+      assert.throws(() => loadConfig(path), /changed while it was being read/);
     } finally {
       mock.restoreAll();
       syncBuiltinESMExports();
@@ -2783,28 +2804,34 @@ test("configuration capture preserves an unexpected descriptor-open error", t =>
   }
 });
 
-test("an unchanged bundle replaced mid-check is rewritten over, never skipped or followed", async () => {
+test("an unchanged bundle replaced mid-check is rewritten over, never skipped or followed", async t => {
   const f = fixture();
   try {
+    const replacement = prepareReplacementLink(t, f.root);
+    if (replacement === undefined) return;
+    const path = join(f.root, "selfhost.bundle");
+    const target = join(f.root, "README.md");
     await main(f.root, ["--write"]);
     f.git(["add", "--", "selfhost.bundle"]);
-    const expected = readFileSync(join(f.root, "selfhost.bundle"));
+    const expected = readFileSync(path);
+    const targetBytes = readFileSync(target);
     // The second write produces identical bytes, so an honest unchanged check
     // would skip. The leaf is swapped for a link after those bytes are read:
     // the decision must observe the replacement (identity re-check) and the
     // write must replace the link rather than follow it into another file.
-    afterFileRead(join(f.root, "selfhost.bundle"), () => {
-      rmSync(join(f.root, "selfhost.bundle"));
-      symlinkSync("README.md", join(f.root, "selfhost.bundle"));
+    afterFileRead(path, () => {
+      rmSync(path);
+      renameSync(replacement, path);
     });
     try {
       await main(f.root, ["--write"]);
       mock.restoreAll();
       syncBuiltinESMExports();
-      const leaf = lstatSync(join(f.root, "selfhost.bundle"));
+      const leaf = lstatSync(path);
       assert.equal(leaf.isSymbolicLink(), false, "the bundle path must be a regular file after a write");
       assert.equal(leaf.isFile(), true);
-      assert.deepEqual(readFileSync(join(f.root, "selfhost.bundle")), expected);
+      assert.deepEqual(readFileSync(path), expected);
+      assert.deepEqual(readFileSync(target), targetBytes, "the replacement link target must remain unchanged");
     } finally {
       mock.restoreAll();
       syncBuiltinESMExports();
@@ -3071,22 +3098,56 @@ test("staged writer ignores unreadable siblings for an unsplit alternate index",
   }
 });
 
-test("Git administrative paths reject invalid UTF-8 and preserve significant whitespace", { skip: process.platform === "win32" }, async t => {
+test("Git administrative paths preserve significant whitespace in the staged index path", { skip: process.platform === "win32" }, async t => {
   const f = fixture();
   t.after(f.cleanup);
-  const gitDir = join(f.root, ".git");
   const index = join(f.root, "shared index é \t\n");
   const previous = process.env.GIT_INDEX_FILE;
   try {
-    writeFileSync(index, readFileSync(join(gitDir, "index")));
     process.env.GIT_INDEX_FILE = index;
+    runGit(f.root, ["read-tree", "HEAD"]);
+    writeFileSync(join(f.root, "README.md"), "staged through a whitespace path\n");
+    runGit(f.root, ["add", "--", "README.md"]);
     await main(f.root, ["--write", "--staged"]);
-    runGit(f.root, ["add", "--", "selfhost.bundle"]);
-    const rawIndex = Buffer.concat([Buffer.from(join(f.root, "index-")), Buffer.from([0x80])]);
+    const archive = readFileSync(join(f.root, "selfhost.bundle"));
+    assert.deepEqual(bundledFiles(archive).get("README.md")?.content, Buffer.from("staged through a whitespace path\n"));
+  } finally {
+    if (previous === undefined) delete process.env.GIT_INDEX_FILE;
+    else process.env.GIT_INDEX_FILE = previous;
+  }
+});
+
+/** Probe a raw name with an empty disposable directory before renaming live Git data. */
+function rawAdministrativePath(t: TestContext, root: string, prefix: string): Buffer | undefined {
+  const raw = Buffer.concat([Buffer.from(join(root, prefix)), Buffer.from([0x80])]);
+  const probe = mkdtempSync(join(root, "raw-path-probe-"));
+  try {
+    renameSync(probe, raw);
+  } catch (error) {
+    if (!["EILSEQ", "EINVAL"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    t.skip("The fixture filesystem rejects invalid UTF-8 filenames.");
+    return;
+  }
+  rmdirSync(raw);
+  return raw;
+}
+
+test("Git administrative paths allow a staged index symlink to a raw-byte target", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const rawIndex = rawAdministrativePath(t, f.root, "index-");
+  if (rawIndex === undefined) return;
+  const index = join(f.root, "selected-index");
+  const previous = process.env.GIT_INDEX_FILE;
+  try {
+    writeFileSync(index, readFileSync(join(f.root, ".git", "index")));
+    process.env.GIT_INDEX_FILE = index;
     renameSync(index, rawIndex);
     try {
       symlinkSync(rawIndex, index);
       await main(f.root, ["--write", "--staged"]);
+      const archive = readFileSync(join(f.root, "selfhost.bundle"));
+      assert.deepEqual(bundledFiles(archive).get("README.md")?.content, Buffer.from("hello\n"));
     } finally {
       rmSync(index, { force: true });
       renameSync(rawIndex, index);
@@ -3095,10 +3156,18 @@ test("Git administrative paths reject invalid UTF-8 and preserve significant whi
     if (previous === undefined) delete process.env.GIT_INDEX_FILE;
     else process.env.GIT_INDEX_FILE = previous;
   }
+});
+
+test("Git administrative paths reject a Git directory with invalid UTF-8", { skip: process.platform === "win32" }, async t => {
+  const f = fixture();
+  t.after(f.cleanup);
+  const rawGitDir = rawAdministrativePath(t, f.root, "git-admin-");
+  if (rawGitDir === undefined) return;
+  const gitDir = join(f.root, ".git");
   const archive = join(f.root, "selfhost.bundle");
+  await main(f.root, ["--write", "--staged"]);
   const original = readFileSync(archive);
   f.git(["add", "--", "selfhost.bundle"]);
-  const rawGitDir = Buffer.concat([Buffer.from(join(f.root, "git-admin-")), Buffer.from([0x80])]);
   renameSync(gitDir, rawGitDir);
   try {
     writeFileSync(gitDir, Buffer.concat([Buffer.from("gitdir: "), rawGitDir, Buffer.from("\n")]));
